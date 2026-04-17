@@ -1,0 +1,26 @@
+{
+  "name": "perceiver_2L",
+
+  // Perceiver bottleneck example with latent slots for sequence mixing.
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // num_latents controls the size of the latent bottleneck each block attends through.
+  "blocks": [
+    {"type": "perceiver", "heads": 4, "num_latents": 16},
+    {"type": "swiglu"},
+    {"type": "perceiver", "heads": 4, "num_latents": 16},
+    {"type": "swiglu"}
+  ],
+
+  // Short run for validating the Perceiver block path.
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 512
+  }
+}

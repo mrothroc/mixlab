@@ -1,0 +1,26 @@
+{
+  "name": "rwkv_2L",
+
+  // RWKV-style recurrent mixing example with a compact model dimension.
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // RWKV blocks replace attention; SwiGLU blocks keep the usual feed-forward updates.
+  "blocks": [
+    {"type": "rwkv"},
+    {"type": "swiglu"},
+    {"type": "rwkv"},
+    {"type": "swiglu"}
+  ],
+
+  // Lightweight settings make this a quick recurrent-block smoke test.
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 512
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "name": "plain_3L",
+
+  // Minimal causal transformer baseline: 3 attention layers plus 3 SwiGLU layers.
+  "model_dim": 128,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // Blocks execute sequentially, alternating token mixing and feed-forward mixing.
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+
+  // Slightly longer than smoke-test configs so the baseline loss moves visibly.
+  "training": {
+    "steps": 200,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 1024
+  }
+}

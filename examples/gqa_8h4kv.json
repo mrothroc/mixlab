@@ -1,0 +1,28 @@
+{
+  "name": "gqa_8h4kv",
+
+  // Grouped-query attention example with more query heads than KV heads.
+  "model_dim": 128,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // kv_heads=4 shares keys/values across 8 query heads to reduce KV parameters.
+  "blocks": [
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"}
+  ],
+
+  // Same short-run settings as other attention variants for quick comparison.
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 1024
+  }
+}

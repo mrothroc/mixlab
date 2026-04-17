@@ -1,0 +1,64 @@
+{
+  "name": "unet_transformer",
+
+  // Model dimensions
+  "model_dim": 512,
+  "vocab_size": 1024,          // SP1024 tokenizer
+  "seq_len": 2048,
+  "mlp_mult": 3.0,
+
+  // Architecture features
+  "logit_softcap": 30.0,       // Bound logits to [-30, 30] before loss
+  "tie_embeddings": true,       // Head reuses embedding weights
+  "unet": true,                 // U-Net: encoder/decoder with learned skip connections
+  "block_scales": true,         // Learned attn_scale + mlp_scale per block
+  "resid_mix": true,            // Learned blend of x with original embedding x0
+  "bigram_vocab_size": 4096,    // Hashed bigram embedding table size
+  "bigram_dim": 128,
+
+  "blocks": [
+    // TokenBlend blends adjacent token embeddings before attention
+    {"type": "token_blend"},
+
+    // 9 attention+FFN layers. With unet=true, the builder splits these into
+    // encoder (first half) and decoder (second half). The decoder gets
+    // learned skip connections from the encoder's matching layers.
+    {"type": "plain", "heads": 8, "kv_heads": 4},  // GQA: 8 query, 4 KV heads
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"}
+  ],
+
+  "training": {
+    "steps": 3000,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "beta1": 0.9,
+    "beta2": 0.95,
+
+    // Per-group learning rates (conservative for small batch)
+    "embed_lr": 3e-4,
+    "matrix_lr": 3e-4,          // Muon optimizer for matrix weights
+    "scalar_lr": 3e-4,
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+
+    "seed": 42,
+    "batch_tokens": 4096
+  }
+}

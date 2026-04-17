@@ -1,0 +1,51 @@
+{
+  "name": "custom_geglu",
+
+  // Demonstrates a user-defined feed-forward block expressed as IR ops.
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // Plain attention handles token mixing; custom GEGLU blocks handle channel mixing.
+  "blocks": [
+    {"type": "plain", "heads": 4},
+
+    // Weights declare the tensors available to the custom op graph.
+    {"type": "custom", "name": "geglu", "weights": [
+      {"name": "w_gate", "shape": ["D", "FFN"]},
+      {"name": "w_up",   "shape": ["D", "FFN"]},
+      {"name": "w_down", "shape": ["FFN", "D"]}
+    ], "ops": [
+      // Ops implement gated GELU-style FFN math and return to residual state x.
+      {"op": "matmul",  "inputs": ["x", "w_gate"], "output": "gate"},
+      {"op": "silu",    "inputs": ["gate"],         "output": "gate_act"},
+      {"op": "matmul",  "inputs": ["x", "w_up"],   "output": "up"},
+      {"op": "mul",     "inputs": ["gate_act", "up"], "output": "ff"},
+      {"op": "matmul",  "inputs": ["ff", "w_down"], "output": "ff_out"},
+      {"op": "add",     "inputs": ["x", "ff_out"],  "output": "x"}
+    ]},
+    {"type": "plain", "heads": 4},
+    {"type": "custom", "name": "geglu", "weights": [
+      {"name": "w_gate", "shape": ["D", "FFN"]},
+      {"name": "w_up",   "shape": ["D", "FFN"]},
+      {"name": "w_down", "shape": ["FFN", "D"]}
+    ], "ops": [
+      {"op": "matmul",  "inputs": ["x", "w_gate"], "output": "gate"},
+      {"op": "silu",    "inputs": ["gate"],         "output": "gate_act"},
+      {"op": "matmul",  "inputs": ["x", "w_up"],   "output": "up"},
+      {"op": "mul",     "inputs": ["gate_act", "up"], "output": "ff"},
+      {"op": "matmul",  "inputs": ["ff", "w_down"], "output": "ff_out"},
+      {"op": "add",     "inputs": ["x", "ff_out"],  "output": "x"}
+    ]}
+  ],
+
+  // Small batch keeps the custom-block smoke test lightweight.
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 512
+  }
+}

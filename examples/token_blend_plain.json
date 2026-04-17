@@ -1,0 +1,28 @@
+{
+  "name": "token_blend_plain",
+
+  // Adds token_blend blocks before standard attention to blend neighboring tokens.
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // Each stage applies token_blend, causal attention, then SwiGLU channel mixing.
+  "blocks": [
+    {"type": "token_blend"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "token_blend"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+
+  // Short run checks the learned token blending path.
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 512
+  }
+}

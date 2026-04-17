@@ -1,0 +1,14 @@
+*.bin
+*.safetensors
+*.st
+/mixlab
+__pycache__/
+.gocache/
+cover*.out
+data/example/
+checkpoints/
+.idea/
+.projectdb/
+.weft/
+# CI trigger test
+# CI trigger test

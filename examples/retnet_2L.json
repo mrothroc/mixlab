@@ -1,0 +1,26 @@
+{
+  "name": "retnet_2L",
+
+  // RetNet retention example using recurrent-style sequence mixing.
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // decay controls how quickly older token state fades in each retention block.
+  "blocks": [
+    {"type": "retnet", "heads": 4, "decay": 0.99},
+    {"type": "swiglu"},
+    {"type": "retnet", "heads": 4, "decay": 0.99},
+    {"type": "swiglu"}
+  ],
+
+  // Small run verifies the retention block and paired SwiGLU path.
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 512
+  }
+}

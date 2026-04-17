@@ -1,0 +1,27 @@
+linters:
+  enable:
+    - errcheck        # unchecked errors
+    - govet           # go vet
+    - ineffassign     # useless assignments
+    - staticcheck     # comprehensive static analysis (includes gosimple)
+    - unused          # unused code
+    - gocritic        # opinionated style checks
+    - misspell        # spelling in comments/strings
+    - unconvert       # unnecessary type conversions
+    - unparam         # unused function parameters
+
+linters-settings:
+  gocritic:
+    disabled-checks:
+      - captLocal         # B, T, D, H are standard ML notation
+
+output:
+  sort-results: true
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 5
+
+run:
+  skip-dirs:
+    - vendor

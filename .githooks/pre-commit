@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -e
+
+echo "pre-commit: running checks..."
+
+# Format check
+UNFORMATTED=$(gofmt -l . 2>/dev/null | grep -v vendor/ || true)
+if [ -n "$UNFORMATTED" ]; then
+    echo "FAIL: gofmt — these files need formatting:"
+    echo "$UNFORMATTED"
+    echo "  Run: gofmt -w ."
+    exit 1
+fi
+
+# Lint (includes vet, staticcheck, errcheck, unused, etc.)
+if command -v golangci-lint &> /dev/null; then
+    if ! golangci-lint run ./... 2>&1; then
+        echo "FAIL: golangci-lint"
+        exit 1
+    fi
+else
+    # Fallback to basic vet if golangci-lint not installed
+    if ! go vet ./... 2>&1; then
+        echo "FAIL: go vet"
+        exit 1
+    fi
+fi
+
+# Tests
+if ! go test ./... -count=1 -timeout 120s 2>&1; then
+    echo "FAIL: go test"
+    exit 1
+fi
+
+# File size lint (no Go file over 1000 lines)
+OVERSIZED=$(find . -name "*.go" -not -path "./vendor/*" -exec wc -l {} + | sort -rn | awk '$1 > 1000 && $2 != "total" {print $2 " (" $1 " lines)"}')
+if [ -n "$OVERSIZED" ]; then
+    echo "FAIL: files over 1000 lines:"
+    echo "$OVERSIZED"
+    exit 1
+fi
+
+echo "pre-commit: all checks passed"

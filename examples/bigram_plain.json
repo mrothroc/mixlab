@@ -1,0 +1,32 @@
+{
+  "name": "bigram_plain",
+
+  // Small transformer baseline with an added hashed bigram embedding channel.
+  "model_dim": 128,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // Bigram settings add short-range token-pair context before the block stack.
+  "bigram_vocab_size": 4096,
+  "bigram_dim": 64,
+
+  // Alternates causal attention with SwiGLU feed-forward blocks.
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+
+  // Short training run for checking that bigram features lower into the model.
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 1024
+  }
+}

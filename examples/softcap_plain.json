@@ -1,0 +1,31 @@
+{
+  "name": "softcap_plain",
+
+  // Plain transformer baseline with logit soft-capping enabled.
+  "model_dim": 128,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // Bounds logits before loss to limit extreme confidence during training.
+  "logit_softcap": 30.0,
+
+  // Standard 3-layer attention/SwiGLU stack for isolating the softcap effect.
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+
+  // Short run for comparing softcap behavior against plain_3L-style configs.
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 1024
+  }
+}

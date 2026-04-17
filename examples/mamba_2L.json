@@ -1,0 +1,26 @@
+{
+  "name": "mamba_2L",
+
+  // Two-layer selective state-space example using Mamba blocks.
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // Mamba blocks provide sequence mixing; SwiGLU blocks provide channel mixing.
+  "blocks": [
+    {"type": "mamba"},
+    {"type": "swiglu"},
+    {"type": "mamba"},
+    {"type": "swiglu"}
+  ],
+
+  // Lightweight training settings keep this backend path quick to exercise.
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 512
+  }
+}
