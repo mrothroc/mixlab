@@ -6,7 +6,7 @@ The `custom` block type lets you define feed-forward blocks in JSON without
 writing Go code. A custom block declares its own weight tensors (with
 symbolic shape dimensions) and a sequence of IR operations that compose them.
 
-This example defines a GeGLU-style gated feed-forward block.
+This example defines a compact gated feed-forward block using a SiLU gate.
 
 ## Config structure
 
@@ -58,7 +58,9 @@ Each entry in `ops` describes one IR operation.
 |-------|------|-------------|
 | `op` | string | IR opcode name (see supported ops below) |
 | `inputs` | array of strings | Input tensor names (weights, intermediates, or `"x"` for block input) |
-| `output` | string | Output tensor name. Use `"x"` to write back to the block's hidden state |
+| `output` | string | Output tensor name for single-output ops. Use `"x"` to write back to the block's hidden state |
+| `outputs` | array of strings | Output tensor names for multi-output ops such as `rope` |
+| `params` | object | Optional op parameters such as `shape`, `axes`, `axis`, `scalar`, `eps`, `T`, `head_dim`, or `base` |
 
 ## Shape symbols
 
@@ -70,13 +72,17 @@ the model configuration.
 | `D` | `model_dim` | Hidden dimension |
 | `H` | `heads` | Number of attention heads |
 | `HD` | `model_dim / heads` | Per-head dimension |
-| `FFN` | `model_dim * 8 / 3` | Standard feed-forward inner dimension (~2.67x D) |
+| `FFN` | `int(2.67 * model_dim)` | Standard feed-forward inner dimension |
 | `2D` | `2 * model_dim` | 2x hidden dimension |
+| `3D` | `3 * model_dim` | 3x hidden dimension |
 | `4D` | `4 * model_dim` | 4x hidden dimension |
+| `8D` | `8 * model_dim` | 8x hidden dimension |
 | `<float>D` | `float * model_dim` | Arbitrary multiplier (e.g. `1.5D`) |
 | `T` | `seq_len` | Sequence length |
 | `B` | batch size | Batch size |
 | `V` | `vocab_size` | Vocabulary size |
+| `BT` | `batch size * seq_len` | Flattened batch/sequence dimension |
+| `T/2` | `seq_len / 2` | Half sequence length |
 
 Integer literals are also allowed for fixed-size dimensions.
 
@@ -91,7 +97,6 @@ Integer literals are also allowed for fixed-size dimensions.
 - `mul` -- `output = a * b`
 - `div` -- `output = a / b`
 - `scalar_mul` -- `output = a * scalar`
-- `square` -- `output = a^2`
 
 ### Activations
 - `sigmoid` -- `output = sigmoid(a)`
@@ -101,25 +106,15 @@ Integer literals are also allowed for fixed-size dimensions.
 - `tanh` -- `output = tanh(a)`
 
 ### Reductions
-- `softmax` -- softmax along last axis
-- `mean_axis` -- mean along specified axis
-- `cumsum` -- cumulative sum
+- `softmax` -- softmax along an axis
 
 ### Shape manipulation
 - `reshape` -- reshape tensor
 - `transpose` -- transpose axes
-- `slice` -- slice along axis
-- `concat` -- concatenate tensors
-- `squeeze` -- remove size-1 dimensions
-
-### Math
-- `sqrt`, `rsqrt`, `sin`, `cos`, `exp`, `outer`, `argsort`
 
 ### Special
 - `rmsnorm` -- RMS normalization with learned scale
 - `rope` -- rotary position embeddings
-- `causal_mask` -- apply causal attention mask
-- `cross_entropy` -- cross-entropy loss
 
 ## Data flow
 
@@ -157,7 +152,7 @@ Block output ("x")
    gate path; other custom blocks can use a different supported activation.
 
 4. **Keep custom blocks simple.** Complex custom blocks are harder to debug.
-   Start with a known architecture (like GeGLU) and modify incrementally.
+   Start with a known gated feed-forward pattern and modify incrementally.
 
 ## How to run
 
@@ -171,7 +166,6 @@ CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab
 
 ## Status
 
-This config requires the `custom` block type to be registered in mixlab's config
-validator and IR builder. Until then, parsing will fail with an "invalid type"
-error. See the corresponding custom block implementation for the
-reference implementation.
+This config is runnable. The `custom` block type is registered in
+`arch/registry.go`, validated in `arch/config.go`, and lowered by
+`arch/custom.go`.

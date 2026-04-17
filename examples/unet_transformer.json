@@ -3,7 +3,7 @@
 
   // Model dimensions
   "model_dim": 512,
-  "vocab_size": 1024,          // SP1024 tokenizer
+  "vocab_size": 1024,          // 1024-token BPE vocabulary
   "seq_len": 2048,
   "mlp_mult": 3.0,
 

@@ -35,10 +35,11 @@ docker build -f docker/app.Dockerfile \
 
 ## RunPod Serverless
 
-mixlab ships with a RunPod serverless handler. To deploy on RunPod:
+mixlab ships with a separate RunPod serverless image that adds Python and
+`scripts/handler.py` on top of the CLI image. To deploy on RunPod:
 
 1. Create a serverless endpoint at [runpod.io](https://www.runpod.io/)
-2. Set the container image to `michaelrothrock/mixlab:latest`
+2. Set the container image to `michaelrothrock/mixlab:runpod`
 3. The handler starts automatically — it accepts JSON jobs via the RunPod API
 
 ### Sending jobs
@@ -82,14 +83,20 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT/status/JOB_ID \
 
 | Field | Description |
 |-------|-------------|
-| `mode` | `smoke`, `arch`, or `arch_race` |
+| `mode` | Any mixlab CLI mode supported by the container, such as `smoke`, `arch`, `arch_race`, `count`, `eval`, `hiddenstats`, or `generate` |
 | `config_json` | Inline JSON config (alternative to `config` file path) |
 | `config` | Path to a config file inside the container (e.g. `/examples/plain_3L.json`) |
 | `train` | Glob pattern for training data shards |
 | `setup` | Array of shell commands to run before training (e.g. data download) |
+| `post` | Array of shell commands to run after mixlab exits |
 | `safetensors` | Path to export weights after training |
 | `safetensors_load` | Path to load weights before training |
 | `quantize` | `none`, `int8`, or `int6` |
+| `output` | Output path for modes that write a file, such as `hiddenstats` |
+| `checkpoint_dir` | Directory for periodic safetensors checkpoints |
+| `checkpoint_every` | Save a checkpoint every N training steps |
+| `max_tokens` | Maximum generated tokens for `generate` mode |
+| `temperature` | Sampling temperature for `generate` mode |
 | `timeout` | Max seconds (default 3600) |
 
 Logs stream to the RunPod dashboard in real time.

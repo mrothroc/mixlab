@@ -2,9 +2,9 @@
 
 ## Architecture summary
 
-feed-forward blocks. This is the simplest architecture in mixlab.
-`model_dim=128` and processed sequentially through 6 blocks (3 attention + 3
-provides.
+`plain_3L.json` is the simplest architecture in mixlab: a causal transformer
+with `model_dim=128`, `seq_len=128`, and 6 sequential blocks (3 attention
+blocks alternating with 3 SwiGLU feed-forward blocks).
 
 ## Config fields explained
 
@@ -39,7 +39,7 @@ The `blocks` array alternates between two block types:
 
 - **Training speed:** Very fast due to small model_dim and short seq_len. Expect under 1 minute for 200 steps on Apple Silicon.
 - **Loss trajectory:** Training loss should decrease steadily over 200 steps but will not converge -- this is a quick sanity check, not a full training run.
-- **Parameter count:** Roughly ~500K parameters. Well within the 16MB budget even without quantization.
+- **Parameter count:** `mixlab -mode count -config examples/plain_3L.json` reports 1,116,288 parameters, about 4.26 MiB in float32 or 1.06 MiB with int8 quantized export.
 
 ## How to run
 

@@ -3,7 +3,8 @@
 A general-purpose ML architecture exploration tool. Define model architectures
 in JSON, compile them to a typed Go IR, and train them on GPU through the MLX
 backend without writing Python. `mixlab` supports plain transformer stacks,
-fully custom JSON-defined blocks.
+recurrent and bottleneck blocks, U-Net-style layouts, and fully custom
+JSON-defined blocks.
 
 **Platforms:** macOS (Apple Silicon) and Linux (NVIDIA CUDA via Docker). Windows is not supported.
 
@@ -31,14 +32,14 @@ for 200 steps and finishes in seconds.
 ## Quickstart (Docker / NVIDIA GPU)
 
 ```bash
-# Pull the pre-built base image (or build your own — see docker/README.md)
-docker build -f docker/app.Dockerfile -t mixlab .
+# Pull the pre-built CLI image, or build your own; see docker/README.md.
+docker pull michaelrothrock/mixlab:latest
 
 # Smoke test
-docker run --gpus all mixlab -mode smoke
+docker run --gpus all michaelrothrock/mixlab:latest -mode smoke
 
 # Train (mount your data directory)
-docker run --gpus all -v $(pwd)/data:/data mixlab \
+docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
     -mode arch -config /examples/plain_3L.json -train '/data/*.bin'
 ```
 
@@ -47,6 +48,7 @@ docker run --gpus all -v $(pwd)/data:/data mixlab \
 - JSON-first model definition: no Go or Python changes required for most experiments.
 - Built-in block families: `plain`, `swiglu`, `mamba`, `mamba3`, `retnet`,
   `rwkv`, `perceiver`, `bottleneck`, `cross_attention`, `token_blend`, `custom`.
+- Architecture features: U-Net skip connections, parallel residuals, recurrence,
   residual mixing, tied embeddings, hashed bigram embeddings, configurable MLP width.
 - Trainer features: grouped optimizer settings, Muon for matrix weights, AdamW
   for scalar/head/embed groups, SWA/EMA averaging, validation-loss early
@@ -74,20 +76,20 @@ This produces a `mixlab` binary in the project root.
 For Linux or any machine with an NVIDIA GPU:
 
 ```bash
-# Build the container (from the repo root)
-docker build -t mixlab-cuda -f docker/app.Dockerfile .
+# Pull the pre-built CLI image.
+docker pull michaelrothrock/mixlab:latest
 
 # Run smoke test
-docker run --gpus all mixlab-cuda -mode smoke
+docker run --gpus all michaelrothrock/mixlab:latest -mode smoke
 
 # Train a model (mount your data directory)
-docker run --gpus all -v $(pwd)/data:/data mixlab-cuda \
+docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
     -mode arch -config /examples/plain_3L.json -train '/data/train_*.bin'
 ```
 
 ## Usage
 
-mixlab has four modes, selected with `-mode`:
+mixlab has eight modes, selected with `-mode`:
 
 | Mode | Description |
 |------|-------------|
@@ -95,6 +97,10 @@ mixlab has four modes, selected with `-mode`:
 | `arch_race` | Train every JSON config in a directory and compare results. |
 | `smoke` | Run diagnostic checks (MLX availability, GPU health). |
 | `prepare` | Tokenize raw text or JSONL into binary training shards. |
+| `count` | Print parameter, size, block, and IR op counts for a config. |
+| `eval` | Load safetensors and evaluate validation loss. |
+| `hiddenstats` | Export one batch of hidden states as float32 binary. |
+| `generate` | Generate token IDs from a safetensors checkpoint. |
 
 ### arch (default)
 
@@ -111,6 +117,8 @@ Additional flags:
 | `-safetensors-load FILE` | Load weights before training (resume or eval-only) |
 | `-quantize MODE` | Weight quantization: `none` (default), `int8`, `int6` |
 | `-lut-dir DIR` | Directory for BPB lookup tables (default: `data`) |
+| `-checkpoint-dir DIR` | Directory for periodic safetensors checkpoints |
+| `-checkpoint-every N` | Save a checkpoint every `N` training steps (`0` disables) |
 
 ### arch_race
 
@@ -119,6 +127,41 @@ Additional flags:
 ```
 
 Trains every `.json` config in the given directory and prints a ranked summary.
+
+### count
+
+```bash
+./mixlab -mode count -config examples/plain_3L.json
+```
+
+### eval
+
+```bash
+./mixlab -mode eval -config examples/plain_3L.json \
+  -safetensors-load weights.st -train 'data/example/train_*.bin'
+```
+
+### hiddenstats
+
+```bash
+./mixlab -mode hiddenstats -config examples/plain_3L.json \
+  -safetensors-load weights.st -train 'data/example/train_*.bin' \
+  -output hidden.bin
+```
+
+### generate
+
+```bash
+./mixlab -mode generate -config examples/plain_3L.json \
+  -safetensors-load weights.st -prompt token_ids:0,1,2
+```
+
+| Flag | Description |
+|------|-------------|
+| `-max-tokens` | Maximum generated tokens (default: `256`) |
+| `-temperature` | Sampling temperature (default: `0.8`) |
+| `-top-k` | Top-k sampling cutoff; `0` disables the cutoff |
+| `-prompt` | Prompt token IDs in `token_ids:0,1,2` form |
 
 ### prepare
 
@@ -149,7 +192,7 @@ optimization: AdamW for embedding/head/scalar groups and Muon for matrix
 weights.
 
 Sequential models can run as plain stacks or as U-Net layouts with learned skip
-frequency streams. Recent config features such as `block_scales`,
+connections. Config features such as `parallel_residual`, `recurrence`,
 `resid_mix`, `tie_embeddings`, and `mlp_mult` all lower directly into the IR.
 
 ## Block types
@@ -191,7 +234,8 @@ depth recurrence, parallel residuals, GQA, tied embeddings, and Muon optimizer:
 ```
 
 See also `examples/unet_transformer.json` for a U-Net architecture with skip
-connections, and all other examples for commented configs covering every feature.
+connections, and the other examples for commented configs covering the common
+feature paths.
 
 ## Custom blocks
 
@@ -219,7 +263,7 @@ Custom blocks let you define novel architectures entirely in JSON.
 
 See `examples/custom_geglu.json` for a runnable example and
 [`docs/config-reference.md`](docs/config-reference.md) for the full JSON schema,
-shape symbols, op list, training fields, and v0.7 feature notes.
+shape symbols, op list, and training fields.
 
 ## Performance
 
@@ -228,8 +272,9 @@ On Apple M1 Max (Metal): ~8.5 seconds per 100 training steps at `d=1024`,
 
 ## Contributing
 
-See [CONTRIBUTING.md](../../CONTRIBUTING.md) for guidelines on submitting
-changes, code style, testing, and adding new block types.
+Before submitting changes, run `make test` from the repository root. The block
+registry in `arch/registry.go` and config validation in `arch/config.go` must
+both be updated when adding a new block type.
 
 ## License
 

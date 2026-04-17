@@ -17,6 +17,7 @@ These fields live at the root of the config object.
 | `name` | string | No | Source filename/path | Human-readable run name. |
 | `model_dim` | integer | Yes | None | Hidden size `D`. Must be `> 0`. |
 | `vocab_size` | integer | Yes | None | Token vocabulary size `V`. Must be `> 0`. |
+| `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
 | `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
 | `bigram_vocab_size` | integer | No | Disabled | Enables model-level hashed bigram embeddings when `> 1`. `0` disables. `1` is invalid. |
@@ -24,6 +25,10 @@ These fields live at the root of the config object.
 | `tie_embeddings` | boolean | No | `false` | Shares token embedding and output head weights. |
 | `block_scales` | boolean | No | `false` | Adds learned per-channel scales to `plain` attention and MLP residual branches, plus the MLP branch in `swiglu`. |
 | `resid_mix` | boolean | No | `false` | Adds learned mixing of the current state and original input on `plain` blocks. |
+| `parallel_residual` | boolean | No | `false` | Requires `(plain, swiglu)` pairs and emits attention and MLP branches from the same pre-norm input. Cannot be combined with `unet`. |
+| `unet` | boolean | No | `false` | Splits the `blocks` list into encoder/decoder halves with learned skip connections. |
+| `blocks` | array | Yes | None | Ordered block list. Must contain at least one block. |
+| `recurrence` | integer array | No | Disabled | Weight-sharing map for `blocks`; length must equal `blocks`, references must point to the same or earlier block with the same type. |
 | `training` | object | No | Defaults applied per field | Training hyperparameters. See [Training section](#training). |
 
 ### Minimal sequential model
@@ -203,6 +208,9 @@ Example:
 
 ### `cross_attention`
 
+Cross-attention block where the current stream provides queries and
+`source_stream` provides keys and values. No causal mask is applied to the
+source stream.
 
 Required fields:
 
@@ -395,54 +403,6 @@ The custom-op decoder recognizes these `params` keys:
 }
 ```
 
-
-
-
-Required:
-
-
-Behavior:
-
-- `seq_len` must be even.
-- The builder automatically inserts an interaction stage after low/high processing.
-
-Example:
-
-```json
-{
-    {"type": "plain", "heads": 4},
-    {"type": "swiglu"}
-  ],
-    {"type": "plain", "heads": 4},
-    {"type": "swiglu"}
-  ]
-}
-```
-
-
-Required:
-
-
-Behavior:
-
-- `seq_len` must be divisible by `4`.
-
-Example:
-
-```json
-{
-    {"type": "plain", "heads": 8},
-    {"type": "swiglu"}
-  ],
-    {"type": "plain", "heads": 8},
-    {"type": "swiglu"}
-  ],
-    {"type": "plain", "heads": 8},
-    {"type": "swiglu"}
-  ]
-}
-```
-
 ## Training
 
 The `training` object controls optimization, batching, and stochastic settings.
@@ -451,6 +411,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 |------|------|----------|---------|-------|
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
 | `lr` | number | No | `3e-4` | Base learning rate. Must be `> 0`. |
+| `warmdown_steps` | integer | No | `0` | Cosine warmdown length at the end of training. Must be `>= 0`; values above `steps` are clamped by the scheduler. |
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
 | `ttt_steps` | integer | No | `0` | Score-first test-time training updates per validation batch during eval mode and full BPB eval. `0` disables TTT. Must be `>= 0`. |
 | `ttt_lr` | number | No | `1e-5` | Learning rate for TTT updates. Must be `>= 0`; keep much smaller than training `lr`. |
@@ -495,6 +456,7 @@ The trainer classifies weights into four optimizer groups:
   "training": {
     "steps": 20000,
     "lr": 0.0003,
+    "warmdown_steps": 1000,
     "target_val_loss": 1.2,
     "grad_clip": 0.3,
     "weight_decay": 0.01,
@@ -518,9 +480,10 @@ The trainer classifies weights into four optimizer groups:
 }
 ```
 
-## New v0.7 features
+## Advanced architecture features
 
-These are the main config additions reflected in the current codebase.
+These optional fields extend the sequential block stack without changing the
+top-level `blocks` array format.
 
 ### `unet`
 
@@ -652,25 +615,47 @@ Effect:
 
 - `plain`, `swiglu`, and `cross_attention` expand to `round(model_dim * mlp_mult)`, clamped to at least `model_dim`.
 
-## Full example: `leader.json`
+## Full example: `recurrent_parallel.json`
 
-This advanced architecture example combines several recent features:
+This advanced architecture example combines recurrence, parallel residuals,
+GQA, tied embeddings, bigram embeddings, logit softcap, and test-time training:
 
-```json
+```jsonc
 {
-  "name": "leader",
+  "name": "recurrent_parallel",
   "model_dim": 512,
-  "vocab_size": 1024,
+  "vocab_size": 8192,
   "seq_len": 2048,
   "mlp_mult": 3.0,
   "logit_softcap": 30.0,
   "bigram_vocab_size": 4096,
   "bigram_dim": 128,
   "tie_embeddings": true,
-  "unet": true,
+  "parallel_residual": true,
   "block_scales": true,
-  "resid_mix": true
+  "resid_mix": true,
+  "recurrence": [0, 1, 2, 3, 4, 5, 2, 3, 4, 5],
+  "blocks": [
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 8, "kv_heads": 4},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "steps": 3000,
+    "lr": 3e-4,
+    "batch_tokens": 4096,
+    "ttt_steps": 1,
+    "ttt_lr": 1e-5
+  }
 }
 ```
 
-See `examples/leader.json` for the full block list and training section.
+See `examples/recurrent_parallel.json` for the runnable version with inline
+comments, and `examples/unet_transformer.json` for the U-Net path.

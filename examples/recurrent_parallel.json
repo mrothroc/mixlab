@@ -3,7 +3,7 @@
 
   // Model dimensions
   "model_dim": 512,
-  "vocab_size": 8192,         // SP8192 tokenizer
+  "vocab_size": 8192,         // 8192-token BPE vocabulary
   "seq_len": 2048,
   "mlp_mult": 3.0,            // FFN hidden dim = 3x model dim
 

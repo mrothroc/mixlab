@@ -27,7 +27,7 @@ make build
 | [retnet_2L.json](retnet_2L.json) | RetNet | Exponential decay retention |
 | [rwkv_2L.json](rwkv_2L.json) | RWKV | Linear attention with time decay |
 | [perceiver_2L.json](perceiver_2L.json) | Perceiver | Latent bottleneck cross-attention |
-| [custom_geglu.json](custom_geglu.json) | Custom block | GeGLU defined in pure JSON |
+| [custom_geglu.json](custom_geglu.json) | Custom block | Gated feed-forward block defined in pure JSON |
 | [unet_transformer.json](unet_transformer.json) | U-Net transformer | Skip connections, block scales, residual mixing |
 | [recurrent_parallel.json](recurrent_parallel.json) | Recurrent parallel | Depth recurrence, parallel residuals, TTT |
 
@@ -36,7 +36,7 @@ make build
 - **Learning mixlab**: Start with `plain_3L.json` — it trains in seconds.
 - **Exploring block types**: Try `mamba_2L.json`, `retnet_2L.json`, or `rwkv_2L.json`.
 - **Custom architectures**: See `custom_geglu.json` and [custom_geglu.md](custom_geglu.md).
-- **Advanced features**: `unet_transformer.json` or `recurrent_parallel.json` use everything.
+- **Advanced features**: `unet_transformer.json` and `recurrent_parallel.json` cover U-Net skips, recurrence, parallel residuals, block scales, residual mixing, tied embeddings, and TTT.
 
 ## Companion documentation
 

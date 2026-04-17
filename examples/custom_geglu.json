@@ -6,7 +6,7 @@
   "vocab_size": 1024,
   "seq_len": 128,
 
-  // Plain attention handles token mixing; custom GEGLU blocks handle channel mixing.
+  // Plain attention handles token mixing; custom gated FFN blocks handle channel mixing.
   "blocks": [
     {"type": "plain", "heads": 4},
 
@@ -16,7 +16,7 @@
       {"name": "w_up",   "shape": ["D", "FFN"]},
       {"name": "w_down", "shape": ["FFN", "D"]}
     ], "ops": [
-      // Ops implement gated GELU-style FFN math and return to residual state x.
+      // Ops implement a SiLU-gated FFN and return to residual state x.
       {"op": "matmul",  "inputs": ["x", "w_gate"], "output": "gate"},
       {"op": "silu",    "inputs": ["gate"],         "output": "gate_act"},
       {"op": "matmul",  "inputs": ["x", "w_up"],   "output": "up"},
