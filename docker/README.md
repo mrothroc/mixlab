@@ -159,6 +159,16 @@ docker build -f docker/app.Dockerfile \
     -t mixlab .
 ```
 
+### RunPod image (optional)
+
+Adds Python + RunPod handler on top of the app image.
+
+```bash
+docker build -f docker/runpod.Dockerfile \
+    --build-arg APP_IMAGE=mixlab \
+    -t mixlab:runpod .
+```
+
 ## Supported GPU architectures
 
 | Architecture | GPUs | Status |

@@ -16,7 +16,7 @@
   "bigram_vocab_size": 4096,   // Hashed bigram embedding table size
   "bigram_dim": 128,
 
-  // Depth recurrence: 5 block pairs, layers 3-4 reuse weights from layers 1-2.
+  // Depth recurrence: 5 block pairs, layers 6-9 reuse weights from layers 2-5.
   // This gives 10 effective layers with only 6 unique weight sets.
   "recurrence": [0, 1, 2, 3, 4, 5, 2, 3, 4, 5],
 
