@@ -359,6 +359,35 @@ Both flags are safe for real training runs — profiling adds negligible
 overhead and the output is a standard pprof file that works with `go tool
 pprof`, Speedscope, or any pprof-compatible viewer.
 
+**Remote GPU profiling (RunPod / cloud):** Generate a signed upload URL,
+pass the training command in `setup`, and upload the profile in `post`:
+
+```bash
+# Generate a signed URL (1 hour expiry)
+gcloud storage sign-url gs://your-bucket/profiles/cpu.prof \
+    --http-verb=PUT --duration=1h \
+    --impersonate-service-account=your-sa@project.iam.gserviceaccount.com
+
+# Submit RunPod job with profiling
+curl -X POST https://api.runpod.ai/v2/YOUR_ENDPOINT/run \
+    -H 'Authorization: Bearer YOUR_API_KEY' \
+    -d '{
+  "input": {
+    "setup": [
+      "mixlab -mode arch -config /examples/plain_3L.json -train /data/*.bin -cpuprofile /tmp/cpu.prof"
+    ],
+    "mode": "smoke",
+    "post": [
+      "curl -X PUT -H '"'"'Content-Type: application/octet-stream'"'"' --data-binary @/tmp/cpu.prof '"'"'SIGNED_URL'"'"'"
+    ]
+  }
+}'
+
+# Download and view the flame graph locally
+gcloud storage cp gs://your-bucket/profiles/cpu.prof .
+go tool pprof -http :8080 cpu.prof
+```
+
 ## Contributing
 
 Before submitting changes, run `make test` from the repository root. The block
