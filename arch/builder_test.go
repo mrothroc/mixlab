@@ -38,7 +38,7 @@ func TestCountWeights_Plain3L(t *testing.T) {
 }
 
 func TestCountWeights_UnsupportedType(t *testing.T) {
-	blocks := []BlockSpec{{Type: "garch"}}
+	blocks := []BlockSpec{{Type: "unknown_block"}}
 	_, err := CountWeights(DefaultFFNMultiplier, false, false, false, false, blocks)
 	if err == nil {
 		t.Fatal("expected error for unsupported type")
