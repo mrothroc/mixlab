@@ -69,6 +69,7 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
 
 **Good fit:**
 - Rapid architecture iteration — try dozens of configs without writing code
+- Fast development loop — builds in <2 seconds, full test suite in ~5 seconds
 - Mac-first workflow — prototype on Apple Silicon, scale to cloud GPU
 - Comparing block families (attention vs Mamba vs RetNet) on the same data
 - Teaching/learning — visible JSON configs make architecture choices explicit
