@@ -48,7 +48,8 @@ The script:
 | Run | Steps | Best val loss | Final val loss | Tokens/sec | Notes |
 | --- | ---: | ---: | ---: | ---: | --- |
 | nanoGPT published | 5000 | 1.4697 | 1.4697 | — | A100, compact 65-char vocab |
-| mixlab plain transformer | 5000 | 1.5527 | 1.5581 | ~37,900 | M1 Max, byte vocab (256), 36 min |
+| mixlab (Metal) | 5000 | 1.5527 | 1.5581 | ~37,900 | Apple M1 Max, byte vocab (256), 36 min |
+| mixlab (CUDA) | 5000 | 1.5588 | 1.5651 | ~91,300 | RunPod serverless GPU, byte vocab (256), 15 min |
 
 The 0.08 gap is expected: byte-level tokenization (256 IDs) wastes capacity
 on unused byte positions compared to nanoGPT's compact 65-character vocabulary.
