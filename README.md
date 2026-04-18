@@ -77,10 +77,16 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
 - Production training at scale — use PyTorch, JAX, or dedicated frameworks
 - Custom CUDA kernels or operator-level debugging
 - Distributed training across multiple GPUs
-- Models that need autograd flexibility beyond the built-in op set
 
 mixlab is an architecture exploration tool, not a training framework.
 It trades generality for speed of iteration.
+
+**Extensibility:** Need ops beyond JSON custom blocks? Create a Go package
+that imports `github.com/mrothroc/mixlab/arch`, registers new block types
+via `arch.RegisterBlock()`, and emits IR using the public op API
+(`prog.MatMul()`, `prog.RMSNorm()`, etc.). Your blocks compile into the
+same binary and run on both Metal and CUDA with no additional work.
+See [`arch/registry.go`](arch/registry.go) for the registration API.
 
 ## Install
 
