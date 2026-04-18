@@ -65,6 +65,23 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
   stopping via `training.target_val_loss`, safetensors import/export.
 - Custom blocks: declare weights and op graphs directly in JSON.
 
+## When to use mixlab
+
+**Good fit:**
+- Rapid architecture iteration — try dozens of configs without writing code
+- Mac-first workflow — prototype on Apple Silicon, scale to cloud GPU
+- Comparing block families (attention vs Mamba vs RetNet) on the same data
+- Teaching/learning — visible JSON configs make architecture choices explicit
+
+**Not the right tool for:**
+- Production training at scale — use PyTorch, JAX, or dedicated frameworks
+- Custom CUDA kernels or operator-level debugging
+- Distributed training across multiple GPUs
+- Models that need autograd flexibility beyond the built-in op set
+
+mixlab is an architecture exploration tool, not a training framework.
+It trades generality for speed of iteration.
+
 ## Install
 
 ### Homebrew (recommended)

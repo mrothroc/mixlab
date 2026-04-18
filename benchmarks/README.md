@@ -49,7 +49,7 @@ The script:
 | --- | ---: | ---: | ---: | ---: | --- |
 | nanoGPT published | 5000 | 1.4697 | 1.4697 | — | A100, compact 65-char vocab |
 | mixlab (Metal) | 5000 | 1.5527 | 1.5581 | ~37,900 | Apple M1 Max, byte vocab (256), 36 min |
-| mixlab (CUDA) | 5000 | 1.5588 | 1.5651 | ~91,300 | RunPod serverless GPU, byte vocab (256), 15 min |
+| mixlab (CUDA) | 5000 | 1.5588 | 1.5651 | ~91,300 | NVIDIA A40 (RunPod), byte vocab (256), 15 min |
 
 The 0.08 gap is expected: byte-level tokenization (256 IDs) wastes capacity
 on unused byte positions compared to nanoGPT's compact 65-character vocabulary.
@@ -59,7 +59,13 @@ Validation loss is stable from step 3000 onward with no overfitting.
 
 ## Hardware and Software Notes
 
-- mixlab commit: `git rev-parse HEAD`
-- nanoGPT reference commit: `3adf61e154c3fe3fca428ad6bc3818b27a3b8291`
-- OS and accelerator
-- Go version: `go version`
+**Metal run:** Apple M1 Max, macOS, MLX via Homebrew, mixlab commit `d136a8c`.
+
+**CUDA run:** NVIDIA A40 (46 GB), Driver 570.195.03, CUDA 12.8,
+RunPod serverless, `michaelrothrock/mixlab:runpod` container,
+mixlab commit `d136a8c`.
+
+nanoGPT reference commit: `3adf61e154c3fe3fca428ad6bc3818b27a3b8291`.
+
+When publishing your own results, record: GPU model, driver/CUDA version,
+mixlab commit (`git rev-parse HEAD`), and the full command used.
