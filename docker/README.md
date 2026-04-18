@@ -88,7 +88,7 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT/status/JOB_ID \
 | `config` | Path to a config file inside the container (e.g. `/examples/plain_3L.json`) |
 | `train` | Glob pattern for training data shards |
 | `setup` | Array of shell commands to run before training (e.g. data download) |
-| `post` | Array of shell commands to run after mixlab exits |
+| `post` | Array of shell commands to run after mixlab exits. `$MIXLAB_CONFIG` is set to the config file path. |
 | `safetensors` | Path to export weights after training |
 | `safetensors_load` | Path to load weights before training |
 | `quantize` | `none`, `int8`, or `int6` |

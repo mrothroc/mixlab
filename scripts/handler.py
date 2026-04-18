@@ -64,6 +64,7 @@ def handler(job):
 
     if config_path:
         cmd.extend(["-config", config_path])
+        os.environ["MIXLAB_CONFIG"] = config_path
     if job_input.get("train"):
         cmd.extend(["-train", job_input["train"]])
     if job_input.get("safetensors"):
@@ -105,11 +106,9 @@ def handler(job):
         return {"error": "timeout"}
     except Exception as e:
         return {"error": str(e)}
-    finally:
-        if tmp_config:
-            os.unlink(tmp_config.name)
 
     # --- Post-processing commands (after mixlab) ---
+    # Run before config cleanup so post commands can reference the config file.
     post_cmds = job_input.get("post", [])
     if post_cmds:
         post_out, err = run_shell_commands(post_cmds, "post", timeout)
@@ -117,6 +116,9 @@ def handler(job):
             output["post_error"] = err
         else:
             output["post_stdout"] = post_out
+
+    if tmp_config:
+        os.unlink(tmp_config.name)
 
     return output
 
