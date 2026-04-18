@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
+	"runtime/pprof"
 
 	"github.com/mrothroc/mixlab/train"
 )
@@ -25,6 +27,10 @@ func main() {
 	topK := flag.Int("top-k", 40, "top-k sampling cutoff (generate mode)")
 	prompt := flag.String("prompt", "", "prompt for generate mode, e.g. token_ids:0,1,2")
 
+	// profiling flags
+	cpuProfile := flag.String("cpuprofile", "", "write CPU profile to file")
+	memProfile := flag.String("memprofile", "", "write memory profile to file")
+
 	// prepare mode flags
 	prepInput := flag.String("input", "", "input text file, JSONL, or directory (prepare mode)")
 	prepOutput := flag.String("output", "", "output directory for shards (prepare mode) or output file (hiddenstats mode)")
@@ -34,6 +40,31 @@ func main() {
 	prepTextField := flag.String("text-field", "text", "JSON field for text in JSONL (prepare mode)")
 
 	flag.Parse()
+
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: create CPU profile: %v\n", err)
+			os.Exit(1)
+		}
+		pprof.StartCPUProfile(f)
+		defer func() {
+			pprof.StopCPUProfile()
+			f.Close()
+		}()
+	}
+	if *memProfile != "" {
+		defer func() {
+			f, err := os.Create(*memProfile)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: create mem profile: %v\n", err)
+				return
+			}
+			runtime.GC()
+			pprof.WriteHeapProfile(f)
+			f.Close()
+		}()
+	}
 
 	switch *quantize {
 	case "none", "int8", "int6":
