@@ -68,11 +68,11 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
 ## When to use mixlab
 
 **Good fit:**
-- Rapid architecture iteration — try dozens of configs without writing code
-- Fast development loop — builds in <2 seconds, full test suite in ~5 seconds
-- Mac-first workflow — prototype on Apple Silicon, scale to cloud GPU
+- Rapid architecture iteration — edit a JSON config, train on Metal, see results in seconds
+- Mac-first workflow — prototype on Apple Silicon, scale to cloud GPU with the same config
 - Comparing block families (attention vs Mamba vs RetNet) on the same data
 - Teaching/learning — visible JSON configs make architecture choices explicit
+- Fast block development — import mixlab, register your block, build in <2s, test in ~5s
 
 **Not the right tool for:**
 - Production training at scale — use PyTorch, JAX, or dedicated frameworks
