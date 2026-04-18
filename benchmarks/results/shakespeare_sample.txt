@@ -1,0 +1,15 @@
+Prompt: "The" (byte IDs 84, 104, 101)
+Model: shakespeare_char_gpt2_small, 10.8M params, 5000 steps
+Temperature: 0.8, trained on CUDA (NVIDIA A40)
+---
+The shadow of the foe; and some plead late
+My better things of banishment.
+
+AUTOLYCUS:
+Ay, my word: for being a
+great good soldiers, so sir, he is against the
+world done.
+
+Clown:
+Ay, if you are to sad a parlon which shows a came
+with raised and sworn, do d
