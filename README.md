@@ -335,6 +335,25 @@ make build
 On Apple M1 Max (Metal): ~8.5 seconds per 100 training steps at `d=1024`,
 `seq_len=1024`. Smaller models (`d=128`) train in seconds.
 
+### Profiling
+
+mixlab is written in Go, which has built-in profiling with zero overhead
+when disabled. No extra tools to install.
+
+```bash
+# CPU profile — where is time spent?
+./mixlab -mode arch -config my_model.json -train 'data/*.bin' -cpuprofile cpu.prof
+go tool pprof -http :8080 cpu.prof    # interactive flame graph in your browser
+
+# Memory profile — what's allocating?
+./mixlab -mode arch -config my_model.json -train 'data/*.bin' -memprofile mem.prof
+go tool pprof mem.prof
+```
+
+Both flags are safe for real training runs — profiling adds negligible
+overhead and the output is a standard pprof file that works with `go tool
+pprof`, Speedscope, or any pprof-compatible viewer.
+
 ## Contributing
 
 Before submitting changes, run `make test` from the repository root. The block
