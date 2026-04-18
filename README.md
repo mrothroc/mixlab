@@ -340,6 +340,14 @@ make build
 On Apple M1 Max (Metal): ~8.5 seconds per 100 training steps at `d=1024`,
 `seq_len=1024`. Smaller models (`d=128`) train in seconds.
 
+**CUDA note:** GPU utilization may fluctuate during training due to MLX's
+per-iteration kernel dispatch overhead. MLX does not yet use CUDA graphs
+for kernel replay, so each training step re-launches kernels individually.
+This is a known upstream limitation tracked in
+[ml-explore/mlx#2358](https://github.com/ml-explore/mlx/issues/2358).
+Training results are correct; throughput will improve as MLX's CUDA backend
+matures.
+
 ### Profiling
 
 mixlab is written in Go, which has built-in profiling with zero overhead
