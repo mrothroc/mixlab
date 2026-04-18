@@ -85,8 +85,12 @@ It trades generality for speed of iteration.
 that imports `github.com/mrothroc/mixlab/arch`, registers new block types
 via `arch.RegisterBlock()`, and emits IR using the public op API
 (`prog.MatMul()`, `prog.RMSNorm()`, etc.). Your blocks compile into the
-same binary and run on both Metal and CUDA with no additional work.
-See [`arch/registry.go`](arch/registry.go) for the registration API.
+same binary and automatically inherit everything mixlab provides: Metal and
+CUDA backends, the training loop, Muon/AdamW optimizers, safetensors
+import/export, checkpointing, profiling, and all CLI modes. No C++
+extensions, no custom build systems — just a Go import and an `init()`
+function. See [`arch/registry.go`](arch/registry.go) for the registration
+API.
 
 ## Install
 
