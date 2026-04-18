@@ -21,7 +21,5 @@ output:
 issues:
   max-issues-per-linter: 50
   max-same-issues: 5
-
-run:
-  skip-dirs:
+  exclude-dirs:
     - vendor
