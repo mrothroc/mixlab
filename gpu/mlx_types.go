@@ -22,6 +22,7 @@ const (
 	OpConcat       = 12
 	OpCausalMask   = 13
 	OpCrossEntropy = 14
+	OpDropout      = 15
 	OpSquare       = 20
 	OpSub          = 21
 	OpDiv          = 22

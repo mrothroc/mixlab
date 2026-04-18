@@ -280,12 +280,16 @@ func applyResidMixIR(prog *Program, x, x0 string, wi, D, idx int) int {
 
 // emitStreamIR emits all blocks in a stream against the named hidden state.
 func emitStreamIR(prog *Program, specs []BlockSpec, stream, original string, wi, D, T, B, V int, opIdx *int, mlpMult float64, blockScales, residMix bool) (int, error) {
+	return emitStreamIRWithDropout(prog, specs, stream, original, wi, D, T, B, V, opIdx, mlpMult, blockScales, residMix, 0)
+}
+
+func emitStreamIRWithDropout(prog *Program, specs []BlockSpec, stream, original string, wi, D, T, B, V int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
 	for _, spec := range specs {
 		var err error
 		if needsResidMix(spec, residMix) {
 			wi = applyResidMixIR(prog, stream, original, wi, D, *opIdx)
 		}
-		wi, err = emitBlockIR(prog, spec, stream, wi, D, T, B, V, *opIdx, nil, mlpMult, blockScales)
+		wi, err = emitBlockIRWithDropout(prog, spec, stream, wi, D, T, B, V, *opIdx, nil, mlpMult, blockScales, dropout)
 		if err != nil {
 			return wi, err
 		}
@@ -295,6 +299,10 @@ func emitStreamIR(prog *Program, specs []BlockSpec, stream, original string, wi,
 }
 
 func emitSequentialBlockWithRecurrence(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool) (int, error) {
+	return emitSequentialBlockWithRecurrenceDropout(prog, specs, rec, weightStarts, blockIdx, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, 0)
+}
+
+func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
 	spec := specs[blockIdx]
 	blockWI := wi
 	originalBlock := rec[blockIdx] == blockIdx
@@ -309,7 +317,7 @@ func emitSequentialBlockWithRecurrence(prog *Program, specs []BlockSpec, rec []i
 	if needsResidMix(spec, residMix) {
 		bodyWI = applyResidMixIR(prog, stream, original, bodyWI, D, *opIdx)
 	}
-	nextWI, err := emitBlockIR(prog, spec, stream, bodyWI, D, T, B, V, *opIdx, streamSeqLens, mlpMult, blockScales)
+	nextWI, err := emitBlockIRWithDropout(prog, spec, stream, bodyWI, D, T, B, V, *opIdx, streamSeqLens, mlpMult, blockScales, dropout)
 	if err != nil {
 		return wi, err
 	}
@@ -324,6 +332,10 @@ func emitSequentialBlockWithRecurrence(prog *Program, specs []BlockSpec, rec []i
 // emitBlockIR dispatches a single block emission.
 // streamSeqLens maps stream names to their sequence lengths (used by cross_attention).
 func emitBlockIR(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, streamSeqLens map[string]int, mlpMult float64, blockScales bool) (int, error) {
+	return emitBlockIRWithDropout(prog, spec, stream, wi, D, T, B, V, idx, streamSeqLens, mlpMult, blockScales, 0)
+}
+
+func emitBlockIRWithDropout(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, streamSeqLens map[string]int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
 	reg, err := lookupBlock(spec)
 	if err != nil {
 		return wi, err
@@ -335,6 +347,7 @@ func emitBlockIR(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, i
 		StreamSeqLens: streamSeqLens,
 		MLPMult:       mlpMult,
 		BlockScales:   blockScales,
+		Dropout:       dropout,
 	})
 }
 
@@ -398,6 +411,25 @@ func BuildIRProgramWithBigramAndRecurrence(
 	return BuildIRProgramWithBigramRecurrenceAndParallel(modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix, unet, false, bigramVocabSize, bigramDim, logitSoftcap, blocks, recurrence)
 }
 
+func BuildIRProgramWithBigramRecurrenceParallelDropout(
+	modelDim, vocabSize, seqLen, batchSize int,
+	mlpMult float64,
+	tieEmbeddings bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	logitSoftcap float32,
+	dropout float32,
+	blocks []BlockSpec,
+	recurrence []int,
+) (*Program, error) {
+	if dropout < 0 || dropout > 1 {
+		return nil, fmt.Errorf("invalid dropout=%g", dropout)
+	}
+	return buildIRProgramWithDropout(modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, logitSoftcap, dropout, blocks, recurrence)
+}
+
 // BuildIRProgramWithBigramRecurrenceAndParallel constructs an IR program and
 // optionally injects model-level bigram embeddings, ties sequential block
 // weights, and emits parallel residual block pairs.
@@ -410,6 +442,22 @@ func BuildIRProgramWithBigramRecurrenceAndParallel(
 	parallelResidual bool,
 	bigramVocabSize, bigramDim int,
 	logitSoftcap float32,
+	blocks []BlockSpec,
+	recurrence []int,
+) (*Program, error) {
+	return buildIRProgramWithDropout(modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, logitSoftcap, 0, blocks, recurrence)
+}
+
+func buildIRProgramWithDropout(
+	modelDim, vocabSize, seqLen, batchSize int,
+	mlpMult float64,
+	tieEmbeddings bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	logitSoftcap float32,
+	dropout float32,
 	blocks []BlockSpec,
 	recurrence []int,
 ) (*Program, error) {
@@ -488,7 +536,7 @@ func BuildIRProgramWithBigramRecurrenceAndParallel(
 	if unet {
 		numEncoder, numSkip := unetLayout(len(blocks))
 		for i := range blocks[:numEncoder] {
-			wi, err = emitSequentialBlockWithRecurrence(prog, blocks, rec, weightStarts, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, rec, weightStarts, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
 			if err != nil {
 				return nil, err
 			}
@@ -515,14 +563,14 @@ func BuildIRProgramWithBigramRecurrenceAndParallel(
 				prog.Add("x", skipScaled, "x")
 			}
 			blockIdx := numEncoder + decIdx
-			wi, err = emitSequentialBlockWithRecurrence(prog, blocks, rec, weightStarts, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, rec, weightStarts, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
 			if err != nil {
 				return nil, err
 			}
 			opIdx++
 		}
 	} else {
-		wi, err = emitSequentialRangeWithRecurrence(prog, blocks, rec, weightStarts, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual)
+		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, rec, weightStarts, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout)
 		if err != nil {
 			return nil, err
 		}

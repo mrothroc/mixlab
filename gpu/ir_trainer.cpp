@@ -125,7 +125,7 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   std::iota(argnums.begin(), argnums.end(), 0);
   auto fn = mx::value_and_grad(
       [this, tokens, targets](const std::vector<mx::array>& w) {
-        return ir_interpret(program, w, tokens, targets);
+        return ir_interpret(program, w, tokens, targets, true);
       },
       argnums);
 
@@ -220,7 +220,7 @@ float IRTrainer::step_named(const TensorMap& inputs) {
   std::unordered_map<std::string, mx::array> outputs;
   auto fn = mx::value_and_grad(
       [this, inputs, &outputs, &output_names](const std::vector<mx::array>& w) {
-        outputs = ir_interpret_outputs(program, w, inputs, output_names);
+        outputs = ir_interpret_outputs(program, w, inputs, output_names, true);
         return outputs.at("loss");
       },
       argnums);

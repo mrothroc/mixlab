@@ -11,6 +11,7 @@ type EmitOptions struct {
 	MLPMult       float64
 	BlockScales   bool
 	ResidMix      bool
+	Dropout       float32
 }
 
 // BlockEmitter emits IR ops for a block and returns the next weight index.
@@ -62,7 +63,7 @@ func init() {
 			if heads <= 0 {
 				heads = 4
 			}
-			return emitPlainAttentionIR(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales)
+			return emitPlainAttentionIRWithDropout(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout)
 		},
 		WeightCount: plainWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
@@ -74,7 +75,7 @@ func init() {
 	})
 	RegisterBlock("swiglu", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
-			return emitSwiGLUIR(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales)
+			return emitSwiGLUIRWithDropout(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout)
 		},
 		WeightCount: swigluWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {

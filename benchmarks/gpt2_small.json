@@ -1,0 +1,40 @@
+{
+  "name": "shakespeare_char_gpt2_small",
+
+  // nanoGPT reference: karpathy/nanoGPT config/train_shakespeare_char.py
+  // at commit 3adf61e154c3fe3fca428ad6bc3818b27a3b8291.
+  // The reference run uses block_size=256, n_layer=6, n_head=6, n_embd=384.
+  "model_dim": 384,
+  "vocab_size": 256,
+  "seq_len": 256,
+  "mlp_mult": 4.0,
+  "dropout": 0.2,
+
+  // A mixlab plain block contains causal self-attention and a feed-forward
+  // tail. Six plain blocks therefore correspond to nanoGPT's 6 Transformer
+  // blocks with 4x MLP expansion.
+  "blocks": [
+    {"type": "plain", "heads": 6},
+    {"type": "plain", "heads": 6},
+    {"type": "plain", "heads": 6},
+    {"type": "plain", "heads": 6},
+    {"type": "plain", "heads": 6},
+    {"type": "plain", "heads": 6}
+  ],
+
+  "training": {
+    // nanoGPT uses max_iters=5000 and learning_rate=1e-3.
+    "steps": 5000,
+    "lr": 1e-3,
+
+    // Matches nanoGPT's batch_size=64, block_size=256 = 16384 tokens/step.
+    "batch_tokens": 16384,
+
+    // nanoGPT uses beta2=0.99 for this small-token regime.
+    "beta2": 0.99,
+
+    "seed": 42,
+    "weight_decay": 0.01,
+    "grad_clip": 1.0
+  }
+}

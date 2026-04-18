@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      # GPU package requires MLX headers (Metal/CUDA) — skip on CI.
+      # Pure-Go packages (arch, data, train) compile and test without CGO.
+      - name: Vet
+        run: CGO_ENABLED=0 go vet ./arch/... ./data/... ./train/...
+
+      - name: Test
+        run: CGO_ENABLED=0 go test ./arch/... ./data/... ./train/... -count=1 -timeout 120s
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          args: --build-tags="" ./arch/... ./data/... ./train/...
+
+      - name: Check file sizes (max 1000 lines per .go file)
+        run: |
+          find . -name "*.go" -not -path "./vendor/*" -exec wc -l {} + | sort -rn | \
+            awk '$1 > 1000 && $2 != "total" {printf "OVER 1000 LINES: %s (%d)\n", $2, $1; err=1} END {exit err}'

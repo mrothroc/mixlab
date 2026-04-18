@@ -25,6 +25,7 @@ var irToGPUOp = map[int]int{
 	ir.OpConcat:       OpConcat,
 	ir.OpCausalMask:   OpCausalMask,
 	ir.OpCrossEntropy: OpCrossEntropy,
+	ir.OpDropout:      OpDropout,
 	ir.OpSquare:       OpSquare,
 	ir.OpSub:          OpSub,
 	ir.OpDiv:          OpDiv,

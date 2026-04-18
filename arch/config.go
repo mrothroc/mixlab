@@ -23,6 +23,7 @@ type ArchConfig struct {
 	BigramVocabSize  int     `json:"bigram_vocab_size,omitempty"`
 	BigramDim        int     `json:"bigram_dim,omitempty"`
 	LogitSoftcap     float32 `json:"logit_softcap,omitempty"`
+	Dropout          float32 `json:"dropout,omitempty"`
 
 	Blocks     []BlockSpec `json:"blocks"`
 	Recurrence []int       `json:"recurrence,omitempty"`
@@ -252,6 +253,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.MLPMult <= 0 {
 		return nil, fmt.Errorf("config %q has invalid mlp_mult=%g (must be > 0)", source, cfg.MLPMult)
 	}
+	if cfg.Dropout < 0 || cfg.Dropout > 1 {
+		return nil, fmt.Errorf("config %q has invalid dropout=%g (must be in [0,1])", source, cfg.Dropout)
+	}
 
 	for i, b := range cfg.Blocks {
 		if err := validateBlockSpec(b, source, "blocks", i); err != nil {
@@ -423,7 +427,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)
 	default:
-		return fmt.Errorf("config %q %s[%d] has invalid type %q (allowed: plain, swiglu, mamba, mamba3, rwkv, retnet, perceiver, bottleneck, cross_attention, token_blend, custom)", source, groupName, idx, b.Type)
+		if _, err := lookupBlock(b); err != nil {
+			return fmt.Errorf("config %q %s[%d] has invalid type %q (not in registry)", source, groupName, idx, b.Type)
+		}
 	}
 	if b.Type == "plain" && b.Heads <= 0 {
 		return fmt.Errorf("config %q %s[%d] type=plain requires heads > 0", source, groupName, idx)

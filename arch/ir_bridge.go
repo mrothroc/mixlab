@@ -17,7 +17,7 @@ func BuildIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		}
 	}
 
-	return BuildIRProgramWithBigramRecurrenceAndParallel(
+	return BuildIRProgramWithBigramRecurrenceParallelDropout(
 		cfg.ModelDim,
 		cfg.VocabSize,
 		cfg.SeqLen,
@@ -31,6 +31,7 @@ func BuildIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		cfg.BigramVocabSize,
 		cfg.EffectiveBigramDim(),
 		cfg.LogitSoftcap,
+		cfg.Dropout,
 		cfg.Blocks,
 		cfg.Recurrence,
 	)

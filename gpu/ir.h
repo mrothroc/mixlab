@@ -25,6 +25,7 @@ enum OpType {
   OP_CONCAT = 12,
   OP_CAUSAL_MASK = 13,
   OP_CROSS_ENTROPY = 14,
+  OP_DROPOUT = 15,
   OP_SQUARE = 20,
   OP_SUB = 21,
   OP_DIV = 22,
@@ -96,17 +97,38 @@ mlx::core::array ir_interpret(
     const TensorMap& inputs,
     const std::string& output_name);
 
+mlx::core::array ir_interpret(
+    const IRProgram& program,
+    const std::vector<mlx::core::array>& weights,
+    const TensorMap& inputs,
+    const std::string& output_name,
+    bool training);
+
 std::unordered_map<std::string, mlx::core::array> ir_interpret_outputs(
     const IRProgram& program,
     const std::vector<mlx::core::array>& weights,
     const TensorMap& inputs,
     const std::vector<std::string>& output_names);
 
+std::unordered_map<std::string, mlx::core::array> ir_interpret_outputs(
+    const IRProgram& program,
+    const std::vector<mlx::core::array>& weights,
+    const TensorMap& inputs,
+    const std::vector<std::string>& output_names,
+    bool training);
+
 mlx::core::array ir_interpret(
     const IRProgram& program,
     const std::vector<mlx::core::array>& weights,
     const mlx::core::array& tokens,
     const mlx::core::array& targets);
+
+mlx::core::array ir_interpret(
+    const IRProgram& program,
+    const std::vector<mlx::core::array>& weights,
+    const mlx::core::array& tokens,
+    const mlx::core::array& targets,
+    bool training);
 
 } // namespace mlx_ir
 

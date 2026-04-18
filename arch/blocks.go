@@ -20,6 +20,10 @@ import (
 //	w[wi+5] = FF layer 1
 //	w[wi+6] = FF layer 2
 func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool) (int, error) {
+	return emitPlainAttentionIRWithDropout(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, 0)
+}
+
+func emitPlainAttentionIRWithDropout(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -56,6 +60,7 @@ func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int,
 	flat := prefix + "_flat"
 	proj := prefix + "_proj"
 	projScaled := prefix + "_proj_scaled"
+	projDrop := prefix + "_proj_dropout"
 
 	// Pre-attention RMSNorm
 	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
@@ -120,6 +125,10 @@ func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int,
 		wi++
 		proj = projScaled
 	}
+	if dropout > 0 {
+		prog.Dropout(proj, dropout, projDrop)
+		proj = projDrop
+	}
 	prog.Add(x, proj, x)
 
 	// Feed-forward tail: ff1 -> SiLU -> ff2 -> residual
@@ -127,6 +136,7 @@ func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int,
 	ffAct := prefix + "_ff_act"
 	ff2 := prefix + "_ff2"
 	ff2Scaled := prefix + "_ff2_scaled"
+	ff2Drop := prefix + "_ff2_dropout"
 	prog.MatMul(x, weightName(wi), ff1)
 	wi++
 	prog.SiLU(ff1, ffAct)
@@ -136,6 +146,10 @@ func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int,
 		prog.Mul(ff2, weightName(wi), ff2Scaled)
 		wi++
 		ff2 = ff2Scaled
+	}
+	if dropout > 0 {
+		prog.Dropout(ff2, dropout, ff2Drop)
+		ff2 = ff2Drop
 	}
 	prog.Add(x, ff2, x)
 
@@ -248,6 +262,10 @@ func emitTokenBlendIR(prog *Program, x string, wi, D, T, B, idx int) (int, error
 //	w[wi+2] = up projection
 //	w[wi+3] = down projection
 func emitSwiGLUIR(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool) (int, error) {
+	return emitSwiGLUIRWithDropout(prog, x, wi, idx, mlpMult, blockScales, 0)
+}
+
+func emitSwiGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
 	_ = mlpMult
 	prefix := tmpName(x+"_swiglu", idx)
 	xNorm := prefix + "_x_norm"
@@ -257,6 +275,7 @@ func emitSwiGLUIR(prog *Program, x string, wi, idx int, mlpMult float64, blockSc
 	ff := prefix + "_ff"
 	ffDown := prefix + "_down"
 	ffScaled := prefix + "_scaled"
+	ffDrop := prefix + "_dropout"
 
 	// Pre-block RMSNorm
 	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
@@ -276,12 +295,20 @@ func emitSwiGLUIR(prog *Program, x string, wi, idx int, mlpMult float64, blockSc
 		wi++
 		ffDown = ffScaled
 	}
+	if dropout > 0 {
+		prog.Dropout(ffDown, dropout, ffDrop)
+		ffDown = ffDrop
+	}
 	prog.Add(x, ffDown, x)
 
 	return wi, nil
 }
 
 func emitPlainAttentionParallelDeltaIR(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool) (string, int, error) {
+	return emitPlainAttentionParallelDeltaIRWithDropout(prog, x, xNorm, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, 0)
+}
+
+func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (string, int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return "", wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -317,6 +344,7 @@ func emitPlainAttentionParallelDeltaIR(prog *Program, x, xNorm string, wi, H, kv
 	flat := prefix + "_flat"
 	proj := prefix + "_proj"
 	projScaled := prefix + "_proj_scaled"
+	projDrop := prefix + "_proj_dropout"
 
 	prog.MatMul(xNorm, weightName(wi), q)
 	wi++
@@ -367,12 +395,17 @@ func emitPlainAttentionParallelDeltaIR(prog *Program, x, xNorm string, wi, H, kv
 		wi++
 		proj = projScaled
 	}
+	if dropout > 0 {
+		prog.Dropout(proj, dropout, projDrop)
+		proj = projDrop
+	}
 
 	ffIn := prefix + "_ff_in"
 	ff1 := prefix + "_ff1"
 	ffAct := prefix + "_ff_act"
 	ff2 := prefix + "_ff2"
 	ff2Scaled := prefix + "_ff2_scaled"
+	ff2Drop := prefix + "_ff2_dropout"
 	state := prefix + "_state"
 	prog.Add(x, proj, ffIn)
 	prog.MatMul(ffIn, weightName(wi), ff1)
@@ -385,11 +418,19 @@ func emitPlainAttentionParallelDeltaIR(prog *Program, x, xNorm string, wi, H, kv
 		wi++
 		ff2 = ff2Scaled
 	}
+	if dropout > 0 {
+		prog.Dropout(ff2, dropout, ff2Drop)
+		ff2 = ff2Drop
+	}
 	prog.Add(ffIn, ff2, state)
 	return state, wi, nil
 }
 
 func emitSwiGLUParallelDeltaIR(prog *Program, xNorm string, wi, idx int, mlpMult float64, blockScales bool) (string, int) {
+	return emitSwiGLUParallelDeltaIRWithDropout(prog, xNorm, wi, idx, mlpMult, blockScales, 0)
+}
+
+func emitSwiGLUParallelDeltaIRWithDropout(prog *Program, xNorm string, wi, idx int, mlpMult float64, blockScales bool, dropout float32) (string, int) {
 	_ = mlpMult
 	prefix := tmpName(xNorm+"_parallel_swiglu", idx)
 	gate := prefix + "_gate"
@@ -398,6 +439,7 @@ func emitSwiGLUParallelDeltaIR(prog *Program, xNorm string, wi, idx int, mlpMult
 	ff := prefix + "_ff"
 	ffDown := prefix + "_down"
 	ffScaled := prefix + "_scaled"
+	ffDrop := prefix + "_dropout"
 
 	prog.MatMul(xNorm, weightName(wi), gate)
 	wi++
@@ -411,6 +453,10 @@ func emitSwiGLUParallelDeltaIR(prog *Program, xNorm string, wi, idx int, mlpMult
 		prog.Mul(ffDown, weightName(wi), ffScaled)
 		wi++
 		ffDown = ffScaled
+	}
+	if dropout > 0 {
+		prog.Dropout(ffDown, dropout, ffDrop)
+		ffDown = ffDrop
 	}
 	return ffDown, wi
 }

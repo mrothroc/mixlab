@@ -16,7 +16,7 @@ These fields live at the root of the config object.
 |------|------|----------|---------|-------|
 | `name` | string | No | Source filename/path | Human-readable run name. |
 | `model_dim` | integer | Yes | None | Hidden size `D`. Must be `> 0`. |
-| `vocab_size` | integer | Yes | None | Token vocabulary size `V`. Must be `> 0`. |
+| `vocab_size` | integer | Yes | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` (tokens are stored as uint16 in binary shards). |
 | `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
 | `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |

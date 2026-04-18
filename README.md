@@ -1,12 +1,21 @@
 # mixlab
 
-A general-purpose ML architecture exploration tool. Define model architectures
-in JSON, compile them to a typed Go IR, and train them on GPU through the MLX
-backend without writing Python. `mixlab` supports plain transformer stacks,
-recurrent and bottleneck blocks, U-Net-style layouts, and fully custom
-JSON-defined blocks.
+Explore ML architectures fast. Define a model in JSON, train it on your Mac
+in seconds and iterate until you find a winner, then ship the same config to 
+a cloud GPU for full-scale runs. One JSON file, two platforms, no code changes.
 
-**Platforms:** macOS (Apple Silicon) and Linux (NVIDIA CUDA via Docker). Windows is not supported.
+```text
+laptop (Metal)                          cloud GPU (CUDA)
+mixlab -config my_model.json    ===>    mixlab -config my_model.json
+       -train 'data/*.bin'                     -train 'data/*.bin'
+```
+
+mixlab compiles JSON configs into a typed Go IR and executes them on GPU
+through the MLX backend. No Python model code to write, no framework
+translation between local and remote. Supports plain transformers, GQA, Mamba, RetNet, RWKV, Perceiver,
+U-Net layouts, and fully custom JSON-defined blocks.
+
+**Platforms:** macOS (Apple Silicon) and Linux (NVIDIA CUDA via Docker).
 
 ## Quickstart (macOS)
 
@@ -17,7 +26,8 @@ pip install mlx
 # 2. Build mixlab
 make build
 
-# 3. Download example training data (~5 MB from Project Gutenberg)
+# 3. Install Python deps for data preparation, then download example data (~5 MB)
+pip install numpy tokenizers
 bash scripts/download_example_data.sh
 
 # 4. Train a 3-layer attention model
@@ -57,15 +67,26 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
 
 ## Install
 
-### macOS (Apple Silicon)
-
-Requires Go 1.24+ and MLX. The Makefile handles compiler flags.
+### Homebrew (recommended)
 
 ```bash
-# Install MLX (if not already present)
-pip install mlx
+brew install mrothroc/tap/mixlab
+```
 
-# Build
+This installs MLX automatically as a dependency.
+
+For data preparation (`prepare` mode), also install Python deps:
+
+```bash
+pip install numpy tokenizers
+```
+
+### Build from source (macOS Apple Silicon)
+
+Requires Go 1.24+ and MLX (`brew install mlx` or `pip install mlx`).
+
+```bash
+pip install numpy tokenizers   # for data preparation
 make build
 ```
 
@@ -164,6 +185,9 @@ Trains every `.json` config in the given directory and prints a ranked summary.
 | `-prompt` | Prompt token IDs in `token_ids:0,1,2` form |
 
 ### prepare
+
+Requires Python 3 with `numpy` and `tokenizers` (`pip install numpy tokenizers`).
+Tokens are stored as uint16, so `vocab-size` must be 65,535 or less.
 
 ```bash
 ./mixlab -mode prepare -input raw_text/ -output data/shards/ -vocab-size 1024
@@ -264,6 +288,24 @@ Custom blocks let you define novel architectures entirely in JSON.
 See `examples/custom_geglu.json` for a runnable example and
 [`docs/config-reference.md`](docs/config-reference.md) for the full JSON schema,
 shape symbols, op list, and training fields.
+
+## Troubleshooting
+
+### MLX not found / wrong Python version
+
+The Makefile auto-detects your MLX install path via `python3 -c "import mlx; ..."`.
+Run `make check-mlx` to see what it found.
+
+If detection fails (e.g. MLX is in a virtualenv or a different Python):
+
+```bash
+# Point to MLX manually
+make build MLX_PREFIX=$(python3.12 -c "import mlx, os; print(os.path.dirname(mlx.__file__))")
+
+# Or export it for the session
+export MLX_PREFIX=/opt/homebrew/lib/python3.12/site-packages/mlx
+make build
+```
 
 ## Performance
 

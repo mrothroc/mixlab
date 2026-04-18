@@ -22,6 +22,7 @@ const (
 	OpConcat       = 12 // OP_CONCAT
 	OpCausalMask   = 13 // OP_CAUSAL_MASK
 	OpCrossEntropy = 14 // OP_CROSS_ENTROPY
+	OpDropout      = 15 // OP_DROPOUT
 	OpSquare       = 20 // OP_SQUARE
 	OpSub          = 21 // OP_SUB
 	OpDiv          = 22 // OP_DIV
@@ -129,6 +130,11 @@ func (p *Program) Mul(a, b, output string) {
 // ScalarMul emits scalar multiplication: output = a * s.
 func (p *Program) ScalarMul(a string, s float32, output string) {
 	p.AddOp(OpScalarMul, []string{a}, []string{output}, []float32{s}, nil)
+}
+
+// Dropout emits inverted dropout with probability rate.
+func (p *Program) Dropout(a string, rate float32, output string) {
+	p.AddOp(OpDropout, []string{a}, []string{output}, []float32{rate}, nil)
 }
 
 // Sigmoid emits a sigmoid activation.

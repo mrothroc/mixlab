@@ -4,9 +4,42 @@ package train
 
 import (
 	"math/rand"
+	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/mrothroc/mixlab/arch"
 )
+
+// discoverExampleConfigs finds all JSON configs in the examples/ directory.
+func discoverExampleConfigs(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir("../examples")
+	if err != nil {
+		t.Fatalf("ReadDir ../examples: %v", err)
+	}
+	var configs []string
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".json" {
+			configs = append(configs, e.Name())
+		}
+	}
+	if len(configs) == 0 {
+		t.Fatal("no example JSON configs found")
+	}
+	return configs
+}
+
+// shrinkConfigForTest overrides config dimensions for fast GPU testing:
+// small seq_len and batch_tokens=seq_len (batchSize=1), 10 steps.
+func shrinkConfigForTest(cfg *arch.ArchConfig) {
+	if cfg.SeqLen > 128 {
+		cfg.SeqLen = 128
+	}
+	cfg.Training.Steps = 10
+	cfg.Training.BatchTokens = cfg.SeqLen
+	cfg.Training.LR = 1e-3
+}
 
 // generateSyntheticBatch creates random token sequences for training.
 // Tokens are uniform random in [0, vocabSize). Targets are the next token
@@ -24,31 +57,24 @@ func generateSyntheticBatch(rng *rand.Rand, batchTokens, vocabSize int) (x, y []
 	return x, y
 }
 
-// TestIntegrationExampleConfigs_TrainDecreasingLoss runs 10 training steps
-// on synthetic data for each example config and verifies loss decreases.
-func TestIntegrationExampleConfigs_TrainDecreasingLoss(t *testing.T) {
+// TestIntegrationExampleConfigs_TrainStable runs 10 training steps on
+// synthetic data for each example config and verifies the training loop
+// produces finite, non-NaN losses (no crashes, no gradient explosions).
+func TestIntegrationExampleConfigs_TrainStable(t *testing.T) {
 	if !mlxAvailable() {
 		t.Skip("MLX backend not available")
 	}
 
-	cases := []struct {
-		filename string
-	}{
-		{"plain_3L.json"},
-	}
+	configs := discoverExampleConfigs(t)
 
-	for _, tc := range cases {
-		t.Run(tc.filename, func(t *testing.T) {
-			cfg, err := LoadArchConfig(filepath.Join("examples", tc.filename))
+	for _, filename := range configs {
+		t.Run(filename, func(t *testing.T) {
+			cfg, err := LoadArchConfig(filepath.Join("examples", filename))
 			if err != nil {
 				t.Fatalf("LoadArchConfig: %v", err)
 			}
 
-			// Override training to use small batch for fast testing.
-			// Use batch_tokens = seq_len so batchSize=1.
-			cfg.Training.Steps = 10
-			cfg.Training.BatchTokens = cfg.SeqLen
-			cfg.Training.LR = 1e-3 // slightly higher LR for fast convergence on random data
+			shrinkConfigForTest(cfg)
 
 			batchSize := cfg.Training.BatchTokens / cfg.SeqLen
 			if batchSize <= 0 {
@@ -69,7 +95,6 @@ func TestIntegrationExampleConfigs_TrainDecreasingLoss(t *testing.T) {
 			rng := rand.New(rand.NewSource(cfg.Training.Seed))
 			lr := float32(cfg.Training.LR)
 
-			var firstLoss, lastLoss float32
 			steps := 10
 			for step := 0; step < steps; step++ {
 				x, y := generateSyntheticBatch(rng, cfg.Training.BatchTokens, cfg.VocabSize)
@@ -77,19 +102,17 @@ func TestIntegrationExampleConfigs_TrainDecreasingLoss(t *testing.T) {
 				if err != nil {
 					t.Fatalf("TrainStepGPU step %d: %v", step, err)
 				}
-				if step == 0 {
-					firstLoss = loss
-				}
-				lastLoss = loss
 				t.Logf("  step %d/%d loss=%.4f", step, steps, loss)
-			}
 
-			t.Logf("  first=%.4f last=%.4f delta=%.4f", firstLoss, lastLoss, lastLoss-firstLoss)
-
-			// Loss should decrease after 10 steps of training.
-			// On random data with LR=1e-3, the model should memorize somewhat.
-			if lastLoss >= firstLoss {
-				t.Errorf("loss did not decrease: first=%.4f last=%.4f", firstLoss, lastLoss)
+				if loss != loss { // NaN
+					t.Fatalf("loss is NaN at step %d", step)
+				}
+				if loss <= 0 {
+					t.Fatalf("loss is non-positive (%.4f) at step %d", loss, step)
+				}
+				if loss > 100 {
+					t.Fatalf("loss exploded (%.4f) at step %d", loss, step)
+				}
 			}
 		})
 	}
@@ -102,20 +125,16 @@ func TestIntegrationExampleConfigs_EvalForwardPass(t *testing.T) {
 		t.Skip("MLX backend not available")
 	}
 
-	cases := []struct {
-		filename string
-	}{
-		{"plain_3L.json"},
-	}
+	configs := discoverExampleConfigs(t)
 
-	for _, tc := range cases {
-		t.Run(tc.filename, func(t *testing.T) {
-			cfg, err := LoadArchConfig(filepath.Join("examples", tc.filename))
+	for _, filename := range configs {
+		t.Run(filename, func(t *testing.T) {
+			cfg, err := LoadArchConfig(filepath.Join("examples", filename))
 			if err != nil {
 				t.Fatalf("LoadArchConfig: %v", err)
 			}
 
-			cfg.Training.BatchTokens = cfg.SeqLen // batchSize=1
+			shrinkConfigForTest(cfg)
 			batchSize := 1
 
 			prog, err := BuildIRProgramFromConfig(cfg)

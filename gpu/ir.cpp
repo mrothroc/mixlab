@@ -1,5 +1,7 @@
 #include "ir.h"
 
+#include <mlx/random.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -168,10 +170,19 @@ mx::array ir_interpret(
     const std::vector<mx::array>& weights,
     const TensorMap& inputs,
     const std::string& output_name) {
+  return ir_interpret(program, weights, inputs, output_name, false);
+}
+
+mx::array ir_interpret(
+    const IRProgram& program,
+    const std::vector<mx::array>& weights,
+    const TensorMap& inputs,
+    const std::string& output_name,
+    bool training) {
   const std::vector<std::string> keep_outputs = output_name.empty()
       ? std::vector<std::string>{}
       : std::vector<std::string>{output_name};
-  auto outputs = ir_interpret_outputs(program, weights, inputs, keep_outputs);
+  auto outputs = ir_interpret_outputs(program, weights, inputs, keep_outputs, training);
   if (output_name.empty()) {
     auto loss_it = outputs.find("loss");
     if (loss_it != outputs.end()) {
@@ -193,6 +204,15 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
     const std::vector<mx::array>& weights,
     const TensorMap& inputs,
     const std::vector<std::string>& output_names) {
+  return ir_interpret_outputs(program, weights, inputs, output_names, false);
+}
+
+std::unordered_map<std::string, mx::array> ir_interpret_outputs(
+    const IRProgram& program,
+    const std::vector<mx::array>& weights,
+    const TensorMap& inputs,
+    const std::vector<std::string>& output_names,
+    bool training) {
   std::unordered_map<std::string, mx::array> env;
   env.reserve(program.ops.size() * 2 + static_cast<size_t>(weights.size()) + 8);
   std::unordered_set<std::string> pinned;
@@ -424,6 +444,28 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
       }
       case OP_CROSS_ENTROPY: {
         set_out(op, 0, cross_entropy_mean(get(op, 0), mx::astype(get(op, 1), mx::int32)));
+        break;
+      }
+      case OP_DROPOUT: {
+        if (op.n_float_params < 1) {
+          throw std::runtime_error("OP_DROPOUT requires rate float param");
+        }
+        auto x = get(op, 0);
+        float rate = op.float_params[0];
+        if (rate < 0.0f || rate > 1.0f) {
+          throw std::runtime_error("OP_DROPOUT rate must be in [0,1]");
+        }
+        if (!training || rate == 0.0f) {
+          set_out(op, 0, x);
+          break;
+        }
+        if (rate == 1.0f) {
+          set_out(op, 0, mx::zeros_like(x));
+          break;
+        }
+        float keep_prob = 1.0f - rate;
+        auto mask = mx::astype(mx::random::bernoulli(keep_prob, x.shape()), x.dtype());
+        set_out(op, 0, x * mask / keep_prob);
         break;
       }
       case OP_SQUARE: {
@@ -726,6 +768,15 @@ mx::array ir_interpret(
     const std::vector<mx::array>& weights,
     const mx::array& tokens,
     const mx::array& targets) {
+  return ir_interpret(program, weights, tokens, targets, false);
+}
+
+mx::array ir_interpret(
+    const IRProgram& program,
+    const std::vector<mx::array>& weights,
+    const mx::array& tokens,
+    const mx::array& targets,
+    bool training) {
   auto tokens_i32 = mx::astype(tokens, mx::int32);
   auto targets_i32 = mx::astype(targets, mx::int32);
   mx::eval(tokens_i32, targets_i32);
@@ -749,7 +800,7 @@ mx::array ir_interpret(
                               targets_host.data(),
                               targets_host.size() * sizeof(int32_t),
                           });
-  return ir_interpret(program, weights, inputs);
+  return ir_interpret(program, weights, inputs, "", training);
 }
 
 } // namespace mlx_ir

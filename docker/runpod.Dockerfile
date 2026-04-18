@@ -14,7 +14,7 @@ FROM ${APP_IMAGE}
 ENTRYPOINT []
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-pip \
+    python3 python3-pip curl wget \
     && pip3 install --no-cache-dir tiktoken tokenizers numpy huggingface_hub runpod \
     && rm -rf /var/lib/apt/lists/*
 

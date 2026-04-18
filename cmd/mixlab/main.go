@@ -65,7 +65,7 @@ func main() {
 	}
 
 	if !train.MLXAvailable() {
-		fmt.Fprintln(os.Stderr, "error: MLX backend unavailable\n  rebuild with: CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab\n  requires macOS with Apple Silicon and MLX installed (pip install mlx)")
+		fmt.Fprintln(os.Stderr, "error: MLX backend unavailable\n  rebuild with: CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab\n  macOS: requires Apple Silicon and MLX (brew install mlx)\n  Linux: requires CUDA and MLX built from source (see docker/README.md)")
 		os.Exit(1)
 	}
 
