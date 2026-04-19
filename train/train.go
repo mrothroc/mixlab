@@ -212,6 +212,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		fmt.Printf("  [%s] loaded %d weights from %s\n", name, len(loadedWeights), opts.SafetensorsLoad)
 	}
 
+	// Auto-tune CUDA graph batch size if not set by user. The forward+backward
+	// pass has roughly 2x the IR ops; fitting it in one graph avoids per-graph
+	// reconstruction overhead in MLX's CUDA backend.
+	if os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" {
+		opsPerStep := len(prog.Ops) * 3 // forward + backward + optimizer margin
+		os.Setenv("MLX_MAX_OPS_PER_BUFFER", fmt.Sprintf("%d", opsPerStep))
+	}
+
 	// Initialize GPU trainer
 	trainer, err := initGPUTrainer(prog, cfg, loadedWeights)
 	if err != nil {
