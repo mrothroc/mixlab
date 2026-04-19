@@ -7,6 +7,10 @@
 extern "C" {
 #endif
 
+// Set CUDA graph batch limits before MLX initialization.
+// Must be called before mlx_init(). Values <= 0 are ignored.
+void mlx_set_cuda_graph_limits(int max_ops, int max_mb);
+
 // Initialize MLX - returns 0 on success, -1 on failure
 int mlx_init(void);
 

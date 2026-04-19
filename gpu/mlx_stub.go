@@ -23,6 +23,8 @@ import "fmt"
 
 var errNotBuilt = fmt.Errorf("MLX backend not built; rebuild with -tags mlx")
 
+func SetCUDAGraphLimits(_, _ int) {}
+
 func Available() bool    { return false }
 func DeviceName() string { return "" }
 

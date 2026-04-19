@@ -8,6 +8,7 @@ import (
 	"runtime/pprof"
 
 	"github.com/mrothroc/mixlab/arch"
+	"github.com/mrothroc/mixlab/gpu"
 	"github.com/mrothroc/mixlab/train"
 )
 
@@ -72,14 +73,14 @@ func main() {
 	}
 
 	// Auto-tune CUDA graph batch size from the model's IR op count.
-	// MLX caches MLX_MAX_OPS_PER_BUFFER in a static on first GPU stream
-	// creation, so it must be set before any CGO call into MLX.
-	// arch is pure Go — no GPU touch.
+	// MLX caches graph limits on first GPU stream creation, so this must
+	// happen before any CGO call into MLX (including gpu.Available()).
+	// arch.LoadArchConfig and arch.BuildIRProgramFromConfig are pure Go.
 	if os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" && *configPath != "" {
 		if cfg, err := arch.LoadArchConfig(*configPath); err == nil {
 			if prog, err := arch.BuildIRProgramFromConfig(cfg); err == nil {
 				opsPerStep := len(prog.Ops) * 3 // forward + backward + optimizer margin
-				_ = os.Setenv("MLX_MAX_OPS_PER_BUFFER", fmt.Sprintf("%d", opsPerStep))
+				gpu.SetCUDAGraphLimits(opsPerStep, 0)
 			}
 		}
 	}

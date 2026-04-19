@@ -149,6 +149,15 @@ mlx_ir::TensorMap to_tensor_map(const mlx_tensor_input* inputs, int n_inputs) {
 
 extern "C" {
 
+void mlx_set_cuda_graph_limits(int max_ops, int max_mb) {
+  if (max_ops > 0) {
+    setenv("MLX_MAX_OPS_PER_BUFFER", std::to_string(max_ops).c_str(), 0);
+  }
+  if (max_mb > 0) {
+    setenv("MLX_MAX_MB_PER_BUFFER", std::to_string(max_mb).c_str(), 0);
+  }
+}
+
 int mlx_init(void) {
   if (g_initialized) {
     return 0;

@@ -21,6 +21,10 @@ import (
 	"unsafe"
 )
 
+func mlxSetCUDAGraphLimits(maxOps, maxMB int) {
+	C.mlx_set_cuda_graph_limits(C.int(maxOps), C.int(maxMB))
+}
+
 func mlxInit() int {
 	return int(C.mlx_init())
 }

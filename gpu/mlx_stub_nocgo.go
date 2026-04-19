@@ -8,8 +8,9 @@ import "fmt"
 
 var errNotBuilt = fmt.Errorf("MLX backend not built; rebuild with -tags mlx")
 
-func Available() bool    { return false }
-func DeviceName() string { return "" }
+func SetCUDAGraphLimits(_, _ int) {}
+func Available() bool             { return false }
+func DeviceName() string          { return "" }
 
 func FromData(data []float32, rows, cols int) (int64, error) {
 	return 0, errNotBuilt

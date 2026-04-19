@@ -4,6 +4,13 @@ package gpu
 
 import "fmt"
 
+// SetCUDAGraphLimits configures MLX's CUDA graph batch size.
+// Must be called before Available() or any other GPU function.
+// Values <= 0 are ignored.
+func SetCUDAGraphLimits(maxOps, maxMB int) {
+	mlxSetCUDAGraphLimits(maxOps, maxMB)
+}
+
 func Available() bool {
 	return mlxInit() == 0
 }
