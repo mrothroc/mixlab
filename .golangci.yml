@@ -16,18 +16,12 @@ linters:
     gocritic:
       disabled-checks:
         - captLocal         # B, T, D, H are standard ML notation
-        - exitAfterDefer    # pprof defer is intentional — profile written on normal exit
+        - exitAfterDefer    # pprof defer is intentional
 
-output:
-  sort-results: true
-
-issues:
-  max-issues-per-linter: 50
-  max-same-issues: 5
-  exclude-dirs:
-    - vendor
-  exclude-rules:
-    - path: "arch/"
-      linters:
-        - unparam
-      text: "always receives"   # B, x, stream are fixed at IR build time by design
+  exclusions:
+    rules:
+      - path: "arch/"
+        linters: [unparam]
+        text: "always receives"   # B, x, stream are fixed at IR build time by design
+    paths:
+      - vendor
