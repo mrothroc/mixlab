@@ -560,6 +560,57 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mx::reshape(out, {B * T, D}));
         break;
       }
+      case OP_GATHER_POSITIONS: {
+        if (op.n_int_params < 3) {
+          throw std::runtime_error("OP_GATHER_POSITIONS requires B,K,D");
+        }
+        int B = op.int_params[0];
+        int K = op.int_params[1];
+        int D = op.int_params[2];
+        auto x = get(op, 0);
+        auto positions = mx::astype(get(op, 1), mx::int32);
+        if (x.ndim() != 3 || x.shape(0) != B || x.shape(2) != D) {
+          throw std::runtime_error("OP_GATHER_POSITIONS expects input shape [B,T,D]");
+        }
+        if (positions.ndim() != 1 || positions.shape(0) != K) {
+          throw std::runtime_error("OP_GATHER_POSITIONS expects positions shape [K]");
+        }
+        set_out(op, 0, mx::take(x, positions, 1));
+        break;
+      }
+      case OP_SCATTER_POSITIONS: {
+        if (op.n_int_params < 4) {
+          throw std::runtime_error("OP_SCATTER_POSITIONS requires B,T,K,D");
+        }
+        int B = op.int_params[0];
+        int T = op.int_params[1];
+        int K = op.int_params[2];
+        int D = op.int_params[3];
+        auto out = get(op, 0);
+        auto updates = get(op, 1);
+        auto positions = mx::astype(get(op, 2), mx::int32);
+        if (out.ndim() != 3 || out.shape(0) != B || out.shape(1) != T || out.shape(2) != D) {
+          throw std::runtime_error("OP_SCATTER_POSITIONS expects input shape [B,T,D]");
+        }
+        if (updates.ndim() != 3 || updates.shape(0) != B || updates.shape(1) != K || updates.shape(2) != D) {
+          throw std::runtime_error("OP_SCATTER_POSITIONS expects updates shape [B,K,D]");
+        }
+        if (positions.ndim() != 1 || positions.shape(0) != K) {
+          throw std::runtime_error("OP_SCATTER_POSITIONS expects positions shape [K]");
+        }
+        for (int k = 0; k < K; ++k) {
+          auto pos_scalar = mx::reshape(mx::slice(positions, {k}, {k + 1}), {});
+          mx::eval(pos_scalar);
+          int t = pos_scalar.item<int>();
+          if (t < 0 || t >= T) {
+            throw std::runtime_error("OP_SCATTER_POSITIONS position out of range");
+          }
+          auto update = mx::slice(updates, {0, k, 0}, {B, k + 1, D});
+          out = mx::slice_update(out, update, mx::Shape{0, t, 0}, mx::Shape{B, t + 1, D});
+        }
+        set_out(op, 0, out);
+        break;
+      }
       case OP_GRADIENT_MAGNITUDES: {
         auto hidden = mx::stop_gradient(get(op, 0));
         if (hidden.ndim() != 3) {

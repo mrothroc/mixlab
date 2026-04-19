@@ -8,35 +8,37 @@ import "fmt"
 // Op codes for IR operations. These MUST match the C++ enum in h.
 // Do NOT invent new opcodes — express new operations using existing ones.
 const (
-	OpEmbed        = 1  // OP_EMBED
-	OpMatMul       = 2  // OP_MATMUL
-	OpAdd          = 3  // OP_ADD
-	OpMul          = 4  // OP_MUL
-	OpScalarMul    = 5  // OP_SCALAR_MUL
-	OpSigmoid      = 6  // OP_SIGMOID
-	OpSiLU         = 7  // OP_SILU
-	OpSoftmax      = 8  // OP_SOFTMAX
-	OpReshape      = 9  // OP_RESHAPE
-	OpTranspose    = 10 // OP_TRANSPOSE
-	OpSlice        = 11 // OP_SLICE
-	OpConcat       = 12 // OP_CONCAT
-	OpCausalMask   = 13 // OP_CAUSAL_MASK
-	OpCrossEntropy = 14 // OP_CROSS_ENTROPY
-	OpDropout      = 15 // OP_DROPOUT
-	OpSquare       = 20 // OP_SQUARE
-	OpSub          = 21 // OP_SUB
-	OpDiv          = 22 // OP_DIV
-	OpArange       = 28 // OP_ARANGE
-	OpMeanAxis     = 29 // OP_MEAN_AXIS
-	OpFull         = 30 // OP_FULL
-	OpRMSNorm      = 33 // OP_RMSNORM
-	OpRoPE         = 34 // OP_ROPE
-	OpExp          = 39 // OP_EXP
-	OpOuter        = 40 // OP_OUTER
-	OpGELU         = 42 // OP_GELU
-	OpReLU         = 43 // OP_RELU
-	OpTanh         = 44 // OP_TANH
-	OpScan         = 49 // OP_SCAN
+	OpEmbed            = 1  // OP_EMBED
+	OpMatMul           = 2  // OP_MATMUL
+	OpAdd              = 3  // OP_ADD
+	OpMul              = 4  // OP_MUL
+	OpScalarMul        = 5  // OP_SCALAR_MUL
+	OpSigmoid          = 6  // OP_SIGMOID
+	OpSiLU             = 7  // OP_SILU
+	OpSoftmax          = 8  // OP_SOFTMAX
+	OpReshape          = 9  // OP_RESHAPE
+	OpTranspose        = 10 // OP_TRANSPOSE
+	OpSlice            = 11 // OP_SLICE
+	OpConcat           = 12 // OP_CONCAT
+	OpCausalMask       = 13 // OP_CAUSAL_MASK
+	OpCrossEntropy     = 14 // OP_CROSS_ENTROPY
+	OpDropout          = 15 // OP_DROPOUT
+	OpSquare           = 20 // OP_SQUARE
+	OpSub              = 21 // OP_SUB
+	OpDiv              = 22 // OP_DIV
+	OpArange           = 28 // OP_ARANGE
+	OpMeanAxis         = 29 // OP_MEAN_AXIS
+	OpFull             = 30 // OP_FULL
+	OpRMSNorm          = 33 // OP_RMSNORM
+	OpRoPE             = 34 // OP_ROPE
+	OpExp              = 39 // OP_EXP
+	OpOuter            = 40 // OP_OUTER
+	OpGELU             = 42 // OP_GELU
+	OpReLU             = 43 // OP_RELU
+	OpTanh             = 44 // OP_TANH
+	OpScan             = 49 // OP_SCAN
+	OpGatherPositions  = 51 // OP_GATHER_POSITIONS
+	OpScatterPositions = 52 // OP_SCATTER_POSITIONS
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -208,6 +210,18 @@ func (p *Program) Concat(a, b string, axis int, output string) {
 // IntParams layout: [B, T, D].
 func (p *Program) Scan(x, decay, output string, B, T, D int) {
 	p.AddOp(OpScan, []string{x, decay}, []string{output}, nil, []int{B, T, D})
+}
+
+// GatherPositions selects K entries from the position axis of a [B,T,D] tensor.
+// IntParams layout: [B, K, D].
+func (p *Program) GatherPositions(input, positions, output string, B, K, D int) {
+	p.AddOp(OpGatherPositions, []string{input, positions}, []string{output}, nil, []int{B, K, D})
+}
+
+// ScatterPositions overwrites K entries on the position axis of a [B,T,D] tensor.
+// IntParams layout: [B, T, K, D].
+func (p *Program) ScatterPositions(input, updates, positions, output string, B, T, K, D int) {
+	p.AddOp(OpScatterPositions, []string{input, updates, positions}, []string{output}, nil, []int{B, T, K, D})
 }
 
 // Exp emits element-wise exponential: output = exp(a).

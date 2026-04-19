@@ -128,6 +128,48 @@ func TestScanOp(t *testing.T) {
 	}
 }
 
+func TestPositionIndexingOps(t *testing.T) {
+	p := NewProgram(0)
+	p.DeclareInput("x", TensorFloat32, []int{2, 5, 3})
+	p.DeclareInput("positions", TensorInt32, []int{2})
+	p.DeclareOutput("out", TensorFloat32, []int{2, 5, 3})
+
+	p.GatherPositions("x", "positions", "picked", 2, 2, 3)
+	p.ScatterPositions("x", "picked", "positions", "out", 2, 5, 2, 3)
+
+	if len(p.Ops) != 2 {
+		t.Fatalf("expected 2 ops, got %d", len(p.Ops))
+	}
+
+	gather := p.Ops[0]
+	if gather.Code != OpGatherPositions {
+		t.Fatalf("expected OpGatherPositions (%d), got %d", OpGatherPositions, gather.Code)
+	}
+	if len(gather.Inputs) != 2 || gather.Inputs[0] != "x" || gather.Inputs[1] != "positions" {
+		t.Fatalf("bad gather inputs: %v", gather.Inputs)
+	}
+	if len(gather.Outputs) != 1 || gather.Outputs[0] != "picked" {
+		t.Fatalf("bad gather outputs: %v", gather.Outputs)
+	}
+	if len(gather.IntParams) != 3 || gather.IntParams[0] != 2 || gather.IntParams[1] != 2 || gather.IntParams[2] != 3 {
+		t.Fatalf("bad gather int params: %v", gather.IntParams)
+	}
+
+	scatter := p.Ops[1]
+	if scatter.Code != OpScatterPositions {
+		t.Fatalf("expected OpScatterPositions (%d), got %d", OpScatterPositions, scatter.Code)
+	}
+	if len(scatter.Inputs) != 3 || scatter.Inputs[0] != "x" || scatter.Inputs[1] != "picked" || scatter.Inputs[2] != "positions" {
+		t.Fatalf("bad scatter inputs: %v", scatter.Inputs)
+	}
+	if len(scatter.Outputs) != 1 || scatter.Outputs[0] != "out" {
+		t.Fatalf("bad scatter outputs: %v", scatter.Outputs)
+	}
+	if len(scatter.IntParams) != 4 || scatter.IntParams[0] != 2 || scatter.IntParams[1] != 5 || scatter.IntParams[2] != 2 || scatter.IntParams[3] != 3 {
+		t.Fatalf("bad scatter int params: %v", scatter.IntParams)
+	}
+}
+
 func TestSliceOp(t *testing.T) {
 	p := NewProgram(0)
 	p.Slice("proj", 0, 64, 1, 1, "z")
