@@ -70,6 +70,14 @@ func main() {
 		}()
 	}
 
+	// Set a generous CUDA graph batch size before any MLX initialization.
+	// MLX caches this value on first GPU stream creation, so it must be in
+	// the environment before any CGO call into MLX. The per-model auto-tune
+	// in train.go refines this once the IR op count is known.
+	if os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" {
+		_ = os.Setenv("MLX_MAX_OPS_PER_BUFFER", "1000")
+	}
+
 	switch *quantize {
 	case "none", "int8", "int6":
 		// valid
