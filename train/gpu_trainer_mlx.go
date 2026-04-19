@@ -258,15 +258,47 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 	if cfg.TieEmbeddings && cfg.Training.HeadLR != cfg.Training.EmbedLR {
 		log.Printf("warning: tie_embeddings=true ignores head_lr; using embed_lr for shared embedding/head weight")
 	}
-	groups, weights, err := buildOptimizerGroups(cfg, shapes)
-	if err != nil {
-		return gpu.TrainerOptimizerSpec{}, err
+	muonNesterov := true
+	if cfg.Training.MuonNesterov != nil {
+		muonNesterov = *cfg.Training.MuonNesterov
 	}
-
-	return gpu.TrainerOptimizerSpec{
-		Groups:        groups,
-		Weights:       weights,
+	return gpu.BuildTrainerOptimizerSpec(gpu.TrainerOptimizerConfig{
+		Weights: optimizerWeightMetadata(shapes),
+		Embed: gpu.OptimizerSettings{
+			Name:        "adamw",
+			LR:          cfg.Training.EmbedLR,
+			Beta1:       cfg.Training.Beta1,
+			Beta2:       cfg.Training.Beta2,
+			Epsilon:     cfg.Training.Epsilon,
+			WeightDecay: cfg.Training.EmbedWeightDecay,
+		},
+		Head: gpu.OptimizerSettings{
+			Name:        "adamw",
+			LR:          cfg.Training.HeadLR,
+			Beta1:       cfg.Training.Beta1,
+			Beta2:       cfg.Training.Beta2,
+			Epsilon:     cfg.Training.Epsilon,
+			WeightDecay: cfg.Training.HeadWeightDecay,
+		},
+		Scalar: gpu.OptimizerSettings{
+			Name:        "adamw",
+			LR:          cfg.Training.ScalarLR,
+			Beta1:       cfg.Training.Beta1,
+			Beta2:       cfg.Training.Beta2,
+			Epsilon:     cfg.Training.Epsilon,
+			WeightDecay: cfg.Training.ScalarWeightDecay,
+		},
+		Matrix: gpu.OptimizerSettings{
+			Name:         "muon",
+			LR:           cfg.Training.MatrixLR,
+			Beta1:        cfg.Training.MuonMomentum,
+			Beta2:        cfg.Training.Beta2,
+			Epsilon:      cfg.Training.Epsilon,
+			WeightDecay:  cfg.Training.MatrixWeightDecay,
+			BackendSteps: cfg.Training.MuonBackendSteps,
+			Nesterov:     muonNesterov,
+		},
 		MaxGradNorm:   cfg.Training.GradClip,
 		DefaultBaseLR: float32(cfg.Training.LR),
-	}, nil
+	})
 }
