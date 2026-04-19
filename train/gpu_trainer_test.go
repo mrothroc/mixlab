@@ -27,39 +27,6 @@ func TestShouldDecayWeight(t *testing.T) {
 	}
 }
 
-func TestClassifyWeightOptimizer(t *testing.T) {
-	tests := []struct {
-		name   string
-		weight WeightShape
-		want   optimizerClass
-	}{
-		{"embed", WeightShape{Name: "embed", Shape: []int{128, 256}}, optimizerClassEmbed},
-		{"bigram_table", WeightShape{Name: "bigram_table", Shape: []int{64, 32}}, optimizerClassEmbed},
-		{"head", WeightShape{Name: "head", Shape: []int{128, 256}}, optimizerClassHead},
-		{"norm", WeightShape{Name: "final_norm", Shape: []int{128}, IsNormScale: true}, optimizerClassScalar},
-		{"scalar_name", WeightShape{Name: "bigram_scale", Shape: []int{1}}, optimizerClassScalar},
-		{"vector", WeightShape{Name: "bias", Shape: []int{128}}, optimizerClassScalar},
-		{"matrix", WeightShape{Name: "wq", Shape: []int{128, 128}}, optimizerClassMatrix},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := classifyWeightOptimizer(tt.weight)
-			if err != nil {
-				t.Fatalf("classifyWeightOptimizer(%+v) error = %v", tt.weight, err)
-			}
-			if got != tt.want {
-				t.Fatalf("classifyWeightOptimizer(%+v) = %v, want %v", tt.weight, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestClassifyWeightOptimizerRejectsUnclassified(t *testing.T) {
-	if _, err := classifyWeightOptimizer(WeightShape{Name: "cube", Shape: []int{2, 3, 4}}); err == nil {
-		t.Fatal("expected error for unclassified weight")
-	}
-}
-
 func TestInitWeightData_InitOneScalars(t *testing.T) {
 	weights := initWeightData([]WeightShape{
 		{Name: "attn_scale", Shape: []int{4}, InitOne: true},

@@ -107,6 +107,32 @@ func TestEmitPlainAttentionIR_WithBlockScales(t *testing.T) {
 	}
 }
 
+func TestEmitPlainAttentionIR_SkipAttentionPreservesWeights(t *testing.T) {
+	p := NewProgram(7)
+	wi, err := emitPlainAttentionIRWithOptions(p, "x", 0, 4, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, true)
+	if err != nil {
+		t.Fatalf("emitPlainAttentionIRWithOptions skip attention: %v", err)
+	}
+	if wi != 7 {
+		t.Fatalf("expected wi=7, got %d", wi)
+	}
+	if n := countOps(p, OpCausalMask); n != 0 {
+		t.Fatalf("expected no CausalMask ops, got %d", n)
+	}
+	if n := countOps(p, OpSoftmax); n != 0 {
+		t.Fatalf("expected no Softmax ops, got %d", n)
+	}
+	if n := countOps(p, OpRoPE); n != 0 {
+		t.Fatalf("expected no RoPE ops, got %d", n)
+	}
+	if n := countOps(p, OpMatMul); n != 2 {
+		t.Fatalf("expected 2 FFN MatMul ops, got %d", n)
+	}
+	if n := countOps(p, OpSiLU); n != 1 {
+		t.Fatalf("expected 1 SiLU op, got %d", n)
+	}
+}
+
 func TestEmitPlainAttentionIR_InvalidDims(t *testing.T) {
 	p := NewProgram(7)
 	_, err := emitPlainAttentionIR(p, "x", 0, 3, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false)

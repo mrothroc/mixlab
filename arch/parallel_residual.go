@@ -74,7 +74,6 @@ func countBlockRangeWeightsWithRecurrenceAndParallel(specs []BlockSpec, rec []in
 	return total, nil
 }
 
-
 func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
 	plainSpec := specs[blockIdx]
 	swigluSpec := specs[blockIdx+1]
@@ -134,7 +133,6 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 	*opIdx += 2
 	return wi, nil
 }
-
 
 func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32) (int, error) {
 	if parallelResidual {

@@ -75,16 +75,17 @@ type CustomOpSpec = OpSpec
 
 // BlockSpec describes a single model block.
 type BlockSpec struct {
-	Type         string       `json:"type"`
-	Name         string       `json:"name,omitempty"` // custom block name (required for type=custom)
-	Heads        int          `json:"heads"`
-	KVHeads      int          `json:"kv_heads,omitempty"`
-	InnerDim     int          `json:"inner_dim,omitempty"`     // Mamba inner dimension; defaults to model_dim.
-	NumLatents   int          `json:"num_latents,omitempty"`   // Perceiver/bottleneck latent count.
-	SourceStream string       `json:"source_stream,omitempty"` // cross_attention: stream providing K/V.
-	Decay        float64      `json:"decay,omitempty"`         // RetNet: initial decay rate in (0,1); defaults to 0.95.
-	Weights      []WeightSpec `json:"weights,omitempty"`       // custom block weight declarations
-	Ops          []OpSpec     `json:"ops,omitempty"`           // custom block operation sequence
+	Type          string       `json:"type"`
+	Name          string       `json:"name,omitempty"` // custom block name (required for type=custom)
+	Heads         int          `json:"heads"`
+	KVHeads       int          `json:"kv_heads,omitempty"`
+	SkipAttention bool         `json:"skip_attention,omitempty"` // plain: bypass attention while preserving weight layout.
+	InnerDim      int          `json:"inner_dim,omitempty"`      // Mamba inner dimension; defaults to model_dim.
+	NumLatents    int          `json:"num_latents,omitempty"`    // Perceiver/bottleneck latent count.
+	SourceStream  string       `json:"source_stream,omitempty"`  // cross_attention: stream providing K/V.
+	Decay         float64      `json:"decay,omitempty"`          // RetNet: initial decay rate in (0,1); defaults to 0.95.
+	Weights       []WeightSpec `json:"weights,omitempty"`        // custom block weight declarations
+	Ops           []OpSpec     `json:"ops,omitempty"`            // custom block operation sequence
 }
 
 // TrainingSpec holds training hyperparameters.

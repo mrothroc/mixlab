@@ -315,7 +315,6 @@ func emitSwiGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float
 	return wi, nil
 }
 
-
 func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (string, int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
@@ -433,7 +432,6 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 	prog.Add(ffIn, ff2, state)
 	return state, wi, nil
 }
-
 
 func emitSwiGLUParallelDeltaIRWithDropout(prog *Program, xNorm string, wi, idx int, mlpMult float64, blockScales bool, dropout float32) (string, int) {
 	_ = mlpMult
