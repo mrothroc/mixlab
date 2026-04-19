@@ -35,8 +35,8 @@ jobs:
 
       - uses: golangci/golangci-lint-action@v6
         with:
-          version: latest
-          args: --build-tags="" ./arch/... ./data/... ./train/...
+          version: v2.1.6
+          args: ./arch/... ./data/... ./train/...
 
       - name: Check file sizes (max 1000 lines per .go file)
         run: |
