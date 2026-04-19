@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 
+	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/train"
 )
 
@@ -70,12 +71,17 @@ func main() {
 		}()
 	}
 
-	// Set a generous CUDA graph batch size before any MLX initialization.
-	// MLX caches this value on first GPU stream creation, so it must be in
-	// the environment before any CGO call into MLX. The per-model auto-tune
-	// in train.go refines this once the IR op count is known.
-	if os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" {
-		_ = os.Setenv("MLX_MAX_OPS_PER_BUFFER", "1000")
+	// Auto-tune CUDA graph batch size from the model's IR op count.
+	// MLX caches MLX_MAX_OPS_PER_BUFFER in a static on first GPU stream
+	// creation, so it must be set before any CGO call into MLX.
+	// arch is pure Go — no GPU touch.
+	if os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" && *configPath != "" {
+		if cfg, err := arch.LoadArchConfig(*configPath); err == nil {
+			if prog, err := arch.BuildIRProgramFromConfig(cfg); err == nil {
+				opsPerStep := len(prog.Ops) * 3 // forward + backward + optimizer margin
+				_ = os.Setenv("MLX_MAX_OPS_PER_BUFFER", fmt.Sprintf("%d", opsPerStep))
+			}
+		}
 	}
 
 	switch *quantize {
