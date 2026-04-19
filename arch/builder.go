@@ -298,9 +298,6 @@ func emitStreamIRWithDropout(prog *Program, specs []BlockSpec, stream, original 
 	return wi, nil
 }
 
-func emitSequentialBlockWithRecurrence(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool) (int, error) {
-	return emitSequentialBlockWithRecurrenceDropout(prog, specs, rec, weightStarts, blockIdx, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, 0)
-}
 
 func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
 	spec := specs[blockIdx]
@@ -331,7 +328,7 @@ func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 
 // emitBlockIR dispatches a single block emission.
 // streamSeqLens maps stream names to their sequence lengths (used by cross_attention).
-func emitBlockIR(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, streamSeqLens map[string]int, mlpMult float64, blockScales bool) (int, error) {
+func emitBlockIR(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, streamSeqLens map[string]int, mlpMult float64, blockScales bool) (int, error) { //nolint:unparam // B is fixed at IR build time by design
 	return emitBlockIRWithDropout(prog, spec, stream, wi, D, T, B, V, idx, streamSeqLens, mlpMult, blockScales, 0)
 }
 

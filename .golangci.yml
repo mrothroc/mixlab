@@ -1,3 +1,5 @@
+version: "2"
+
 linters:
   enable:
     - errcheck        # unchecked errors
@@ -10,10 +12,11 @@ linters:
     - unconvert       # unnecessary type conversions
     - unparam         # unused function parameters
 
-linters-settings:
-  gocritic:
-    disabled-checks:
-      - captLocal         # B, T, D, H are standard ML notation
+  settings:
+    gocritic:
+      disabled-checks:
+        - captLocal         # B, T, D, H are standard ML notation
+        - exitAfterDefer    # pprof defer is intentional — profile written on normal exit
 
 output:
   sort-results: true
@@ -23,3 +26,8 @@ issues:
   max-same-issues: 5
   exclude-dirs:
     - vendor
+  exclude-rules:
+    - path: "arch/"
+      linters:
+        - unparam
+      text: "always receives"   # B, x, stream are fixed at IR build time by design

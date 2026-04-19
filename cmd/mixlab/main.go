@@ -47,10 +47,14 @@ func main() {
 			fmt.Fprintf(os.Stderr, "error: create CPU profile: %v\n", err)
 			os.Exit(1)
 		}
-		pprof.StartCPUProfile(f)
+		if err := pprof.StartCPUProfile(f); err != nil {
+			_ = f.Close()
+			fmt.Fprintf(os.Stderr, "error: start CPU profile: %v\n", err)
+			os.Exit(1)
+		}
 		defer func() {
 			pprof.StopCPUProfile()
-			f.Close()
+			_ = f.Close()
 		}()
 	}
 	if *memProfile != "" {
@@ -61,8 +65,8 @@ func main() {
 				return
 			}
 			runtime.GC()
-			pprof.WriteHeapProfile(f)
-			f.Close()
+			_ = pprof.WriteHeapProfile(f)
+			_ = f.Close()
 		}()
 	}
 

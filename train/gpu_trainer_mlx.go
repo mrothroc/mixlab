@@ -262,8 +262,16 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 	if cfg.Training.MuonNesterov != nil {
 		muonNesterov = *cfg.Training.MuonNesterov
 	}
+	wmeta := make([]gpu.OptimizerWeightMetadata, len(shapes))
+	for i, s := range shapes {
+		wmeta[i] = gpu.OptimizerWeightMetadata{
+			Name:        s.Name,
+			Shape:       s.Shape,
+			IsNormScale: s.IsNormScale,
+		}
+	}
 	return gpu.BuildTrainerOptimizerSpec(gpu.TrainerOptimizerConfig{
-		Weights: optimizerWeightMetadata(shapes),
+		Weights: wmeta,
 		Embed: gpu.OptimizerSettings{
 			Name:        "adamw",
 			LR:          cfg.Training.EmbedLR,

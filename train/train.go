@@ -217,7 +217,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	// reconstruction overhead in MLX's CUDA backend.
 	if os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" {
 		opsPerStep := len(prog.Ops) * 3 // forward + backward + optimizer margin
-		os.Setenv("MLX_MAX_OPS_PER_BUFFER", fmt.Sprintf("%d", opsPerStep))
+		_ = os.Setenv("MLX_MAX_OPS_PER_BUFFER", fmt.Sprintf("%d", opsPerStep))
 	}
 
 	// Initialize GPU trainer

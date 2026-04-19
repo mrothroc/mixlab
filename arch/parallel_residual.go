@@ -74,9 +74,6 @@ func countBlockRangeWeightsWithRecurrenceAndParallel(specs []BlockSpec, rec []in
 	return total, nil
 }
 
-func emitParallelBlockPairWithRecurrence(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B int, opIdx *int, mlpMult float64, blockScales, residMix bool) (int, error) {
-	return emitParallelBlockPairWithRecurrenceDropout(prog, specs, rec, weightStarts, blockIdx, stream, original, wi, D, T, B, opIdx, mlpMult, blockScales, residMix, 0)
-}
 
 func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
 	plainSpec := specs[blockIdx]
@@ -138,9 +135,6 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 	return wi, nil
 }
 
-func emitSequentialRangeWithRecurrence(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool) (int, error) {
-	return emitSequentialRangeWithRecurrenceDropout(prog, specs, rec, weightStarts, start, end, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, parallelResidual, 0)
-}
 
 func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32) (int, error) {
 	if parallelResidual {

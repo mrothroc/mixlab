@@ -19,11 +19,15 @@ import (
 //	w[wi+4] = output projection
 //	w[wi+5] = FF layer 1
 //	w[wi+6] = FF layer 2
-func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool) (int, error) {
+func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool) (int, error) { //nolint:unparam // x and B are fixed at IR build time by design
 	return emitPlainAttentionIRWithDropout(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, 0)
 }
 
 func emitPlainAttentionIRWithDropout(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
+	return emitPlainAttentionIRWithOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, false)
+}
+
+func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool) (int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -62,74 +66,81 @@ func emitPlainAttentionIRWithDropout(prog *Program, x string, wi, H, kvH, D, T, 
 	projScaled := prefix + "_proj_scaled"
 	projDrop := prefix + "_proj_dropout"
 
-	// Pre-attention RMSNorm
-	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
-	wi++
-
-	// Q/K/V projections
-	prog.MatMul(xNorm, weightName(wi), q)
-	wi++
-	prog.MatMul(xNorm, weightName(wi), k)
-	wi++
-	prog.MatMul(xNorm, weightName(wi), v)
-	wi++
-
-	// Reshape to multi-head: [B*T, D] -> [B, T, H, headDim] -> [B, H, T, headDim]
-	prog.Reshape(q, []int{B, T, H, headDim}, q4)
-	prog.Transpose(q4, []int{0, 2, 1, 3}, qh)
-	prog.Reshape(k, []int{B, T, kvH, headDim}, k4)
-	prog.Transpose(k4, []int{0, 2, 1, 3}, kh)
-	prog.Reshape(v, []int{B, T, kvH, headDim}, v4)
-	prog.Transpose(v4, []int{0, 2, 1, 3}, vh)
-	if kvProjDim != D {
-		khExp := kh + "_exp"
-		khOnes := kh + "_ones"
-		khRep := kh + "_rep"
-		vhExp := vh + "_exp"
-		vhOnes := vh + "_ones"
-		vhRep := vh + "_rep"
-
-		prog.Reshape(kh, []int{B, kvH, 1, T, headDim}, khExp)
-		prog.Full([]int{1, 1, groupSize, 1, 1}, 1.0, khOnes)
-		prog.Mul(khExp, khOnes, khRep)
-		prog.Reshape(khRep, []int{B, H, T, headDim}, kh)
-
-		prog.Reshape(vh, []int{B, kvH, 1, T, headDim}, vhExp)
-		prog.Full([]int{1, 1, groupSize, 1, 1}, 1.0, vhOnes)
-		prog.Mul(vhExp, vhOnes, vhRep)
-		prog.Reshape(vhRep, []int{B, H, T, headDim}, vh)
-	}
-
-	// Rotary position embeddings
-	prog.RoPE(qh, kh, qhRot, khRot, T, headDim, 10000.0)
-
-	// Attention scores: Q @ K^T / sqrt(headDim)
-	prog.Transpose(khRot, []int{0, 1, 3, 2}, kt)
-	prog.MatMul(qhRot, kt, scores)
-	prog.ScalarMul(scores, scale, scaled)
-
-	// Causal mask + softmax
-	prog.CausalMask(scaled, T, masked)
-	prog.Softmax(masked, -1, attn)
-
-	// Attention output: attn @ V, then transpose back
-	prog.MatMul(attn, vh, ctx)
-	prog.Transpose(ctx, []int{0, 2, 1, 3}, ctxT)
-	prog.Reshape(ctxT, []int{B * T, D}, flat)
-
-	// Output projection + residual
-	prog.MatMul(flat, weightName(wi), proj)
-	wi++
-	if blockScales {
-		prog.Mul(proj, weightName(wi), projScaled)
+	if skipAttention {
+		wi += 5 // norm, q, k, v, output projection
+		if blockScales {
+			wi++ // attention residual scale
+		}
+	} else {
+		// Pre-attention RMSNorm
+		prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
 		wi++
-		proj = projScaled
+
+		// Q/K/V projections
+		prog.MatMul(xNorm, weightName(wi), q)
+		wi++
+		prog.MatMul(xNorm, weightName(wi), k)
+		wi++
+		prog.MatMul(xNorm, weightName(wi), v)
+		wi++
+
+		// Reshape to multi-head: [B*T, D] -> [B, T, H, headDim] -> [B, H, T, headDim]
+		prog.Reshape(q, []int{B, T, H, headDim}, q4)
+		prog.Transpose(q4, []int{0, 2, 1, 3}, qh)
+		prog.Reshape(k, []int{B, T, kvH, headDim}, k4)
+		prog.Transpose(k4, []int{0, 2, 1, 3}, kh)
+		prog.Reshape(v, []int{B, T, kvH, headDim}, v4)
+		prog.Transpose(v4, []int{0, 2, 1, 3}, vh)
+		if kvProjDim != D {
+			khExp := kh + "_exp"
+			khOnes := kh + "_ones"
+			khRep := kh + "_rep"
+			vhExp := vh + "_exp"
+			vhOnes := vh + "_ones"
+			vhRep := vh + "_rep"
+
+			prog.Reshape(kh, []int{B, kvH, 1, T, headDim}, khExp)
+			prog.Full([]int{1, 1, groupSize, 1, 1}, 1.0, khOnes)
+			prog.Mul(khExp, khOnes, khRep)
+			prog.Reshape(khRep, []int{B, H, T, headDim}, kh)
+
+			prog.Reshape(vh, []int{B, kvH, 1, T, headDim}, vhExp)
+			prog.Full([]int{1, 1, groupSize, 1, 1}, 1.0, vhOnes)
+			prog.Mul(vhExp, vhOnes, vhRep)
+			prog.Reshape(vhRep, []int{B, H, T, headDim}, vh)
+		}
+
+		// Rotary position embeddings
+		prog.RoPE(qh, kh, qhRot, khRot, T, headDim, 10000.0)
+
+		// Attention scores: Q @ K^T / sqrt(headDim)
+		prog.Transpose(khRot, []int{0, 1, 3, 2}, kt)
+		prog.MatMul(qhRot, kt, scores)
+		prog.ScalarMul(scores, scale, scaled)
+
+		// Causal mask + softmax
+		prog.CausalMask(scaled, T, masked)
+		prog.Softmax(masked, -1, attn)
+
+		// Attention output: attn @ V, then transpose back
+		prog.MatMul(attn, vh, ctx)
+		prog.Transpose(ctx, []int{0, 2, 1, 3}, ctxT)
+		prog.Reshape(ctxT, []int{B * T, D}, flat)
+
+		// Output projection + residual
+		prog.MatMul(flat, weightName(wi), proj)
+		wi++
+		if blockScales {
+			prog.Mul(proj, weightName(wi), projScaled)
+			wi++
+			proj = projScaled
+		}
+		if dropout > 0 {
+			prog.Dropout(proj, dropout, projDrop)
+			proj = projDrop
+		}
+		prog.Add(x, proj, x)
 	}
-	if dropout > 0 {
-		prog.Dropout(proj, dropout, projDrop)
-		proj = projDrop
-	}
-	prog.Add(x, proj, x)
 
 	// Feed-forward tail: ff1 -> SiLU -> ff2 -> residual
 	ff1 := prefix + "_ff1"
@@ -304,9 +315,6 @@ func emitSwiGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIR(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool) (string, int, error) {
-	return emitPlainAttentionParallelDeltaIRWithDropout(prog, x, xNorm, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, 0)
-}
 
 func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (string, int, error) {
 	_ = mlpMult
@@ -426,9 +434,6 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 	return state, wi, nil
 }
 
-func emitSwiGLUParallelDeltaIR(prog *Program, xNorm string, wi, idx int, mlpMult float64, blockScales bool) (string, int) {
-	return emitSwiGLUParallelDeltaIRWithDropout(prog, xNorm, wi, idx, mlpMult, blockScales, 0)
-}
 
 func emitSwiGLUParallelDeltaIRWithDropout(prog *Program, xNorm string, wi, idx int, mlpMult float64, blockScales bool, dropout float32) (string, int) {
 	_ = mlpMult
