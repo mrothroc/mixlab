@@ -4,11 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"runtime/pprof"
+	"strconv"
+	"syscall"
 
 	"github.com/mrothroc/mixlab/arch"
-	"github.com/mrothroc/mixlab/gpu"
 	"github.com/mrothroc/mixlab/train"
 )
 
@@ -72,17 +74,27 @@ func main() {
 		}()
 	}
 
-	// Auto-tune CUDA graph batch size from the model's IR op count.
-	// MLX caches graph limits on first GPU stream creation, so this must
-	// happen before any CGO call into MLX (including gpu.Available()).
-	// arch.LoadArchConfig and arch.BuildIRProgramFromConfig are pure Go.
-	if os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" && *configPath != "" {
-		if cfg, err := arch.LoadArchConfig(*configPath); err == nil {
-			if prog, err := arch.BuildIRProgramFromConfig(cfg); err == nil {
-				opsPerStep := len(prog.Ops) * 3 // forward + backward + optimizer margin
-				gpu.SetCUDAGraphLimits(opsPerStep, 0)
-			}
+	// Auto-tune MLX CUDA graph batch size before any GPU initialization.
+	//
+	// MLX caches MLX_MAX_OPS_PER_BUFFER in a function-local static on first
+	// GPU stream creation. With static linking, this happens during library
+	// init — before Go's main() can set env vars. The only reliable way to
+	// set it is in the process environment before the binary starts.
+	//
+	// Solution: compute the tuned value from the pure-Go IR, set the env var,
+	// and re-exec the same binary. The sentinel MIXLAB_MLX_BOOTSTRAPPED
+	// prevents infinite recursion.
+	if os.Getenv("MIXLAB_MLX_BOOTSTRAPPED") == "" {
+		maxOps := autoTuneMaxOps(*configPath, *configsDir)
+		if maxOps > 0 && os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" {
+			_ = os.Setenv("MLX_MAX_OPS_PER_BUFFER", strconv.Itoa(maxOps))
 		}
+		_ = os.Setenv("MIXLAB_MLX_BOOTSTRAPPED", "1")
+		exe, err := os.Executable()
+		if err != nil {
+			exe = os.Args[0]
+		}
+		syscall.Exec(exe, os.Args, os.Environ()) //nolint:errcheck // if exec fails, fall through to normal startup
 	}
 
 	switch *quantize {
@@ -148,4 +160,46 @@ func must(err error) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// autoTuneMaxOps computes the CUDA graph batch size from the model's IR.
+// Uses pure Go (arch package) — no GPU, no CGO, no MLX.
+// Returns 0 if no config is available or IR can't be built.
+func autoTuneMaxOps(configPath, configsDir string) int {
+	if configPath != "" {
+		return opsFromConfig(configPath)
+	}
+	if configsDir != "" {
+		return maxOpsFromDir(configsDir)
+	}
+	return 0
+}
+
+func opsFromConfig(path string) int {
+	cfg, err := arch.LoadArchConfig(path)
+	if err != nil {
+		return 0
+	}
+	prog, err := arch.BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		return 0
+	}
+	return len(prog.Ops) * 3 // forward + backward + optimizer margin
+}
+
+func maxOpsFromDir(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	maxOps := 0
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
+			continue
+		}
+		if ops := opsFromConfig(filepath.Join(dir, e.Name())); ops > maxOps {
+			maxOps = ops
+		}
+	}
+	return maxOps
 }
