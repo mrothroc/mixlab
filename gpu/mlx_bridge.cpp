@@ -168,11 +168,6 @@ int mlx_init(void) {
     }
     mx::set_default_device(mx::Device(mx::Device::gpu));
 
-    // Log CUDA graph tuning state before first GPU stream creation.
-    const char* ops_env = std::getenv("MLX_MAX_OPS_PER_BUFFER");
-    fprintf(stderr, "[mixlab] mlx_init: MLX_MAX_OPS_PER_BUFFER=%s\n",
-            ops_env ? ops_env : "(not set)");
-
     // Force backend initialization.
     auto x = mx::ones({1});
     mx::eval(x);
