@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strconv"
-	"syscall"
 
 	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/train"
@@ -74,27 +73,15 @@ func main() {
 		}()
 	}
 
-	// Auto-tune MLX CUDA graph batch size before any GPU initialization.
-	//
-	// MLX caches MLX_MAX_OPS_PER_BUFFER in a function-local static on first
-	// GPU stream creation. With static linking, this happens during library
-	// init — before Go's main() can set env vars. The only reliable way to
-	// set it is in the process environment before the binary starts.
-	//
-	// Solution: compute the tuned value from the pure-Go IR, set the env var,
-	// and re-exec the same binary. The sentinel MIXLAB_MLX_BOOTSTRAPPED
-	// prevents infinite recursion.
-	if os.Getenv("MIXLAB_MLX_BOOTSTRAPPED") == "" {
+	// Best-effort CUDA graph tuning. Sets MLX_MAX_OPS_PER_BUFFER from the
+	// model's IR op count so MLX batches more kernels per graph. This helps
+	// reduce dispatch overhead on small models; large models saturate the
+	// GPU regardless. Users can override: MLX_MAX_OPS_PER_BUFFER=2000 mixlab ...
+	if os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" {
 		maxOps := autoTuneMaxOps(*configPath, *configsDir)
-		if maxOps > 0 && os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" {
+		if maxOps > 0 {
 			_ = os.Setenv("MLX_MAX_OPS_PER_BUFFER", strconv.Itoa(maxOps))
 		}
-		_ = os.Setenv("MIXLAB_MLX_BOOTSTRAPPED", "1")
-		exe, err := os.Executable()
-		if err != nil {
-			exe = os.Args[0]
-		}
-		syscall.Exec(exe, os.Args, os.Environ()) //nolint:errcheck // if exec fails, fall through to normal startup
 	}
 
 	switch *quantize {
