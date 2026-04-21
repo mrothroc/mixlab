@@ -39,6 +39,7 @@ const (
 	OpScan             = 49
 	OpGatherPositions  = 51
 	OpScatterPositions = 52
+	OpRoPEIndexed      = 53
 )
 
 const (

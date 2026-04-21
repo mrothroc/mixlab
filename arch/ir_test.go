@@ -96,6 +96,27 @@ func TestRoPE(t *testing.T) {
 	}
 }
 
+func TestRoPEIndexed(t *testing.T) {
+	p := NewProgram(0)
+	p.RoPEIndexed("q", "k", "positions", "qr", "kr", 3, 8, 10000.0)
+	if len(p.Ops) != 1 || p.Ops[0].Code != OpRoPEIndexed {
+		t.Fatalf("unexpected: %+v", p.Ops)
+	}
+	op := p.Ops[0]
+	if len(op.Inputs) != 3 || op.Inputs[0] != "q" || op.Inputs[1] != "k" || op.Inputs[2] != "positions" {
+		t.Fatalf("bad RoPEIndexed inputs: %v", op.Inputs)
+	}
+	if len(op.Outputs) != 2 || op.Outputs[0] != "qr" || op.Outputs[1] != "kr" {
+		t.Fatalf("bad RoPEIndexed outputs: %v", op.Outputs)
+	}
+	if len(op.FloatParams) != 1 || op.FloatParams[0] != 10000.0 {
+		t.Fatalf("bad RoPEIndexed float params: %v", op.FloatParams)
+	}
+	if len(op.IntParams) != 2 || op.IntParams[0] != 3 || op.IntParams[1] != 8 {
+		t.Fatalf("bad RoPEIndexed int params: %v", op.IntParams)
+	}
+}
+
 func TestBroadcast(t *testing.T) {
 	p := NewProgram(0)
 	p.Broadcast("latents", 4, "latents_b")

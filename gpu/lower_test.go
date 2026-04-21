@@ -45,6 +45,7 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"Scan", ir.OpScan, OpScan},
 		{"GatherPositions", ir.OpGatherPositions, OpGatherPositions},
 		{"ScatterPositions", ir.OpScatterPositions, OpScatterPositions},
+		{"RoPEIndexed", ir.OpRoPEIndexed, OpRoPEIndexed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

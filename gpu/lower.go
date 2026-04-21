@@ -42,6 +42,7 @@ var irToGPUOp = map[int]int{
 	ir.OpScan:             OpScan,
 	ir.OpGatherPositions:  OpGatherPositions,
 	ir.OpScatterPositions: OpScatterPositions,
+	ir.OpRoPEIndexed:      OpRoPEIndexed,
 }
 
 // irToGPUDType maps ir tensor dtype codes to gpu dtype codes.

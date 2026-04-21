@@ -39,6 +39,7 @@ const (
 	OpScan             = 49 // OP_SCAN
 	OpGatherPositions  = 51 // OP_GATHER_POSITIONS
 	OpScatterPositions = 52 // OP_SCATTER_POSITIONS
+	OpRoPEIndexed      = 53 // OP_ROPE_INDEXED
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -182,6 +183,11 @@ func (p *Program) RMSNorm(x, scale, output string, eps float32) {
 // RoPE emits rotary position embeddings.
 func (p *Program) RoPE(q, k, qOut, kOut string, T, headDim int, base float32) {
 	p.AddOp(OpRoPE, []string{q, k}, []string{qOut, kOut}, []float32{base}, []int{T, headDim})
+}
+
+// RoPEIndexed emits rotary position embeddings using explicit position indices.
+func (p *Program) RoPEIndexed(q, k, positions, qOut, kOut string, K, headDim int, base float32) {
+	p.AddOp(OpRoPEIndexed, []string{q, k, positions}, []string{qOut, kOut}, []float32{base}, []int{K, headDim})
 }
 
 // Broadcast tiles a 1-D or 2-D tensor along a new leading batch dimension.
