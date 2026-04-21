@@ -212,6 +212,47 @@ func TestTrainingDefaults(t *testing.T) {
 	}
 }
 
+func TestOptimizerFieldParsing(t *testing.T) {
+	// Default: empty string (Muon for matrix weights)
+	cfg1, err := ParseArchConfig([]byte(`{
+		"model_dim": 128, "vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 10, "lr": 1e-3, "batch_tokens": 128, "seed": 1}
+	}`), "default")
+	if err != nil {
+		t.Fatalf("parse default: %v", err)
+	}
+	if cfg1.Training.Optimizer != "" {
+		t.Errorf("default optimizer = %q, want empty", cfg1.Training.Optimizer)
+	}
+
+	// Explicit adamw
+	cfg2, err := ParseArchConfig([]byte(`{
+		"model_dim": 128, "vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 10, "lr": 1e-3, "batch_tokens": 128, "seed": 1, "optimizer": "adamw"}
+	}`), "adamw")
+	if err != nil {
+		t.Fatalf("parse adamw: %v", err)
+	}
+	if cfg2.Training.Optimizer != "adamw" {
+		t.Errorf("adamw optimizer = %q, want adamw", cfg2.Training.Optimizer)
+	}
+
+	// Explicit muon
+	cfg3, err := ParseArchConfig([]byte(`{
+		"model_dim": 128, "vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 10, "lr": 1e-3, "batch_tokens": 128, "seed": 1, "optimizer": "muon"}
+	}`), "muon")
+	if err != nil {
+		t.Fatalf("parse muon: %v", err)
+	}
+	if cfg3.Training.Optimizer != "muon" {
+		t.Errorf("muon optimizer = %q, want muon", cfg3.Training.Optimizer)
+	}
+}
+
 func TestMLPMultValidation(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  128,

@@ -76,3 +76,27 @@ func TestBuildTrainerOptimizerSpec(t *testing.T) {
 		t.Fatalf("spec lr fields = max_grad_norm=%v default_base_lr=%v", spec.MaxGradNorm, spec.DefaultBaseLR)
 	}
 }
+
+func TestBuildTrainerOptimizerSpec_AdamWForMatrix(t *testing.T) {
+	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
+		Weights: []OptimizerWeightMetadata{
+			{Name: "embed", Shape: []int{10, 4}},
+			{Name: "wq", Shape: []int{4, 4}},
+		},
+		Embed:  OptimizerSettings{Name: "adamw", LR: 1},
+		Head:   OptimizerSettings{Name: "adamw", LR: 2},
+		Scalar: OptimizerSettings{Name: "adamw", LR: 3},
+		Matrix: OptimizerSettings{Name: "adamw", LR: 4, Beta1: 0.9, Beta2: 0.95, Epsilon: 1e-8},
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainerOptimizerSpec error = %v", err)
+	}
+	// Matrix group should be AdamW, not Muon
+	matrixGroup := spec.Groups[spec.Weights[1].GroupIndex]
+	if matrixGroup.Kind != OptimizerAdamW {
+		t.Fatalf("matrix group Kind = %d, want AdamW (%d)", matrixGroup.Kind, OptimizerAdamW)
+	}
+	if matrixGroup.LR != 4 {
+		t.Fatalf("matrix group LR = %v, want 4", matrixGroup.LR)
+	}
+}

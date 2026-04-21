@@ -415,6 +415,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
 | `ttt_steps` | integer | No | `0` | Score-first test-time training updates per validation batch during eval mode and full BPB eval. `0` disables TTT. Must be `>= 0`. |
 | `ttt_lr` | number | No | `1e-5` | Learning rate for TTT updates. Must be `>= 0`; keep much smaller than training `lr`. |
+| `optimizer` | string | No | `"muon"` | Optimizer for matrix (rank ≥ 2) weights: `"muon"` or `"adamw"`. Embed, head, and scalar groups always use AdamW. |
 | `grad_clip` | number | No | `0` | Max grad norm. `0` means no clipping. Must be `>= 0`. |
 | `weight_decay` | number | No | `0.01` | Global fallback weight decay. Must be `>= 0`. |
 | `beta1` | number | No | `0.9` | AdamW beta1. Also seeds Muon momentum when `muon_momentum` is omitted. |
