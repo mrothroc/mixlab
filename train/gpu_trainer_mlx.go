@@ -297,7 +297,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 			WeightDecay: cfg.Training.ScalarWeightDecay,
 		},
 		Matrix: gpu.OptimizerSettings{
-			Name:         "muon",
+			Name:         matrixOptimizer(cfg),
 			LR:           cfg.Training.MatrixLR,
 			Beta1:        cfg.Training.MuonMomentum,
 			Beta2:        cfg.Training.Beta2,
@@ -309,4 +309,11 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 		MaxGradNorm:   cfg.Training.GradClip,
 		DefaultBaseLR: float32(cfg.Training.LR),
 	})
+}
+
+func matrixOptimizer(cfg *ArchConfig) string {
+	if cfg.Training.Optimizer == "adamw" {
+		return "adamw"
+	}
+	return "muon"
 }
