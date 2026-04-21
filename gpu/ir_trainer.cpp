@@ -86,6 +86,7 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program) {
   bool capture_magnitudes = false;
   bool capture_x_hidden = false;
   bool capture_logits = false;
+  bool capture_qr = false;
   for (const auto& op : program.ops) {
     for (int i = 0; i < op.n_outputs; ++i) {
       if (op.outputs[i] == "magnitudes") {
@@ -96,6 +97,9 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program) {
       }
       if (op.outputs[i] == "logits") {
         capture_logits = true;
+      }
+      if (op.outputs[i] == "qr") {
+        capture_qr = true;
       }
     }
   }
@@ -109,6 +113,9 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program) {
   }
   if (capture_logits) {
     output_names.push_back("logits");
+  }
+  if (capture_qr) {
+    output_names.push_back("qr");
   }
   return output_names;
 }
