@@ -111,7 +111,9 @@ type TrainingSpec struct {
 	MuonMomentum       float32 `json:"muon_momentum,omitempty"`
 	MuonBackendSteps   int     `json:"muon_backend_steps,omitempty"`
 	MuonNesterov       *bool   `json:"muon_nesterov,omitempty"`
-	Optimizer          string  `json:"optimizer,omitempty"` // "muon" (default) or "adamw" for matrix weights
+	Optimizer          string  `json:"optimizer,omitempty"`       // "muon" (default) or "adamw" for matrix weights
+	WeightInit         string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
+	WeightInitStd      float32 `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
 	EmbedWeightDecay   float32 `json:"embed_weight_decay,omitempty"`
 	MatrixWeightDecay  float32 `json:"matrix_weight_decay,omitempty"`
 	ScalarWeightDecay  float32 `json:"scalar_weight_decay,omitempty"`

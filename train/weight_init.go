@@ -51,7 +51,7 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 	return shapes, nil
 }
 
-func initWeightData(shapes []WeightShape, seed int64) [][]float32 {
+func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightInitStd float32) [][]float32 {
 	rng := rand.New(rand.NewSource(seed))
 	weights := make([][]float32, len(shapes))
 	for i, ws := range shapes {
@@ -67,11 +67,21 @@ func initWeightData(shapes []WeightShape, seed int64) [][]float32 {
 				}
 			}
 		} else if len(ws.Shape) >= 2 {
-			fanIn := ws.Shape[0]
-			fanOut := ws.Shape[1]
-			limit := float64(math.Sqrt(6.0 / float64(fanIn+fanOut)))
-			for j := range data {
-				data[j] = float32(rng.Float64()*2*limit - limit)
+			if weightInit == "normal" {
+				std := float64(weightInitStd)
+				if std <= 0 {
+					std = 0.02
+				}
+				for j := range data {
+					data[j] = float32(rng.NormFloat64() * std)
+				}
+			} else {
+				fanIn := ws.Shape[0]
+				fanOut := ws.Shape[1]
+				limit := float64(math.Sqrt(6.0 / float64(fanIn+fanOut)))
+				for j := range data {
+					data[j] = float32(rng.Float64()*2*limit - limit)
+				}
 			}
 		}
 		weights[i] = data

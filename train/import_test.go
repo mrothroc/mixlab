@@ -28,7 +28,7 @@ func TestSafetensorsRoundTrip(t *testing.T) {
 	}
 
 	// Generate deterministic weights
-	original := initWeightData(shapes, 123)
+	original := initWeightData(shapes, 123, "", 0)
 	if len(original) != len(shapes) {
 		t.Fatalf("initWeightData returned %d weights, expected %d", len(original), len(shapes))
 	}
@@ -156,7 +156,7 @@ func TestLoadSafetensorsWeightsMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("computeWeightShapes: %v", err)
 	}
-	original := initWeightData(shapes, 1)
+	original := initWeightData(shapes, 1, "", 0)
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "weights.safetensors")
@@ -242,7 +242,7 @@ func TestRoundTripNaNInf(t *testing.T) {
 		t.Fatalf("computeWeightShapes: %v", err)
 	}
 
-	weights := initWeightData(shapes, 1)
+	weights := initWeightData(shapes, 1, "", 0)
 	// Inject special values into first weight
 	if len(weights[0]) >= 4 {
 		weights[0][0] = float32(math.Inf(1))

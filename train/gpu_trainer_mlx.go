@@ -54,7 +54,7 @@ func initMLXGPUTrainer(irProg *ir.Program, cfg *ArchConfig, loadedWeights [][]fl
 		}
 		weightData = loadedWeights
 	} else {
-		weightData = initWeightData(shapes, cfg.Training.Seed)
+		weightData = initWeightData(shapes, cfg.Training.Seed, cfg.Training.WeightInit, cfg.Training.WeightInitStd)
 	}
 
 	// Upload weights to GPU
