@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/data"
 )
 
@@ -105,6 +106,8 @@ type TrainResult struct {
 	HasValLoss  bool
 	Delta       float64
 	Elapsed     time.Duration
+	StepFLOPs   int64
+	FLOPsPerTok int64
 }
 
 // formatSummary returns a one-line summary of the training result.
@@ -180,6 +183,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	name := cfg.Name
 	targetValLoss := cfg.Training.TargetValLoss
 	shuffleChunkTokens := effectiveShuffleChunkTokens(cfg)
+	flops := arch.EstimateFLOPs(cfg)
 
 	// Build IR program
 	prog, err := BuildIRProgramFromConfig(cfg)
@@ -323,8 +327,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 			}
 			tokensPerSec := float64(batchTokens) / stepDuration.Seconds()
-			fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f tok/s=%.0f %s\n",
-				name, step, steps, v, valStr, sched.At(step), tokensPerSec, formatProgressTiming(time.Since(start), stepDurationEMA, step, steps))
+			mfuStr := ""
+			if cfg.Training.HardwareTFLOPs > 0 && flops.TrainingFLOPs > 0 {
+				mfu := (float64(flops.TrainingFLOPs) / stepDuration.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
+				mfuStr = fmt.Sprintf(" MFU=%.1f%%", mfu*100)
+			}
+			fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f tok/s=%.0f%s %s\n",
+				name, step, steps, v, valStr, sched.At(step), tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), stepDurationEMA, step, steps))
 			if hasValLoss && targetValLoss > 0 && lastValLoss <= targetValLoss {
 				fmt.Printf("  [%s] target val loss %.4f reached at step %d (val=%.4f), stopping early\n",
 					name, targetValLoss, step, lastValLoss)
@@ -384,6 +393,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		HasValLoss:  hasValLoss,
 		Delta:       lastLoss - firstLoss,
 		Elapsed:     elapsed,
+		StepFLOPs:   flops.TrainingFLOPs,
+		FLOPsPerTok: flops.FLOPsPerToken,
 	}
 	fmt.Println(result.formatSummary())
 

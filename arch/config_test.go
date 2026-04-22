@@ -372,6 +372,23 @@ func TestNegativeTargetValLoss(t *testing.T) {
 	}
 }
 
+func TestNegativeHardwareTFLOPs(t *testing.T) {
+	cfg := ArchConfig{
+		ModelDim:  128,
+		VocabSize: 1024,
+		Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
+		Training:  TrainingSpec{HardwareTFLOPs: -1},
+	}
+	data, _ := json.Marshal(cfg)
+	_, err := ParseArchConfig(data, "test")
+	if err == nil {
+		t.Fatal("expected error for negative hardware_tflops")
+	}
+	if !strings.Contains(err.Error(), "hardware_tflops") {
+		t.Errorf("error should mention hardware_tflops: %v", err)
+	}
+}
+
 func TestTTTConfigValidation(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  128,

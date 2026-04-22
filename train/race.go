@@ -56,9 +56,9 @@ func runArchRace(configsDir, trainPattern string, opts TrainOptions) error {
 	})
 
 	fmt.Println("\n=== ARCH RACE RESULTS ===")
-	fmt.Printf("%-28s %10s %10s %10s %10s %10s %s\n",
-		"CONFIG", "FIRST", "LAST", "VAL", "DELTA", "DELTA%", "TIME")
-	fmt.Println(strings.Repeat("-", 96))
+	fmt.Printf("%-28s %10s %10s %10s %10s %10s %12s %12s %11s %s\n",
+		"CONFIG", "FIRST", "LAST", "VAL", "DELTA", "DELTA%", "FLOPs/STEP", "FLOPs/TOK", "LOSS/MFLOP", "TIME")
+	fmt.Println(strings.Repeat("-", 137))
 	for _, r := range results {
 		pct := 0.0
 		if r.FirstLoss != 0 {
@@ -68,12 +68,24 @@ func runArchRace(configsDir, trainPattern string, opts TrainOptions) error {
 		if !r.HasValLoss {
 			valStr = fmt.Sprintf("%10s", "n/a")
 		}
-		fmt.Printf("%-28s %10.4f %10.4f %s %10.4f %9.1f%% %8s\n",
+		fmt.Printf("%-28s %10.4f %10.4f %s %10.4f %9.1f%% %12s %12s %11s %8s\n",
 			r.Name, r.FirstLoss, r.LastLoss, valStr, r.Delta, pct,
+			formatFLOPs(r.StepFLOPs), formatFLOPs(r.FLOPsPerTok), formatLossPerMFLOP(r),
 			r.Elapsed.Round(time.Millisecond))
 	}
 
 	return nil
+}
+
+func formatLossPerMFLOP(r TrainResult) string {
+	if r.FLOPsPerTok <= 0 {
+		return "n/a"
+	}
+	flopsPerTokenMFLOP := float64(r.FLOPsPerTok) / 1e6
+	if flopsPerTokenMFLOP == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.4f", sortKey(r)/flopsPerTokenMFLOP)
 }
 
 // sortKey returns the value to sort results by: validation loss if available,

@@ -96,6 +96,7 @@ type TrainingSpec struct {
 	TargetValLoss      float64 `json:"target_val_loss,omitempty"`
 	TTTSteps           int     `json:"ttt_steps,omitempty"`
 	TTTLR              float64 `json:"ttt_lr,omitempty"`
+	HardwareTFLOPs     float64 `json:"hardware_tflops,omitempty"` // peak hardware TFLOPS (e.g., 400 for M1 Max, 312 for A100)
 	GradClip           float32 `json:"grad_clip"`
 	WeightDecay        float32 `json:"weight_decay"`
 	Beta1              float32 `json:"beta1"`
@@ -370,6 +371,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Training.TargetValLoss < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.target_val_loss=%g (must be >= 0)", source, cfg.Training.TargetValLoss)
+	}
+	if cfg.Training.HardwareTFLOPs < 0 {
+		return nil, fmt.Errorf("config %q has invalid training.hardware_tflops=%g (must be >= 0)", source, cfg.Training.HardwareTFLOPs)
 	}
 	if cfg.Training.TTTSteps < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.ttt_steps=%d (must be >= 0)", source, cfg.Training.TTTSteps)

@@ -415,6 +415,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
 | `ttt_steps` | integer | No | `0` | Score-first test-time training updates per validation batch during eval mode and full BPB eval. `0` disables TTT. Must be `>= 0`. |
 | `ttt_lr` | number | No | `1e-5` | Learning rate for TTT updates. Must be `>= 0`; keep much smaller than training `lr`. |
+| `hardware_tflops` | number | No | `0` | Peak hardware TFLOPS used to log MFU next to `tok/s`. `0` disables MFU logging. Must be `>= 0`. |
 | `optimizer` | string | No | `"muon"` | Optimizer for matrix (rank ≥ 2) weights: `"muon"` or `"adamw"`. Embed, head, and scalar groups always use AdamW. |
 | `weight_init` | string | No | `"xavier_uniform"` | Initialization for rank ≥ 2 weights: `"xavier_uniform"` or `"normal"`. 1D weights are always ones (norms) or zeros. |
 | `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` initialization. Ignored when `weight_init` is `"xavier_uniform"`. |
