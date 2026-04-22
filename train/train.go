@@ -322,8 +322,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					valStr = fmt.Sprintf(" val=%.4f", valAvg)
 				}
 			}
-			fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f %s\n",
-				name, step, steps, v, valStr, sched.At(step), formatProgressTiming(time.Since(start), stepDurationEMA, step, steps))
+			tokensPerSec := float64(batchTokens) / stepDuration.Seconds()
+			fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f tok/s=%.0f %s\n",
+				name, step, steps, v, valStr, sched.At(step), tokensPerSec, formatProgressTiming(time.Since(start), stepDurationEMA, step, steps))
 			if hasValLoss && targetValLoss > 0 && lastValLoss <= targetValLoss {
 				fmt.Printf("  [%s] target val loss %.4f reached at step %d (val=%.4f), stopping early\n",
 					name, targetValLoss, step, lastValLoss)
