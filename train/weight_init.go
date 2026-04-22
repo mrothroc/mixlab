@@ -13,6 +13,7 @@ type WeightShape struct {
 	Shape       []int
 	IsNormScale bool
 	InitOne     bool
+	InitValue   float32
 }
 
 func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
@@ -46,6 +47,7 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 			Shape:       m.Shape,
 			IsNormScale: m.IsNormScale,
 			InitOne:     m.InitOne,
+			InitValue:   m.InitValue,
 		}
 	}
 	return shapes, nil
@@ -60,13 +62,18 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 			n *= d
 		}
 		data := make([]float32, n)
-		if len(ws.Shape) == 1 {
+		switch {
+		case ws.InitValue != 0:
+			for j := range data {
+				data[j] = ws.InitValue
+			}
+		case len(ws.Shape) == 1:
 			if ws.IsNormScale || ws.InitOne {
 				for j := range data {
 					data[j] = 1.0
 				}
 			}
-		} else if len(ws.Shape) >= 2 {
+		case len(ws.Shape) >= 2:
 			if weightInit == "normal" {
 				std := float64(weightInitStd)
 				if std <= 0 {

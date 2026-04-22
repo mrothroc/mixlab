@@ -13,6 +13,7 @@ func TestBlockWeightCount(t *testing.T) {
 		want int
 	}{
 		{BlockSpec{Type: "plain", Heads: 4}, 7},
+		{BlockSpec{Type: "plain", Heads: 4, QKGain: 5.25}, 8},
 		{BlockSpec{Type: "swiglu"}, 4},
 		{BlockSpec{Type: "mamba"}, 4},
 		{BlockSpec{Type: "token_blend"}, 1},
@@ -109,7 +110,7 @@ func TestEmitPlainAttentionIR_WithBlockScales(t *testing.T) {
 
 func TestEmitPlainAttentionIR_SkipAttentionPreservesWeights(t *testing.T) {
 	p := NewProgram(7)
-	wi, err := emitPlainAttentionIRWithOptions(p, "x", 0, 4, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, true)
+	wi, err := emitPlainAttentionIRWithOptions(p, "x", 0, 4, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, true, 0)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithOptions skip attention: %v", err)
 	}
@@ -130,6 +131,51 @@ func TestEmitPlainAttentionIR_SkipAttentionPreservesWeights(t *testing.T) {
 	}
 	if n := countOps(p, OpSiLU); n != 1 {
 		t.Fatalf("expected 1 SiLU op, got %d", n)
+	}
+}
+
+func TestEmitPlainAttentionIR_QKGainBeforeMaskAndSoftmax(t *testing.T) {
+	p := NewProgram(8)
+	wi, err := emitBlockIR(p, BlockSpec{Type: "plain", Heads: 4, QKGain: 5.25}, "x", 0, 128, 64, 2, 1024, 0, nil, DefaultFFNMultiplier, false)
+	if err != nil {
+		t.Fatalf("emitBlockIR qk_gain: %v", err)
+	}
+	if wi != 8 {
+		t.Fatalf("expected wi=8, got %d", wi)
+	}
+
+	gainReshapeIdx := -1
+	gainMulIdx := -1
+	maskIdx := -1
+	softmaxIdx := -1
+	for i, op := range p.Ops {
+		switch op.Code {
+		case OpReshape:
+			if len(op.Inputs) == 1 && op.Inputs[0] == "w4" && reflect.DeepEqual(op.IntParams, []int{1, 4, 1, 1}) {
+				gainReshapeIdx = i
+			}
+		case OpMul:
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_0_scores_scaled" && op.Inputs[1] == "x_attn_0_scores_qk_gain" {
+				gainMulIdx = i
+			}
+		case OpCausalMask:
+			if maskIdx == -1 {
+				maskIdx = i
+			}
+		case OpSoftmax:
+			if softmaxIdx == -1 {
+				softmaxIdx = i
+			}
+		}
+	}
+	if gainReshapeIdx == -1 {
+		t.Fatal("missing qk_gain reshape from w4 to [1,4,1,1]")
+	}
+	if gainMulIdx == -1 {
+		t.Fatal("missing qk_gain score multiply")
+	}
+	if gainReshapeIdx >= gainMulIdx || gainMulIdx >= maskIdx || maskIdx >= softmaxIdx {
+		t.Fatalf("unexpected op order reshape=%d mul=%d mask=%d softmax=%d", gainReshapeIdx, gainMulIdx, maskIdx, softmaxIdx)
 	}
 }
 

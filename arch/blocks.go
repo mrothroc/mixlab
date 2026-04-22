@@ -10,27 +10,31 @@ import (
 // When kvH < H, K/V use grouped-query attention and are repeated across query
 // head groups before the attention matmul.
 //
-// Weight layout (7 weights per block):
+// Weight layout (7 weights per block, or 8 when qk_gain is enabled):
 //
 //	w[wi+0] = RMSNorm scale
 //	w[wi+1] = Q projection
 //	w[wi+2] = K projection
 //	w[wi+3] = V projection
-//	w[wi+4] = output projection
-//	w[wi+5] = FF layer 1
-//	w[wi+6] = FF layer 2
+//	w[wi+4] = optional per-head QK gain
+//	w[wi+4/5] = output projection
+//	w[wi+5/6] = FF layer 1
+//	w[wi+6/7] = FF layer 2
 func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool) (int, error) { //nolint:unparam // x and B are fixed at IR build time by design
 	return emitPlainAttentionIRWithDropout(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, 0)
 }
 
 func emitPlainAttentionIRWithDropout(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
-	return emitPlainAttentionIRWithOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, false)
+	return emitPlainAttentionIRWithOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, false, 0)
 }
 
-func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool) (int, error) {
+func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64) (int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
+	}
+	if qkGain < 0 {
+		return wi, fmt.Errorf("invalid qk_gain=%g", qkGain)
 	}
 	kvH, err := normalizePlainKVHeads(H, kvH)
 	if err != nil {
@@ -57,6 +61,8 @@ func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, 
 	khRot := k + "_rot"
 	scores := prefix + "_scores"
 	scaled := scores + "_scaled"
+	gain := scores + "_qk_gain"
+	gained := scores + "_gained"
 	masked := scores + "_masked"
 	attn := prefix + "_attn"
 	ctx := prefix + "_ctx"
@@ -68,6 +74,9 @@ func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, 
 
 	if skipAttention {
 		wi += 5 // norm, q, k, v, output projection
+		if qkGain > 0 {
+			wi++ // per-head QK gain
+		}
 		if blockScales {
 			wi++ // attention residual scale
 		}
@@ -117,6 +126,12 @@ func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, 
 		prog.Transpose(khRot, []int{0, 1, 3, 2}, kt)
 		prog.MatMul(qhRot, kt, scores)
 		prog.ScalarMul(scores, scale, scaled)
+		if qkGain > 0 {
+			prog.Reshape(weightName(wi), []int{1, H, 1, 1}, gain)
+			wi++
+			prog.Mul(scaled, gain, gained)
+			scaled = gained
+		}
 
 		// Causal mask + softmax
 		prog.CausalMask(scaled, T, masked)

@@ -50,6 +50,28 @@ func TestValidPlainConfig(t *testing.T) {
 	}
 }
 
+func TestParseArchConfig_QKGain(t *testing.T) {
+	cfg := ArchConfig{
+		Name:      "test_qk_gain",
+		ModelDim:  128,
+		VocabSize: 1024,
+		SeqLen:    128,
+		Blocks:    []BlockSpec{{Type: "plain", Heads: 4, QKGain: 5.25}},
+		Training:  TrainingSpec{Steps: 100, LR: 3e-4},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got, err := ParseArchConfig(data, "test_qk_gain")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if got.Blocks[0].QKGain != 5.25 {
+		t.Fatalf("qk_gain = %g, want 5.25", got.Blocks[0].QKGain)
+	}
+}
+
 func TestMissingModelDim(t *testing.T) {
 	cfg := ArchConfig{
 		VocabSize: 1024,

@@ -79,6 +79,7 @@ type BlockSpec struct {
 	Name          string       `json:"name,omitempty"` // custom block name (required for type=custom)
 	Heads         int          `json:"heads"`
 	KVHeads       int          `json:"kv_heads,omitempty"`
+	QKGain        float64      `json:"qk_gain,omitempty"`        // per-head learnable QK scaling; 0 disables
 	SkipAttention bool         `json:"skip_attention,omitempty"` // plain: bypass attention while preserving weight layout.
 	InnerDim      int          `json:"inner_dim,omitempty"`      // Mamba inner dimension; defaults to model_dim.
 	NumLatents    int          `json:"num_latents,omitempty"`    // Perceiver/bottleneck latent count.
@@ -441,6 +442,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	}
 	if b.Type == "plain" && b.Heads <= 0 {
 		return fmt.Errorf("config %q %s[%d] type=plain requires heads > 0", source, groupName, idx)
+	}
+	if b.Type == "plain" && b.QKGain < 0 {
+		return fmt.Errorf("config %q %s[%d] type=plain has invalid qk_gain=%g (must be >= 0)", source, groupName, idx, b.QKGain)
 	}
 	if b.Type == "plain" && b.KVHeads != 0 {
 		if b.KVHeads < 0 {

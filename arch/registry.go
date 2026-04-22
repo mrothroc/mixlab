@@ -63,7 +63,7 @@ func init() {
 			if heads <= 0 {
 				heads = 4
 			}
-			return emitPlainAttentionIRWithOptions(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, spec.SkipAttention)
+			return emitPlainAttentionIRWithOptions(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, spec.SkipAttention, spec.QKGain)
 		},
 		WeightCount: plainWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
@@ -99,8 +99,11 @@ func init() {
 	}
 }
 
-func plainWeightCount(_ BlockSpec, blockScales, residMix bool) (int, error) {
+func plainWeightCount(spec BlockSpec, blockScales, residMix bool) (int, error) {
 	total := 7
+	if spec.QKGain > 0 {
+		total++
+	}
 	if blockScales {
 		total += 2
 	}

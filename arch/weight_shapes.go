@@ -16,6 +16,7 @@ type WeightMeta struct {
 	Shape       []int
 	IsNormScale bool // true for normalization scales (init 1.0); false for other 1-D params (init 0.0)
 	InitOne     bool // true for non-norm weights that should initialize to 1.0
+	InitValue   float32
 }
 
 // ffnDim computes the FFN hidden dimension, clamped to at least D.
@@ -73,8 +74,11 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 			{Name: "wq", Shape: []int{D, D}},
 			{Name: "wk", Shape: []int{D, kvProjDim}},
 			{Name: "wv", Shape: []int{D, kvProjDim}},
-			{Name: "wo", Shape: []int{D, D}},
 		}
+		if spec.QKGain > 0 {
+			metas = append(metas, WeightMeta{Name: "qk_gain", Shape: []int{heads}, InitValue: float32(spec.QKGain)})
+		}
+		metas = append(metas, WeightMeta{Name: "wo", Shape: []int{D, D}})
 		if blockScales {
 			metas = append(metas, WeightMeta{Name: "attn_scale", Shape: []int{D}, InitOne: true})
 		}
