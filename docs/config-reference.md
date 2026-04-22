@@ -65,12 +65,14 @@ Required fields:
 
 Optional fields:
 
-- `kv_heads`
+- `kv_heads` — grouped-query attention (must divide `heads` evenly)
+- `qk_gain` — learnable per-head QK scaling. When set, allocates one trainable scalar per head initialized to this value, applied as `scores = qk_gain * (Q @ K^T / sqrt(d_k))`. Omit or set to `0` for standard scaling.
+- `rope_dims` — partial RoPE: apply rotary embeddings to only the first `rope_dims` dimensions per head, leaving the rest position-invariant. Must be even and `<= head_dim`. Omit or set to `0` for full RoPE.
 
 Example:
 
 ```json
-{"type": "plain", "heads": 8, "kv_heads": 4}
+{"type": "plain", "heads": 8, "kv_heads": 4, "qk_gain": 5.25, "rope_dims": 16}
 ```
 
 ### `swiglu`

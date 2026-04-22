@@ -256,7 +256,7 @@ These built-in block types are available in JSON configs:
 
 | Type | Description |
 |------|-------------|
-| `plain` | Causal self-attention + FFN. Requires `heads`. Optional `kv_heads` for grouped-query attention. |
+| `plain` | Causal self-attention + FFN. Requires `heads`. Optional `kv_heads` (GQA), `qk_gain` (learnable QK scaling), `rope_dims` (partial RoPE). |
 | `swiglu` | SwiGLU feed-forward block with residual connection. |
 | `mamba` | Mamba selective state-space block. Optional `inner_dim`. |
 | `mamba3` | Mamba-3 style gated scan block with learned delta-t gating. Optional `inner_dim`. |
