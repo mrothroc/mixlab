@@ -514,7 +514,7 @@ func emitPerceiverIR(prog *Program, x string, wi, H, L, D, T, B, idx int) (int, 
 		// RoPE
 		qsRot := qs + "_rot"
 		ksRot := ks + "_rot"
-		prog.RoPE(qsh, ksh, qsRot, ksRot, L, headDim, 10000.0)
+		prog.RoPE(qsh, ksh, qsRot, ksRot, L, headDim, 0, 10000.0)
 
 		// Scores with causal mask
 		kst := ks + "t"

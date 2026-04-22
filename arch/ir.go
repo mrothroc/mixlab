@@ -181,13 +181,13 @@ func (p *Program) RMSNorm(x, scale, output string, eps float32) {
 }
 
 // RoPE emits rotary position embeddings.
-func (p *Program) RoPE(q, k, qOut, kOut string, T, headDim int, base float32) {
-	p.AddOp(OpRoPE, []string{q, k}, []string{qOut, kOut}, []float32{base}, []int{T, headDim})
+func (p *Program) RoPE(q, k, qOut, kOut string, T, headDim, ropeDims int, base float32) {
+	p.AddOp(OpRoPE, []string{q, k}, []string{qOut, kOut}, []float32{base}, []int{T, headDim, ropeDims})
 }
 
 // RoPEIndexed emits rotary position embeddings using explicit position indices.
-func (p *Program) RoPEIndexed(q, k, positions, qOut, kOut string, K, headDim int, base float32) {
-	p.AddOp(OpRoPEIndexed, []string{q, k, positions}, []string{qOut, kOut}, []float32{base}, []int{K, headDim})
+func (p *Program) RoPEIndexed(q, k, positions, qOut, kOut string, K, headDim, ropeDims int, base float32) {
+	p.AddOp(OpRoPEIndexed, []string{q, k, positions}, []string{qOut, kOut}, []float32{base}, []int{K, headDim, ropeDims})
 }
 
 // Broadcast tiles a 1-D or 2-D tensor along a new leading batch dimension.

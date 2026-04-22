@@ -1,6 +1,7 @@
 package arch
 
 import (
+	"reflect"
 	"testing"
 )
 
@@ -15,6 +16,7 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 
 	specs := []BlockSpec{
 		{Type: "plain", Heads: 4},
+		{Type: "plain", Heads: 4, QKGain: 5.25},
 		{Type: "swiglu"},
 		{Type: "mamba", InnerDim: 32},
 		{Type: "mamba"}, // default inner = D
@@ -65,6 +67,28 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBlockWeightShapes_QKGainMeta(t *testing.T) {
+	metas, err := blockWeightShapes(BlockSpec{Type: "plain", Heads: 4, QKGain: 5.25}, 64, 32, 1, 256, DefaultFFNMultiplier, false, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes: %v", err)
+	}
+	if len(metas) != 8 {
+		t.Fatalf("weight count = %d, want 8", len(metas))
+	}
+	if got, want := metas[4].Name, "qk_gain"; got != want {
+		t.Fatalf("weight[4].Name = %q, want %q", got, want)
+	}
+	if got, want := metas[4].Shape, []int{4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("qk_gain shape = %v, want %v", got, want)
+	}
+	if got, want := metas[4].InitValue, float32(5.25); got != want {
+		t.Fatalf("qk_gain InitValue = %g, want %g", got, want)
+	}
+	if metas[4].IsNormScale || metas[4].InitOne {
+		t.Fatalf("qk_gain should use InitValue only, got %+v", metas[4])
 	}
 }
 

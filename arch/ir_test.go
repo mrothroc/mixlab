@@ -87,18 +87,21 @@ func TestRMSNorm(t *testing.T) {
 
 func TestRoPE(t *testing.T) {
 	p := NewProgram(0)
-	p.RoPE("q", "k", "qr", "kr", 128, 32, 10000.0)
+	p.RoPE("q", "k", "qr", "kr", 128, 32, 16, 10000.0)
 	if len(p.Ops) != 1 || p.Ops[0].Code != OpRoPE {
 		t.Fatalf("unexpected: %+v", p.Ops)
 	}
 	if len(p.Ops[0].Outputs) != 2 {
 		t.Fatalf("expected 2 outputs for RoPE, got %d", len(p.Ops[0].Outputs))
 	}
+	if got := p.Ops[0].IntParams; len(got) != 3 || got[0] != 128 || got[1] != 32 || got[2] != 16 {
+		t.Fatalf("bad RoPE int params: %v", got)
+	}
 }
 
 func TestRoPEIndexed(t *testing.T) {
 	p := NewProgram(0)
-	p.RoPEIndexed("q", "k", "positions", "qr", "kr", 3, 8, 10000.0)
+	p.RoPEIndexed("q", "k", "positions", "qr", "kr", 3, 8, 4, 10000.0)
 	if len(p.Ops) != 1 || p.Ops[0].Code != OpRoPEIndexed {
 		t.Fatalf("unexpected: %+v", p.Ops)
 	}
@@ -112,7 +115,7 @@ func TestRoPEIndexed(t *testing.T) {
 	if len(op.FloatParams) != 1 || op.FloatParams[0] != 10000.0 {
 		t.Fatalf("bad RoPEIndexed float params: %v", op.FloatParams)
 	}
-	if len(op.IntParams) != 2 || op.IntParams[0] != 3 || op.IntParams[1] != 8 {
+	if len(op.IntParams) != 3 || op.IntParams[0] != 3 || op.IntParams[1] != 8 || op.IntParams[2] != 4 {
 		t.Fatalf("bad RoPEIndexed int params: %v", op.IntParams)
 	}
 }

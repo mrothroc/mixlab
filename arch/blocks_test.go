@@ -108,9 +108,25 @@ func TestEmitPlainAttentionIR_WithBlockScales(t *testing.T) {
 	}
 }
 
+func TestEmitPlainAttentionIR_RopeDims(t *testing.T) {
+	p := NewProgram(7)
+	if _, err := emitBlockIR(p, BlockSpec{Type: "plain", Heads: 4, RopeDims: 16}, "x", 0, 128, 64, 2, 1024, 0, nil, DefaultFFNMultiplier, false); err != nil {
+		t.Fatalf("emitBlockIR: %v", err)
+	}
+	for _, op := range p.Ops {
+		if op.Code == OpRoPE {
+			if len(op.IntParams) != 3 || op.IntParams[0] != 64 || op.IntParams[1] != 32 || op.IntParams[2] != 16 {
+				t.Fatalf("RoPE int params = %v, want [64 32 16]", op.IntParams)
+			}
+			return
+		}
+	}
+	t.Fatal("missing RoPE op")
+}
+
 func TestEmitPlainAttentionIR_SkipAttentionPreservesWeights(t *testing.T) {
 	p := NewProgram(7)
-	wi, err := emitPlainAttentionIRWithOptions(p, "x", 0, 4, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, true, 0)
+	wi, err := emitPlainAttentionIRWithOptions(p, "x", 0, 4, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, true, 0, 0)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithOptions skip attention: %v", err)
 	}

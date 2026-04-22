@@ -25,10 +25,10 @@ func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int,
 }
 
 func emitPlainAttentionIRWithDropout(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
-	return emitPlainAttentionIRWithOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, false, 0)
+	return emitPlainAttentionIRWithOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, false, 0, 0)
 }
 
-func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64) (int, error) {
+func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int) (int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -120,7 +120,7 @@ func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, 
 		}
 
 		// Rotary position embeddings
-		prog.RoPE(qh, kh, qhRot, khRot, T, headDim, 10000.0)
+		prog.RoPE(qh, kh, qhRot, khRot, T, headDim, ropeDims, 10000.0)
 
 		// Attention scores: Q @ K^T / sqrt(headDim)
 		prog.Transpose(khRot, []int{0, 1, 3, 2}, kt)
@@ -400,7 +400,7 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 		prog.Reshape(vhRep, []int{B, H, T, headDim}, vh)
 	}
 
-	prog.RoPE(qh, kh, qhRot, khRot, T, headDim, 10000.0)
+	prog.RoPE(qh, kh, qhRot, khRot, T, headDim, 0, 10000.0)
 	prog.Transpose(khRot, []int{0, 1, 3, 2}, kt)
 	prog.MatMul(qhRot, kt, scores)
 	prog.ScalarMul(scores, scale, scaled)

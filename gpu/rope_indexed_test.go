@@ -43,9 +43,9 @@ func buildRoPEIndexedTestProgram(indexed bool) *ir.Program {
 	prog.Transpose("k_bthd", []int{0, 2, 1, 3}, "k_bhtd")
 
 	if indexed {
-		prog.RoPEIndexed("q_bhtd", "k_bhtd", "positions", "qr", "kr", ropeIndexedTestT, ropeIndexedTestHeadDim, ropeIndexedTestBase)
+		prog.RoPEIndexed("q_bhtd", "k_bhtd", "positions", "qr", "kr", ropeIndexedTestT, ropeIndexedTestHeadDim, 0, ropeIndexedTestBase)
 	} else {
-		prog.RoPE("q_bhtd", "k_bhtd", "qr", "kr", ropeIndexedTestT, ropeIndexedTestHeadDim, ropeIndexedTestBase)
+		prog.RoPE("q_bhtd", "k_bhtd", "qr", "kr", ropeIndexedTestT, ropeIndexedTestHeadDim, 0, ropeIndexedTestBase)
 	}
 
 	prog.Transpose("qr", []int{0, 2, 1, 3}, "qr_bthd")
@@ -172,6 +172,35 @@ func TestRoPEIndexedSparsePositionsUseAbsolutePositionValues(t *testing.T) {
 	}
 	if maxSparseDiff <= ropeIndexedTestTol {
 		t.Fatalf("sparse positions produced the same qr rotations as contiguous positions; max diff=%g", maxSparseDiff)
+	}
+}
+
+func TestRoPEPartialLeavesPassThroughDimsUnchanged(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+
+	prog := buildRoPEIndexedTestProgram(false)
+	for i := range prog.Ops {
+		if prog.Ops[i].Code == ir.OpRoPE {
+			prog.Ops[i].IntParams[2] = 2
+			break
+		}
+	}
+	qr := runRoPEIndexedTestProgram(t, prog, nil)
+
+	for tok := 0; tok < ropeIndexedTestT; tok++ {
+		for h := 0; h < ropeIndexedTestH; h++ {
+			for d := 2; d < ropeIndexedTestHeadDim; d++ {
+				i := ropeIndexedTestQRIndex(0, h, tok, d)
+				flatDim := h*ropeIndexedTestHeadDim + d
+				want := 0.1 + float32(tok*ropeIndexedTestD+flatDim)*0.01
+				if diff := math.Abs(float64(qr[i] - want)); diff > ropeIndexedTestTol {
+					t.Fatalf("partial RoPE changed pass-through dim token=%d head=%d dim=%d: got=%g want=%g diff=%g",
+						tok, h, d, qr[i], want, diff)
+				}
+			}
+		}
 	}
 }
 

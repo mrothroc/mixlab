@@ -40,21 +40,25 @@ def rms_norm(x, scale):
     return x * torch.rsqrt(torch.mean(x * x, dim=-1, keepdim=True) + EPS) * scale
 
 
-def apply_rope(q, k):
+def apply_rope(q, k, rope_dims=0):
     head_dim = q.shape[-1]
-    dim_idx = torch.arange(0, head_dim // 2, dtype=torch.float32)
-    freqs = torch.exp(dim_idx * (-math.log(ROPE_BASE) * 2.0 / head_dim))
+    if rope_dims <= 0 or rope_dims >= head_dim:
+        rope_dims = head_dim
+    dim_idx = torch.arange(0, rope_dims // 2, dtype=torch.float32)
+    freqs = torch.exp(dim_idx * (-math.log(ROPE_BASE) * 2.0 / rope_dims))
     positions = torch.arange(0, SEQ_LEN, dtype=torch.float32)
     angles = positions[:, None] * freqs[None, :]
-    cos_t = torch.cos(angles).reshape(1, 1, SEQ_LEN, head_dim // 2)
-    sin_t = torch.sin(angles).reshape(1, 1, SEQ_LEN, head_dim // 2)
+    cos_t = torch.cos(angles).reshape(1, 1, SEQ_LEN, rope_dims // 2)
+    sin_t = torch.sin(angles).reshape(1, 1, SEQ_LEN, rope_dims // 2)
 
     def rotate(x):
-        even = x[..., 0::2]
-        odd = x[..., 1::2]
+        x_rot = x[..., :rope_dims]
+        even = x_rot[..., 0::2]
+        odd = x_rot[..., 1::2]
         rot_even = even * cos_t - odd * sin_t
         rot_odd = even * sin_t + odd * cos_t
-        return torch.stack((rot_even, rot_odd), dim=-1).reshape_as(x)
+        rotated = torch.stack((rot_even, rot_odd), dim=-1).reshape_as(x_rot)
+        return torch.cat((rotated, x[..., rope_dims:]), dim=-1)
 
     return rotate(q), rotate(k)
 
@@ -98,7 +102,7 @@ def main():
     qh = q.reshape(BATCH, SEQ_LEN, HEADS, head_dim).transpose(1, 2)
     kh = k.reshape(BATCH, SEQ_LEN, HEADS, head_dim).transpose(1, 2)
     vh = v.reshape(BATCH, SEQ_LEN, HEADS, head_dim).transpose(1, 2)
-    qh, kh = apply_rope(qh, kh)
+    qh, kh = apply_rope(qh, kh, 0)
 
     scores = qh @ kh.transpose(-2, -1)
     scores = scores * (1.0 / math.sqrt(head_dim))

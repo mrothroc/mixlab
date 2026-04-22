@@ -650,12 +650,19 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         if (HD <= 0 || (HD % 2) != 0) {
           throw std::runtime_error("OP_ROPE requires even positive head_dim");
         }
-        int start = (op.n_int_params > 2) ? op.int_params[2] : 0;
-        int stride = (op.n_int_params > 3) ? op.int_params[3] : 1;
+        int rope_dims = (op.n_int_params > 2) ? op.int_params[2] : HD;
+        if (rope_dims <= 0 || rope_dims >= HD) {
+          rope_dims = HD;
+        }
+        if ((rope_dims % 2) != 0) {
+          throw std::runtime_error("OP_ROPE requires even rope_dims");
+        }
+        int start = (op.n_int_params > 3) ? op.int_params[3] : 0;
+        int stride = (op.n_int_params > 4) ? op.int_params[4] : 1;
         float base = (op.n_float_params > 0) ? op.float_params[0] : 10000.0f;
 
-        auto dim_idx = mx::astype(mx::arange(0, HD / 2), mx::float32);
-        auto freqs = mx::exp(dim_idx * static_cast<float>(-std::log(base) * 2.0 / static_cast<double>(HD)));
+        auto dim_idx = mx::astype(mx::arange(0, rope_dims / 2), mx::float32);
+        auto freqs = mx::exp(dim_idx * static_cast<float>(-std::log(base) * 2.0 / static_cast<double>(rope_dims)));
         auto positions = [&]() -> mx::array {
           if (op.n_inputs > 2 && !op.inputs[2].empty()) {
             auto positions_in = mx::astype(get(op, 2), mx::int32);
@@ -666,19 +673,25 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           }
           return mx::astype(mx::arange(0, T) * stride + start, mx::float32);
         }();
-        auto angles = mx::reshape(positions, {T, 1}) * mx::reshape(freqs, {1, HD / 2});
-        auto cos_t = mx::reshape(mx::cos(angles), {1, 1, T, HD / 2});
-        auto sin_t = mx::reshape(mx::sin(angles), {1, 1, T, HD / 2});
+        auto angles = mx::reshape(positions, {T, 1}) * mx::reshape(freqs, {1, rope_dims / 2});
+        auto cos_t = mx::reshape(mx::cos(angles), {1, 1, T, rope_dims / 2});
+        auto sin_t = mx::reshape(mx::sin(angles), {1, 1, T, rope_dims / 2});
 
         auto apply_rope = [&](const mx::array& x) -> mx::array {
-          if (x.ndim() != 4) {
-            throw std::runtime_error("OP_ROPE expects rank-4 tensors");
+          if (x.ndim() != 4 || x.shape(2) != T || x.shape(3) != HD) {
+            throw std::runtime_error("OP_ROPE expects q/k shape [B,H,T,head_dim]");
           }
-          auto even = mx::slice(x, {0, 0, 0, 0}, {x.shape(0), x.shape(1), x.shape(2), x.shape(3)}, {1, 1, 1, 2});
-          auto odd = mx::slice(x, {0, 0, 0, 1}, {x.shape(0), x.shape(1), x.shape(2), x.shape(3)}, {1, 1, 1, 2});
+          auto x_rot = mx::slice(x, {0, 0, 0, 0}, {x.shape(0), x.shape(1), x.shape(2), rope_dims});
+          auto even = mx::slice(x_rot, {0, 0, 0, 0}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), x_rot.shape(3)}, {1, 1, 1, 2});
+          auto odd = mx::slice(x_rot, {0, 0, 0, 1}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), x_rot.shape(3)}, {1, 1, 1, 2});
           auto rot_even = even * cos_t - odd * sin_t;
           auto rot_odd = even * sin_t + odd * cos_t;
-          return mx::reshape(mx::stack({rot_even, rot_odd}, 4), x.shape());
+          auto rotated = mx::reshape(mx::stack({rot_even, rot_odd}, 4), x_rot.shape());
+          if (rope_dims == HD) {
+            return rotated;
+          }
+          auto pass = mx::slice(x, {0, 0, 0, rope_dims}, {x.shape(0), x.shape(1), x.shape(2), x.shape(3)});
+          return mx::concatenate({rotated, pass}, 3);
         };
 
         set_out(op, 0, apply_rope(get(op, 0)));
@@ -697,28 +710,41 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         if (HD <= 0 || (HD % 2) != 0) {
           throw std::runtime_error("OP_ROPE_INDEXED requires even positive head_dim");
         }
+        int rope_dims = (op.n_int_params > 2) ? op.int_params[2] : HD;
+        if (rope_dims <= 0 || rope_dims >= HD) {
+          rope_dims = HD;
+        }
+        if ((rope_dims % 2) != 0) {
+          throw std::runtime_error("OP_ROPE_INDEXED requires even rope_dims");
+        }
         float base = (op.n_float_params > 0) ? op.float_params[0] : 10000.0f;
 
         auto positions_in = mx::astype(get(op, 2), mx::int32);
         if (positions_in.ndim() != 1 || positions_in.shape(0) != K) {
           throw std::runtime_error("OP_ROPE_INDEXED expects positions shape [K]");
         }
-        auto dim_idx = mx::astype(mx::arange(0, HD / 2), mx::float32);
-        auto freqs = mx::exp(dim_idx * static_cast<float>(-std::log(base) * 2.0 / static_cast<double>(HD)));
+        auto dim_idx = mx::astype(mx::arange(0, rope_dims / 2), mx::float32);
+        auto freqs = mx::exp(dim_idx * static_cast<float>(-std::log(base) * 2.0 / static_cast<double>(rope_dims)));
         auto positions = mx::astype(positions_in, mx::float32);
-        auto angles = mx::reshape(positions, {K, 1}) * mx::reshape(freqs, {1, HD / 2});
-        auto cos_t = mx::reshape(mx::cos(angles), {1, 1, K, HD / 2});
-        auto sin_t = mx::reshape(mx::sin(angles), {1, 1, K, HD / 2});
+        auto angles = mx::reshape(positions, {K, 1}) * mx::reshape(freqs, {1, rope_dims / 2});
+        auto cos_t = mx::reshape(mx::cos(angles), {1, 1, K, rope_dims / 2});
+        auto sin_t = mx::reshape(mx::sin(angles), {1, 1, K, rope_dims / 2});
 
         auto apply_rope = [&](const mx::array& x) -> mx::array {
           if (x.ndim() != 4 || x.shape(2) != K || x.shape(3) != HD) {
             throw std::runtime_error("OP_ROPE_INDEXED expects q/k shape [B,H,K,head_dim]");
           }
-          auto even = mx::slice(x, {0, 0, 0, 0}, {x.shape(0), x.shape(1), x.shape(2), x.shape(3)}, {1, 1, 1, 2});
-          auto odd = mx::slice(x, {0, 0, 0, 1}, {x.shape(0), x.shape(1), x.shape(2), x.shape(3)}, {1, 1, 1, 2});
+          auto x_rot = mx::slice(x, {0, 0, 0, 0}, {x.shape(0), x.shape(1), x.shape(2), rope_dims});
+          auto even = mx::slice(x_rot, {0, 0, 0, 0}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), x_rot.shape(3)}, {1, 1, 1, 2});
+          auto odd = mx::slice(x_rot, {0, 0, 0, 1}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), x_rot.shape(3)}, {1, 1, 1, 2});
           auto rot_even = even * cos_t - odd * sin_t;
           auto rot_odd = even * sin_t + odd * cos_t;
-          return mx::reshape(mx::stack({rot_even, rot_odd}, 4), x.shape());
+          auto rotated = mx::reshape(mx::stack({rot_even, rot_odd}, 4), x_rot.shape());
+          if (rope_dims == HD) {
+            return rotated;
+          }
+          auto pass = mx::slice(x, {0, 0, 0, rope_dims}, {x.shape(0), x.shape(1), x.shape(2), x.shape(3)});
+          return mx::concatenate({rotated, pass}, 3);
         };
 
         set_out(op, 0, apply_rope(get(op, 0)));

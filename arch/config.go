@@ -79,6 +79,7 @@ type BlockSpec struct {
 	Name          string       `json:"name,omitempty"` // custom block name (required for type=custom)
 	Heads         int          `json:"heads"`
 	KVHeads       int          `json:"kv_heads,omitempty"`
+	RopeDims      int          `json:"rope_dims,omitempty"`      // RoPE rotation dims per head; 0 or head_dim = full RoPE
 	QKGain        float64      `json:"qk_gain,omitempty"`        // per-head learnable QK scaling; 0 disables
 	SkipAttention bool         `json:"skip_attention,omitempty"` // plain: bypass attention while preserving weight layout.
 	InnerDim      int          `json:"inner_dim,omitempty"`      // Mamba inner dimension; defaults to model_dim.
@@ -265,6 +266,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 
 	for i, b := range cfg.Blocks {
 		if err := validateBlockSpec(b, source, "blocks", i); err != nil {
+			return nil, err
+		}
+		if err := validateBlockRopeDims(b, cfg.ModelDim, source, "blocks", i); err != nil {
 			return nil, err
 		}
 	}
@@ -467,6 +471,29 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		if b.SourceStream == "" {
 			return fmt.Errorf("config %q %s[%d] type=cross_attention requires source_stream", source, groupName, idx)
 		}
+	}
+	return nil
+}
+
+func validateBlockRopeDims(b BlockSpec, modelDim int, source, groupName string, idx int) error {
+	if b.RopeDims == 0 {
+		return nil
+	}
+	if b.RopeDims < 0 {
+		return fmt.Errorf("config %q %s[%d] has invalid rope_dims=%d (must be > 0 when set)", source, groupName, idx, b.RopeDims)
+	}
+	if b.RopeDims%2 != 0 {
+		return fmt.Errorf("config %q %s[%d] has invalid rope_dims=%d (must be even)", source, groupName, idx, b.RopeDims)
+	}
+	if b.Heads <= 0 {
+		return fmt.Errorf("config %q %s[%d] has rope_dims=%d but heads must be > 0", source, groupName, idx, b.RopeDims)
+	}
+	if modelDim%b.Heads != 0 {
+		return fmt.Errorf("config %q %s[%d] has rope_dims=%d but model_dim=%d is not divisible by heads=%d", source, groupName, idx, b.RopeDims, modelDim, b.Heads)
+	}
+	headDim := modelDim / b.Heads
+	if b.RopeDims > headDim {
+		return fmt.Errorf("config %q %s[%d] has invalid rope_dims=%d (must be <= head_dim=%d)", source, groupName, idx, b.RopeDims, headDim)
 	}
 	return nil
 }
