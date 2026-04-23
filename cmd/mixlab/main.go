@@ -129,23 +129,25 @@ func main() {
 		os.Exit(1)
 	}
 
+	opts := train.TrainOptions{
+		SafetensorsPath: *safetensorsPath,
+		SafetensorsLoad: *safetensorsLoad,
+		Quantize:        *quantize,
+		QuantMethod:     *quantMethod,
+		QuantK:          float32(*quantK),
+		QuantKEmbed:     float32(*quantKEmbed),
+		DoFullEval:      *flagFullEval,
+		LUTDir:          *lutDir,
+		CheckpointDir:   *checkpointDir,
+		CheckpointEvery: *checkpointEvery,
+		Timing:          *timing,
+	}
+
 	switch *mode {
 	case "arch":
-		must(train.RunArch(*configPath, *trainPattern, *safetensorsPath, *safetensorsLoad, *quantize, *quantMethod, float32(*quantK), float32(*quantKEmbed), *flagFullEval, *lutDir, *checkpointDir, *checkpointEvery, *timing))
+		must(train.RunArch(*configPath, *trainPattern, opts))
 	case "arch_race":
-		must(train.RunArchRace(*configsDir, *trainPattern, train.TrainOptions{
-			SafetensorsPath: *safetensorsPath,
-			SafetensorsLoad: *safetensorsLoad,
-			Quantize:        *quantize,
-			QuantMethod:     *quantMethod,
-			QuantK:          float32(*quantK),
-			QuantKEmbed:     float32(*quantKEmbed),
-			DoFullEval:      *flagFullEval,
-			LUTDir:          *lutDir,
-			CheckpointDir:   *checkpointDir,
-			CheckpointEvery: *checkpointEvery,
-			Timing:          *timing,
-		}))
+		must(train.RunArchRace(*configsDir, *trainPattern, opts))
 	case "eval":
 		must(train.RunEvalMode(*configPath, *trainPattern, *safetensorsLoad))
 	case "hiddenstats":
