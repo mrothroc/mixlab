@@ -140,6 +140,7 @@ type TrainOptions struct {
 	LUTDir          string // Directory containing BPB lookup tables
 	CheckpointDir   string // Directory for periodic safetensors checkpoints
 	CheckpointEvery int    // Save checkpoint every N steps; 0 disables
+	Timing          bool   // If true, print per-step timing breakdown at log intervals
 }
 
 type trainBatch struct {
@@ -253,7 +254,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	start := time.Now()
 	var stepDurationEMA time.Duration
 	done := make(chan struct{})
-	batchCh := make(chan trainBatch, 2)
+	batchCh := make(chan trainBatch, 4)
 	var loadWG sync.WaitGroup
 	loadWG.Add(1)
 	go func() {
@@ -281,7 +282,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 	for step := 0; step < steps; step++ {
 		stepStart := time.Now()
+		batchWaitStart := time.Now()
 		batch, ok := <-batchCh
+		dataDuration := time.Since(batchWaitStart)
 		if !ok {
 			return TrainResult{}, fmt.Errorf("load batch at step %d: prefetch pipeline closed unexpectedly", step)
 		}
@@ -289,7 +292,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			return TrainResult{}, fmt.Errorf("load batch at step %d: %w", step, batch.err)
 		}
 
+		gpuStart := time.Now()
 		lossV, err := trainer.TrainStepGPU(batch.x, batch.y, batchSize, seqLen, sched.At(step))
+		gpuDuration := time.Since(gpuStart)
 		if err != nil {
 			return TrainResult{}, fmt.Errorf("train step %d: %w", step, err)
 		}
@@ -320,9 +325,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 		// Log every 100 steps or at the last step
 		if step%100 == 0 || step == steps-1 {
+			logStart := time.Now()
+			valDuration := time.Duration(0)
 			valStr := ""
 			if valSet != nil && len(valSet.Batches) > 0 {
+				valStart := time.Now()
 				valAvg, err := meanValidationLoss(valSet, trainer, batchSize, seqLen)
+				valDuration = time.Since(valStart)
 				if err == nil {
 					lastValLoss = valAvg
 					hasValLoss = true
@@ -337,6 +346,15 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 			fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f tok/s=%.0f%s %s\n",
 				name, step, steps, v, valStr, sched.At(step), tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), stepDurationEMA, step, steps))
+			logDuration := time.Since(logStart)
+			if opts.Timing {
+				fmt.Printf("  [%s] [timing] data=%.1fms gpu=%.1fms val=%.1fms log=%.1fms\n",
+					name,
+					float64(dataDuration)/float64(time.Millisecond),
+					float64(gpuDuration)/float64(time.Millisecond),
+					float64(valDuration)/float64(time.Millisecond),
+					float64(logDuration)/float64(time.Millisecond))
+			}
 			if hasValLoss && targetValLoss > 0 && lastValLoss <= targetValLoss {
 				fmt.Printf("  [%s] target val loss %.4f reached at step %d (val=%.4f), stopping early\n",
 					name, targetValLoss, step, lastValLoss)
