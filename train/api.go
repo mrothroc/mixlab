@@ -4,7 +4,7 @@ import (
 	"fmt"
 )
 
-func RunArch(configPath, trainPattern, safetensorsPath, safetensorsLoad, quantize string, doFullEval bool, lutDir, checkpointDir string, checkpointEvery int) error {
+func RunArch(configPath, trainPattern, safetensorsPath, safetensorsLoad, quantize, quantMethod string, quantK, quantKEmbed float32, doFullEval bool, lutDir, checkpointDir string, checkpointEvery int) error {
 	if configPath == "" {
 		return fmt.Errorf("-config is required for arch mode; pass a JSON config file, e.g.: mixlab -mode arch -config examples/plain_3L.json -train 'data/train_*.bin'")
 	}
@@ -26,6 +26,9 @@ func RunArch(configPath, trainPattern, safetensorsPath, safetensorsLoad, quantiz
 		SafetensorsPath: safetensorsPath,
 		SafetensorsLoad: safetensorsLoad,
 		Quantize:        quantize,
+		QuantMethod:     quantMethod,
+		QuantK:          quantK,
+		QuantKEmbed:     quantKEmbed,
 		DoFullEval:      doFullEval,
 		LUTDir:          lutDir,
 		CheckpointDir:   checkpointDir,

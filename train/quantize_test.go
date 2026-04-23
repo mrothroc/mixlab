@@ -84,6 +84,53 @@ func TestQuantizePerRow_Int6_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestQuantizePerRowSDClip_KControlsClipRange(t *testing.T) {
+	data := []float32{
+		-4, -2, 0, 2, 4,
+		-8, -4, 0, 4, 8,
+	}
+	rows, cols := 2, 5
+
+	_, lowScales := quantizeTensorPerRowSDClip(data, rows, cols, "int8", 1.5)
+	_, highScales := quantizeTensorPerRowSDClip(data, rows, cols, "int8", 3.0)
+
+	for r := 0; r < rows; r++ {
+		if highScales[r] <= lowScales[r] {
+			t.Fatalf("row %d high-k scale=%g should exceed low-k scale=%g", r, highScales[r], lowScales[r])
+		}
+	}
+}
+
+func TestQuantizePerRowSDClip_UniformDataUsesKStd(t *testing.T) {
+	data := []float32{-3, -1, 1, 3}
+	k := float32(2.0)
+
+	_, scales := quantizeTensorPerRowSDClip(data, 1, len(data), "int8", k)
+
+	// mean=0, variance=(9+1+1+9)/4=5, std=sqrt(5)
+	wantScale := float32((float64(k) * math.Sqrt(5)) / 127.0)
+	if math.Abs(float64(scales[0]-wantScale)) > 1e-6 {
+		t.Fatalf("scale=%g, want %g", scales[0], wantScale)
+	}
+}
+
+func TestQuantizePerRowSDClip_DiffersFromQuantile(t *testing.T) {
+	data := []float32{-1, -0.5, 0, 0.5, 50}
+
+	qQuantile, _ := quantizeTensorPerRow(data, 1, len(data), "int8")
+	qSDClip, _ := quantizeTensorPerRowSDClip(data, 1, len(data), "int8", 1.0)
+
+	if len(qQuantile) != len(qSDClip) {
+		t.Fatalf("length mismatch: quantile=%d sdclip=%d", len(qQuantile), len(qSDClip))
+	}
+	for i := range qQuantile {
+		if qQuantile[i] != qSDClip[i] {
+			return
+		}
+	}
+	t.Fatalf("SDClip quantized values should differ from quantile values: %v", qSDClip)
+}
+
 // TestQuantizeFlat_RoundTrip verifies flat (whole-tensor) quantization.
 func TestQuantizeFlat_RoundTrip(t *testing.T) {
 	rng := rand.New(rand.NewSource(99))
@@ -175,10 +222,10 @@ func TestExportSafetensorsQuantized_SmallerThanFloat32(t *testing.T) {
 	if err := exportSafetensors(f32Path, cfg, shapes, weights); err != nil {
 		t.Fatalf("exportSafetensors: %v", err)
 	}
-	if err := exportSafetensorsQuantized(q8Path, cfg, shapes, weights, "int8"); err != nil {
+	if err := exportSafetensorsQuantized(q8Path, cfg, shapes, weights, "int8", "", 0, 0); err != nil {
 		t.Fatalf("exportSafetensorsQuantized(int8): %v", err)
 	}
-	if err := exportSafetensorsQuantized(q6Path, cfg, shapes, weights, "int6"); err != nil {
+	if err := exportSafetensorsQuantized(q6Path, cfg, shapes, weights, "int6", "", 0, 0); err != nil {
 		t.Fatalf("exportSafetensorsQuantized(int6): %v", err)
 	}
 
@@ -231,7 +278,7 @@ func TestExportSafetensorsQuantized_HeaderDTypes(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "model_q8.safetensors")
 
-	if err := exportSafetensorsQuantized(path, cfg, shapes, weights, "int8"); err != nil {
+	if err := exportSafetensorsQuantized(path, cfg, shapes, weights, "int8", "", 0, 0); err != nil {
 		t.Fatalf("export: %v", err)
 	}
 
@@ -298,7 +345,7 @@ func TestExportSafetensorsQuantized_HeaderDTypes(t *testing.T) {
 // TestExportSafetensorsQuantized_InvalidMode returns error for bad mode.
 func TestExportSafetensorsQuantized_InvalidMode(t *testing.T) {
 	cfg := &ArchConfig{Name: "test", ModelDim: 32, VocabSize: 128, SeqLen: 16, Training: TrainingSpec{Steps: 1}}
-	err := exportSafetensorsQuantized("/tmp/test.safetensors", cfg, nil, nil, "int4")
+	err := exportSafetensorsQuantized("/tmp/test.safetensors", cfg, nil, nil, "int4", "", 0, 0)
 	if err == nil {
 		t.Fatal("expected error for unsupported mode")
 	}

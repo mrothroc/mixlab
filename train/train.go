@@ -133,6 +133,9 @@ type TrainOptions struct {
 	SafetensorsPath string // If set, export weights after training
 	SafetensorsLoad string // If set, load weights from safetensors file before training
 	Quantize        string // Quantization mode: "none", "int8", or "int6"
+	QuantMethod     string // Quantization clipping method: "quantile" or "sdclip"
+	QuantK          float32
+	QuantKEmbed     float32
 	DoFullEval      bool   // If true, run full BPB evaluation after training
 	LUTDir          string // Directory containing BPB lookup tables
 	CheckpointDir   string // Directory for periodic safetensors checkpoints
@@ -357,7 +360,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		} else {
 			qmode := opts.Quantize
 			if qmode == "int8" || qmode == "int6" {
-				if err := exportSafetensorsQuantized(opts.SafetensorsPath, cfg, shapes, weights, qmode); err != nil {
+				if err := exportSafetensorsQuantized(opts.SafetensorsPath, cfg, shapes, weights, qmode, opts.QuantMethod, opts.QuantK, opts.QuantKEmbed); err != nil {
 					fmt.Printf("  [%s] quantized safetensors export failed: %v\n", name, err)
 				}
 			} else {

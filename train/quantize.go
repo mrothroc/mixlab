@@ -117,6 +117,38 @@ func quantizeTensorPerRow(data []float32, rows, cols int, mode string) ([]int8, 
 	return qData, scales
 }
 
+func quantizeTensorPerRowSDClip(data []float32, rows, cols int, mode string, k float32) ([]int8, []float32) {
+	qData := make([]int8, len(data))
+	scales := make([]float32, rows)
+	for r := 0; r < rows; r++ {
+		row := data[r*cols : (r+1)*cols]
+		var sum, sumSq float64
+		for _, v := range row {
+			fv := float64(v)
+			sum += fv
+			sumSq += fv * fv
+		}
+		n := float64(len(row))
+		mean := sum / n
+		std := math.Sqrt(sumSq/n - mean*mean)
+		clipAbs := float32(float64(k) * std)
+		if clipAbs < minRowScale {
+			clipAbs = minRowScale
+		}
+		scale := clipAbs / 127.0
+		if scale < minRowScale {
+			scale = minRowScale
+		}
+		scales[r] = scale
+		for c, v := range row {
+			clipped := float32(math.Max(float64(-clipAbs), math.Min(float64(clipAbs), float64(v))))
+			qRaw := float32(math.Round(float64(clipped / scale)))
+			qData[r*cols+c] = quantizeClamp(qRaw, mode)
+		}
+	}
+	return qData, scales
+}
+
 // quantizeTensorFlat performs whole-tensor quantization for 1-D tensors.
 // Returns quantized int8 values and a single scalar scale.
 func quantizeTensorFlat(data []float32, mode string) ([]int8, float32) {

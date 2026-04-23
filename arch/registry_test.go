@@ -3,7 +3,7 @@ package arch
 import "testing"
 
 func TestRegistryBuiltinsRegistered(t *testing.T) {
-	for _, name := range []string{"plain", "swiglu", "mamba", "mamba3", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
+	for _, name := range []string{"plain", "swiglu", "mlp", "mamba", "mamba3", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
 		reg, err := lookupBlock(BlockSpec{Type: name})
 		if err != nil {
 			t.Fatalf("lookupBlock(%q): %v", name, err)

@@ -21,6 +21,9 @@ func main() {
 	safetensorsPath := flag.String("safetensors", "", "export weights to safetensors file after training")
 	safetensorsLoad := flag.String("safetensors-load", "", "load weights from safetensors file before training (resume/eval)")
 	quantize := flag.String("quantize", "none", "weight quantization mode: none, int8, int6")
+	quantMethod := flag.String("quant-method", "quantile", `quantization clipping method: "quantile" or "sdclip"`)
+	quantK := flag.Float64("quant-k", 12.85, "SDClip k for matrix weights")
+	quantKEmbed := flag.Float64("quant-k-embed", 20.0, "SDClip k for embedding weights")
 	flagFullEval := flag.Bool("eval", false, "run full validation BPB evaluation after training")
 	lutDir := flag.String("lut-dir", "data", "directory containing BPB lookup tables (bytes_per_token.bin, etc.)")
 	checkpointDir := flag.String("checkpoint-dir", "", "directory for periodic safetensors checkpoints")
@@ -91,6 +94,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "error: unsupported -quantize mode %q (supported: none, int8, int6)\n", *quantize)
 		os.Exit(1)
 	}
+	switch *quantMethod {
+	case "", "quantile", "sdclip":
+		// valid
+	default:
+		fmt.Fprintf(os.Stderr, "error: unsupported -quant-method %q (supported: quantile, sdclip)\n", *quantMethod)
+		os.Exit(1)
+	}
 
 	// smoke, prepare, and count modes handle availability themselves
 	if *mode == "smoke" {
@@ -120,12 +130,15 @@ func main() {
 
 	switch *mode {
 	case "arch":
-		must(train.RunArch(*configPath, *trainPattern, *safetensorsPath, *safetensorsLoad, *quantize, *flagFullEval, *lutDir, *checkpointDir, *checkpointEvery))
+		must(train.RunArch(*configPath, *trainPattern, *safetensorsPath, *safetensorsLoad, *quantize, *quantMethod, float32(*quantK), float32(*quantKEmbed), *flagFullEval, *lutDir, *checkpointDir, *checkpointEvery))
 	case "arch_race":
 		must(train.RunArchRace(*configsDir, *trainPattern, train.TrainOptions{
 			SafetensorsPath: *safetensorsPath,
 			SafetensorsLoad: *safetensorsLoad,
 			Quantize:        *quantize,
+			QuantMethod:     *quantMethod,
+			QuantK:          float32(*quantK),
+			QuantKEmbed:     float32(*quantKEmbed),
 			DoFullEval:      *flagFullEval,
 			LUTDir:          *lutDir,
 			CheckpointDir:   *checkpointDir,

@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // safetensorHeaderEntry describes one tensor in the safetensors header.
@@ -152,7 +153,7 @@ func addSafetensorPayload(header map[string]safetensorHeaderEntry, payloads *[][
 // Supported modes: "int8" (row-wise 8-bit) and "int6" (row-wise 6-bit packed as int8).
 // 1-D weights (norms, biases) and small tensors (<256 elements) are kept as F32.
 // Quantized 2-D tensors store int8 data + a per-row F32 scale vector.
-func exportSafetensorsQuantized(path string, cfg *ArchConfig, shapes []WeightShape, weights [][]float32, mode string) error {
+func exportSafetensorsQuantized(path string, cfg *ArchConfig, shapes []WeightShape, weights [][]float32, mode string, quantMethod string, kMatrix, kEmbed float32) error {
 	if path == "" {
 		return nil
 	}
@@ -161,6 +162,12 @@ func exportSafetensorsQuantized(path string, cfg *ArchConfig, shapes []WeightSha
 	}
 	if mode != "int8" && mode != "int6" {
 		return fmt.Errorf("unsupported quantize mode %q", mode)
+	}
+	if quantMethod == "" {
+		quantMethod = "quantile"
+	}
+	if quantMethod != "quantile" && quantMethod != "sdclip" {
+		return fmt.Errorf("unsupported quantization method %q", quantMethod)
 	}
 	if len(shapes) != len(weights) {
 		return fmt.Errorf("shapes/weights count mismatch: %d vs %d", len(shapes), len(weights))
@@ -191,7 +198,17 @@ func exportSafetensorsQuantized(path string, cfg *ArchConfig, shapes []WeightSha
 			if rows*cols != len(data) {
 				return fmt.Errorf("tensor %s shape/data mismatch: shape=%v data=%d", name, ws.Shape, len(data))
 			}
-			qData, scales := quantizeTensorPerRow(data, rows, cols, mode)
+			var qData []int8
+			var scales []float32
+			if quantMethod == "sdclip" {
+				k := kMatrix
+				if strings.Contains(strings.ToLower(ws.Name), "embed") {
+					k = kEmbed
+				}
+				qData, scales = quantizeTensorPerRowSDClip(data, rows, cols, mode, k)
+			} else {
+				qData, scales = quantizeTensorPerRow(data, rows, cols, mode)
+			}
 			addSafetensorPayload(header, &payloads, &offset, name, "I8", ws.Shape, int8ToBytes(qData))
 			addSafetensorPayload(header, &payloads, &offset, name+".scale", "F32", []int{rows}, encodeFloat32Data(scales))
 			continue
@@ -205,13 +222,18 @@ func exportSafetensorsQuantized(path string, cfg *ArchConfig, shapes []WeightSha
 
 	// Add metadata with quantization info.
 	meta := map[string]string{
-		"name":       cfg.Name,
-		"model_dim":  fmt.Sprintf("%d", cfg.ModelDim),
-		"vocab_size": fmt.Sprintf("%d", cfg.VocabSize),
-		"seq_len":    fmt.Sprintf("%d", cfg.SeqLen),
-		"steps":      fmt.Sprintf("%d", cfg.Training.Steps),
-		"quantize":   mode,
-		"format":     "mixlab_v1",
+		"name":         cfg.Name,
+		"model_dim":    fmt.Sprintf("%d", cfg.ModelDim),
+		"vocab_size":   fmt.Sprintf("%d", cfg.VocabSize),
+		"seq_len":      fmt.Sprintf("%d", cfg.SeqLen),
+		"steps":        fmt.Sprintf("%d", cfg.Training.Steps),
+		"quantize":     mode,
+		"quant_method": quantMethod,
+		"format":       "mixlab_v1",
+	}
+	if quantMethod == "sdclip" {
+		meta["quant_k"] = fmt.Sprintf("%g", kMatrix)
+		meta["quant_k_embed"] = fmt.Sprintf("%g", kEmbed)
 	}
 	metaBytes, _ := json.Marshal(meta)
 
