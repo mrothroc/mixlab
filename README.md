@@ -57,12 +57,16 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
 
 - JSON-first model definition: no Go or Python changes required for most experiments.
 - Built-in block families: `plain`, `swiglu`, `mamba`, `mamba3`, `retnet`,
-  `rwkv`, `perceiver`, `bottleneck`, `cross_attention`, `token_blend`, `custom`.
+  `rwkv`, `perceiver`, `bottleneck`, `cross_attention`, `token_blend`, `mlp`, `custom`.
 - Architecture features: U-Net skip connections, parallel residuals, recurrence,
-  residual mixing, tied embeddings, hashed bigram embeddings, configurable MLP width.
-- Trainer features: grouped optimizer settings, Muon for matrix weights, AdamW
-  for scalar/head/embed groups, SWA/EMA averaging, validation-loss early
-  stopping via `training.target_val_loss`, safetensors import/export.
+  residual mixing, tied embeddings, hashed bigram embeddings, configurable MLP width,
+  QK-Gain, partial RoPE, XSA (V-orthogonal projection).
+- Trainer features: configurable optimizer (Muon or AdamW for matrix weights),
+  configurable weight init (Xavier uniform or normal), SWA/EMA averaging,
+  validation-loss early stopping, safetensors import/export.
+- Compute accounting: analytical FLOPs estimation, tok/s throughput, optional MFU
+  logging via `training.hardware_tflops`.
+- Quantization: int8 and int6 with per-row scaling, SDClip clipping (`-quant-method sdclip`).
 - Custom blocks: declare weights and op graphs directly in JSON.
 
 ## When to use mixlab
@@ -266,6 +270,7 @@ These built-in block types are available in JSON configs:
 | `bottleneck` | Smaller latent bottleneck block. Requires `heads`. Optional `num_latents`. |
 | `cross_attention` | Cross-attention from the current stream into `source_stream`. Requires `heads`, `source_stream`. |
 | `token_blend` | Learned token blending gate over adjacent positions. |
+| `mlp` | Feed-forward with configurable activation (`silu`, `gelu`, `relu`, `leaky_relu_sq`). 2-weight layout (up + down), lighter than `swiglu`. |
 | `custom` | User-defined block with declared weights and IR ops. |
 
 
