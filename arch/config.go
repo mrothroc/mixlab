@@ -130,6 +130,7 @@ type TrainingSpec struct {
 	MuonBackendSteps   int             `json:"muon_backend_steps,omitempty"`
 	MuonNesterov       *bool           `json:"muon_nesterov,omitempty"`
 	Optimizer          string          `json:"optimizer,omitempty"`       // "muon" (default) or "adamw" for matrix weights
+	QAT                string          `json:"qat,omitempty"`             // "none" (default), "int8", or "int6"
 	WeightInit         string          `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
 	WeightInitStd      float32         `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
 	EmbedWeightDecay   float32         `json:"embed_weight_decay,omitempty"`
@@ -168,6 +169,7 @@ func DefaultTrainingSpec() TrainingSpec {
 		TTTMode:           "full",
 		TTTLR:             1e-5,
 		TTTRank:           4,
+		QAT:               "none",
 		MuonBackendSteps:  5,
 		EmbedWeightDecay:  0.01,
 		MatrixWeightDecay: 0.01,
@@ -361,6 +363,10 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.Training.TTTMode == "" {
 		cfg.Training.TTTMode = d.TTTMode
 	}
+	cfg.Training.QAT = strings.ToLower(strings.TrimSpace(cfg.Training.QAT))
+	if cfg.Training.QAT == "" {
+		cfg.Training.QAT = d.QAT
+	}
 	if cfg.Training.TTTRank == 0 {
 		cfg.Training.TTTRank = d.TTTRank
 	}
@@ -435,6 +441,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Training.TTTMode != "full" && cfg.Training.TTTMode != "lora" {
 		return nil, fmt.Errorf("config %q has invalid training.ttt_mode=%q (must be \"full\" or \"lora\")", source, cfg.Training.TTTMode)
+	}
+	if cfg.Training.QAT != "none" && cfg.Training.QAT != "int8" && cfg.Training.QAT != "int6" {
+		return nil, fmt.Errorf("config %q has invalid training.qat=%q (must be \"none\", \"int8\", or \"int6\")", source, cfg.Training.QAT)
 	}
 	if cfg.Training.TTTLR < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.ttt_lr=%g (must be >= 0)", source, cfg.Training.TTTLR)

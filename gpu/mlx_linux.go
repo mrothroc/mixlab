@@ -390,6 +390,13 @@ func mlxTrainerSetLRScale(t TrainerHandle, lrScale float32) {
 	C.mlx_ir_trainer_set_lr_scale(C.int64_t(t), C.float(lrScale))
 }
 
+func mlxTrainerSetQAT(t TrainerHandle, mode string) error {
+	cMode := C.CString(mode)
+	defer C.free(unsafe.Pointer(cMode))
+	C.mlx_ir_trainer_set_qat(C.int64_t(t), cMode)
+	return nil
+}
+
 func mlxTrainerDestroy(t TrainerHandle) {
 	C.mlx_ir_trainer_destroy(C.int64_t(t))
 }

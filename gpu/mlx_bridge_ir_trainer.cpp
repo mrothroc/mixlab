@@ -77,6 +77,22 @@ float effective_lr_scale(const mlx_ir::IRTrainer& trainer, float lr) {
   return lr / trainer.default_base_lr;
 }
 
+mlx_ir::QATMode parse_qat_mode(const char* mode) {
+  if (!mode || mode[0] == '\0') {
+    return mlx_ir::QATMode::None;
+  }
+  if (std::strcmp(mode, "none") == 0) {
+    return mlx_ir::QATMode::None;
+  }
+  if (std::strcmp(mode, "int8") == 0) {
+    return mlx_ir::QATMode::Int8;
+  }
+  if (std::strcmp(mode, "int6") == 0) {
+    return mlx_ir::QATMode::Int6;
+  }
+  throw std::runtime_error("unsupported QAT mode");
+}
+
 } // namespace
 
 extern "C" {
@@ -416,6 +432,20 @@ void mlx_ir_trainer_set_lr_scale(int64_t trainer, float lr_scale) {
     return;
   }
   t->lr_scale = lr_scale;
+}
+
+void mlx_ir_trainer_set_qat(int64_t trainer, const char* mode) {
+  auto* t = get_ir_trainer(trainer);
+  if (!t) {
+    return;
+  }
+  try {
+    t->qat_mode = parse_qat_mode(mode);
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_set_qat", e);
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_set_qat unknown exception" << std::endl;
+  }
 }
 
 void mlx_ir_trainer_destroy(int64_t trainer) {

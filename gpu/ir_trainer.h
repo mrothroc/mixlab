@@ -19,6 +19,12 @@ enum class OptimizerKind : uint8_t {
   Muon = 1,
 };
 
+enum class QATMode : uint8_t {
+  None = 0,
+  Int8 = 1,
+  Int6 = 2,
+};
+
 struct OptimizerGroupConfig {
   OptimizerKind kind = OptimizerKind::AdamW;
   float lr = 0.0f;
@@ -60,6 +66,7 @@ struct IRTrainer {
   float max_grad_norm = 0.0f;
   float lr_scale = 1.0f;
   float default_base_lr = 0.0f;
+  QATMode qat_mode = QATMode::None;
 
   float step(const mlx::core::array& tokens, const mlx::core::array& targets);
   float step_named(const TensorMap& inputs);

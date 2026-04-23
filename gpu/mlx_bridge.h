@@ -167,6 +167,7 @@ int mlx_ir_trainer_weight_size(int64_t trainer, int weight_idx);
 int mlx_ir_trainer_read_weight(int64_t trainer, int weight_idx, float* out, int size);
 void mlx_ir_trainer_set_lr(int64_t trainer, float lr);
 void mlx_ir_trainer_set_lr_scale(int64_t trainer, float lr_scale);
+void mlx_ir_trainer_set_qat(int64_t trainer, const char* mode);
 void mlx_ir_trainer_destroy(int64_t trainer);
 
 // Cleanup

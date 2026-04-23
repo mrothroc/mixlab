@@ -186,6 +186,18 @@ func TrainerSetLRScale(t TrainerHandle, lrScale float32) {
 	mlxTrainerSetLRScale(t, lrScale)
 }
 
+func TrainerSetQAT(t TrainerHandle, mode string) error {
+	if t == 0 {
+		return fmt.Errorf("invalid trainer handle; create the trainer successfully before configuring QAT")
+	}
+	switch mode {
+	case "", "none", "int8", "int6":
+	default:
+		return fmt.Errorf("invalid QAT mode %q; expected \"none\", \"int8\", or \"int6\"", mode)
+	}
+	return mlxTrainerSetQAT(t, mode)
+}
+
 func TrainerDestroy(t TrainerHandle) {
 	if t == 0 {
 		return

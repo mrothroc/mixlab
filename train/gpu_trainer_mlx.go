@@ -94,6 +94,12 @@ func initMLXGPUTrainer(irProg *ir.Program, cfg *ArchConfig, loadedWeights [][]fl
 		gpu.FreeHandles(handles)
 		return nil, fmt.Errorf("create GPU trainer: %w", err)
 	}
+	if err := gpu.TrainerSetQAT(trainerHandle, cfg.Training.QAT); err != nil {
+		gpu.TrainerDestroy(trainerHandle)
+		gpuProg.Destroy()
+		gpu.FreeHandles(handles)
+		return nil, fmt.Errorf("set GPU trainer QAT mode: %w", err)
+	}
 
 	batchElems := cfg.Training.BatchTokens
 	declaredTargetSize := 0

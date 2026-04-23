@@ -160,6 +160,37 @@ std::vector<mx::array> effective_lora_weights(
   return effective;
 }
 
+mx::array fake_quantize_weight(const mx::array& weight, QATMode mode) {
+  if (mode == QATMode::None || weight.ndim() != 2) {
+    return weight;
+  }
+  constexpr float kInt8Max = 127.0f;
+  auto w = mx::astype(weight, mx::float32);
+  auto abs_max = mx::max(mx::abs(w), 1, true);
+  auto scale = mx::maximum(abs_max / kInt8Max, mx::array(1.0f / kInt8Max, mx::float32));
+  auto q = mx::round(mx::clip(w / scale, mx::array(-kInt8Max, mx::float32), mx::array(kInt8Max, mx::float32)));
+  if (mode == QATMode::Int6) {
+    q = mx::round(q / 4.0f) * 4.0f;
+    q = mx::clip(q, mx::array(-128.0f, mx::float32), mx::array(124.0f, mx::float32));
+  }
+  auto w_fake = q * scale;
+  return mx::stop_gradient(w_fake - w) + w;
+}
+
+std::vector<mx::array> effective_training_weights(
+    const std::vector<mx::array>& base_weights,
+    QATMode qat_mode) {
+  if (qat_mode == QATMode::None) {
+    return base_weights;
+  }
+  std::vector<mx::array> effective;
+  effective.reserve(base_weights.size());
+  for (const auto& weight : base_weights) {
+    effective.push_back(fake_quantize_weight(weight, qat_mode));
+  }
+  return effective;
+}
+
 void collect_state_for_eval(
     const IRTrainer& trainer,
     std::vector<mx::array>& eval_arrays,
@@ -262,7 +293,8 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   std::iota(argnums.begin(), argnums.end(), 0);
   auto fn = mx::value_and_grad(
       [this, tokens, targets](const std::vector<mx::array>& w) {
-        return ir_interpret(program, w, tokens, targets, true);
+        auto effective = effective_training_weights(w, qat_mode);
+        return ir_interpret(program, effective, tokens, targets, true);
       },
       argnums);
 
@@ -370,7 +402,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   std::unordered_map<std::string, mx::array> outputs;
   auto fn = mx::value_and_grad(
       [this, inputs, &outputs, &output_names](const std::vector<mx::array>& w) {
-        outputs = ir_interpret_outputs(program, w, inputs, output_names, true);
+        auto effective = effective_training_weights(w, qat_mode);
+        outputs = ir_interpret_outputs(program, effective, inputs, output_names, true);
         return outputs.at("loss");
       },
       argnums);
