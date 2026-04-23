@@ -58,6 +58,7 @@ enum OpType {
   OP_GATHER_POSITIONS = 51,
   OP_SCATTER_POSITIONS = 52,
   OP_ROPE_INDEXED = 53,
+  OP_LEAKY_RELU = 54,
 };
 
 struct IRop {

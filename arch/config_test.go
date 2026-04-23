@@ -346,6 +346,26 @@ func TestMLPMultValidation(t *testing.T) {
 	}
 }
 
+func TestMLPActivationConfigParsing(t *testing.T) {
+	cfg := `{
+		"name": "test",
+		"model_dim": 64,
+		"vocab_size": 256,
+		"seq_len": 32,
+		"blocks": [{"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.25}]
+	}`
+	got, err := ParseArchConfig([]byte(cfg), "test")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if got.Blocks[0].Activation != "leaky_relu_sq" {
+		t.Fatalf("activation = %q, want leaky_relu_sq", got.Blocks[0].Activation)
+	}
+	if got.Blocks[0].LeakySlope != 0.25 {
+		t.Fatalf("leaky_slope = %g, want 0.25", got.Blocks[0].LeakySlope)
+	}
+}
+
 func TestNegativeWeightDecay(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  128,

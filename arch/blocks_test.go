@@ -15,6 +15,7 @@ func TestBlockWeightCount(t *testing.T) {
 		{BlockSpec{Type: "plain", Heads: 4}, 7},
 		{BlockSpec{Type: "plain", Heads: 4, QKGain: 5.25}, 8},
 		{BlockSpec{Type: "swiglu"}, 4},
+		{BlockSpec{Type: "mlp"}, 3},
 		{BlockSpec{Type: "mamba"}, 4},
 		{BlockSpec{Type: "token_blend"}, 1},
 	}
@@ -195,6 +196,40 @@ func TestEmitPlainAttentionIR_QKGainBeforeMaskAndSoftmax(t *testing.T) {
 	}
 }
 
+func TestEmitMLPIR_LeakyReLUSquared(t *testing.T) {
+	p := NewProgram(3)
+	wi, err := emitBlockIR(p, BlockSpec{Type: "mlp", Activation: "leaky_relu_sq", LeakySlope: 0.25}, "x", 0, 64, 32, 1, 256, 0, nil, DefaultFFNMultiplier, false)
+	if err != nil {
+		t.Fatalf("emitBlockIR mlp: %v", err)
+	}
+	if wi != 3 {
+		t.Fatalf("expected wi=3, got %d", wi)
+	}
+
+	leakyIdx := -1
+	squareIdx := -1
+	for i, op := range p.Ops {
+		switch op.Code {
+		case OpLeakyReLU:
+			leakyIdx = i
+			if len(op.FloatParams) != 1 || op.FloatParams[0] != 0.25 {
+				t.Fatalf("LeakyReLU float params = %v, want [0.25]", op.FloatParams)
+			}
+		case OpSquare:
+			squareIdx = i
+		}
+	}
+	if leakyIdx == -1 {
+		t.Fatal("missing LeakyReLU op")
+	}
+	if squareIdx == -1 {
+		t.Fatal("missing Square op")
+	}
+	if leakyIdx > squareIdx {
+		t.Fatalf("LeakyReLU op index %d should precede Square op index %d", leakyIdx, squareIdx)
+	}
+}
+
 func TestEmitPlainAttentionIR_InvalidDims(t *testing.T) {
 	p := NewProgram(7)
 	_, err := emitPlainAttentionIR(p, "x", 0, 3, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false)
@@ -335,6 +370,7 @@ func TestEmitBlockIR_Dispatch(t *testing.T) {
 	}{
 		{BlockSpec{Type: "plain", Heads: 4}, 7},
 		{BlockSpec{Type: "swiglu"}, 4},
+		{BlockSpec{Type: "mlp"}, 3},
 	}
 	for _, tt := range tests {
 		p := NewProgram(tt.wantWi)

@@ -260,6 +260,27 @@ func TestTanh(t *testing.T) {
 	}
 }
 
+func TestLeakyReLU(t *testing.T) {
+	p := NewProgram(0)
+	p.LeakyReLU("a", "b", 0.25)
+	if len(p.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(p.Ops))
+	}
+	op := p.Ops[0]
+	if op.Code != OpLeakyReLU {
+		t.Fatalf("expected OpLeakyReLU (%d), got %d", OpLeakyReLU, op.Code)
+	}
+	if len(op.Inputs) != 1 || op.Inputs[0] != "a" {
+		t.Fatalf("bad inputs: %v", op.Inputs)
+	}
+	if len(op.Outputs) != 1 || op.Outputs[0] != "b" {
+		t.Fatalf("bad outputs: %v", op.Outputs)
+	}
+	if len(op.FloatParams) != 1 || op.FloatParams[0] != 0.25 {
+		t.Fatalf("bad float params: %v", op.FloatParams)
+	}
+}
+
 func TestDiv(t *testing.T) {
 	p := NewProgram(0)
 	p.Div("a", "b", "c")

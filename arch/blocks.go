@@ -3,6 +3,7 @@ package arch
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 // emitPlainAttentionIR emits a plain causal self-attention block with
@@ -326,6 +327,52 @@ func emitSwiGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float
 		ffDown = ffDrop
 	}
 	prog.Add(x, ffDown, x)
+
+	return wi, nil
+}
+
+// emitMLPIR emits a two-matrix feed-forward block:
+// RMSNorm -> up projection -> activation -> down projection -> residual add.
+//
+// Weight layout (3 weights per block):
+//
+//	w[wi+0] = RMSNorm scale
+//	w[wi+1] = up projection
+//	w[wi+2] = down projection
+func emitMLPIR(prog *Program, x string, wi, idx int, activation string, leakySlope float64) (int, error) {
+	prefix := tmpName(x+"_mlp", idx)
+	xNorm := prefix + "_x_norm"
+	up := prefix + "_up"
+	act := prefix + "_act"
+	leaky := prefix + "_leaky"
+	down := prefix + "_down"
+
+	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
+	wi++
+	prog.MatMul(xNorm, weightName(wi), up)
+	wi++
+
+	switch strings.ToLower(strings.TrimSpace(activation)) {
+	case "", "silu":
+		prog.SiLU(up, act)
+	case "gelu":
+		prog.GELU(up, act)
+	case "relu":
+		prog.ReLU(up, act)
+	case "leaky_relu_sq":
+		slope := leakySlope
+		if slope == 0 {
+			slope = 0.5
+		}
+		prog.LeakyReLU(up, leaky, float32(slope))
+		prog.Square(leaky, act)
+	default:
+		return wi, fmt.Errorf("unsupported mlp activation %q", activation)
+	}
+
+	prog.MatMul(act, weightName(wi), down)
+	wi++
+	prog.Add(x, down, x)
 
 	return wi, nil
 }

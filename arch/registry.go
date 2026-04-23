@@ -85,6 +85,18 @@ func init() {
 			return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
 		},
 	})
+	RegisterBlock("mlp", blockRegistration{
+		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
+			return emitMLPIR(prog, stream, wi, idx, spec.Activation, spec.LeakySlope)
+		},
+		WeightCount: mlpWeightCount,
+		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
+			return builtinBlockWeightShapes(spec, D, T, B, V, DefaultFFNMultiplier, false, false)
+		},
+		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
+			return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
+		},
+	})
 	for _, name := range []string{"mamba", "mamba3", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
 		RegisterBlock(name, blockRegistration{
 			Emitter:     builtinBlockEmitter,
@@ -121,12 +133,18 @@ func swigluWeightCount(_ BlockSpec, blockScales, _ bool) (int, error) {
 	return total, nil
 }
 
+func mlpWeightCount(_ BlockSpec, _, _ bool) (int, error) {
+	return 3, nil
+}
+
 func builtinBlockWeightCount(spec BlockSpec, blockScales, residMix bool) (int, error) {
 	switch blockTypeName(spec.Type) {
 	case "plain":
 		return plainWeightCount(spec, blockScales, residMix)
 	case "swiglu":
 		return swigluWeightCount(spec, blockScales, residMix)
+	case "mlp":
+		return mlpWeightCount(spec, blockScales, residMix)
 	case "mamba":
 		return 4, nil
 	case "mamba3":

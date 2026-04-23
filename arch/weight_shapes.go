@@ -107,6 +107,14 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 		}
 		return metas, nil
 
+	case "mlp":
+		ffn := ffnDim(D, mlpMult)
+		return []WeightMeta{
+			{Name: "ffn_norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
+			{Name: "w_up", Shape: []int{D, ffn}},
+			{Name: "w_down", Shape: []int{ffn, D}},
+		}, nil
+
 	case "perceiver", "bottleneck":
 		L := spec.NumLatents
 		if L <= 0 {

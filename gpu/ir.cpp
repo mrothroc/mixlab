@@ -325,6 +325,12 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mx::maximum(get(op, 0), mx::array(0.0f)));
         break;
       }
+      case OP_LEAKY_RELU: {
+        auto x = get(op, 0);
+        float slope = op.float_params[0];
+        set_out(op, 0, mx::where(mx::greater(x, mx::array(0.0f)), x, x * mx::array(slope)));
+        break;
+      }
       case OP_TANH: {
         set_out(op, 0, mx::tanh(get(op, 0)));
         break;

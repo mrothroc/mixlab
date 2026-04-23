@@ -18,7 +18,7 @@ These fields live at the root of the config object.
 | `model_dim` | integer | Yes | None | Hidden size `D`. Must be `> 0`. |
 | `vocab_size` | integer | Yes | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` (tokens are stored as uint16 in binary shards). |
 | `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
-| `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, and `cross_attention` FFN tails. Must be `> 0`. |
+| `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `mlp`, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
 | `bigram_vocab_size` | integer | No | Disabled | Enables model-level hashed bigram embeddings when `> 1`. `0` disables. `1` is invalid. |
 | `bigram_dim` | integer | No | `model_dim` when bigrams enabled | Bigram embedding dimension. `0` inherits `model_dim`. Ignored when `bigram_vocab_size == 0`. |
@@ -91,6 +91,33 @@ Example:
 
 ```json
 {"type": "swiglu"}
+```
+
+### `mlp`
+
+Feed-forward-only block with RMSNorm, one up projection, configurable activation, one down projection, and residual connection.
+
+Required fields:
+
+- `type: "mlp"`
+
+Optional fields:
+
+- `activation` — one of `"silu"` (default), `"gelu"`, `"relu"`, or `"leaky_relu_sq"`.
+- `leaky_slope` — negative slope used only by `"leaky_relu_sq"`; defaults to `0.5`.
+
+Weight layout:
+
+- `ffn_norm_scale`: `[D]`
+- `w_up`: `[D, FFN]`
+- `w_down`: `[FFN, D]`
+
+`leaky_relu_sq` emits `LeakyReLU(x, leaky_slope)` followed by `Square`.
+
+Example:
+
+```json
+{"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.5}
 ```
 
 ### `mamba`
@@ -619,7 +646,7 @@ Example:
 
 Effect:
 
-- `plain`, `swiglu`, and `cross_attention` expand to `round(model_dim * mlp_mult)`, clamped to at least `model_dim`.
+- `plain`, `swiglu`, `mlp`, and `cross_attention` expand to `round(model_dim * mlp_mult)`, clamped to at least `model_dim`.
 
 ## Full example: `recurrent_parallel.json`
 

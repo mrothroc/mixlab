@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ArchConfig defines a model architecture for mixlab.
@@ -86,6 +87,8 @@ type BlockSpec struct {
 	NumLatents    int          `json:"num_latents,omitempty"`    // Perceiver/bottleneck latent count.
 	SourceStream  string       `json:"source_stream,omitempty"`  // cross_attention: stream providing K/V.
 	Decay         float64      `json:"decay,omitempty"`          // RetNet: initial decay rate in (0,1); defaults to 0.95.
+	Activation    string       `json:"activation,omitempty"`     // mlp: "silu" (default), "gelu", "relu", "leaky_relu_sq".
+	LeakySlope    float64      `json:"leaky_slope,omitempty"`    // mlp leaky_relu_sq negative slope; defaults to 0.5.
 	Weights       []WeightSpec `json:"weights,omitempty"`        // custom block weight declarations
 	Ops           []OpSpec     `json:"ops,omitempty"`            // custom block operation sequence
 }
@@ -435,7 +438,7 @@ func validateRecurrence(cfg *ArchConfig, source string) error {
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	switch b.Type {
-	case "plain", "swiglu", "mamba", "mamba3", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
+	case "plain", "swiglu", "mlp", "mamba", "mamba3", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
 		// valid
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)
@@ -470,6 +473,17 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if b.SourceStream == "" {
 			return fmt.Errorf("config %q %s[%d] type=cross_attention requires source_stream", source, groupName, idx)
+		}
+	}
+	if blockTypeKey(b) == "mlp" {
+		switch strings.ToLower(strings.TrimSpace(b.Activation)) {
+		case "", "silu", "gelu", "relu", "leaky_relu_sq":
+			// valid
+		default:
+			return fmt.Errorf("config %q %s[%d] type=mlp has invalid activation %q", source, groupName, idx, b.Activation)
+		}
+		if b.LeakySlope < 0 {
+			return fmt.Errorf("config %q %s[%d] type=mlp has invalid leaky_slope=%g (must be >= 0)", source, groupName, idx, b.LeakySlope)
 		}
 	}
 	return nil

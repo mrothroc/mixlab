@@ -40,6 +40,7 @@ const (
 	OpGatherPositions  = 51 // OP_GATHER_POSITIONS
 	OpScatterPositions = 52 // OP_SCATTER_POSITIONS
 	OpRoPEIndexed      = 53 // OP_ROPE_INDEXED
+	OpLeakyReLU        = 54 // OP_LEAKY_RELU
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -238,6 +239,11 @@ func (p *Program) Exp(a, output string) {
 // ReLU emits element-wise rectified linear unit: output = max(a, 0).
 func (p *Program) ReLU(a, output string) {
 	p.AddOp(OpReLU, []string{a}, []string{output}, nil, nil)
+}
+
+// LeakyReLU emits element-wise leaky rectified linear unit.
+func (p *Program) LeakyReLU(a, output string, negativeSlope float32) {
+	p.AddOp(OpLeakyReLU, []string{a}, []string{output}, []float32{negativeSlope}, nil)
 }
 
 // Square emits element-wise square: output = a * a.

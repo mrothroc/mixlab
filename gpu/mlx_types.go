@@ -40,6 +40,7 @@ const (
 	OpGatherPositions  = 51
 	OpScatterPositions = 52
 	OpRoPEIndexed      = 53
+	OpLeakyReLU        = 54
 )
 
 const (
