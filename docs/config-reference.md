@@ -441,6 +441,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 |------|------|----------|---------|-------|
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
 | `lr` | number | No | `3e-4` | Base learning rate. Must be `> 0`. |
+| `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
 | `warmdown_steps` | integer | No | `0` | Cosine warmdown length at the end of training. Must be `>= 0`; values above `steps` are clamped by the scheduler. |
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
 | `ttt_steps` | integer | No | `0` | Score-first test-time training updates per validation batch during eval mode and full BPB eval. `0` disables TTT. Must be `>= 0`. |
@@ -482,6 +483,34 @@ The trainer classifies weights into four optimizer groups:
 | Head | AdamW | `head` | `head_lr` | `head_weight_decay` |
 | Scalar | AdamW | Norm scales, decay vectors, learned scalar scales | `scalar_lr` | `scalar_weight_decay` |
 | Matrix | Muon | Projection and FFN matrices | `matrix_lr` | `matrix_weight_decay` |
+
+### Training phases
+
+Use `training.phases` to run multiple contiguous LR segments in one job. Each
+phase applies its `lr` for its own `steps`, and the total training length is
+the sum of all phase steps.
+
+When `phases` is present:
+
+- top-level `steps` and `lr` are ignored by the training loop
+- `warmdown_steps` still applies, but only within the final phase
+- the trainer logs phase transitions using `label` when provided
+
+Example:
+
+```json
+{
+  "training": {
+    "phases": [
+      {"steps": 100, "lr": 0.0001, "label": "warmup"},
+      {"steps": 4000, "lr": 0.001, "label": "main"},
+      {"steps": 900, "lr": 0.0001, "label": "cooldown"}
+    ],
+    "batch_tokens": 16384,
+    "seed": 42
+  }
+}
+```
 
 ### Training example
 

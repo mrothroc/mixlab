@@ -230,6 +230,85 @@ func TestTrainingSchedule_WarmdownClampedToSteps(t *testing.T) {
 	}
 }
 
+func TestPhaseScheduleAt_Boundaries(t *testing.T) {
+	s := newPhaseSchedule([]TrainingPhase{
+		{Steps: 2, LR: 1e-4, Label: "warmup"},
+		{Steps: 3, LR: 1e-3, Label: "main"},
+		{Steps: 2, LR: 5e-4, Label: "cooldown"},
+	}, 0)
+
+	if got := s.At(0); math.Abs(float64(got-1e-4)) > 1e-8 {
+		t.Fatalf("At(0) = %g, want 1e-4", got)
+	}
+	if got := s.At(1); math.Abs(float64(got-1e-4)) > 1e-8 {
+		t.Fatalf("At(1) = %g, want 1e-4", got)
+	}
+	if got := s.At(2); math.Abs(float64(got-1e-3)) > 1e-8 {
+		t.Fatalf("At(2) = %g, want 1e-3", got)
+	}
+	if got := s.At(4); math.Abs(float64(got-1e-3)) > 1e-8 {
+		t.Fatalf("At(4) = %g, want 1e-3", got)
+	}
+	if got := s.At(5); math.Abs(float64(got-5e-4)) > 1e-8 {
+		t.Fatalf("At(5) = %g, want 5e-4", got)
+	}
+	if phase := s.PhaseAt(2); phase.Label != "main" {
+		t.Fatalf("PhaseAt(2).Label = %q, want main", phase.Label)
+	}
+}
+
+func TestPhaseSchedule_WarmdownWithinLastPhase(t *testing.T) {
+	s := newPhaseSchedule([]TrainingPhase{
+		{Steps: 2, LR: 1e-4},
+		{Steps: 4, LR: 1e-3},
+	}, 2)
+
+	if got := s.At(3); math.Abs(float64(got-1e-3)) > 1e-8 {
+		t.Fatalf("At(3) = %g, want 1e-3 before warmdown", got)
+	}
+	if got := s.At(4); math.Abs(float64(got-1e-3)) > 1e-8 {
+		t.Fatalf("At(4) = %g, want warmdown start at 1e-3", got)
+	}
+	wantLast := float32(1e-3 + (1e-5-1e-3)*0.5)
+	if got := s.At(5); math.Abs(float64(got-wantLast)) > 1e-8 {
+		t.Fatalf("At(5) = %g, want %g", got, wantLast)
+	}
+}
+
+func TestBuildTrainingScheduler_BackwardCompatibleWithoutPhases(t *testing.T) {
+	sched, steps := buildTrainingScheduler(TrainingSpec{Steps: 150, LR: 0.01})
+	if steps != 150 {
+		t.Fatalf("steps = %d, want 150", steps)
+	}
+	s, ok := sched.(LRSchedule)
+	if !ok {
+		t.Fatalf("scheduler type = %T, want LRSchedule", sched)
+	}
+	if s.MaxSteps != 150 {
+		t.Fatalf("MaxSteps = %d, want 150", s.MaxSteps)
+	}
+}
+
+func TestBuildTrainingScheduler_UsesPhaseTotalSteps(t *testing.T) {
+	sched, steps := buildTrainingScheduler(TrainingSpec{
+		Steps: 999,
+		LR:    0.1,
+		Phases: []TrainingPhase{
+			{Steps: 3, LR: 1e-4},
+			{Steps: 7, LR: 2e-4},
+		},
+	})
+	if steps != 10 {
+		t.Fatalf("steps = %d, want 10", steps)
+	}
+	if got := sched.At(0); math.Abs(float64(got-1e-4)) > 1e-8 {
+		t.Fatalf("At(0) = %g, want 1e-4", got)
+	}
+	if got := sched.At(3); math.Abs(float64(got-2e-4)) > 1e-8 {
+		t.Fatalf("At(3) = %g, want 2e-4", got)
+	}
+}
+
 func TestShouldUpdateSWA(t *testing.T) {
 	cases := []struct {
 		step, start, interval int

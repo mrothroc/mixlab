@@ -56,7 +56,7 @@ func exportSafetensors(path string, cfg *ArchConfig, shapes []WeightShape, weigh
 		"model_dim":  fmt.Sprintf("%d", cfg.ModelDim),
 		"vocab_size": fmt.Sprintf("%d", cfg.VocabSize),
 		"seq_len":    fmt.Sprintf("%d", cfg.SeqLen),
-		"steps":      fmt.Sprintf("%d", cfg.Training.Steps),
+		"steps":      fmt.Sprintf("%d", cfg.Training.TotalSteps()),
 		"format":     "mixlab_v1",
 	}
 	metaBytes, _ := json.Marshal(meta)
@@ -226,7 +226,7 @@ func exportSafetensorsQuantized(path string, cfg *ArchConfig, shapes []WeightSha
 		"model_dim":    fmt.Sprintf("%d", cfg.ModelDim),
 		"vocab_size":   fmt.Sprintf("%d", cfg.VocabSize),
 		"seq_len":      fmt.Sprintf("%d", cfg.SeqLen),
-		"steps":        fmt.Sprintf("%d", cfg.Training.Steps),
+		"steps":        fmt.Sprintf("%d", cfg.Training.TotalSteps()),
 		"quantize":     mode,
 		"quant_method": quantMethod,
 		"format":       "mixlab_v1",

@@ -24,6 +24,16 @@ type LRSchedule struct {
 	MaxSteps int
 }
 
+type trainingScheduler interface {
+	At(step int) float32
+}
+
+type phaseSchedule struct {
+	lrs        []float32
+	phaseIndex []int
+	phases     []TrainingPhase
+}
+
 // At returns the learning rate at the given step.
 func (s LRSchedule) At(step int) float32 {
 	baseAt := func(step int) float32 {
@@ -68,6 +78,37 @@ func (s LRSchedule) At(step int) float32 {
 	return startLR + (targetLR-startLR)*progress
 }
 
+// At returns the per-step LR for a phase-based schedule.
+func (s phaseSchedule) At(step int) float32 {
+	if len(s.lrs) == 0 {
+		return 0
+	}
+	if step < 0 {
+		step = 0
+	}
+	if step >= len(s.lrs) {
+		step = len(s.lrs) - 1
+	}
+	return s.lrs[step]
+}
+
+func (s phaseSchedule) PhaseAt(step int) TrainingPhase {
+	if len(s.phases) == 0 {
+		return TrainingPhase{}
+	}
+	if step < 0 {
+		step = 0
+	}
+	if step >= len(s.phaseIndex) {
+		step = len(s.phaseIndex) - 1
+	}
+	idx := s.phaseIndex[step]
+	if idx < 0 || idx >= len(s.phases) {
+		return TrainingPhase{}
+	}
+	return s.phases[idx]
+}
+
 // trainingSchedule constructs the standard LR schedule from base LR and total steps.
 func trainingSchedule(lr float32, steps, warmdown int) LRSchedule {
 	if warmdown < 0 {
@@ -95,6 +136,64 @@ func trainingSchedule(lr float32, steps, warmdown int) LRSchedule {
 		Warmdown: warmdown,
 		MaxSteps: steps,
 	}
+}
+
+func newPhaseSchedule(phases []TrainingPhase, warmdown int) phaseSchedule {
+	totalSteps := 0
+	for _, phase := range phases {
+		totalSteps += phase.Steps
+	}
+	sched := phaseSchedule{
+		lrs:        make([]float32, totalSteps),
+		phaseIndex: make([]int, totalSteps),
+		phases:     append([]TrainingPhase(nil), phases...),
+	}
+	offset := 0
+	for phaseIdx, phase := range phases {
+		lr := float32(phase.LR)
+		for i := 0; i < phase.Steps; i++ {
+			sched.lrs[offset+i] = lr
+			sched.phaseIndex[offset+i] = phaseIdx
+		}
+		offset += phase.Steps
+	}
+	if totalSteps == 0 || warmdown <= 0 || len(phases) == 0 {
+		return sched
+	}
+	lastPhase := phases[len(phases)-1]
+	lastPhaseWarmdown := warmdown
+	if lastPhaseWarmdown > lastPhase.Steps {
+		lastPhaseWarmdown = lastPhase.Steps
+	}
+	if lastPhaseWarmdown <= 0 {
+		return sched
+	}
+	warmdownStart := totalSteps - lastPhaseWarmdown
+	startLR := sched.lrs[warmdownStart]
+	targetLR := float32(lastPhase.LR) * 0.01
+	for step := warmdownStart; step < totalSteps; step++ {
+		progress := float32(step-warmdownStart) / float32(lastPhaseWarmdown)
+		if progress > 1 {
+			progress = 1
+		}
+		sched.lrs[step] = startLR + (targetLR-startLR)*progress
+	}
+	return sched
+}
+
+func buildTrainingScheduler(spec TrainingSpec) (trainingScheduler, int) {
+	if len(spec.Phases) > 0 {
+		totalSteps := spec.TotalSteps()
+		return newPhaseSchedule(spec.Phases, spec.WarmdownSteps), totalSteps
+	}
+	return trainingSchedule(float32(spec.LR), spec.Steps, spec.WarmdownSteps), spec.Steps
+}
+
+func phaseDisplayLabel(phase TrainingPhase, index int) string {
+	if strings.TrimSpace(phase.Label) != "" {
+		return phase.Label
+	}
+	return fmt.Sprintf("phase-%d", index+1)
 }
 
 // TrainResult holds the outcome of a training run.
@@ -175,7 +274,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return TrainResult{}, fmt.Errorf("-checkpoint-dir is required when -checkpoint-every > 0")
 	}
 
-	steps := cfg.Training.Steps
 	seqLen := cfg.SeqLen
 	batchTokens := cfg.Training.BatchTokens
 	swaStart := cfg.Training.SWAStart
@@ -185,7 +283,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return TrainResult{}, fmt.Errorf("batch_tokens (%d) must be divisible by seq_len (%d)", batchTokens, seqLen)
 	}
 	batchSize := batchTokens / seqLen
-	lr := float32(cfg.Training.LR)
 	seed := cfg.Training.Seed
 	name := cfg.Name
 	targetValLoss := cfg.Training.TargetValLoss
@@ -249,7 +346,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		fmt.Printf("  [%s] no val set: %v\n", name, valErr)
 	}
 
-	sched := trainingSchedule(lr, steps, cfg.Training.WarmdownSteps)
+	sched, steps := buildTrainingScheduler(cfg.Training)
+	phaseSched, hasPhases := sched.(phaseSchedule)
 
 	var firstLoss, lastLoss float64
 	lastValLoss := math.NaN()
@@ -298,12 +396,22 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			return TrainResult{}, fmt.Errorf("submit step 0: %w", err)
 		}
 		currentSubmitDuration := time.Since(initialSubmitStart)
+		currentPhaseIdx := -1
 
 		for step := 0; step < steps; step++ {
 			stepStart := time.Now()
 			dataDuration := time.Duration(0)
 			if step == 0 {
 				dataDuration = initialDataDuration
+			}
+			if hasPhases {
+				phaseIdx := phaseSched.phaseIndex[step]
+				if phaseIdx != currentPhaseIdx {
+					phase := phaseSched.phases[phaseIdx]
+					fmt.Printf("  [%s] entering %s (%d/%d) steps=%d lr=%.6f\n",
+						name, phaseDisplayLabel(phase, phaseIdx), phaseIdx+1, len(phaseSched.phases), phase.Steps, phase.LR)
+					currentPhaseIdx = phaseIdx
+				}
 			}
 
 			var nextBatch trainBatch
@@ -371,8 +479,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					mfu := (float64(flops.TrainingFLOPs) / stepDuration.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
 					mfuStr = fmt.Sprintf(" MFU=%.1f%%", mfu*100)
 				}
-				fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f tok/s=%.0f%s %s\n",
-					name, step, steps, v, valStr, sched.At(step), tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), stepDurationEMA, step, steps))
+				phaseStr := ""
+				if hasPhases {
+					phase := phaseSched.PhaseAt(step)
+					phaseStr = fmt.Sprintf(" phase=%s", phaseDisplayLabel(phase, currentPhaseIdx))
+				}
+				fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f%s tok/s=%.0f%s %s\n",
+					name, step, steps, v, valStr, sched.At(step), phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), stepDurationEMA, step, steps))
 				logDuration := time.Since(logStart)
 				if opts.Timing {
 					fmt.Printf("  [%s] [timing] data=%.1fms gpu=%.1fms val=%.1fms log=%.1fms\n",

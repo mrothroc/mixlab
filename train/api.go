@@ -14,9 +14,15 @@ func RunArch(configPath, trainPattern, safetensorsPath, safetensorsLoad, quantiz
 	}
 	fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
 		cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
-	fmt.Printf("  training: steps=%d lr=%g grad_clip=%g weight_decay=%g seed=%d batch_tokens=%d\n",
-		cfg.Training.Steps, cfg.Training.LR, cfg.Training.GradClip, cfg.Training.WeightDecay,
-		cfg.Training.Seed, cfg.Training.BatchTokens)
+	if len(cfg.Training.Phases) > 0 {
+		fmt.Printf("  training: phases=%d steps=%d grad_clip=%g weight_decay=%g seed=%d batch_tokens=%d\n",
+			len(cfg.Training.Phases), cfg.Training.TotalSteps(), cfg.Training.GradClip, cfg.Training.WeightDecay,
+			cfg.Training.Seed, cfg.Training.BatchTokens)
+	} else {
+		fmt.Printf("  training: steps=%d lr=%g grad_clip=%g weight_decay=%g seed=%d batch_tokens=%d\n",
+			cfg.Training.Steps, cfg.Training.LR, cfg.Training.GradClip, cfg.Training.WeightDecay,
+			cfg.Training.Seed, cfg.Training.BatchTokens)
+	}
 
 	if trainPattern == "" {
 		return fmt.Errorf("-train is required for arch mode; pass a glob pattern for data shards, e.g.: -train 'data/train_*.bin'")

@@ -351,6 +351,71 @@ func TestOptimizerFieldParsing(t *testing.T) {
 	}
 }
 
+func TestTrainingPhasesParsingAndTotalSteps(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim": 128, "vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {
+			"steps": 10,
+			"lr": 1e-5,
+			"phases": [
+				{"steps": 100, "lr": 1e-4, "label": "warmup"},
+				{"steps": 4000, "lr": 1e-3, "label": "main"},
+				{"steps": 900, "lr": 1e-4, "label": "cooldown"}
+			]
+		}
+	}`), "phases")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if len(cfg.Training.Phases) != 3 {
+		t.Fatalf("phases len = %d, want 3", len(cfg.Training.Phases))
+	}
+	if got := cfg.Training.TotalSteps(); got != 5000 {
+		t.Fatalf("TotalSteps() = %d, want 5000", got)
+	}
+	if cfg.Training.Steps != 5000 {
+		t.Fatalf("training.steps = %d, want computed total 5000", cfg.Training.Steps)
+	}
+	if cfg.Training.Phases[1].Label != "main" {
+		t.Fatalf("phases[1].label = %q, want main", cfg.Training.Phases[1].Label)
+	}
+}
+
+func TestTrainingPhasesValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		phases  string
+		wantErr string
+	}{
+		{
+			name:    "non_positive_steps",
+			phases:  `[{"steps": 0, "lr": 1e-4}]`,
+			wantErr: "training.phases[0].steps",
+		},
+		{
+			name:    "non_positive_lr",
+			phases:  `[{"steps": 10, "lr": 0}]`,
+			wantErr: "training.phases[0].lr",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseArchConfig([]byte(`{
+				"model_dim": 128, "vocab_size": 1024,
+				"blocks": [{"type": "plain", "heads": 4}],
+				"training": {"phases": `+tt.phases+`}
+			}`), tt.name)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestMLPMultValidation(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  128,

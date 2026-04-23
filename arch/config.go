@@ -94,40 +94,61 @@ type BlockSpec struct {
 	Ops           []OpSpec     `json:"ops,omitempty"`            // custom block operation sequence
 }
 
+// TrainingPhase defines one contiguous training phase with a fixed LR.
+type TrainingPhase struct {
+	Steps int     `json:"steps"`
+	LR    float64 `json:"lr"`
+	Label string  `json:"label,omitempty"`
+}
+
 // TrainingSpec holds training hyperparameters.
 type TrainingSpec struct {
-	Steps              int     `json:"steps"`
-	LR                 float64 `json:"lr"`
-	WarmdownSteps      int     `json:"warmdown_steps,omitempty"`
-	TargetValLoss      float64 `json:"target_val_loss,omitempty"`
-	TTTSteps           int     `json:"ttt_steps,omitempty"`
-	TTTLR              float64 `json:"ttt_lr,omitempty"`
-	HardwareTFLOPs     float64 `json:"hardware_tflops,omitempty"` // peak hardware TFLOPS (e.g., 400 for M1 Max, 312 for A100)
-	GradClip           float32 `json:"grad_clip"`
-	WeightDecay        float32 `json:"weight_decay"`
-	Beta1              float32 `json:"beta1"`
-	Beta2              float32 `json:"beta2"`
-	Epsilon            float32 `json:"epsilon"`
-	Seed               int64   `json:"seed"`
-	BatchTokens        int     `json:"batch_tokens"`
-	ShuffleChunkTokens int     `json:"shuffle_chunk_tokens,omitempty"`
-	EmbedLR            float32 `json:"embed_lr,omitempty"`
-	MatrixLR           float32 `json:"matrix_lr,omitempty"`
-	ScalarLR           float32 `json:"scalar_lr,omitempty"`
-	HeadLR             float32 `json:"head_lr,omitempty"`
-	MuonMomentum       float32 `json:"muon_momentum,omitempty"`
-	MuonBackendSteps   int     `json:"muon_backend_steps,omitempty"`
-	MuonNesterov       *bool   `json:"muon_nesterov,omitempty"`
-	Optimizer          string  `json:"optimizer,omitempty"`       // "muon" (default) or "adamw" for matrix weights
-	WeightInit         string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
-	WeightInitStd      float32 `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
-	EmbedWeightDecay   float32 `json:"embed_weight_decay,omitempty"`
-	MatrixWeightDecay  float32 `json:"matrix_weight_decay,omitempty"`
-	ScalarWeightDecay  float32 `json:"scalar_weight_decay,omitempty"`
-	HeadWeightDecay    float32 `json:"head_weight_decay,omitempty"`
-	SWAStart           int     `json:"swa_start,omitempty"`
-	SWADecay           float32 `json:"swa_decay,omitempty"`
-	SWAInterval        int     `json:"swa_interval,omitempty"`
+	Steps              int             `json:"steps"`
+	LR                 float64         `json:"lr"`
+	Phases             []TrainingPhase `json:"phases,omitempty"`
+	WarmdownSteps      int             `json:"warmdown_steps,omitempty"`
+	TargetValLoss      float64         `json:"target_val_loss,omitempty"`
+	TTTSteps           int             `json:"ttt_steps,omitempty"`
+	TTTLR              float64         `json:"ttt_lr,omitempty"`
+	HardwareTFLOPs     float64         `json:"hardware_tflops,omitempty"` // peak hardware TFLOPS (e.g., 400 for M1 Max, 312 for A100)
+	GradClip           float32         `json:"grad_clip"`
+	WeightDecay        float32         `json:"weight_decay"`
+	Beta1              float32         `json:"beta1"`
+	Beta2              float32         `json:"beta2"`
+	Epsilon            float32         `json:"epsilon"`
+	Seed               int64           `json:"seed"`
+	BatchTokens        int             `json:"batch_tokens"`
+	ShuffleChunkTokens int             `json:"shuffle_chunk_tokens,omitempty"`
+	EmbedLR            float32         `json:"embed_lr,omitempty"`
+	MatrixLR           float32         `json:"matrix_lr,omitempty"`
+	ScalarLR           float32         `json:"scalar_lr,omitempty"`
+	HeadLR             float32         `json:"head_lr,omitempty"`
+	MuonMomentum       float32         `json:"muon_momentum,omitempty"`
+	MuonBackendSteps   int             `json:"muon_backend_steps,omitempty"`
+	MuonNesterov       *bool           `json:"muon_nesterov,omitempty"`
+	Optimizer          string          `json:"optimizer,omitempty"`       // "muon" (default) or "adamw" for matrix weights
+	WeightInit         string          `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
+	WeightInitStd      float32         `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
+	EmbedWeightDecay   float32         `json:"embed_weight_decay,omitempty"`
+	MatrixWeightDecay  float32         `json:"matrix_weight_decay,omitempty"`
+	ScalarWeightDecay  float32         `json:"scalar_weight_decay,omitempty"`
+	HeadWeightDecay    float32         `json:"head_weight_decay,omitempty"`
+	SWAStart           int             `json:"swa_start,omitempty"`
+	SWADecay           float32         `json:"swa_decay,omitempty"`
+	SWAInterval        int             `json:"swa_interval,omitempty"`
+}
+
+// TotalSteps returns the effective training step count.
+// When phases are configured, their summed length takes precedence.
+func (t TrainingSpec) TotalSteps() int {
+	if len(t.Phases) == 0 {
+		return t.Steps
+	}
+	total := 0
+	for _, phase := range t.Phases {
+		total += phase.Steps
+	}
+	return total
 }
 
 // DefaultTrainingSpec returns sensible training defaults.
@@ -377,6 +398,17 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Training.WarmdownSteps < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.warmdown_steps=%d (must be >= 0)", source, cfg.Training.WarmdownSteps)
+	}
+	for i, phase := range cfg.Training.Phases {
+		if phase.Steps <= 0 {
+			return nil, fmt.Errorf("config %q has invalid training.phases[%d].steps=%d (must be > 0)", source, i, phase.Steps)
+		}
+		if phase.LR <= 0 {
+			return nil, fmt.Errorf("config %q has invalid training.phases[%d].lr=%g (must be > 0)", source, i, phase.LR)
+		}
+	}
+	if len(cfg.Training.Phases) > 0 {
+		cfg.Training.Steps = cfg.Training.TotalSteps()
 	}
 	if cfg.Training.TargetValLoss < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.target_val_loss=%g (must be >= 0)", source, cfg.Training.TargetValLoss)
