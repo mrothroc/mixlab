@@ -239,6 +239,18 @@ func (t *mlxGPUTrainer) EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (fl
 	return gpu.TrainerEvaluate(t.handle, inputs)
 }
 
+// EvaluateLoRATTTGPU runs per-batch LoRA TTT without mutating the base trainer weights.
+func (t *mlxGPUTrainer) EvaluateLoRATTTGPU(xTok, yTok []int, batchSize, seqLen, tttSteps int, tttLR float32, tttRank int) (float32, error) {
+	if err := t.FlushGPU(); err != nil {
+		return 0, err
+	}
+	inputs, err := t.makeInputs(xTok, yTok, batchSize, seqLen)
+	if err != nil {
+		return 0, err
+	}
+	return gpu.TrainerEvaluateLoRA(t.handle, inputs, tttRank, tttSteps, tttLR)
+}
+
 // CloseTrainer releases GPU resources.
 func (t *mlxGPUTrainer) CloseTrainer() {
 	if t.handle != 0 {

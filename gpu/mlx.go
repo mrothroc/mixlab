@@ -372,6 +372,26 @@ func mlxTrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) 
 	return loss, nil
 }
 
+func mlxTrainerEvaluateLoRA(t TrainerHandle, inputs []TensorInput, rank, steps int, lr float32) (float32, error) {
+	cInputs, cleanup, err := marshalTensorInputs(inputs)
+	if err != nil {
+		return 0, err
+	}
+	defer cleanup()
+	loss := float32(C.mlx_ir_trainer_evaluate_lora_named(
+		C.int64_t(t),
+		(*C.mlx_tensor_input)(unsafe.Pointer(&cInputs[0])),
+		C.int(len(cInputs)),
+		C.int(rank),
+		C.int(steps),
+		C.float(lr),
+	))
+	if math.IsNaN(float64(loss)) {
+		return 0, fmt.Errorf("mlx_ir_trainer_evaluate_lora_named failed")
+	}
+	return loss, nil
+}
+
 func mlxTrainerSetLRScale(t TrainerHandle, lrScale float32) {
 	C.mlx_ir_trainer_set_lr_scale(C.int64_t(t), C.float(lrScale))
 }

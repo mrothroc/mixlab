@@ -74,18 +74,45 @@ func loadBPBLUTs(dir string, vocab int) (*bpbLUT, error) {
 
 // runFullEval performs full validation BPB evaluation on all validation shards.
 func runFullEval(cfg *ArchConfig, valPattern string, trainer GPUTrainer, lutDir string) error {
-	return runFullEvalWithTTT(cfg, valPattern, trainer, lutDir, cfg.Training.TTTSteps, float32(cfg.Training.TTTLR))
+	return runFullEvalWithTTT(
+		cfg,
+		valPattern,
+		trainer,
+		lutDir,
+		cfg.Training.TTTMode,
+		cfg.Training.TTTSteps,
+		float32(cfg.Training.TTTLR),
+		cfg.Training.TTTRank,
+	)
 }
 
 // runFullEvalWithTTT performs score-first full validation BPB evaluation and,
 // when enabled, adapts weights after each scored batch.
-func runFullEvalWithTTT(cfg *ArchConfig, valPattern string, trainer GPUTrainer, lutDir string, tttSteps int, tttLR float32) error {
+func runFullEvalWithTTT(
+	cfg *ArchConfig,
+	valPattern string,
+	trainer GPUTrainer,
+	lutDir string,
+	tttMode string,
+	tttSteps int,
+	tttLR float32,
+	tttRank int,
+) error {
 	name := cfg.Name
 	seqLen := cfg.SeqLen
 	batchTokens := cfg.Training.BatchTokens
 	vocab := cfg.VocabSize
 	if tttSteps < 0 {
 		return fmt.Errorf("ttt_steps must be >= 0")
+	}
+	if tttMode == "" {
+		tttMode = "full"
+	}
+	if tttMode != "full" && tttMode != "lora" {
+		return fmt.Errorf("ttt_mode must be \"full\" or \"lora\"")
+	}
+	if tttMode == "lora" && tttRank <= 0 {
+		return fmt.Errorf("ttt_rank must be > 0")
 	}
 
 	luts, err := loadBPBLUTs(lutDir, vocab)
@@ -129,7 +156,12 @@ func runFullEvalWithTTT(cfg *ArchConfig, valPattern string, trainer GPUTrainer, 
 		}
 		batchSize := chunkTokens / seqLen
 
-		lossV, err := trainer.EvaluateGPU(xTok, yTok, batchSize, seqLen)
+		var lossV float32
+		if tttMode == "lora" && tttSteps > 0 {
+			lossV, err = trainer.EvaluateLoRATTTGPU(xTok, yTok, batchSize, seqLen, tttSteps, tttLR, tttRank)
+		} else {
+			lossV, err = trainer.EvaluateGPU(xTok, yTok, batchSize, seqLen)
+		}
 		if err != nil {
 			return fmt.Errorf("eval failed at token offset %d: %w", rawStart, err)
 		}
@@ -149,9 +181,11 @@ func runFullEvalWithTTT(cfg *ArchConfig, valPattern string, trainer GPUTrainer, 
 			totalBytes += tokenBytes
 		}
 		totalTokens += chunkTokens
-		for step := 0; step < tttSteps; step++ {
-			if _, err := trainer.TrainStepGPU(xTok, yTok, batchSize, seqLen, tttLR); err != nil {
-				return fmt.Errorf("ttt step %d failed at token offset %d: %w", step+1, rawStart, err)
+		if tttMode == "full" {
+			for step := 0; step < tttSteps; step++ {
+				if _, err := trainer.TrainStepGPU(xTok, yTok, batchSize, seqLen, tttLR); err != nil {
+					return fmt.Errorf("ttt step %d failed at token offset %d: %w", step+1, rawStart, err)
+				}
 			}
 		}
 		rawStart += chunkTokens
@@ -183,7 +217,11 @@ func runFullEvalWithTTT(cfg *ArchConfig, valPattern string, trainer GPUTrainer, 
 	bpb := (totalLossNats / math.Log(2.0)) / totalBytes
 	avgNLL := totalLossNats / float64(totalTokens)
 	if tttSteps > 0 {
-		fmt.Printf("  [%s] full_val nll=%.6f bpb=%.6f tokens=%d bytes=%.0f ttt_steps=%d ttt_lr=%g\n", name, avgNLL, bpb, totalTokens, totalBytes, tttSteps, tttLR)
+		if tttMode == "lora" {
+			fmt.Printf("  [%s] full_val nll=%.6f bpb=%.6f tokens=%d bytes=%.0f ttt_mode=lora ttt_steps=%d ttt_lr=%g ttt_rank=%d\n", name, avgNLL, bpb, totalTokens, totalBytes, tttSteps, tttLR, tttRank)
+		} else {
+			fmt.Printf("  [%s] full_val nll=%.6f bpb=%.6f tokens=%d bytes=%.0f ttt_steps=%d ttt_lr=%g\n", name, avgNLL, bpb, totalTokens, totalBytes, tttSteps, tttLR)
+		}
 	} else {
 		fmt.Printf("  [%s] full_val nll=%.6f bpb=%.6f tokens=%d bytes=%.0f\n", name, avgNLL, bpb, totalTokens, totalBytes)
 	}

@@ -4,6 +4,7 @@
 #include "ir.h"
 
 #include <mlx/mlx.h>
+#include <mlx/random.h>
 
 #include <cstdint>
 #include <memory>
@@ -67,6 +68,7 @@ struct IRTrainer {
   void flush();
   float evaluate(const mlx::core::array& tokens, const mlx::core::array& targets);
   float evaluate_named(const TensorMap& inputs);
+  float evaluate_lora_named(const TensorMap& inputs, int rank, int steps, float lr);
   mlx::core::array read_output(const std::string& output_name) const;
   void apply_optimizer_updates(const std::vector<mlx::core::array>& grads);
 };

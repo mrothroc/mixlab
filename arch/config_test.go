@@ -299,8 +299,14 @@ func TestTrainingDefaults(t *testing.T) {
 	if got.Training.TTTSteps != 0 {
 		t.Errorf("default ttt_steps = %d, want 0", got.Training.TTTSteps)
 	}
+	if got.Training.TTTMode != d.TTTMode {
+		t.Errorf("default ttt_mode = %q, want %q", got.Training.TTTMode, d.TTTMode)
+	}
 	if got.Training.TTTLR != d.TTTLR {
 		t.Errorf("default ttt_lr = %g, want %g", got.Training.TTTLR, d.TTTLR)
+	}
+	if got.Training.TTTRank != d.TTTRank {
+		t.Errorf("default ttt_rank = %d, want %d", got.Training.TTTRank, d.TTTRank)
 	}
 	if got.MLPMult != 2.67 {
 		t.Errorf("default mlp_mult = %g, want 2.67", got.MLPMult)
@@ -577,7 +583,7 @@ func TestTTTConfigValidation(t *testing.T) {
 		ModelDim:  128,
 		VocabSize: 1024,
 		Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
-		Training:  TrainingSpec{TTTSteps: 2, TTTLR: 2e-5},
+		Training:  TrainingSpec{TTTSteps: 2, TTTMode: "lora", TTTLR: 2e-5, TTTRank: 8},
 	}
 	data, _ := json.Marshal(cfg)
 	got, err := ParseArchConfig(data, "test")
@@ -589,6 +595,12 @@ func TestTTTConfigValidation(t *testing.T) {
 	}
 	if got.Training.TTTLR != 2e-5 {
 		t.Errorf("ttt_lr = %g, want 2e-5", got.Training.TTTLR)
+	}
+	if got.Training.TTTMode != "lora" {
+		t.Errorf("ttt_mode = %q, want lora", got.Training.TTTMode)
+	}
+	if got.Training.TTTRank != 8 {
+		t.Errorf("ttt_rank = %d, want 8", got.Training.TTTRank)
 	}
 
 	cfg.Training.TTTSteps = -1
@@ -610,6 +622,28 @@ func TestTTTConfigValidation(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ttt_lr") {
 		t.Errorf("error should mention ttt_lr: %v", err)
+	}
+
+	cfg.Training.TTTLR = 2e-5
+	cfg.Training.TTTMode = "bad"
+	data, _ = json.Marshal(cfg)
+	_, err = ParseArchConfig(data, "test")
+	if err == nil {
+		t.Fatal("expected error for invalid ttt_mode")
+	}
+	if !strings.Contains(err.Error(), "ttt_mode") {
+		t.Errorf("error should mention ttt_mode: %v", err)
+	}
+
+	cfg.Training.TTTMode = "lora"
+	cfg.Training.TTTRank = -1
+	data, _ = json.Marshal(cfg)
+	_, err = ParseArchConfig(data, "test")
+	if err == nil {
+		t.Fatal("expected error for negative ttt_rank")
+	}
+	if !strings.Contains(err.Error(), "ttt_rank") {
+		t.Errorf("error should mention ttt_rank: %v", err)
 	}
 }
 

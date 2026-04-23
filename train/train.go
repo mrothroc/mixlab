@@ -227,6 +227,7 @@ type GPUTrainer interface {
 	CollectLossGPU() (float32, error)
 	FlushGPU() error
 	EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (float32, error)
+	EvaluateLoRATTTGPU(xTok, yTok []int, batchSize, seqLen, tttSteps int, tttLR float32, tttRank int) (float32, error)
 	CloseTrainer()
 }
 
@@ -543,7 +544,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	// Full BPB evaluation if requested
 	if opts.DoFullEval {
 		if cfg.Training.TTTSteps > 0 {
-			fmt.Printf("  [%s] computing full validation BPB with score-first TTT (steps=%d lr=%g)...\n", name, cfg.Training.TTTSteps, cfg.Training.TTTLR)
+			if cfg.Training.TTTMode == "lora" {
+				fmt.Printf("  [%s] computing full validation BPB with LoRA-TTT (steps=%d lr=%g rank=%d)...\n", name, cfg.Training.TTTSteps, cfg.Training.TTTLR, cfg.Training.TTTRank)
+			} else {
+				fmt.Printf("  [%s] computing full validation BPB with score-first TTT (steps=%d lr=%g)...\n", name, cfg.Training.TTTSteps, cfg.Training.TTTLR)
+			}
 		} else {
 			fmt.Printf("  [%s] computing full validation BPB...\n", name)
 		}
@@ -575,32 +580,59 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 // meanValidationLoss computes the mean loss across validation batches.
 func meanValidationLoss(valSet *data.ValSet, trainer GPUTrainer, batchSize, seqLen int) (float64, error) {
-	return meanValidationLossWithTTT(valSet, trainer, batchSize, seqLen, 0, 0)
+	return meanValidationLossWithTTT(valSet, trainer, batchSize, seqLen, "full", 0, 0, 0)
 }
 
 // meanValidationLossWithTTT computes score-first validation loss and, when
 // tttSteps > 0, adapts weights after each scored batch.
-func meanValidationLossWithTTT(valSet *data.ValSet, trainer GPUTrainer, batchSize, seqLen int, tttSteps int, tttLR float32) (float64, error) {
+func meanValidationLossWithTTT(
+	valSet *data.ValSet,
+	trainer GPUTrainer,
+	batchSize, seqLen int,
+	tttMode string,
+	tttSteps int,
+	tttLR float32,
+	tttRank int,
+) (float64, error) {
 	if valSet == nil || len(valSet.Batches) == 0 {
 		return 0, fmt.Errorf("no validation batches")
 	}
 	if tttSteps < 0 {
 		return 0, fmt.Errorf("ttt_steps must be >= 0")
 	}
+	if tttMode == "" {
+		tttMode = "full"
+	}
+	if tttMode != "full" && tttMode != "lora" {
+		return 0, fmt.Errorf("ttt_mode must be \"full\" or \"lora\"")
+	}
+	if tttMode == "lora" && tttRank <= 0 {
+		return 0, fmt.Errorf("ttt_rank must be > 0")
+	}
 	sum := 0.0
 	count := 0
 	failures := 0
 	for _, vb := range valSet.Batches {
-		loss, err := trainer.EvaluateGPU(vb.X, vb.Y, batchSize, seqLen)
+		var (
+			loss float32
+			err  error
+		)
+		if tttMode == "lora" && tttSteps > 0 {
+			loss, err = trainer.EvaluateLoRATTTGPU(vb.X, vb.Y, batchSize, seqLen, tttSteps, tttLR, tttRank)
+		} else {
+			loss, err = trainer.EvaluateGPU(vb.X, vb.Y, batchSize, seqLen)
+		}
 		if err != nil {
 			failures++
 			continue
 		}
 		sum += float64(loss)
 		count++
-		for step := 0; step < tttSteps; step++ {
-			if _, err := trainer.TrainStepGPU(vb.X, vb.Y, batchSize, seqLen, tttLR); err != nil {
-				return 0, fmt.Errorf("ttt step %d after val batch %d: %w", step+1, count, err)
+		if tttMode == "full" {
+			for step := 0; step < tttSteps; step++ {
+				if _, err := trainer.TrainStepGPU(vb.X, vb.Y, batchSize, seqLen, tttLR); err != nil {
+					return 0, fmt.Errorf("ttt step %d after val batch %d: %w", step+1, count, err)
+				}
 			}
 		}
 	}

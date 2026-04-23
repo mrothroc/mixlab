@@ -61,6 +61,10 @@ func TrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return 0, errNotBuilt
 }
 
+func TrainerEvaluateLoRA(t TrainerHandle, inputs []TensorInput, rank, steps int, lr float32) (float32, error) {
+	return 0, errNotBuilt
+}
+
 func TrainerSetLRScale(t TrainerHandle, lrScale float32) {}
 
 func TrainerDestroy(t TrainerHandle) {}

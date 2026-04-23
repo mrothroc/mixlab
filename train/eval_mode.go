@@ -60,8 +60,10 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad string) error {
 	}
 
 	tttSteps := cfg.Training.TTTSteps
+	tttMode := cfg.Training.TTTMode
 	tttLR := float32(cfg.Training.TTTLR)
-	valLoss, err := meanValidationLossWithTTT(valSet, trainer, batchSize, seqLen, tttSteps, tttLR)
+	tttRank := cfg.Training.TTTRank
+	valLoss, err := meanValidationLossWithTTT(valSet, trainer, batchSize, seqLen, tttMode, tttSteps, tttLR, tttRank)
 	if err != nil {
 		return fmt.Errorf("evaluate validation loss: %w", err)
 	}
@@ -70,7 +72,11 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad string) error {
 		cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
 	fmt.Printf("  [%s] loaded %d weights from %s\n", cfg.Name, len(loadedWeights), safetensorsLoad)
 	if tttSteps > 0 {
-		fmt.Printf("  [%s] validation loss=%.6f (score-first TTT steps=%d lr=%g)\n", cfg.Name, valLoss, tttSteps, tttLR)
+		if tttMode == "lora" {
+			fmt.Printf("  [%s] validation loss=%.6f (LoRA-TTT steps=%d lr=%g rank=%d)\n", cfg.Name, valLoss, tttSteps, tttLR, tttRank)
+		} else {
+			fmt.Printf("  [%s] validation loss=%.6f (score-first TTT steps=%d lr=%g)\n", cfg.Name, valLoss, tttSteps, tttLR)
+		}
 	} else {
 		fmt.Printf("  [%s] validation loss=%.6f\n", cfg.Name, valLoss)
 	}

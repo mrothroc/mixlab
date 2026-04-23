@@ -267,6 +267,32 @@ float mlx_ir_trainer_evaluate_named(int64_t trainer, const mlx_tensor_input* inp
   }
 }
 
+float mlx_ir_trainer_evaluate_lora_named(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    int rank,
+    int steps,
+    float lr) {
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return std::nanf("");
+    }
+    auto* t = get_ir_trainer(trainer);
+    if (!t || !inputs || n_inputs <= 0 || rank <= 0 || steps < 0) {
+      return std::nanf("");
+    }
+    auto tensor_map = to_tensor_map(inputs, n_inputs);
+    return t->evaluate_lora_named(tensor_map, rank, steps, lr);
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_evaluate_lora_named", e);
+    return std::nanf("");
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_evaluate_lora_named unknown exception" << std::endl;
+    return std::nanf("");
+  }
+}
+
 int mlx_ir_trainer_read_output(int64_t trainer, const char* output_name, float* out, int out_size) {
   if (!output_name || output_name[0] == '\0' || !out || out_size <= 0) {
     return -1;

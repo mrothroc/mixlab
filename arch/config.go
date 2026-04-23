@@ -110,7 +110,9 @@ type TrainingSpec struct {
 	WarmdownSteps      int             `json:"warmdown_steps,omitempty"`
 	TargetValLoss      float64         `json:"target_val_loss,omitempty"`
 	TTTSteps           int             `json:"ttt_steps,omitempty"`
+	TTTMode            string          `json:"ttt_mode,omitempty"`
 	TTTLR              float64         `json:"ttt_lr,omitempty"`
+	TTTRank            int             `json:"ttt_rank,omitempty"`
 	HardwareTFLOPs     float64         `json:"hardware_tflops,omitempty"` // peak hardware TFLOPS (e.g., 400 for M1 Max, 312 for A100)
 	GradClip           float32         `json:"grad_clip"`
 	WeightDecay        float32         `json:"weight_decay"`
@@ -163,7 +165,9 @@ func DefaultTrainingSpec() TrainingSpec {
 		Epsilon:           1e-8,
 		Seed:              42,
 		BatchTokens:       1024,
+		TTTMode:           "full",
 		TTTLR:             1e-5,
+		TTTRank:           4,
 		MuonBackendSteps:  5,
 		EmbedWeightDecay:  0.01,
 		MatrixWeightDecay: 0.01,
@@ -354,6 +358,12 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.Training.TTTLR == 0 {
 		cfg.Training.TTTLR = d.TTTLR
 	}
+	if cfg.Training.TTTMode == "" {
+		cfg.Training.TTTMode = d.TTTMode
+	}
+	if cfg.Training.TTTRank == 0 {
+		cfg.Training.TTTRank = d.TTTRank
+	}
 	if cfg.Training.MuonMomentum == 0 {
 		cfg.Training.MuonMomentum = cfg.Training.Beta1
 	}
@@ -423,8 +433,14 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.Training.TTTSteps < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.ttt_steps=%d (must be >= 0)", source, cfg.Training.TTTSteps)
 	}
+	if cfg.Training.TTTMode != "full" && cfg.Training.TTTMode != "lora" {
+		return nil, fmt.Errorf("config %q has invalid training.ttt_mode=%q (must be \"full\" or \"lora\")", source, cfg.Training.TTTMode)
+	}
 	if cfg.Training.TTTLR < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.ttt_lr=%g (must be >= 0)", source, cfg.Training.TTTLR)
+	}
+	if cfg.Training.TTTRank <= 0 {
+		return nil, fmt.Errorf("config %q has invalid training.ttt_rank=%d (must be > 0)", source, cfg.Training.TTTRank)
 	}
 
 	return cfg, nil

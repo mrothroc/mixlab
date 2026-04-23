@@ -455,8 +455,10 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
 | `warmdown_steps` | integer | No | `0` | Cosine warmdown length at the end of training. Must be `>= 0`; values above `steps` are clamped by the scheduler. |
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
-| `ttt_steps` | integer | No | `0` | Score-first test-time training updates per validation batch during eval mode and full BPB eval. `0` disables TTT. Must be `>= 0`. |
+| `ttt_steps` | integer | No | `0` | Test-time training updates per validation batch during eval mode and full BPB eval. `0` disables TTT. In `ttt_mode="full"` this is score-first full-weight adaptation; in `ttt_mode="lora"` this is per-batch LoRA adaptation before scoring. Must be `>= 0`. |
+| `ttt_mode` | string | No | `"full"` | TTT implementation: `"full"` keeps score-first full-weight fine-tuning, `"lora"` uses per-batch Low-Rank Adaptation at test time and discards adapters after each batch. Must be `"full"` or `"lora"`. |
 | `ttt_lr` | number | No | `1e-5` | Learning rate for TTT updates. Must be `>= 0`; keep much smaller than training `lr`. |
+| `ttt_rank` | integer | No | `4` | LoRA rank used when `ttt_mode="lora"`. Rank-2-or-higher weights get temporary adapters `W + A @ B` with `A:[M,R]`, `B:[R,N]`; only `A` and `B` train during LoRA-TTT. Must be `> 0`. |
 | `hardware_tflops` | number | No | `0` | Peak hardware TFLOPS used to log MFU next to `tok/s`. `0` disables MFU logging. Must be `>= 0`. |
 | `optimizer` | string | No | `"muon"` | Optimizer for matrix (rank ≥ 2) weights: `"muon"` or `"adamw"`. Embed, head, and scalar groups always use AdamW. |
 | `weight_init` | string | No | `"xavier_uniform"` | Initialization for rank ≥ 2 weights: `"xavier_uniform"` or `"normal"`. 1D weights are always ones (norms) or zeros. |
@@ -725,8 +727,10 @@ GQA, tied embeddings, bigram embeddings, logit softcap, and test-time training:
     "steps": 3000,
     "lr": 3e-4,
     "batch_tokens": 4096,
+    "ttt_mode": "lora",
     "ttt_steps": 1,
-    "ttt_lr": 1e-5
+    "ttt_lr": 1e-5,
+    "ttt_rank": 4
   }
 }
 ```

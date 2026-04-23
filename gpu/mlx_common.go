@@ -166,6 +166,19 @@ func TrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return mlxTrainerEvaluate(t, inputs)
 }
 
+func TrainerEvaluateLoRA(t TrainerHandle, inputs []TensorInput, rank, steps int, lr float32) (float32, error) {
+	if t == 0 {
+		return 0, fmt.Errorf("invalid trainer handle; create the trainer successfully before running LoRA TTT evaluation")
+	}
+	if rank <= 0 {
+		return 0, fmt.Errorf("invalid LoRA rank %d; pass a positive rank", rank)
+	}
+	if steps < 0 {
+		return 0, fmt.Errorf("invalid LoRA step count %d; pass a non-negative step count", steps)
+	}
+	return mlxTrainerEvaluateLoRA(t, inputs, rank, steps, lr)
+}
+
 func TrainerSetLRScale(t TrainerHandle, lrScale float32) {
 	if t == 0 {
 		return
