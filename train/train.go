@@ -325,14 +325,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step, err)
 			}
-			if step < steps-1 {
-				submitStart := time.Now()
-				if err := trainer.SubmitStepGPU(nextBatch.x, nextBatch.y, batchSize, seqLen, sched.At(step+1)); err != nil {
-					return TrainResult{}, fmt.Errorf("submit step %d: %w", step+1, err)
-				}
-				currentSubmitDuration = time.Since(submitStart)
-				gpuDuration += currentSubmitDuration
-			}
 			v := float64(lossV)
 
 			if step == 0 {
@@ -402,6 +394,16 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					return TrainResult{}, fmt.Errorf("checkpoint at step %d: %w", step+1, err)
 				}
 				fmt.Printf("  [%s] checkpoint saved: %s\n", name, checkpointPath(opts.CheckpointDir, step+1))
+			}
+
+			// Submit next step AFTER validation/checkpoint/logging so flush
+			// inside EvaluateGPU doesn't discard the pending step.
+			if step < steps-1 {
+				submitStart := time.Now()
+				if err := trainer.SubmitStepGPU(nextBatch.x, nextBatch.y, batchSize, seqLen, sched.At(step+1)); err != nil {
+					return TrainResult{}, fmt.Errorf("submit step %d: %w", step+1, err)
+				}
+				currentSubmitDuration = time.Since(submitStart)
 			}
 		}
 	}
