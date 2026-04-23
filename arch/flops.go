@@ -78,9 +78,12 @@ func estimatePlainBlockFLOPs(block BlockSpec, B, T, D, ffn int) int64 {
 	}
 
 	if !block.SkipAttention {
-		if kvHeads < heads {
+		switch {
+		case block.KVSource > 0:
+			total += 2 * i64(B) * i64(T) * i64(D) * i64(D) // Q + O only
+		case kvHeads < heads:
 			total += 2 * i64(B) * i64(T) * i64(D) * (i64(D) + 2*i64(D)*i64(kvHeads)/i64(heads))
-		} else {
+		default:
 			total += 3 * 2 * i64(B) * i64(T) * i64(D) * i64(D)
 		}
 		total += 2 * i64(B) * i64(heads) * i64(T) * i64(T) * i64(headDim)

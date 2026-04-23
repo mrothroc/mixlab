@@ -365,6 +365,59 @@ func TestEmitPlainAttentionIR_InvalidKVHeads(t *testing.T) {
 	}
 }
 
+func TestEmitPlainAttentionIR_KVSourceReusesCachedTensors(t *testing.T) {
+	p := NewProgram(12)
+	cache := make(map[int]BlockKVOutputs)
+
+	wi, err := emitPlainAttentionIRWithKVOptions(p, "x", 0, 8, 4, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, false, 0, 0, false, 0, cache, 0)
+	if err != nil {
+		t.Fatalf("emitPlainAttentionIRWithKVOptions source: %v", err)
+	}
+	if wi != 7 {
+		t.Fatalf("source wi=%d want 7", wi)
+	}
+	got := cache[0]
+	if got.K != "x_attn_0_k_rot" || got.V != "x_attn_0_vh" {
+		t.Fatalf("cached kv = %+v, want {K:x_attn_0_k_rot V:x_attn_0_vh}", got)
+	}
+
+	wi, err = emitPlainAttentionIRWithKVOptions(p, "x", wi, 8, 4, 128, 64, 2, 1, DefaultFFNMultiplier, false, 0, false, 0, 0, false, 1, cache, 2)
+	if err != nil {
+		t.Fatalf("emitPlainAttentionIRWithKVOptions shared: %v", err)
+	}
+	if wi != 12 {
+		t.Fatalf("shared wi=%d want 12", wi)
+	}
+
+	sharedTransposeUsesSourceK := false
+	sharedCtxUsesSourceV := false
+	hasSharedKMatMul := false
+	hasSharedVMatMul := false
+	for _, op := range p.Ops {
+		if op.Code == OpMatMul && len(op.Outputs) == 1 && op.Outputs[0] == "x_attn_1_k" {
+			hasSharedKMatMul = true
+		}
+		if op.Code == OpMatMul && len(op.Outputs) == 1 && op.Outputs[0] == "x_attn_1_v" {
+			hasSharedVMatMul = true
+		}
+		if op.Code == OpTranspose && len(op.Inputs) == 1 && op.Inputs[0] == "x_attn_0_k_rot" && len(op.Outputs) == 1 && op.Outputs[0] == "x_attn_1_kt" {
+			sharedTransposeUsesSourceK = true
+		}
+		if op.Code == OpMatMul && len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_1_attn" && op.Inputs[1] == "x_attn_0_vh" {
+			sharedCtxUsesSourceV = true
+		}
+	}
+	if hasSharedKMatMul || hasSharedVMatMul {
+		t.Fatalf("shared KV block should not emit local K/V matmuls")
+	}
+	if !sharedTransposeUsesSourceK {
+		t.Fatal("shared KV block did not reference source K tensor")
+	}
+	if !sharedCtxUsesSourceV {
+		t.Fatal("shared KV block did not reference source V tensor")
+	}
+}
+
 // --- SwiGLU block emission ---
 
 func TestEmitSwiGLUIR(t *testing.T) {

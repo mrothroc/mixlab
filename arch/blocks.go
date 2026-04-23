@@ -30,6 +30,10 @@ func emitPlainAttentionIRWithDropout(prog *Program, x string, wi, H, kvH, D, T, 
 }
 
 func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa bool) (int, error) {
+	return emitPlainAttentionIRWithKVOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, skipAttention, qkGain, ropeDims, xsa, 0, nil, -1)
+}
+
+func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa bool, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -45,6 +49,7 @@ func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, 
 	scale := float32(1.0 / math.Sqrt(float64(headDim)))
 	kvProjDim := kvH * headDim
 	groupSize := H / kvH
+	reuseKV := kvSource > 0
 
 	prefix := tmpName(x+"_attn", idx)
 	xNorm := prefix + "_x_norm"
@@ -75,7 +80,10 @@ func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, 
 	projDrop := prefix + "_proj_dropout"
 
 	if skipAttention {
-		wi += 5 // norm, q, k, v, output projection
+		wi += 3 // norm, q, output projection
+		if !reuseKV {
+			wi += 2 // k, v
+		}
 		if qkGain > 0 {
 			wi++ // per-head QK gain
 		}
@@ -87,42 +95,61 @@ func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, 
 		prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
 		wi++
 
-		// Q/K/V projections
+		// Q projection
 		prog.MatMul(xNorm, weightName(wi), q)
 		wi++
-		prog.MatMul(xNorm, weightName(wi), k)
-		wi++
-		prog.MatMul(xNorm, weightName(wi), v)
-		wi++
-
-		// Reshape to multi-head: [B*T, D] -> [B, T, H, headDim] -> [B, H, T, headDim]
 		prog.Reshape(q, []int{B, T, H, headDim}, q4)
 		prog.Transpose(q4, []int{0, 2, 1, 3}, qh)
-		prog.Reshape(k, []int{B, T, kvH, headDim}, k4)
-		prog.Transpose(k4, []int{0, 2, 1, 3}, kh)
-		prog.Reshape(v, []int{B, T, kvH, headDim}, v4)
-		prog.Transpose(v4, []int{0, 2, 1, 3}, vh)
-		if kvProjDim != D {
-			khExp := kh + "_exp"
-			khOnes := kh + "_ones"
-			khRep := kh + "_rep"
-			vhExp := vh + "_exp"
-			vhOnes := vh + "_ones"
-			vhRep := vh + "_rep"
 
-			prog.Reshape(kh, []int{B, kvH, 1, T, headDim}, khExp)
-			prog.Full([]int{1, 1, groupSize, 1, 1}, 1.0, khOnes)
-			prog.Mul(khExp, khOnes, khRep)
-			prog.Reshape(khRep, []int{B, H, T, headDim}, kh)
+		if reuseKV {
+			if kvCache == nil {
+				return wi, fmt.Errorf("kv_source=%d requires KV cache", kvSource)
+			}
+			src, ok := kvCache[kvSource-1]
+			if !ok || src.K == "" || src.V == "" {
+				return wi, fmt.Errorf("kv_source=%d references block without emitted KV tensors", kvSource)
+			}
+			khRot = src.K
+			vh = src.V
+		} else {
+			// K/V projections
+			prog.MatMul(xNorm, weightName(wi), k)
+			wi++
+			prog.MatMul(xNorm, weightName(wi), v)
+			wi++
 
-			prog.Reshape(vh, []int{B, kvH, 1, T, headDim}, vhExp)
-			prog.Full([]int{1, 1, groupSize, 1, 1}, 1.0, vhOnes)
-			prog.Mul(vhExp, vhOnes, vhRep)
-			prog.Reshape(vhRep, []int{B, H, T, headDim}, vh)
+			prog.Reshape(k, []int{B, T, kvH, headDim}, k4)
+			prog.Transpose(k4, []int{0, 2, 1, 3}, kh)
+			prog.Reshape(v, []int{B, T, kvH, headDim}, v4)
+			prog.Transpose(v4, []int{0, 2, 1, 3}, vh)
+			if kvProjDim != D {
+				khExp := kh + "_exp"
+				khOnes := kh + "_ones"
+				khRep := kh + "_rep"
+				vhExp := vh + "_exp"
+				vhOnes := vh + "_ones"
+				vhRep := vh + "_rep"
+
+				prog.Reshape(kh, []int{B, kvH, 1, T, headDim}, khExp)
+				prog.Full([]int{1, 1, groupSize, 1, 1}, 1.0, khOnes)
+				prog.Mul(khExp, khOnes, khRep)
+				prog.Reshape(khRep, []int{B, H, T, headDim}, kh)
+
+				prog.Reshape(vh, []int{B, kvH, 1, T, headDim}, vhExp)
+				prog.Full([]int{1, 1, groupSize, 1, 1}, 1.0, vhOnes)
+				prog.Mul(vhExp, vhOnes, vhRep)
+				prog.Reshape(vhRep, []int{B, H, T, headDim}, vh)
+			}
+
+			// Rotary position embeddings
+			prog.RoPE(qh, kh, qhRot, khRot, T, headDim, ropeDims, 10000.0)
+			if kvCache != nil && blockIndex >= 0 {
+				kvCache[blockIndex] = BlockKVOutputs{K: khRot, V: vh}
+			}
 		}
-
-		// Rotary position embeddings
-		prog.RoPE(qh, kh, qhRot, khRot, T, headDim, ropeDims, 10000.0)
+		if reuseKV {
+			prog.ScalarMul(qh, 1.0, qhRot)
+		}
 
 		// Attention scores: Q @ K^T / sqrt(headDim)
 		prog.Transpose(khRot, []int{0, 1, 3, 2}, kt)

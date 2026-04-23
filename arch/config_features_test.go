@@ -159,6 +159,87 @@ func TestParseArchConfig_RejectsCrossAttentionWithoutSourceStream(t *testing.T) 
 	}
 }
 
+func TestParseArchConfig_AcceptsKVSource(t *testing.T) {
+	cfg := ArchConfig{
+		ModelDim:  128,
+		VocabSize: 1024,
+		SeqLen:    64,
+		Blocks: []BlockSpec{
+			{Type: "plain", Heads: 8, KVHeads: 4},
+			{Type: "swiglu"},
+			{Type: "plain", Heads: 8, KVHeads: 4, KVSource: 1},
+		},
+	}
+	data, _ := json.Marshal(cfg)
+	got, err := ParseArchConfig(data, "kv_source_ok")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if got.Blocks[2].KVSource != 1 {
+		t.Fatalf("kv_source=%d want 1", got.Blocks[2].KVSource)
+	}
+}
+
+func TestParseArchConfig_RejectsInvalidKVSource(t *testing.T) {
+	tests := []struct {
+		name   string
+		blocks []BlockSpec
+		want   string
+	}{
+		{
+			name: "forward ref",
+			blocks: []BlockSpec{
+				{Type: "plain", Heads: 8, KVHeads: 4, KVSource: 2},
+				{Type: "plain", Heads: 8, KVHeads: 4},
+			},
+			want: "must reference an earlier block",
+		},
+		{
+			name: "non plain source",
+			blocks: []BlockSpec{
+				{Type: "swiglu"},
+				{Type: "plain", Heads: 8, KVHeads: 4, KVSource: 1},
+			},
+			want: "want plain",
+		},
+		{
+			name: "heads mismatch",
+			blocks: []BlockSpec{
+				{Type: "plain", Heads: 4, KVHeads: 4},
+				{Type: "plain", Heads: 8, KVHeads: 4, KVSource: 1},
+			},
+			want: "source heads=4",
+		},
+		{
+			name: "kv heads mismatch",
+			blocks: []BlockSpec{
+				{Type: "plain", Heads: 8, KVHeads: 2},
+				{Type: "plain", Heads: 8, KVHeads: 4, KVSource: 1},
+			},
+			want: "source kv_heads=2",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := ArchConfig{
+				ModelDim:  128,
+				VocabSize: 1024,
+				SeqLen:    64,
+				Blocks:    tc.blocks,
+			}
+			data, _ := json.Marshal(cfg)
+			_, err := ParseArchConfig(data, "kv_source_bad")
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q does not contain %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidCustomBlockConfig(t *testing.T) {
 	cfg := ArchConfig{
 		Name:      "test_custom",

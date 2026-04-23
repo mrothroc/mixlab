@@ -72,8 +72,12 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 		metas := []WeightMeta{
 			{Name: "norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
 			{Name: "wq", Shape: []int{D, D}},
-			{Name: "wk", Shape: []int{D, kvProjDim}},
-			{Name: "wv", Shape: []int{D, kvProjDim}},
+		}
+		if spec.KVSource <= 0 {
+			metas = append(metas,
+				WeightMeta{Name: "wk", Shape: []int{D, kvProjDim}},
+				WeightMeta{Name: "wv", Shape: []int{D, kvProjDim}},
+			)
 		}
 		if spec.QKGain > 0 {
 			metas = append(metas, WeightMeta{Name: "qk_gain", Shape: []int{heads}, InitValue: float32(spec.QKGain)})

@@ -12,6 +12,14 @@ type EmitOptions struct {
 	BlockScales   bool
 	ResidMix      bool
 	Dropout       float32
+	BlockIndex    int
+	KVCache       map[int]BlockKVOutputs
+}
+
+// BlockKVOutputs tracks the named K/V tensors emitted by a plain attention block.
+type BlockKVOutputs struct {
+	K string
+	V string
 }
 
 // BlockEmitter emits IR ops for a block and returns the next weight index.
@@ -63,7 +71,7 @@ func init() {
 			if heads <= 0 {
 				heads = 4
 			}
-			return emitPlainAttentionIRWithOptions(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, spec.SkipAttention, spec.QKGain, spec.RopeDims, spec.XSA)
+			return emitPlainAttentionIRWithKVOptions(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, spec.SkipAttention, spec.QKGain, spec.RopeDims, spec.XSA, spec.KVSource, opts.KVCache, opts.BlockIndex)
 		},
 		WeightCount: plainWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
@@ -113,6 +121,9 @@ func init() {
 
 func plainWeightCount(spec BlockSpec, blockScales, residMix bool) (int, error) {
 	total := 7
+	if spec.KVSource > 0 {
+		total -= 2
+	}
 	if spec.QKGain > 0 {
 		total++
 	}

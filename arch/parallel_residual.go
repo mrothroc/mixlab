@@ -10,6 +10,9 @@ func validateParallelResidualBlocks(specs []BlockSpec) error {
 		if blockTypeKey(specs[i]) != "plain" {
 			return fmt.Errorf("parallel_residual requires blocks[%d].type=plain (got %q)", i, specs[i].Type)
 		}
+		if specs[i].KVSource > 0 {
+			return fmt.Errorf("parallel_residual does not support blocks[%d].kv_source=%d", i, specs[i].KVSource)
+		}
 		if blockTypeKey(specs[i+1]) != "swiglu" {
 			return fmt.Errorf("parallel_residual requires blocks[%d].type=swiglu (got %q)", i+1, specs[i+1].Type)
 		}
@@ -134,7 +137,7 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 	return wi, nil
 }
 
-func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32) (int, error) {
+func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, kvCache map[int]BlockKVOutputs, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32) (int, error) {
 	if parallelResidual {
 		if start%2 != 0 || end%2 != 0 {
 			return wi, fmt.Errorf("parallel_residual block range [%d,%d) must align with block pairs", start, end)
@@ -150,7 +153,7 @@ func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 	}
 	for i := start; i < end; i++ {
 		var err error
-		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, rec, weightStarts, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout)
+		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, rec, weightStarts, kvCache, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout)
 		if err != nil {
 			return wi, err
 		}

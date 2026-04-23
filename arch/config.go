@@ -80,6 +80,7 @@ type BlockSpec struct {
 	Name          string       `json:"name,omitempty"` // custom block name (required for type=custom)
 	Heads         int          `json:"heads"`
 	KVHeads       int          `json:"kv_heads,omitempty"`
+	KVSource      int          `json:"kv_source,omitempty"`      // -1 or 0 = compute own KV; positive = reuse KV from block N (1-indexed)
 	RopeDims      int          `json:"rope_dims,omitempty"`      // RoPE rotation dims per head; 0 or head_dim = full RoPE
 	QKGain        float64      `json:"qk_gain,omitempty"`        // per-head learnable QK scaling; 0 disables
 	XSA           bool         `json:"xsa,omitempty"`            // enable V-orthogonal projection after attention
@@ -304,6 +305,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if err := validateRecurrence(cfg, source); err != nil {
 		return nil, err
 	}
+	if err := validateKVSources(cfg, source); err != nil {
+		return nil, err
+	}
 	if err := validateParallelResidual(cfg, source); err != nil {
 		return nil, err
 	}
@@ -517,6 +521,41 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if b.LeakySlope < 0 {
 			return fmt.Errorf("config %q %s[%d] type=mlp has invalid leaky_slope=%g (must be >= 0)", source, groupName, idx, b.LeakySlope)
+		}
+	}
+	return nil
+}
+
+func validateKVSources(cfg *ArchConfig, source string) error {
+	for i, b := range cfg.Blocks {
+		if blockTypeKey(b) != "plain" || b.KVSource <= 0 {
+			continue
+		}
+		srcIdx := b.KVSource - 1
+		if srcIdx < 0 || srcIdx >= len(cfg.Blocks) {
+			return fmt.Errorf("config %q blocks[%d] type=plain has invalid kv_source=%d (must reference an earlier block)", source, i, b.KVSource)
+		}
+		if srcIdx >= i {
+			return fmt.Errorf("config %q blocks[%d] type=plain has invalid kv_source=%d (must reference an earlier block)", source, i, b.KVSource)
+		}
+		src := cfg.Blocks[srcIdx]
+		if blockTypeKey(src) != "plain" {
+			return fmt.Errorf("config %q blocks[%d] type=plain has invalid kv_source=%d (blocks[%d] is type=%q, want plain)", source, i, b.KVSource, srcIdx, src.Type)
+		}
+
+		wantKVHeads, err := normalizePlainKVHeads(b.Heads, b.KVHeads)
+		if err != nil {
+			return fmt.Errorf("config %q blocks[%d] type=plain has invalid kv_source=%d: %w", source, i, b.KVSource, err)
+		}
+		gotKVHeads, err := normalizePlainKVHeads(src.Heads, src.KVHeads)
+		if err != nil {
+			return fmt.Errorf("config %q blocks[%d] kv_source=%d references invalid source block: %w", source, i, b.KVSource, err)
+		}
+		if src.Heads != b.Heads {
+			return fmt.Errorf("config %q blocks[%d] type=plain has incompatible kv_source=%d (heads=%d, source heads=%d)", source, i, b.KVSource, b.Heads, src.Heads)
+		}
+		if gotKVHeads != wantKVHeads {
+			return fmt.Errorf("config %q blocks[%d] type=plain has incompatible kv_source=%d (kv_heads=%d, source kv_heads=%d)", source, i, b.KVSource, wantKVHeads, gotKVHeads)
 		}
 	}
 	return nil

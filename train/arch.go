@@ -9,6 +9,7 @@ type BlockSpec = arch.BlockSpec
 type CustomOpSpec = arch.CustomOpSpec
 type CustomWeightSpec = arch.CustomWeightSpec
 type OpSpec = arch.OpSpec
+type TrainingPhase = arch.TrainingPhase
 type TrainingSpec = arch.TrainingSpec
 type WeightSpec = arch.WeightSpec
 

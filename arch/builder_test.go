@@ -124,6 +124,20 @@ func TestCountWeights_TiedEmbeddingsDropsHeadWeight(t *testing.T) {
 	}
 }
 
+func TestCountWeights_KVSourceDropsTwoWeights(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "plain", Heads: 8, KVHeads: 4},
+		{Type: "plain", Heads: 8, KVHeads: 4, KVSource: 1},
+	}
+	n, err := CountWeights(DefaultFFNMultiplier, false, false, false, false, blocks)
+	if err != nil {
+		t.Fatalf("CountWeights: %v", err)
+	}
+	if n != 15 {
+		t.Fatalf("expected 15 weights, got %d", n)
+	}
+}
+
 func TestCountWeights_UNetAddsSkipWeights(t *testing.T) {
 	blocks := []BlockSpec{
 		{Type: "plain", Heads: 4},
@@ -181,6 +195,46 @@ func TestBuildIRProgram_Plain3L(t *testing.T) {
 	last := prog.Ops[len(prog.Ops)-1]
 	if last.Code != OpCrossEntropy {
 		t.Fatalf("last op should be CrossEntropy, got %d", last.Code)
+	}
+}
+
+func TestBuildIRProgram_KVSourceReusesEarlierKVTensors(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "plain", Heads: 8, KVHeads: 4},
+		{Type: "swiglu"},
+		{Type: "plain", Heads: 8, KVHeads: 4, KVSource: 1},
+	}
+	prog, err := BuildIRProgram(128, 1024, 64, 1, DefaultFFNMultiplier, false, false, false, false, 0, blocks)
+	if err != nil {
+		t.Fatalf("BuildIRProgram: %v", err)
+	}
+	if prog.NumWeights != 19 {
+		t.Fatalf("NumWeights=%d want 19", prog.NumWeights)
+	}
+
+	hasLocalSharedKMatMul := false
+	hasLocalSharedVMatMul := false
+	usesSourceK := false
+	usesSourceV := false
+	for _, op := range prog.Ops {
+		if op.Code == OpMatMul && len(op.Outputs) == 1 && op.Outputs[0] == "x_attn_2_k" {
+			hasLocalSharedKMatMul = true
+		}
+		if op.Code == OpMatMul && len(op.Outputs) == 1 && op.Outputs[0] == "x_attn_2_v" {
+			hasLocalSharedVMatMul = true
+		}
+		if op.Code == OpTranspose && len(op.Inputs) == 1 && op.Inputs[0] == "x_attn_0_k_rot" && len(op.Outputs) == 1 && op.Outputs[0] == "x_attn_2_kt" {
+			usesSourceK = true
+		}
+		if op.Code == OpMatMul && len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_2_attn" && op.Inputs[1] == "x_attn_0_vh" {
+			usesSourceV = true
+		}
+	}
+	if hasLocalSharedKMatMul || hasLocalSharedVMatMul {
+		t.Fatal("shared KV block emitted local K/V matmuls")
+	}
+	if !usesSourceK || !usesSourceV {
+		t.Fatalf("shared KV block did not reuse source tensors: usesSourceK=%v usesSourceV=%v", usesSourceK, usesSourceV)
 	}
 }
 

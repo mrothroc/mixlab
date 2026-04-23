@@ -108,6 +108,21 @@ func TestBlockWeightShapes_QKGainMeta(t *testing.T) {
 	}
 }
 
+func TestBlockWeightShapes_KVSourceOmitsWKAndWV(t *testing.T) {
+	metas, err := blockWeightShapes(BlockSpec{Type: "plain", Heads: 8, KVHeads: 4, KVSource: 1}, 128, 32, 1, 256, DefaultFFNMultiplier, false, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes: %v", err)
+	}
+	if len(metas) != 5 {
+		t.Fatalf("weight count=%d want 5", len(metas))
+	}
+	for _, meta := range metas {
+		if meta.Name == "wk" || meta.Name == "wv" {
+			t.Fatalf("unexpected shared-KV weight %q in %+v", meta.Name, metas)
+		}
+	}
+}
+
 // TestCollectWeightShapes_CountMatchesCountWeights verifies the total count
 // matches for several architecture configurations.
 func TestCollectWeightShapes_CountMatchesCountWeights(t *testing.T) {
