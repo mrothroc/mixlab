@@ -12,12 +12,13 @@ import (
 
 // mlxGPUTrainer wraps the MLX IR trainer for the training loop.
 type mlxGPUTrainer struct {
-	handle          gpu.TrainerHandle
-	prog            *gpu.Program
-	handles         []int64 // GPU weight array handles
-	shapes          []WeightShape
-	baseLR          float32
-	bigramVocabSize int
+	handle             gpu.TrainerHandle
+	prog               *gpu.Program
+	handles            []int64 // GPU weight array handles
+	shapes             []WeightShape
+	baseLR             float32
+	bigramVocabSize    int
+	declaredTargetSize int
 	// Pre-allocated input buffers to avoid per-step allocation.
 	tokBuf    []int32
 	tgtBuf    []int32
@@ -95,16 +96,24 @@ func initMLXGPUTrainer(irProg *ir.Program, cfg *ArchConfig, loadedWeights [][]fl
 	}
 
 	batchElems := cfg.Training.BatchTokens
+	declaredTargetSize := 0
+	for _, inp := range irProg.Inputs {
+		if inp.Name == "targets" && len(inp.Shape) == 1 {
+			declaredTargetSize = inp.Shape[0]
+			break
+		}
+	}
 	return &mlxGPUTrainer{
-		handle:          trainerHandle,
-		prog:            gpuProg,
-		handles:         handles,
-		shapes:          shapes,
-		baseLR:          optimizerSpec.DefaultBaseLR,
-		bigramVocabSize: cfg.BigramVocabSize,
-		tokBuf:          make([]int32, batchElems),
-		tgtBuf:          make([]int32, batchElems),
-		bigramBuf:       make([]int32, batchElems),
+		handle:             trainerHandle,
+		prog:               gpuProg,
+		handles:            handles,
+		shapes:             shapes,
+		baseLR:             optimizerSpec.DefaultBaseLR,
+		bigramVocabSize:    cfg.BigramVocabSize,
+		declaredTargetSize: declaredTargetSize,
+		tokBuf:             make([]int32, batchElems),
+		tgtBuf:             make([]int32, batchElems),
+		bigramBuf:          make([]int32, batchElems),
 	}, nil
 }
 
@@ -124,9 +133,13 @@ func (t *mlxGPUTrainer) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([]g
 		t.tokBuf[i] = int32(xTok[i])
 		t.tgtBuf[i] = int32(yTok[i])
 	}
+	targetData, targetShape, err := t.prepareTargets(batchSize, seqLen, need)
+	if err != nil {
+		return nil, err
+	}
 	inputs := []gpu.TensorInput{
 		{Name: "tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.tokBuf[:need]},
-		{Name: "targets", DType: gpu.TensorInt32, Shape: []int{need}, Data: t.tgtBuf[:need]},
+		{Name: "targets", DType: gpu.TensorInt32, Shape: targetShape, Data: targetData},
 	}
 	if t.bigramVocabSize > 0 {
 		bigramIDs, err := ComputeBigramIDs(t.tokBuf[:need], need, t.bigramVocabSize)
@@ -139,6 +152,41 @@ func (t *mlxGPUTrainer) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([]g
 		})
 	}
 	return inputs, nil
+}
+
+func (t *mlxGPUTrainer) prepareTargets(batchSize, seqLen, targetSize int) ([]int32, []int, error) {
+	if t.declaredTargetSize <= 0 || t.declaredTargetSize == targetSize {
+		return t.tgtBuf[:targetSize], []int{targetSize}, nil
+	}
+	if t.declaredTargetSize < targetSize {
+		return nil, nil, fmt.Errorf("declared targets size=%d smaller than batch target size=%d", t.declaredTargetSize, targetSize)
+	}
+	if batchSize <= 0 {
+		return nil, nil, fmt.Errorf("invalid batch size=%d", batchSize)
+	}
+	extraTargets := t.declaredTargetSize - targetSize
+	if extraTargets%batchSize != 0 {
+		return nil, nil, fmt.Errorf("declared targets size=%d adds %d extras not divisible by batch size=%d", t.declaredTargetSize, extraTargets, batchSize)
+	}
+	kPerBatch := extraTargets / batchSize
+	if kPerBatch <= 0 {
+		return t.tgtBuf[:targetSize], []int{targetSize}, nil
+	}
+	if seqLen%kPerBatch != 0 {
+		return nil, nil, fmt.Errorf("invalid extended targets: seq len=%d not divisible by extra targets per batch=%d", seqLen, kPerBatch)
+	}
+	stride := seqLen / kPerBatch
+	extBuf := make([]int32, t.declaredTargetSize)
+	copy(extBuf, t.tgtBuf[:targetSize])
+	dst := targetSize
+	for b := 0; b < batchSize; b++ {
+		base := b * seqLen
+		for i := 0; i < kPerBatch; i++ {
+			extBuf[dst] = t.tgtBuf[base+i*stride]
+			dst++
+		}
+	}
+	return extBuf, []int{t.declaredTargetSize}, nil
 }
 
 func (t *mlxGPUTrainer) setLRScale(lr float32) {
