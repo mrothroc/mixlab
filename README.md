@@ -63,10 +63,12 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
   QK-Gain, partial RoPE, XSA (V-orthogonal projection).
 - Trainer features: configurable optimizer (Muon or AdamW for matrix weights),
   configurable weight init (Xavier uniform or normal), phase-based LR schedules,
-  SWA/EMA averaging, validation-loss early stopping, safetensors import/export.
+  SWA/EMA averaging, validation-loss early stopping, LoRA-TTT (`ttt_mode: "lora"`),
+  safetensors import/export.
 - Compute accounting: analytical FLOPs estimation, tok/s throughput, optional MFU
   logging via `training.hardware_tflops`.
-- Quantization: int8 and int6 with per-row scaling, SDClip clipping (`-quant-method sdclip`).
+- Quantization: int8 and int6 with per-row scaling, SDClip clipping (`-quant-method sdclip`),
+  quantization-aware training (`training.qat: "int6"`).
 - Custom blocks: declare weights and op graphs directly in JSON.
 
 ## When to use mixlab
