@@ -41,6 +41,7 @@ const (
 	OpScatterPositions = 52
 	OpRoPEIndexed      = 53
 	OpLeakyReLU        = 54
+	OpXSAProject       = 55
 )
 
 const (

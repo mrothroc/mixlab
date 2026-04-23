@@ -6,7 +6,6 @@ package arch
 import "fmt"
 
 // Op codes for IR operations. These MUST match the C++ enum in h.
-// Do NOT invent new opcodes — express new operations using existing ones.
 const (
 	OpEmbed            = 1  // OP_EMBED
 	OpMatMul           = 2  // OP_MATMUL
@@ -41,6 +40,7 @@ const (
 	OpScatterPositions = 52 // OP_SCATTER_POSITIONS
 	OpRoPEIndexed      = 53 // OP_ROPE_INDEXED
 	OpLeakyReLU        = 54 // OP_LEAKY_RELU
+	OpXSAProject       = 55 // OP_XSA_PROJECT
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -244,6 +244,11 @@ func (p *Program) ReLU(a, output string) {
 // LeakyReLU emits element-wise leaky rectified linear unit.
 func (p *Program) LeakyReLU(a, output string, negativeSlope float32) {
 	p.AddOp(OpLeakyReLU, []string{a}, []string{output}, []float32{negativeSlope}, nil)
+}
+
+// XSAProject projects y orthogonal to v along the last dimension.
+func (p *Program) XSAProject(y, v, output string) {
+	p.AddOp(OpXSAProject, []string{y, v}, []string{output}, nil, nil)
 }
 
 // Square emits element-wise square: output = a * a.

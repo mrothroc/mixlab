@@ -127,7 +127,7 @@ func TestEmitPlainAttentionIR_RopeDims(t *testing.T) {
 
 func TestEmitPlainAttentionIR_SkipAttentionPreservesWeights(t *testing.T) {
 	p := NewProgram(7)
-	wi, err := emitPlainAttentionIRWithOptions(p, "x", 0, 4, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, true, 0, 0)
+	wi, err := emitPlainAttentionIRWithOptions(p, "x", 0, 4, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, true, 0, 0, false)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithOptions skip attention: %v", err)
 	}
@@ -148,6 +148,53 @@ func TestEmitPlainAttentionIR_SkipAttentionPreservesWeights(t *testing.T) {
 	}
 	if n := countOps(p, OpSiLU); n != 1 {
 		t.Fatalf("expected 1 SiLU op, got %d", n)
+	}
+}
+
+func TestEmitPlainAttentionIR_XSAProjectsBeforeOutputProjection(t *testing.T) {
+	p := NewProgram(7)
+	wi, err := emitBlockIR(p, BlockSpec{Type: "plain", Heads: 4, XSA: true}, "x", 0, 128, 64, 2, 1024, 0, nil, DefaultFFNMultiplier, false)
+	if err != nil {
+		t.Fatalf("emitBlockIR xsa: %v", err)
+	}
+	if wi != 7 {
+		t.Fatalf("expected wi=7, got %d", wi)
+	}
+
+	ctxMatMulIdx := -1
+	xsaIdx := -1
+	ctxTransposeIdx := -1
+	for i, op := range p.Ops {
+		switch op.Code {
+		case OpMatMul:
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_0_attn" && op.Inputs[1] == "x_attn_0_vh" && len(op.Outputs) == 1 && op.Outputs[0] == "x_attn_0_ctx" {
+				ctxMatMulIdx = i
+			}
+		case OpXSAProject:
+			xsaIdx = i
+			if len(op.Inputs) != 2 || op.Inputs[0] != "x_attn_0_ctx" || op.Inputs[1] != "x_attn_0_vh" {
+				t.Fatalf("bad XSA inputs: %v", op.Inputs)
+			}
+			if len(op.Outputs) != 1 || op.Outputs[0] != "x_attn_0_ctx_xsa" {
+				t.Fatalf("bad XSA outputs: %v", op.Outputs)
+			}
+		case OpTranspose:
+			if len(op.Inputs) == 1 && op.Inputs[0] == "x_attn_0_ctx_xsa" && reflect.DeepEqual(op.IntParams, []int{0, 2, 1, 3}) {
+				ctxTransposeIdx = i
+			}
+		}
+	}
+	if ctxMatMulIdx == -1 {
+		t.Fatal("missing attention context matmul")
+	}
+	if xsaIdx == -1 {
+		t.Fatal("missing XSAProject op")
+	}
+	if ctxTransposeIdx == -1 {
+		t.Fatal("missing transpose from XSA output")
+	}
+	if ctxMatMulIdx >= xsaIdx || xsaIdx >= ctxTransposeIdx {
+		t.Fatalf("unexpected XSA order ctx_matmul=%d xsa=%d transpose=%d", ctxMatMulIdx, xsaIdx, ctxTransposeIdx)
 	}
 }
 

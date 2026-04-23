@@ -331,6 +331,23 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mx::where(mx::greater(x, mx::array(0.0f)), x, x * mx::array(slope)));
         break;
       }
+      case OP_XSA_PROJECT: {
+        auto y = get(op, 0);
+        auto v = get(op, 1);
+        if (y.ndim() != v.ndim()) {
+          throw std::runtime_error("OP_XSA_PROJECT expects y and v to have the same rank");
+        }
+        for (int i = 0; i < y.ndim(); ++i) {
+          if (y.shape(i) != v.shape(i)) {
+            throw std::runtime_error("OP_XSA_PROJECT expects y and v to have the same shape");
+          }
+        }
+        auto dot_yv = mx::sum(y * v, -1, true);
+        auto dot_vv = mx::sum(v * v, -1, true);
+        auto coeff = dot_yv / (dot_vv + 1e-8f);
+        set_out(op, 0, y - coeff * v);
+        break;
+      }
       case OP_TANH: {
         set_out(op, 0, mx::tanh(get(op, 0)));
         break;

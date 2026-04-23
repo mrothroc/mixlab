@@ -72,6 +72,28 @@ func TestParseArchConfig_QKGain(t *testing.T) {
 	}
 }
 
+func TestParseArchConfig_XSA(t *testing.T) {
+	cfg := ArchConfig{
+		Name:      "test_xsa",
+		ModelDim:  128,
+		VocabSize: 1024,
+		SeqLen:    128,
+		Blocks:    []BlockSpec{{Type: "plain", Heads: 4, XSA: true}},
+		Training:  TrainingSpec{Steps: 100, LR: 3e-4},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got, err := ParseArchConfig(data, "test_xsa")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if !got.Blocks[0].XSA {
+		t.Fatal("xsa = false, want true")
+	}
+}
+
 func TestParseArchConfig_RopeDims(t *testing.T) {
 	cfg := ArchConfig{
 		Name:      "test_rope_dims",

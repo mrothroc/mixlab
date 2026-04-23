@@ -82,6 +82,7 @@ type BlockSpec struct {
 	KVHeads       int          `json:"kv_heads,omitempty"`
 	RopeDims      int          `json:"rope_dims,omitempty"`      // RoPE rotation dims per head; 0 or head_dim = full RoPE
 	QKGain        float64      `json:"qk_gain,omitempty"`        // per-head learnable QK scaling; 0 disables
+	XSA           bool         `json:"xsa,omitempty"`            // enable V-orthogonal projection after attention
 	SkipAttention bool         `json:"skip_attention,omitempty"` // plain: bypass attention while preserving weight layout.
 	InnerDim      int          `json:"inner_dim,omitempty"`      // Mamba inner dimension; defaults to model_dim.
 	NumLatents    int          `json:"num_latents,omitempty"`    // Perceiver/bottleneck latent count.

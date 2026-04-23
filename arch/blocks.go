@@ -26,10 +26,10 @@ func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int,
 }
 
 func emitPlainAttentionIRWithDropout(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
-	return emitPlainAttentionIRWithOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, false, 0, 0)
+	return emitPlainAttentionIRWithOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, false, 0, 0, false)
 }
 
-func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int) (int, error) {
+func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa bool) (int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -67,6 +67,7 @@ func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, 
 	masked := scores + "_masked"
 	attn := prefix + "_attn"
 	ctx := prefix + "_ctx"
+	ctxXSA := prefix + "_ctx_xsa"
 	ctxT := prefix + "_ctx_t"
 	flat := prefix + "_flat"
 	proj := prefix + "_proj"
@@ -140,6 +141,10 @@ func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, 
 
 		// Attention output: attn @ V, then transpose back
 		prog.MatMul(attn, vh, ctx)
+		if xsa {
+			prog.XSAProject(ctx, vh, ctxXSA)
+			ctx = ctxXSA
+		}
 		prog.Transpose(ctx, []int{0, 2, 1, 3}, ctxT)
 		prog.Reshape(ctxT, []int{B * T, D}, flat)
 

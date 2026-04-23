@@ -281,6 +281,24 @@ func TestLeakyReLU(t *testing.T) {
 	}
 }
 
+func TestXSAProject(t *testing.T) {
+	p := NewProgram(0)
+	p.XSAProject("y", "v", "out")
+	if len(p.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(p.Ops))
+	}
+	op := p.Ops[0]
+	if op.Code != OpXSAProject {
+		t.Fatalf("expected OpXSAProject (%d), got %d", OpXSAProject, op.Code)
+	}
+	if len(op.Inputs) != 2 || op.Inputs[0] != "y" || op.Inputs[1] != "v" {
+		t.Fatalf("bad inputs: %v", op.Inputs)
+	}
+	if len(op.Outputs) != 1 || op.Outputs[0] != "out" {
+		t.Fatalf("bad outputs: %v", op.Outputs)
+	}
+}
+
 func TestDiv(t *testing.T) {
 	p := NewProgram(0)
 	p.Div("a", "b", "c")
