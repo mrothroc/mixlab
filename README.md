@@ -62,8 +62,8 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
   residual mixing, tied embeddings, hashed bigram embeddings, configurable MLP width,
   QK-Gain, partial RoPE, XSA (V-orthogonal projection).
 - Trainer features: configurable optimizer (Muon or AdamW for matrix weights),
-  configurable weight init (Xavier uniform or normal), SWA/EMA averaging,
-  validation-loss early stopping, safetensors import/export.
+  configurable weight init (Xavier uniform or normal), phase-based LR schedules,
+  SWA/EMA averaging, validation-loss early stopping, safetensors import/export.
 - Compute accounting: analytical FLOPs estimation, tok/s throughput, optional MFU
   logging via `training.hardware_tflops`.
 - Quantization: int8 and int6 with per-row scaling, SDClip clipping (`-quant-method sdclip`).
@@ -260,7 +260,7 @@ These built-in block types are available in JSON configs:
 
 | Type | Description |
 |------|-------------|
-| `plain` | Causal self-attention + FFN. Requires `heads`. Optional `kv_heads` (GQA), `qk_gain` (learnable QK scaling), `rope_dims` (partial RoPE), `xsa` (V-orthogonal projection). |
+| `plain` | Causal self-attention + FFN. Requires `heads`. Optional `kv_heads` (GQA), `qk_gain` (learnable QK scaling), `rope_dims` (partial RoPE), `xsa` (V-orthogonal projection), `kv_source` (share K/V from earlier block). |
 | `swiglu` | SwiGLU feed-forward block with residual connection. |
 | `mamba` | Mamba selective state-space block. Optional `inner_dim`. |
 | `mamba3` | Mamba-3 style gated scan block with learned delta-t gating. Optional `inner_dim`. |
