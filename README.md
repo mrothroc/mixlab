@@ -361,6 +361,27 @@ Higher values batch more kernels into each CUDA graph, reducing dispatch
 overhead at the cost of more GPU memory. The auto-tuned default (3x IR ops)
 captures most of the benefit.
 
+### Step timing breakdown
+
+Add `-timing` to see where each training step spends time:
+
+```bash
+./mixlab -mode arch -config model.json -train 'data/*.bin' -timing
+```
+
+Prints at each progress interval:
+```
+[model] [timing] data=1.2ms gpu=142.5ms val=11.3ms log=0.2ms
+```
+
+- `data` — time waiting for the next batch (should be ~0 if prefetch keeps up)
+- `gpu` — forward + backward + optimizer (the useful work)
+- `val` — validation loss computation (0 on non-validation steps)
+- `log` — progress formatting
+
+If `data` is consistently high, the data loader can't keep up with the GPU.
+If `gpu` dominates and `data` is near zero, the pipeline is healthy.
+
 ### Profiling
 
 mixlab is written in Go, which has built-in profiling with zero overhead
