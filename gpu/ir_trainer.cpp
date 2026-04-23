@@ -120,9 +120,27 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program) {
   return output_names;
 }
 
+float finalize_pending_step(
+    IRTrainer& trainer,
+    std::unordered_map<std::string, mx::array>* outputs) {
+  if (!trainer.has_pending_step_) {
+    throw std::runtime_error("no pending step to collect");
+  }
+  float loss = trainer.pending_loss_.item<float>();
+  if (outputs != nullptr) {
+    *outputs = std::move(trainer.pending_outputs_);
+  }
+  trainer.pending_outputs_.clear();
+  trainer.has_pending_step_ = false;
+  return loss;
+}
+
 } // namespace
 
+IRTrainer::IRTrainer() : pending_loss_(mx::array(0.0f, mx::float32)) {}
+
 float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
+  flush();
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
   }
@@ -216,8 +234,21 @@ void IRTrainer::apply_optimizer_updates(const std::vector<mx::array>& grads) {
 }
 
 float IRTrainer::step_named(const TensorMap& inputs) {
+  flush();
+  submit_step(inputs);
+  return collect_loss();
+}
+
+void IRTrainer::submit_step(const TensorMap& inputs) {
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
+  }
+  if (has_ready_step_) {
+    throw std::runtime_error("previous step loss must be collected before submitting another step");
+  }
+  if (has_pending_step_) {
+    ready_loss_ = finalize_pending_step(*this, &ready_outputs_);
+    has_ready_step_ = true;
   }
   step_count++;
 
@@ -238,16 +269,45 @@ float IRTrainer::step_named(const TensorMap& inputs) {
   clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
 
-  last_outputs = std::move(outputs);
   std::vector<mx::array> eval_arrays;
-  eval_arrays.reserve(1 + last_outputs.size() + weights.size() + adam_m.size() * 2 + muon_momentum.size());
+  eval_arrays.reserve(1 + outputs.size() + weights.size() + adam_m.size() * 2 + muon_momentum.size());
   eval_arrays.push_back(loss);
-  collect_state_for_eval(*this, eval_arrays, true);
+  for (const auto& [_, output] : outputs) {
+    eval_arrays.push_back(output);
+  }
+  collect_state_for_eval(*this, eval_arrays, false);
   mx::eval(eval_arrays);
-  return loss.item<float>();
+  pending_loss_ = loss;
+  pending_outputs_ = std::move(outputs);
+  has_pending_step_ = true;
+}
+
+float IRTrainer::collect_loss() {
+  if (has_ready_step_) {
+    last_outputs = std::move(ready_outputs_);
+    ready_outputs_.clear();
+    has_ready_step_ = false;
+    return ready_loss_;
+  }
+  last_outputs.clear();
+  return finalize_pending_step(*this, &last_outputs);
+}
+
+void IRTrainer::flush() {
+  if (has_pending_step_) {
+    last_outputs = std::move(pending_outputs_);
+    pending_outputs_.clear();
+    pending_loss_.item<float>();
+    has_pending_step_ = false;
+  } else if (has_ready_step_) {
+    last_outputs = std::move(ready_outputs_);
+    ready_outputs_.clear();
+  }
+  has_ready_step_ = false;
 }
 
 float IRTrainer::evaluate(const mx::array& tokens, const mx::array& targets) {
+  flush();
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
   }
@@ -257,6 +317,7 @@ float IRTrainer::evaluate(const mx::array& tokens, const mx::array& targets) {
 }
 
 float IRTrainer::evaluate_named(const TensorMap& inputs) {
+  flush();
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
   }

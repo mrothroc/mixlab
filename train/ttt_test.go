@@ -14,6 +14,7 @@ type fakeTTTTrainer struct {
 	trainCalls int
 	lrs        []float32
 	events     []string
+	pending    *float32
 }
 
 func (t *fakeTTTTrainer) TrainStepGPU(_ []int, _ []int, _, _ int, lr float32) (float32, error) {
@@ -22,6 +23,29 @@ func (t *fakeTTTTrainer) TrainStepGPU(_ []int, _ []int, _, _ int, lr float32) (f
 	t.events = append(t.events, "train")
 	t.loss -= t.delta
 	return t.loss, nil
+}
+
+func (t *fakeTTTTrainer) SubmitStepGPU(_ []int, _ []int, _, _ int, lr float32) error {
+	loss, err := t.TrainStepGPU(nil, nil, 0, 0, lr)
+	if err != nil {
+		return err
+	}
+	t.pending = &loss
+	return nil
+}
+
+func (t *fakeTTTTrainer) CollectLossGPU() (float32, error) {
+	if t.pending == nil {
+		return 0, nil
+	}
+	loss := *t.pending
+	t.pending = nil
+	return loss, nil
+}
+
+func (t *fakeTTTTrainer) FlushGPU() error {
+	t.pending = nil
+	return nil
 }
 
 func (t *fakeTTTTrainer) EvaluateGPU(_ []int, _ []int, _, _ int) (float32, error) {

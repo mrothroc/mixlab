@@ -322,6 +322,33 @@ func mlxTrainerStep(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return loss, nil
 }
 
+func mlxTrainerSubmitStep(t TrainerHandle, inputs []TensorInput) error {
+	cInputs, cleanup, err := marshalTensorInputs(inputs)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	C.mlx_ir_trainer_submit_step(
+		C.int64_t(t),
+		(*C.mlx_tensor_input)(unsafe.Pointer(&cInputs[0])),
+		C.int(len(cInputs)),
+	)
+	return nil
+}
+
+func mlxTrainerCollectLoss(t TrainerHandle) (float32, error) {
+	loss := float32(C.mlx_ir_trainer_collect_loss(C.int64_t(t)))
+	if math.IsNaN(float64(loss)) {
+		return 0, fmt.Errorf("mlx_ir_trainer_collect_loss failed")
+	}
+	return loss, nil
+}
+
+func mlxTrainerFlush(t TrainerHandle) error {
+	C.mlx_ir_trainer_flush(C.int64_t(t))
+	return nil
+}
+
 func mlxTrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	cInputs, cleanup, err := marshalTensorInputs(inputs)
 	if err != nil {

@@ -141,13 +141,17 @@ func (t *mlxGPUTrainer) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([]g
 	return inputs, nil
 }
 
-// TrainStepGPU runs one training step and returns the loss.
-func (t *mlxGPUTrainer) TrainStepGPU(xTok, yTok []int, batchSize, seqLen int, lr float32) (float32, error) {
+func (t *mlxGPUTrainer) setLRScale(lr float32) {
 	lrScale := float32(1.0)
 	if t.baseLR > 0 {
 		lrScale = lr / t.baseLR
 	}
 	gpu.TrainerSetLRScale(t.handle, lrScale)
+}
+
+// TrainStepGPU runs one training step and returns the loss.
+func (t *mlxGPUTrainer) TrainStepGPU(xTok, yTok []int, batchSize, seqLen int, lr float32) (float32, error) {
+	t.setLRScale(lr)
 	inputs, err := t.makeInputs(xTok, yTok, batchSize, seqLen)
 	if err != nil {
 		return 0, err
@@ -155,8 +159,31 @@ func (t *mlxGPUTrainer) TrainStepGPU(xTok, yTok []int, batchSize, seqLen int, lr
 	return gpu.TrainerStep(t.handle, inputs)
 }
 
+// SubmitStepGPU submits one training step without blocking on loss readback.
+func (t *mlxGPUTrainer) SubmitStepGPU(xTok, yTok []int, batchSize, seqLen int, lr float32) error {
+	t.setLRScale(lr)
+	inputs, err := t.makeInputs(xTok, yTok, batchSize, seqLen)
+	if err != nil {
+		return err
+	}
+	return gpu.TrainerSubmitStep(t.handle, inputs)
+}
+
+// CollectLossGPU blocks until the oldest uncollected submitted step completes.
+func (t *mlxGPUTrainer) CollectLossGPU() (float32, error) {
+	return gpu.TrainerCollectLoss(t.handle)
+}
+
+// FlushGPU waits for any submitted work and discards uncollected losses.
+func (t *mlxGPUTrainer) FlushGPU() error {
+	return gpu.TrainerFlush(t.handle)
+}
+
 // EvaluateGPU runs a forward pass without gradients and returns the loss.
 func (t *mlxGPUTrainer) EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (float32, error) {
+	if err := t.FlushGPU(); err != nil {
+		return 0, err
+	}
 	inputs, err := t.makeInputs(xTok, yTok, batchSize, seqLen)
 	if err != nil {
 		return 0, err
@@ -167,6 +194,7 @@ func (t *mlxGPUTrainer) EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (fl
 // CloseTrainer releases GPU resources.
 func (t *mlxGPUTrainer) CloseTrainer() {
 	if t.handle != 0 {
+		_ = gpu.TrainerFlush(t.handle)
 		gpu.TrainerDestroy(t.handle)
 		t.handle = 0
 	}
@@ -182,6 +210,9 @@ func (t *mlxGPUTrainer) CloseTrainer() {
 
 // ReadWeights reads all weight tensors back from the GPU trainer.
 func (t *mlxGPUTrainer) ReadWeights() ([][]float32, error) {
+	if err := t.FlushGPU(); err != nil {
+		return nil, err
+	}
 	nWeights, err := gpu.TrainerNumWeights(t.handle)
 	if err != nil {
 		return nil, err
@@ -206,6 +237,9 @@ func (t *mlxGPUTrainer) ReadWeights() ([][]float32, error) {
 
 // ReadOutput reads a named output tensor cached by the last trainer step or eval.
 func (t *mlxGPUTrainer) ReadOutput(name string, shape []int) ([]float32, error) {
+	if err := t.FlushGPU(); err != nil {
+		return nil, err
+	}
 	return gpu.TrainerReadOutput(t.handle, name, shape)
 }
 

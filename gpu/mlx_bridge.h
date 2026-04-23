@@ -139,6 +139,12 @@ float mlx_ir_trainer_step_named(
     int64_t trainer,
     const mlx_tensor_input* inputs,
     int n_inputs);
+void mlx_ir_trainer_submit_step(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs);
+float mlx_ir_trainer_collect_loss(int64_t trainer);
+void mlx_ir_trainer_flush(int64_t trainer);
 float mlx_ir_trainer_evaluate_named(
     int64_t trainer,
     const mlx_tensor_input* inputs,

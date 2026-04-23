@@ -124,6 +124,9 @@ func (r TrainResult) formatSummary() string {
 // This is implemented by the MLX backend when available.
 type GPUTrainer interface {
 	TrainStepGPU(xTok, yTok []int, batchSize, seqLen int, lr float32) (float32, error)
+	SubmitStepGPU(xTok, yTok []int, batchSize, seqLen int, lr float32) error
+	CollectLossGPU() (float32, error)
+	FlushGPU() error
 	EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (float32, error)
 	CloseTrainer()
 }
@@ -280,93 +283,126 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		loadWG.Wait()
 	}()
 
-	for step := 0; step < steps; step++ {
-		stepStart := time.Now()
-		batchWaitStart := time.Now()
+	if steps > 0 {
+		initialWaitStart := time.Now()
 		batch, ok := <-batchCh
-		dataDuration := time.Since(batchWaitStart)
+		initialDataDuration := time.Since(initialWaitStart)
 		if !ok {
-			return TrainResult{}, fmt.Errorf("load batch at step %d: prefetch pipeline closed unexpectedly", step)
+			return TrainResult{}, fmt.Errorf("load initial batch: prefetch pipeline closed unexpectedly")
 		}
 		if batch.err != nil {
-			return TrainResult{}, fmt.Errorf("load batch at step %d: %w", step, batch.err)
+			return TrainResult{}, fmt.Errorf("load initial batch: %w", batch.err)
 		}
-
-		gpuStart := time.Now()
-		lossV, err := trainer.TrainStepGPU(batch.x, batch.y, batchSize, seqLen, sched.At(step))
-		gpuDuration := time.Since(gpuStart)
-		if err != nil {
-			return TrainResult{}, fmt.Errorf("train step %d: %w", step, err)
+		initialSubmitStart := time.Now()
+		if err := trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, sched.At(0)); err != nil {
+			return TrainResult{}, fmt.Errorf("submit step 0: %w", err)
 		}
-		v := float64(lossV)
+		currentSubmitDuration := time.Since(initialSubmitStart)
 
-		if step == 0 {
-			firstLoss = v
-		}
-		lastLoss = v
-
-		stepDuration := time.Since(stepStart)
-		if step == 0 {
-			stepDurationEMA = stepDuration
-		} else {
-			stepDurationEMA = time.Duration(stepDurationEMADecay*float64(stepDurationEMA) + (1-stepDurationEMADecay)*float64(stepDuration))
-		}
-
-		if shouldUpdateSWA(step, swaStart, swaInterval) {
-			weights, err := readTrainerWeights(trainer)
-			if err != nil {
-				return TrainResult{}, fmt.Errorf("swa read at step %d: %w", step, err)
+		for step := 0; step < steps; step++ {
+			stepStart := time.Now()
+			dataDuration := time.Duration(0)
+			if step == 0 {
+				dataDuration = initialDataDuration
 			}
-			if !hasSWAWeights(swaEMA) {
-				fmt.Printf("  [%s] SWA: averaging started at step %d\n", name, step)
-			}
-			updateEMAWeights(swaEMA, weights, swaDecay)
-		}
 
-		// Log every 100 steps or at the last step
-		if step%100 == 0 || step == steps-1 {
-			logStart := time.Now()
-			valDuration := time.Duration(0)
-			valStr := ""
-			if valSet != nil && len(valSet.Batches) > 0 {
-				valStart := time.Now()
-				valAvg, err := meanValidationLoss(valSet, trainer, batchSize, seqLen)
-				valDuration = time.Since(valStart)
-				if err == nil {
-					lastValLoss = valAvg
-					hasValLoss = true
-					valStr = fmt.Sprintf(" val=%.4f", valAvg)
+			var nextBatch trainBatch
+			if step < steps-1 {
+				batchWaitStart := time.Now()
+				nextBatch, ok = <-batchCh
+				dataDuration = time.Since(batchWaitStart)
+				if !ok {
+					return TrainResult{}, fmt.Errorf("load batch at step %d: prefetch pipeline closed unexpectedly", step+1)
+				}
+				if nextBatch.err != nil {
+					return TrainResult{}, fmt.Errorf("load batch at step %d: %w", step+1, nextBatch.err)
 				}
 			}
-			tokensPerSec := float64(batchTokens) / stepDuration.Seconds()
-			mfuStr := ""
-			if cfg.Training.HardwareTFLOPs > 0 && flops.TrainingFLOPs > 0 {
-				mfu := (float64(flops.TrainingFLOPs) / stepDuration.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
-				mfuStr = fmt.Sprintf(" MFU=%.1f%%", mfu*100)
-			}
-			fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f tok/s=%.0f%s %s\n",
-				name, step, steps, v, valStr, sched.At(step), tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), stepDurationEMA, step, steps))
-			logDuration := time.Since(logStart)
-			if opts.Timing {
-				fmt.Printf("  [%s] [timing] data=%.1fms gpu=%.1fms val=%.1fms log=%.1fms\n",
-					name,
-					float64(dataDuration)/float64(time.Millisecond),
-					float64(gpuDuration)/float64(time.Millisecond),
-					float64(valDuration)/float64(time.Millisecond),
-					float64(logDuration)/float64(time.Millisecond))
-			}
-			if hasValLoss && targetValLoss > 0 && lastValLoss <= targetValLoss {
-				fmt.Printf("  [%s] target val loss %.4f reached at step %d (val=%.4f), stopping early\n",
-					name, targetValLoss, step, lastValLoss)
-				break
-			}
-		}
 
-		if shouldWriteCheckpoint(step, opts.CheckpointEvery) {
-			if err := writeCheckpoint(cfg, trainer, shapes, opts.CheckpointDir, step+1); err != nil {
-				return TrainResult{}, fmt.Errorf("checkpoint at step %d: %w", step+1, err)
+			collectStart := time.Now()
+			lossV, err := trainer.CollectLossGPU()
+			gpuDuration := currentSubmitDuration + time.Since(collectStart)
+			if err != nil {
+				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step, err)
 			}
-			fmt.Printf("  [%s] checkpoint saved: %s\n", name, checkpointPath(opts.CheckpointDir, step+1))
+			if step < steps-1 {
+				submitStart := time.Now()
+				if err := trainer.SubmitStepGPU(nextBatch.x, nextBatch.y, batchSize, seqLen, sched.At(step+1)); err != nil {
+					return TrainResult{}, fmt.Errorf("submit step %d: %w", step+1, err)
+				}
+				currentSubmitDuration = time.Since(submitStart)
+				gpuDuration += currentSubmitDuration
+			}
+			v := float64(lossV)
+
+			if step == 0 {
+				firstLoss = v
+			}
+			lastLoss = v
+
+			stepDuration := time.Since(stepStart)
+			if step == 0 {
+				stepDurationEMA = stepDuration
+			} else {
+				stepDurationEMA = time.Duration(stepDurationEMADecay*float64(stepDurationEMA) + (1-stepDurationEMADecay)*float64(stepDuration))
+			}
+
+			if shouldUpdateSWA(step, swaStart, swaInterval) {
+				weights, err := readTrainerWeights(trainer)
+				if err != nil {
+					return TrainResult{}, fmt.Errorf("swa read at step %d: %w", step, err)
+				}
+				if !hasSWAWeights(swaEMA) {
+					fmt.Printf("  [%s] SWA: averaging started at step %d\n", name, step)
+				}
+				updateEMAWeights(swaEMA, weights, swaDecay)
+			}
+
+			// Log every 100 steps or at the last step
+			if step%100 == 0 || step == steps-1 {
+				logStart := time.Now()
+				valDuration := time.Duration(0)
+				valStr := ""
+				if valSet != nil && len(valSet.Batches) > 0 {
+					valStart := time.Now()
+					valAvg, err := meanValidationLoss(valSet, trainer, batchSize, seqLen)
+					valDuration = time.Since(valStart)
+					if err == nil {
+						lastValLoss = valAvg
+						hasValLoss = true
+						valStr = fmt.Sprintf(" val=%.4f", valAvg)
+					}
+				}
+				tokensPerSec := float64(batchTokens) / stepDuration.Seconds()
+				mfuStr := ""
+				if cfg.Training.HardwareTFLOPs > 0 && flops.TrainingFLOPs > 0 {
+					mfu := (float64(flops.TrainingFLOPs) / stepDuration.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
+					mfuStr = fmt.Sprintf(" MFU=%.1f%%", mfu*100)
+				}
+				fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f tok/s=%.0f%s %s\n",
+					name, step, steps, v, valStr, sched.At(step), tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), stepDurationEMA, step, steps))
+				logDuration := time.Since(logStart)
+				if opts.Timing {
+					fmt.Printf("  [%s] [timing] data=%.1fms gpu=%.1fms val=%.1fms log=%.1fms\n",
+						name,
+						float64(dataDuration)/float64(time.Millisecond),
+						float64(gpuDuration)/float64(time.Millisecond),
+						float64(valDuration)/float64(time.Millisecond),
+						float64(logDuration)/float64(time.Millisecond))
+				}
+				if hasValLoss && targetValLoss > 0 && lastValLoss <= targetValLoss {
+					fmt.Printf("  [%s] target val loss %.4f reached at step %d (val=%.4f), stopping early\n",
+						name, targetValLoss, step, lastValLoss)
+					break
+				}
+			}
+
+			if shouldWriteCheckpoint(step, opts.CheckpointEvery) {
+				if err := writeCheckpoint(cfg, trainer, shapes, opts.CheckpointDir, step+1); err != nil {
+					return TrainResult{}, fmt.Errorf("checkpoint at step %d: %w", step+1, err)
+				}
+				fmt.Printf("  [%s] checkpoint saved: %s\n", name, checkpointPath(opts.CheckpointDir, step+1))
+			}
 		}
 	}
 

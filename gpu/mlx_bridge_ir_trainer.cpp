@@ -194,6 +194,63 @@ float mlx_ir_trainer_step_named(int64_t trainer, const mlx_tensor_input* inputs,
   }
 }
 
+void mlx_ir_trainer_submit_step(int64_t trainer, const mlx_tensor_input* inputs, int n_inputs) {
+  if (!inputs || n_inputs <= 0) {
+    return;
+  }
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return;
+    }
+    auto* t = get_ir_trainer(trainer);
+    if (!t) {
+      return;
+    }
+    auto input_map = to_tensor_map(inputs, n_inputs);
+    t->submit_step(input_map);
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_submit_step", e);
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_submit_step unknown exception" << std::endl;
+  }
+}
+
+float mlx_ir_trainer_collect_loss(int64_t trainer) {
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return std::nanf("");
+    }
+    auto* t = get_ir_trainer(trainer);
+    if (!t) {
+      return std::nanf("");
+    }
+    return t->collect_loss();
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_collect_loss", e);
+    return std::nanf("");
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_collect_loss unknown exception" << std::endl;
+    return std::nanf("");
+  }
+}
+
+void mlx_ir_trainer_flush(int64_t trainer) {
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return;
+    }
+    auto* t = get_ir_trainer(trainer);
+    if (!t) {
+      return;
+    }
+    t->flush();
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_flush", e);
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_flush unknown exception" << std::endl;
+  }
+}
+
 float mlx_ir_trainer_evaluate_named(int64_t trainer, const mlx_tensor_input* inputs, int n_inputs) {
   try {
     if (!g_initialized && mlx_init() != 0) {
@@ -222,6 +279,7 @@ int mlx_ir_trainer_read_output(int64_t trainer, const char* output_name, float* 
     if (!t) {
       return -1;
     }
+    t->flush();
     auto output = t->read_output(output_name);
     if (output.dtype() != mx::float32 || static_cast<int>(output.size()) != out_size) {
       return -1;
@@ -303,6 +361,7 @@ int mlx_ir_trainer_read_weight(int64_t trainer, int weight_idx, float* out, int 
     if (!t || weight_idx < 0 || static_cast<size_t>(weight_idx) >= t->weights.size()) {
       return -1;
     }
+    t->flush();
     auto w = mx::astype(t->weights[static_cast<size_t>(weight_idx)], mx::float32);
     const int n = static_cast<int>(w.size());
     if (size != n) {
@@ -340,6 +399,9 @@ void mlx_ir_trainer_destroy(int64_t trainer) {
   const size_t idx = static_cast<size_t>(trainer - 1);
   if (idx >= g_ir_trainer_pool.size()) {
     return;
+  }
+  if (g_ir_trainer_pool[idx]) {
+    g_ir_trainer_pool[idx]->flush();
   }
   g_ir_trainer_pool[idx].reset();
 }

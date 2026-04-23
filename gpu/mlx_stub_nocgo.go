@@ -45,6 +45,18 @@ func TrainerStep(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return 0, errNotBuilt
 }
 
+func TrainerSubmitStep(t TrainerHandle, inputs []TensorInput) error {
+	return errNotBuilt
+}
+
+func TrainerCollectLoss(t TrainerHandle) (float32, error) {
+	return 0, errNotBuilt
+}
+
+func TrainerFlush(t TrainerHandle) error {
+	return errNotBuilt
+}
+
 func TrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return 0, errNotBuilt
 }

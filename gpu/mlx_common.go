@@ -138,6 +138,27 @@ func TrainerStep(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return mlxTrainerStep(t, inputs)
 }
 
+func TrainerSubmitStep(t TrainerHandle, inputs []TensorInput) error {
+	if t == 0 {
+		return fmt.Errorf("invalid trainer handle; create the trainer successfully before submitting a step")
+	}
+	return mlxTrainerSubmitStep(t, inputs)
+}
+
+func TrainerCollectLoss(t TrainerHandle) (float32, error) {
+	if t == 0 {
+		return 0, fmt.Errorf("invalid trainer handle; create the trainer successfully before collecting a loss")
+	}
+	return mlxTrainerCollectLoss(t)
+}
+
+func TrainerFlush(t TrainerHandle) error {
+	if t == 0 {
+		return fmt.Errorf("invalid trainer handle; create the trainer successfully before flushing pending work")
+	}
+	return mlxTrainerFlush(t)
+}
+
 func TrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	if t == 0 {
 		return 0, fmt.Errorf("invalid trainer handle; create the trainer successfully before running evaluation")

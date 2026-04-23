@@ -35,6 +35,8 @@ struct WeightOptimizerSpec {
 };
 
 struct IRTrainer {
+  IRTrainer();
+
   IRProgram program;
 
   std::vector<mlx::core::array> weights;
@@ -47,6 +49,12 @@ struct IRTrainer {
   std::vector<uint8_t> has_muon_state;
   int step_count = 0;
   std::unordered_map<std::string, mlx::core::array> last_outputs;
+  bool has_pending_step_ = false;
+  mlx::core::array pending_loss_;
+  std::unordered_map<std::string, mlx::core::array> pending_outputs_;
+  bool has_ready_step_ = false;
+  float ready_loss_ = 0.0f;
+  std::unordered_map<std::string, mlx::core::array> ready_outputs_;
 
   float max_grad_norm = 0.0f;
   float lr_scale = 1.0f;
@@ -54,6 +62,9 @@ struct IRTrainer {
 
   float step(const mlx::core::array& tokens, const mlx::core::array& targets);
   float step_named(const TensorMap& inputs);
+  void submit_step(const TensorMap& inputs);
+  float collect_loss();
+  void flush();
   float evaluate(const mlx::core::array& tokens, const mlx::core::array& targets);
   float evaluate_named(const TensorMap& inputs);
   mlx::core::array read_output(const std::string& output_name) const;
