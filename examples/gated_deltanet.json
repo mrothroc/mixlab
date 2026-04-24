@@ -1,0 +1,87 @@
+{
+  "name": "gated_deltanet",
+
+  // Simplified GatedDeltaNet-style demo centered on a time-varying gated scan.
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  "blocks": [
+    {
+      "type": "custom",
+      "name": "gated_deltanet",
+      "weights": [
+        {"name": "norm_scale",   "shape": ["D"]},
+        {"name": "w_gate",       "shape": ["D", "D"]},
+        {"name": "w_val",        "shape": ["D", "D"]},
+        {"name": "w_out",        "shape": ["D", "D"]},
+        {"name": "w_k",          "shape": ["D", "D"]},
+        {"name": "w_beta",       "shape": ["D", "D"]},
+        {"name": "w_state_gate", "shape": ["D", "D"]}
+      ],
+      "ops": [
+        {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+
+        // Main simplified DeltaNet path: gated vector recurrence over projected values.
+        {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+        {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+        {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+        {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+
+        // Auxiliary KV-style state path to exercise outer + matrix_scan in one runnable block.
+        {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+        {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+        {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+        {"op": "mul",     "inputs": ["value", "beta"],          "output": "value_beta"},
+        {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+        {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+        {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+        {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "D", "Db": "D"}},
+
+        {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+        {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+      ]
+    },
+    {"type": "swiglu"},
+    {
+      "type": "custom",
+      "name": "gated_deltanet",
+      "weights": [
+        {"name": "norm_scale",   "shape": ["D"]},
+        {"name": "w_gate",       "shape": ["D", "D"]},
+        {"name": "w_val",        "shape": ["D", "D"]},
+        {"name": "w_out",        "shape": ["D", "D"]},
+        {"name": "w_k",          "shape": ["D", "D"]},
+        {"name": "w_beta",       "shape": ["D", "D"]},
+        {"name": "w_state_gate", "shape": ["D", "D"]}
+      ],
+      "ops": [
+        {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+        {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+        {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+        {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+        {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+        {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+        {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+        {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+        {"op": "mul",     "inputs": ["value", "beta"],          "output": "value_beta"},
+        {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+        {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+        {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+        {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "D", "Db": "D"}},
+        {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+        {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+      ]
+    },
+    {"type": "swiglu"}
+  ],
+
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 512
+  }
+}
