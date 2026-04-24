@@ -573,14 +573,56 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         auto decay = mx::reshape(decay_raw, {static_cast<mx::ShapeElem>(decay_raw.size())});
         auto gate = mx::sigmoid(decay);
         auto keep = 1.0f - gate;
-        auto h = mx::zeros({B, D}, mx::float32);
-        auto out = mx::zeros({B, T, D}, mx::float32);
-        for (int t = 0; t < T; ++t) {
-          auto xt = mx::reshape(mx::slice(x, {0, t, 0}, {B, t + 1, D}), {B, D});
-          h = gate * h + keep * xt;
-          out = mx::slice_update(out, mx::reshape(h, {B, 1, D}), mx::Shape{0, t, 0}, mx::Shape{B, t + 1, D});
+
+        if (T <= 32) {
+          // Sequential scan for small T — FFT overhead not worthwhile.
+          auto h = mx::zeros({B, D}, mx::float32);
+          auto out = mx::zeros({B, T, D}, mx::float32);
+          for (int t = 0; t < T; ++t) {
+            auto xt = mx::reshape(mx::slice(x, {0, t, 0}, {B, t + 1, D}), {B, D});
+            h = gate * h + keep * xt;
+            out = mx::slice_update(out, mx::reshape(h, {B, 1, D}), mx::Shape{0, t, 0}, mx::Shape{B, t + 1, D});
+          }
+          set_out(op, 0, mx::reshape(out, {B * T, D}));
+        } else {
+          // FFT-based parallel scan. The gate is constant across T (shape [D]),
+          // so the recurrence h[t] = gate*h[t-1] + (1-gate)*x[t] is a causal
+          // convolution with exponential kernel k[τ] = (1-gate) * gate^τ.
+          // Computed in O(T log T) via a single FFT/IFFT pair instead of T
+          // sequential kernel launches.
+
+          // Clamp gate away from 0 to avoid log(0) = -inf → NaN in the
+          // kernel build (0 * -inf is undefined). 1e-7 is well below float32
+          // precision; sigmoid only saturates this hard for |decay| > 16.
+          auto gate_safe = mx::maximum(gate, mx::array(1e-7f));
+
+          // Build exponential decay kernel: k[t,d] = keep[d] * gate[d]^t
+          // via exp(t * log(gate)) for numerical stability at large t.
+          auto t_range = mx::astype(mx::arange(T), mx::float32);
+          auto log_gate = mx::log(gate_safe);
+          auto t_col = mx::reshape(t_range, {T, 1});
+          auto log_gate_row = mx::reshape(log_gate, {1, D});
+          auto exponents = t_col * log_gate_row;
+          auto kernel = mx::reshape(keep, {1, D}) * mx::exp(exponents);
+
+          // Pad to next power of 2 >= 2T for linear (non-circular) convolution.
+          // rfft handles zero-padding internally via the n parameter.
+          int fft_len = 1;
+          while (fft_len < 2 * T) fft_len <<= 1;
+
+          // Forward FFT along the time axis (rfft pads/truncates to fft_len).
+          auto X_freq = mx::fft::rfft(x, fft_len, 1);
+          auto K_freq = mx::fft::rfft(kernel, fft_len, 0);
+
+          // Broadcast-multiply in frequency domain (complex × complex).
+          auto K_broad = mx::reshape(K_freq, {1, K_freq.shape(0), D});
+          auto H_freq = X_freq * K_broad;
+
+          // Inverse FFT back to time domain, take first T steps.
+          auto h_full = mx::fft::irfft(H_freq, fft_len, 1);
+          auto out = mx::slice(h_full, {0, 0, 0}, {B, T, D});
+          set_out(op, 0, mx::reshape(out, {B * T, D}));
         }
-        set_out(op, 0, mx::reshape(out, {B * T, D}));
         break;
       }
       case OP_GATHER_POSITIONS: {
