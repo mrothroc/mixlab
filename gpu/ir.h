@@ -61,6 +61,8 @@ enum OpType {
   OP_LEAKY_RELU = 54,
   OP_XSA_PROJECT = 55,
   OP_CROSS_ENTROPY_PER_TOKEN = 56,
+  OP_MATRIX_SCAN = 57,
+  OP_SCAN_TV = 58,  // time-varying gated scan
 };
 
 struct IRop {

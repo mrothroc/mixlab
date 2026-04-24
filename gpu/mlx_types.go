@@ -43,6 +43,8 @@ const (
 	OpLeakyReLU            = 54
 	OpXSAProject           = 55
 	OpCrossEntropyPerToken = 56
+	OpMatrixScan           = 57
+	OpScanTV               = 58
 )
 
 const (

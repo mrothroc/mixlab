@@ -639,6 +639,48 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         }
         break;
       }
+      case OP_MATRIX_SCAN: {
+        if (op.n_int_params < 4) {
+          throw std::runtime_error("OP_MATRIX_SCAN requires B,T,Da,Db");
+        }
+        int B = op.int_params[0];
+        int T = op.int_params[1];
+        int Da = op.int_params[2];
+        int Db = op.int_params[3];
+        auto update = mx::reshape(get(op, 0), {B, T, Da, Db});
+        auto gate_full = mx::reshape(get(op, 1), {B, T, Da});
+        auto H = mx::zeros({B, Da, Db}, mx::float32);
+        auto out = mx::zeros({B, T, Da, Db}, mx::float32);
+        for (int t = 0; t < T; ++t) {
+          auto ut = mx::reshape(mx::slice(update, {0, t, 0, 0}, {B, t + 1, Da, Db}), {B, Da, Db});
+          auto gt = mx::reshape(mx::slice(gate_full, {0, t, 0}, {B, t + 1, Da}), {B, Da, 1});
+          H = gt * H + ut;
+          out = mx::slice_update(out, mx::reshape(H, {B, 1, Da, Db}),
+                                 mx::Shape{0, t, 0, 0}, mx::Shape{B, t + 1, Da, Db});
+        }
+        set_out(op, 0, mx::reshape(out, {B * T, Da, Db}));
+        break;
+      }
+      case OP_SCAN_TV: {
+        if (op.n_int_params < 3) {
+          throw std::runtime_error("OP_SCAN_TV requires B,T,D");
+        }
+        int B = op.int_params[0];
+        int T = op.int_params[1];
+        int D = op.int_params[2];
+        auto x = mx::reshape(get(op, 0), {B, T, D});
+        auto gate_full = mx::reshape(get(op, 1), {B, T, D});
+        auto h = mx::zeros({B, D}, mx::float32);
+        auto out = mx::zeros({B, T, D}, mx::float32);
+        for (int t = 0; t < T; ++t) {
+          auto xt = mx::reshape(mx::slice(x, {0, t, 0}, {B, t + 1, D}), {B, D});
+          auto gt = mx::reshape(mx::slice(gate_full, {0, t, 0}, {B, t + 1, D}), {B, D});
+          h = gt * h + (1.0f - gt) * xt;
+          out = mx::slice_update(out, mx::reshape(h, {B, 1, D}), mx::Shape{0, t, 0}, mx::Shape{B, t + 1, D});
+        }
+        set_out(op, 0, mx::reshape(out, {B * T, D}));
+        break;
+      }
       case OP_GATHER_POSITIONS: {
         if (op.n_int_params < 3) {
           throw std::runtime_error("OP_GATHER_POSITIONS requires B,K,D");

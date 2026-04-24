@@ -170,6 +170,48 @@ func TestScanOp(t *testing.T) {
 	}
 }
 
+func TestMatrixScanMethod(t *testing.T) {
+	p := NewProgram(0)
+	p.MatrixScan("update", "gate", "out", 2, 64, 16, 32)
+	if len(p.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(p.Ops))
+	}
+	op := p.Ops[0]
+	if op.Code != OpMatrixScan {
+		t.Fatalf("expected OpMatrixScan (%d), got %d", OpMatrixScan, op.Code)
+	}
+	if len(op.Inputs) != 2 || op.Inputs[0] != "update" || op.Inputs[1] != "gate" {
+		t.Fatalf("bad matrix scan inputs: %v", op.Inputs)
+	}
+	if len(op.Outputs) != 1 || op.Outputs[0] != "out" {
+		t.Fatalf("bad matrix scan outputs: %v", op.Outputs)
+	}
+	if len(op.IntParams) != 4 || op.IntParams[0] != 2 || op.IntParams[1] != 64 || op.IntParams[2] != 16 || op.IntParams[3] != 32 {
+		t.Fatalf("bad matrix scan int params: %v", op.IntParams)
+	}
+}
+
+func TestScanTVMethod(t *testing.T) {
+	p := NewProgram(0)
+	p.ScanTV("x", "gate", "out", 2, 64, 128)
+	if len(p.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(p.Ops))
+	}
+	op := p.Ops[0]
+	if op.Code != OpScanTV {
+		t.Fatalf("expected OpScanTV (%d), got %d", OpScanTV, op.Code)
+	}
+	if len(op.Inputs) != 2 || op.Inputs[0] != "x" || op.Inputs[1] != "gate" {
+		t.Fatalf("bad scan_tv inputs: %v", op.Inputs)
+	}
+	if len(op.Outputs) != 1 || op.Outputs[0] != "out" {
+		t.Fatalf("bad scan_tv outputs: %v", op.Outputs)
+	}
+	if len(op.IntParams) != 3 || op.IntParams[0] != 2 || op.IntParams[1] != 64 || op.IntParams[2] != 128 {
+		t.Fatalf("bad scan_tv int params: %v", op.IntParams)
+	}
+}
+
 func TestOuterOp(t *testing.T) {
 	p := NewProgram(0)
 	p.Outer("a", "b", "out")

@@ -1,7 +1,6 @@
 package arch
 
 import (
-	"encoding/json"
 	"testing"
 )
 
@@ -392,7 +391,7 @@ func TestEmitCustomBlockIR_MultiOutput(t *testing.T) {
 func TestOpNameToCode_Coverage(t *testing.T) {
 	required := []string{
 		"matmul", "add", "sub", "mul", "scalar_mul", "div",
-		"scan", "embed", "outer", "square", "exp",
+		"scan", "scan_tv", "embed", "outer", "square", "exp",
 		"sigmoid", "silu", "gelu", "relu", "tanh",
 		"softmax", "reshape", "transpose", "rmsnorm", "rope",
 		"slice", "concat",
@@ -404,62 +403,7 @@ func TestOpNameToCode_Coverage(t *testing.T) {
 	}
 }
 
-func TestCustomBlockOuter(t *testing.T) {
-	var spec BlockSpec
-	if err := json.Unmarshal([]byte(`{
-		"type": "custom",
-		"name": "outer_block",
-		"ops": [
-			{"op": "outer", "inputs": ["x", "x"], "output": "outer_out"}
-		]
-	}`), &spec); err != nil {
-		t.Fatalf("json.Unmarshal: %v", err)
-	}
-
-	prog := NewProgram(0)
-	if _, err := emitCustomBlockIR(prog, spec, "stream", 0, 128, 64, 2, 1024, 0); err != nil {
-		t.Fatalf("emitCustomBlockIR: %v", err)
-	}
-	if len(prog.Ops) != 1 {
-		t.Fatalf("expected 1 op, got %d", len(prog.Ops))
-	}
-	if prog.Ops[0].Code != OpOuter {
-		t.Fatalf("expected OpOuter (%d), got %d", OpOuter, prog.Ops[0].Code)
-	}
-}
-
-func TestCustomBlockScan(t *testing.T) {
-	var spec BlockSpec
-	if err := json.Unmarshal([]byte(`{
-		"type": "custom",
-		"name": "scan_block",
-		"ops": [
-			{
-				"op": "scan",
-				"inputs": ["x", "x"],
-				"output": "scan_out",
-				"params": {"B": "B", "T": "T", "D": "D"}
-			}
-		]
-	}`), &spec); err != nil {
-		t.Fatalf("json.Unmarshal: %v", err)
-	}
-
-	prog := NewProgram(0)
-	if _, err := emitCustomBlockIR(prog, spec, "stream", 0, 128, 64, 2, 1024, 0); err != nil {
-		t.Fatalf("emitCustomBlockIR: %v", err)
-	}
-	if len(prog.Ops) != 1 {
-		t.Fatalf("expected 1 op, got %d", len(prog.Ops))
-	}
-	op := prog.Ops[0]
-	if op.Code != OpScan {
-		t.Fatalf("expected OpScan (%d), got %d", OpScan, op.Code)
-	}
-	if len(op.IntParams) != 3 || op.IntParams[0] != 2 || op.IntParams[1] != 64 || op.IntParams[2] != 128 {
-		t.Fatalf("scan int params = %v, want [2 64 128]", op.IntParams)
-	}
-}
+// Opcode-specific custom block tests are in custom_opcode_test.go.
 
 // --- Custom block with reshape params ---
 

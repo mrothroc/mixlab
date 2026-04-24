@@ -9,30 +9,32 @@ import (
 
 // opNameToCode maps JSON op names to IR op codes for custom blocks.
 var opNameToCode = map[string]int{
-	"matmul":     OpMatMul,
-	"add":        OpAdd,
-	"sub":        OpSub,
-	"mul":        OpMul,
-	"scalar_mul": OpScalarMul,
-	"div":        OpDiv,
-	"scan":       OpScan,
-	"embed":      OpEmbed,
-	"outer":      OpOuter,
-	"square":     OpSquare,
-	"exp":        OpExp,
-	"sigmoid":    OpSigmoid,
-	"silu":       OpSiLU,
-	"gelu":       OpGELU,
-	"relu":       OpReLU,
-	"tanh":       OpTanh,
-	"softmax":    OpSoftmax,
-	"reshape":    OpReshape,
-	"transpose":  OpTranspose,
-	"slice":      OpSlice,
-	"concat":     OpConcat,
-	"rmsnorm":    OpRMSNorm,
-	"rms_norm":   OpRMSNorm,
-	"rope":       OpRoPE,
+	"matmul":      OpMatMul,
+	"add":         OpAdd,
+	"sub":         OpSub,
+	"mul":         OpMul,
+	"scalar_mul":  OpScalarMul,
+	"div":         OpDiv,
+	"scan":        OpScan,
+	"matrix_scan": OpMatrixScan,
+	"scan_tv":     OpScanTV,
+	"embed":       OpEmbed,
+	"outer":       OpOuter,
+	"square":      OpSquare,
+	"exp":         OpExp,
+	"sigmoid":     OpSigmoid,
+	"silu":        OpSiLU,
+	"gelu":        OpGELU,
+	"relu":        OpReLU,
+	"tanh":        OpTanh,
+	"softmax":     OpSoftmax,
+	"reshape":     OpReshape,
+	"transpose":   OpTranspose,
+	"slice":       OpSlice,
+	"concat":      OpConcat,
+	"rmsnorm":     OpRMSNorm,
+	"rms_norm":    OpRMSNorm,
+	"rope":        OpRoPE,
 }
 
 // resolveShapeSymbol resolves a slice of symbolic shape dimensions to concrete
@@ -228,6 +230,22 @@ func emitCustomBlockIR(
 			res, err := resolveShapeSymbol(ss, D, heads, T, B, V)
 			if err != nil {
 				return nil, nil, fmt.Errorf("d param: %w", err)
+			}
+			intParams = append(intParams, res[0])
+		}
+		if v, ok := p["Da"]; ok {
+			ss := []string{fmt.Sprint(v)}
+			res, err := resolveShapeSymbol(ss, D, heads, T, B, V)
+			if err != nil {
+				return nil, nil, fmt.Errorf("da param: %w", err)
+			}
+			intParams = append(intParams, res[0])
+		}
+		if v, ok := p["Db"]; ok {
+			ss := []string{fmt.Sprint(v)}
+			res, err := resolveShapeSymbol(ss, D, heads, T, B, V)
+			if err != nil {
+				return nil, nil, fmt.Errorf("db param: %w", err)
 			}
 			intParams = append(intParams, res[0])
 		}

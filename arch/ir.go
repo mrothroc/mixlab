@@ -42,6 +42,8 @@ const (
 	OpLeakyReLU            = 54 // OP_LEAKY_RELU
 	OpXSAProject           = 55 // OP_XSA_PROJECT
 	OpCrossEntropyPerToken = 56 // OP_CROSS_ENTROPY_PER_TOKEN
+	OpMatrixScan           = 57 // OP_MATRIX_SCAN
+	OpScanTV               = 58 // OP_SCAN_TV
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -223,6 +225,18 @@ func (p *Program) Concat(a, b string, axis int, output string) {
 // IntParams layout: [B, T, D].
 func (p *Program) Scan(x, decay, output string, B, T, D int) {
 	p.AddOp(OpScan, []string{x, decay}, []string{output}, nil, []int{B, T, D})
+}
+
+// MatrixScan emits a matrix-state gated recurrence (OpMatrixScan) over a sequence.
+// IntParams layout: [B, T, Da, Db].
+func (p *Program) MatrixScan(update, gate, out string, B, T, Da, Db int) {
+	p.AddOp(OpMatrixScan, []string{update, gate}, []string{out}, nil, []int{B, T, Da, Db})
+}
+
+// ScanTV emits a time-varying gated recurrence over a sequence.
+// IntParams layout: [B, T, D].
+func (p *Program) ScanTV(x, gate, out string, B, T, D int) {
+	p.AddOp(OpScanTV, []string{x, gate}, []string{out}, nil, []int{B, T, D})
 }
 
 // GatherPositions selects K entries from the position axis of a [B,T,D] tensor.
