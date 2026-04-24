@@ -22,20 +22,19 @@ func runCount(configPath string) error {
 	if err != nil {
 		return fmt.Errorf("build IR program: %w", err)
 	}
-	shapes, err := computeWeightShapes(cfg)
+	uniqueParams, expandedParams, err := arch.ParameterCountsFromConfig(cfg)
 	if err != nil {
-		return fmt.Errorf("compute weight shapes: %w", err)
+		return fmt.Errorf("compute parameter counts: %w", err)
 	}
 
-	totalParams := 0
-	for _, shape := range shapes {
-		totalParams += shapeElementCount(shape.Shape)
+	float32MiB := float64(uniqueParams*4) / bytesPerMiB
+	int8MiB := float64(uniqueParams) / bytesPerMiB
+
+	if expandedParams > uniqueParams {
+		fmt.Printf("Total parameters: %d (unique) / %d (with sharing expanded)\n", uniqueParams, expandedParams)
+	} else {
+		fmt.Printf("Total parameters: %d\n", uniqueParams)
 	}
-
-	float32MiB := float64(totalParams*4) / bytesPerMiB
-	int8MiB := float64(totalParams) / bytesPerMiB
-
-	fmt.Printf("Total parameters: %d\n", totalParams)
 	fmt.Printf("Total size (float32, in MB): %.2f\n", float32MiB)
 	fmt.Printf("Total size (int8 quantized, in MB): %.2f\n", int8MiB)
 	fmt.Printf("Number of blocks: %d\n", countConfigBlocks(cfg))
@@ -59,14 +58,6 @@ func formatFLOPs(f int64) string {
 	default:
 		return fmt.Sprintf("%d FLOP", f)
 	}
-}
-
-func shapeElementCount(shape []int) int {
-	n := 1
-	for _, dim := range shape {
-		n *= dim
-	}
-	return n
 }
 
 func countConfigBlocks(cfg *ArchConfig) int {

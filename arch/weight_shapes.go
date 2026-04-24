@@ -245,14 +245,10 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 	}
 }
 
-func streamWeightShapesWithRecurrence(specs []BlockSpec, recurrence []int, D, T, B, V int, mlpMult float64, blockScales, residMix bool) ([]WeightMeta, error) {
-	rec, err := normalizeRecurrence(specs, recurrence)
-	if err != nil {
-		return nil, err
-	}
+func streamWeightShapesWithRefs(specs []BlockSpec, refs []int, D, T, B, V int, mlpMult float64, blockScales, residMix bool) ([]WeightMeta, error) {
 	var all []WeightMeta
 	for i, spec := range specs {
-		if rec[i] != i {
+		if refs[i] != i {
 			continue
 		}
 		metas, err := blockWeightShapes(spec, D, T, B, V, mlpMult, blockScales, residMix)
@@ -278,20 +274,16 @@ func parallelBlockWeightShapes(spec BlockSpec, blockIdx, D, T, B, V int, mlpMult
 	return metas, nil
 }
 
-func streamWeightShapesWithRecurrenceAndParallel(specs []BlockSpec, recurrence []int, D, T, B, V int, mlpMult float64, blockScales, residMix, parallelResidual bool) ([]WeightMeta, error) {
+func streamWeightShapesWithRefsAndParallel(specs []BlockSpec, refs []int, D, T, B, V int, mlpMult float64, blockScales, residMix, parallelResidual bool) ([]WeightMeta, error) {
 	if !parallelResidual {
-		return streamWeightShapesWithRecurrence(specs, recurrence, D, T, B, V, mlpMult, blockScales, residMix)
+		return streamWeightShapesWithRefs(specs, refs, D, T, B, V, mlpMult, blockScales, residMix)
 	}
 	if err := validateParallelResidualBlocks(specs); err != nil {
 		return nil, err
 	}
-	rec, err := normalizeRecurrence(specs, recurrence)
-	if err != nil {
-		return nil, err
-	}
 	var all []WeightMeta
 	for i, spec := range specs {
-		if rec[i] != i {
+		if refs[i] != i {
 			continue
 		}
 		metas, err := parallelBlockWeightShapes(spec, i, D, T, B, V, mlpMult, blockScales, residMix)
@@ -303,10 +295,10 @@ func streamWeightShapesWithRecurrenceAndParallel(specs []BlockSpec, recurrence [
 	return all, nil
 }
 
-func blockRangeWeightShapesWithRecurrence(specs []BlockSpec, rec []int, start, end, D, T, B, V int, mlpMult float64, blockScales, residMix bool) ([]WeightMeta, error) {
+func blockRangeWeightShapesWithRefs(specs []BlockSpec, refs []int, start, end, D, T, B, V int, mlpMult float64, blockScales, residMix bool) ([]WeightMeta, error) {
 	var all []WeightMeta
 	for i := start; i < end; i++ {
-		if rec[i] != i {
+		if refs[i] != i {
 			continue
 		}
 		metas, err := blockWeightShapes(specs[i], D, T, B, V, mlpMult, blockScales, residMix)
@@ -396,6 +388,24 @@ func CollectWeightShapesWithBigramRecurrenceAndParallel(
 	blocks []BlockSpec,
 	recurrence []int,
 ) ([]WeightMeta, error) {
+	refs, err := normalizeWeightRefs(blocks, recurrence)
+	if err != nil {
+		return nil, fmt.Errorf("blocks: %w", err)
+	}
+	return collectWeightShapesWithRefs(modelDim, vocabSize, seqLen, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, blocks, refs)
+}
+
+func collectWeightShapesWithRefs(
+	modelDim, vocabSize, seqLen int,
+	mlpMult float64,
+	tieEmbeddings bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	blocks []BlockSpec,
+	refs []int,
+) ([]WeightMeta, error) {
 	D := modelDim
 	V := vocabSize
 	T := seqLen
@@ -413,6 +423,9 @@ func CollectWeightShapesWithBigramRecurrenceAndParallel(
 	}
 	if bigramDim < 0 {
 		return nil, fmt.Errorf("invalid bigram_dim=%d", bigramDim)
+	}
+	if len(refs) != len(blocks) {
+		return nil, fmt.Errorf("invalid weight refs length=%d for blocks length=%d", len(refs), len(blocks))
 	}
 
 	var shapes []WeightMeta
@@ -433,13 +446,9 @@ func CollectWeightShapesWithBigramRecurrenceAndParallel(
 			return nil, fmt.Errorf("parallel_residual is not supported with unet")
 		}
 	}
-	rec, err := normalizeRecurrence(blocks, recurrence)
-	if err != nil {
-		return nil, fmt.Errorf("blocks: %w", err)
-	}
 	if unet {
 		numEncoder, numSkip := unetLayout(len(blocks))
-		enc, err := blockRangeWeightShapesWithRecurrence(blocks, rec, 0, numEncoder, D, T, 1, V, mlpMult, blockScales, residMix)
+		enc, err := blockRangeWeightShapesWithRefs(blocks, refs, 0, numEncoder, D, T, 1, V, mlpMult, blockScales, residMix)
 		if err != nil {
 			return nil, fmt.Errorf("blocks: %w", err)
 		}
@@ -447,13 +456,13 @@ func CollectWeightShapesWithBigramRecurrenceAndParallel(
 		for i := 0; i < numSkip; i++ {
 			shapes = append(shapes, WeightMeta{Name: fmt.Sprintf("skip_weight_%d", i), Shape: []int{D}, InitOne: true})
 		}
-		dec, err := blockRangeWeightShapesWithRecurrence(blocks, rec, numEncoder, len(blocks), D, T, 1, V, mlpMult, blockScales, residMix)
+		dec, err := blockRangeWeightShapesWithRefs(blocks, refs, numEncoder, len(blocks), D, T, 1, V, mlpMult, blockScales, residMix)
 		if err != nil {
 			return nil, fmt.Errorf("blocks: %w", err)
 		}
 		shapes = append(shapes, dec...)
 	} else {
-		blk, err := streamWeightShapesWithRecurrenceAndParallel(blocks, recurrence, D, T, 1, V, mlpMult, blockScales, residMix, parallelResidual)
+		blk, err := streamWeightShapesWithRefsAndParallel(blocks, refs, D, T, 1, V, mlpMult, blockScales, residMix, parallelResidual)
 		if err != nil {
 			return nil, fmt.Errorf("blocks: %w", err)
 		}

@@ -31,20 +31,16 @@ func parallelBlockWeightCount(spec BlockSpec, blockIdx int, blockScales, residMi
 	return n, nil
 }
 
-func countStreamWeightsWithRecurrenceAndParallel(specs []BlockSpec, recurrence []int, blockScales, residMix, parallelResidual bool) (int, error) {
+func countStreamWeightsWithRefsAndParallel(specs []BlockSpec, refs []int, blockScales, residMix, parallelResidual bool) (int, error) {
 	if !parallelResidual {
-		return countStreamWeightsWithRecurrence(specs, recurrence, blockScales, residMix)
+		return countStreamWeightsWithRefs(specs, refs, blockScales, residMix)
 	}
 	if err := validateParallelResidualBlocks(specs); err != nil {
 		return 0, err
 	}
-	rec, err := normalizeRecurrence(specs, recurrence)
-	if err != nil {
-		return 0, err
-	}
 	total := 0
 	for i, spec := range specs {
-		if rec[i] != i {
+		if refs[i] != i {
 			continue
 		}
 		n, err := parallelBlockWeightCount(spec, i, blockScales, residMix)
@@ -56,16 +52,24 @@ func countStreamWeightsWithRecurrenceAndParallel(specs []BlockSpec, recurrence [
 	return total, nil
 }
 
-func countBlockRangeWeightsWithRecurrenceAndParallel(specs []BlockSpec, rec []int, start, end int, blockScales, residMix, parallelResidual bool) (int, error) {
+func countStreamWeightsWithRecurrenceAndParallel(specs []BlockSpec, recurrence []int, blockScales, residMix, parallelResidual bool) (int, error) {
+	refs, err := normalizeWeightRefs(specs, recurrence)
+	if err != nil {
+		return 0, err
+	}
+	return countStreamWeightsWithRefsAndParallel(specs, refs, blockScales, residMix, parallelResidual)
+}
+
+func countBlockRangeWeightsWithRefsAndParallel(specs []BlockSpec, refs []int, start, end int, blockScales, residMix, parallelResidual bool) (int, error) {
 	if !parallelResidual {
-		return countBlockRangeWeightsWithRecurrence(specs, rec, start, end, blockScales, residMix)
+		return countBlockRangeWeightsWithRefs(specs, refs, start, end, blockScales, residMix)
 	}
 	if start%2 != 0 || end%2 != 0 {
 		return 0, fmt.Errorf("parallel_residual block range [%d,%d) must align with block pairs", start, end)
 	}
 	total := 0
 	for i := start; i < end; i++ {
-		if rec[i] != i {
+		if refs[i] != i {
 			continue
 		}
 		n, err := parallelBlockWeightCount(specs[i], i, blockScales, residMix)
@@ -77,16 +81,20 @@ func countBlockRangeWeightsWithRecurrenceAndParallel(specs []BlockSpec, rec []in
 	return total, nil
 }
 
-func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
+func countBlockRangeWeightsWithRecurrenceAndParallel(specs []BlockSpec, rec []int, start, end int, blockScales, residMix, parallelResidual bool) (int, error) {
+	return countBlockRangeWeightsWithRefsAndParallel(specs, rec, start, end, blockScales, residMix, parallelResidual)
+}
+
+func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
 	plainSpec := specs[blockIdx]
 	swigluSpec := specs[blockIdx+1]
 
 	plainWI := wi
-	plainOriginal := rec[blockIdx] == blockIdx
+	plainOriginal := refs[blockIdx] == blockIdx
 	if !plainOriginal {
-		plainWI = weightStarts[rec[blockIdx]]
+		plainWI = weightStarts[refs[blockIdx]]
 		if plainWI < 0 {
-			return wi, fmt.Errorf("recurrence[%d]=%d references block without emitted weights", blockIdx, rec[blockIdx])
+			return wi, fmt.Errorf("weight sharing for block[%d] references block without emitted weights", blockIdx)
 		}
 	}
 	if plainOriginal {
@@ -99,11 +107,11 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 	}
 
 	swigluWI := wi
-	swigluOriginal := rec[blockIdx+1] == blockIdx+1
+	swigluOriginal := refs[blockIdx+1] == blockIdx+1
 	if !swigluOriginal {
-		swigluWI = weightStarts[rec[blockIdx+1]]
+		swigluWI = weightStarts[refs[blockIdx+1]]
 		if swigluWI < 0 {
-			return wi, fmt.Errorf("recurrence[%d]=%d references block without emitted weights", blockIdx+1, rec[blockIdx+1])
+			return wi, fmt.Errorf("weight sharing for block[%d] references block without emitted weights", blockIdx+1)
 		}
 	}
 	if swigluOriginal {
@@ -137,14 +145,14 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 	return wi, nil
 }
 
-func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, kvCache map[int]BlockKVOutputs, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32) (int, error) {
+func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32) (int, error) {
 	if parallelResidual {
 		if start%2 != 0 || end%2 != 0 {
 			return wi, fmt.Errorf("parallel_residual block range [%d,%d) must align with block pairs", start, end)
 		}
 		for i := start; i < end; i += 2 {
 			var err error
-			wi, err = emitParallelBlockPairWithRecurrenceDropout(prog, specs, rec, weightStarts, i, stream, original, wi, D, T, B, opIdx, mlpMult, blockScales, residMix, dropout)
+			wi, err = emitParallelBlockPairWithRecurrenceDropout(prog, specs, refs, weightStarts, i, stream, original, wi, D, T, B, opIdx, mlpMult, blockScales, residMix, dropout)
 			if err != nil {
 				return wi, err
 			}
@@ -153,7 +161,7 @@ func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 	}
 	for i := start; i < end; i++ {
 		var err error
-		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, rec, weightStarts, kvCache, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout)
+		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, refs, weightStarts, kvCache, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout)
 		if err != nil {
 			return wi, err
 		}

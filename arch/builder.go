@@ -59,14 +59,51 @@ func normalizeRecurrence(specs []BlockSpec, recurrence []int) ([]int, error) {
 	return out, nil
 }
 
-func countStreamWeightsWithRecurrence(specs []BlockSpec, recurrence []int, blockScales, residMix bool) (int, error) {
+func normalizeWeightRefs(specs []BlockSpec, recurrence []int) ([]int, error) {
 	rec, err := normalizeRecurrence(specs, recurrence)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
+
+	refs := make([]int, len(specs))
+	groupStarts := make(map[string]int)
+	for i, spec := range specs {
+		ref := rec[i]
+		if ref != i {
+			ref = refs[ref]
+		}
+
+		group := strings.TrimSpace(spec.WeightGroup)
+		if group == "" {
+			refs[i] = ref
+			continue
+		}
+
+		if groupRef, ok := groupStarts[group]; ok {
+			if ref != i && ref != groupRef {
+				return nil, fmt.Errorf("block[%d] weight_group=%q conflicts with recurrence[%d]=%d", i, group, i, rec[i])
+			}
+			ref = groupRef
+		} else {
+			groupStarts[group] = ref
+		}
+		refs[i] = ref
+	}
+	return refs, nil
+}
+
+func identityWeightRefs(specs []BlockSpec) []int {
+	refs := make([]int, len(specs))
+	for i := range specs {
+		refs[i] = i
+	}
+	return refs
+}
+
+func countStreamWeightsWithRefs(specs []BlockSpec, refs []int, blockScales, residMix bool) (int, error) {
 	total := 0
 	for i, spec := range specs {
-		if rec[i] != i {
+		if refs[i] != i {
 			continue
 		}
 		n, err := BlockWeightCount(spec, blockScales, residMix)
@@ -78,10 +115,10 @@ func countStreamWeightsWithRecurrence(specs []BlockSpec, recurrence []int, block
 	return total, nil
 }
 
-func countBlockRangeWeightsWithRecurrence(specs []BlockSpec, rec []int, start, end int, blockScales, residMix bool) (int, error) {
+func countBlockRangeWeightsWithRefs(specs []BlockSpec, refs []int, start, end int, blockScales, residMix bool) (int, error) {
 	total := 0
 	for i := start; i < end; i++ {
-		if rec[i] != i {
+		if refs[i] != i {
 			continue
 		}
 		n, err := BlockWeightCount(specs[i], blockScales, residMix)
@@ -204,24 +241,24 @@ func CountWeightsWithBigramRecurrenceAndParallel(
 			return 0, fmt.Errorf("parallel_residual is not supported with unet")
 		}
 	}
-	rec, err := normalizeRecurrence(blocks, recurrence)
+	refs, err := normalizeWeightRefs(blocks, recurrence)
 	if err != nil {
 		return 0, fmt.Errorf("blocks: %w", err)
 	}
 	if unet {
 		numEncoder, numSkip := unetLayout(len(blocks))
-		n, err := countBlockRangeWeightsWithRecurrenceAndParallel(blocks, rec, 0, numEncoder, blockScales, residMix, parallelResidual)
+		n, err := countBlockRangeWeightsWithRefsAndParallel(blocks, refs, 0, numEncoder, blockScales, residMix, parallelResidual)
 		if err != nil {
 			return 0, fmt.Errorf("blocks: %w", err)
 		}
 		total += n + numSkip
-		n, err = countBlockRangeWeightsWithRecurrenceAndParallel(blocks, rec, numEncoder, len(blocks), blockScales, residMix, parallelResidual)
+		n, err = countBlockRangeWeightsWithRefsAndParallel(blocks, refs, numEncoder, len(blocks), blockScales, residMix, parallelResidual)
 		if err != nil {
 			return 0, fmt.Errorf("blocks: %w", err)
 		}
 		total += n
 	} else {
-		n, err := countStreamWeightsWithRecurrenceAndParallel(blocks, recurrence, blockScales, residMix, parallelResidual)
+		n, err := countStreamWeightsWithRefsAndParallel(blocks, refs, blockScales, residMix, parallelResidual)
 		if err != nil {
 			return 0, fmt.Errorf("blocks: %w", err)
 		}
@@ -299,14 +336,14 @@ func emitStreamIRWithDropout(prog *Program, specs []BlockSpec, stream, original 
 	return wi, nil
 }
 
-func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, rec []int, weightStarts []int, kvCache map[int]BlockKVOutputs, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
+func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
 	spec := specs[blockIdx]
 	blockWI := wi
-	originalBlock := rec[blockIdx] == blockIdx
+	originalBlock := refs[blockIdx] == blockIdx
 	if !originalBlock {
-		blockWI = weightStarts[rec[blockIdx]]
+		blockWI = weightStarts[refs[blockIdx]]
 		if blockWI < 0 {
-			return wi, fmt.Errorf("recurrence[%d]=%d references block without emitted weights", blockIdx, rec[blockIdx])
+			return wi, fmt.Errorf("weight sharing for block[%d] references block without emitted weights", blockIdx)
 		}
 	}
 
@@ -524,7 +561,7 @@ func buildIRProgramWithDropout(
 	opIdx := 0
 
 	// Sequential blocks process "x" directly.
-	rec, err := normalizeRecurrence(blocks, recurrence)
+	refs, err := normalizeWeightRefs(blocks, recurrence)
 	if err != nil {
 		return nil, err
 	}
@@ -536,7 +573,7 @@ func buildIRProgramWithDropout(
 	if unet {
 		numEncoder, numSkip := unetLayout(len(blocks))
 		for i := range blocks[:numEncoder] {
-			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, rec, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
 			if err != nil {
 				return nil, err
 			}
@@ -563,14 +600,14 @@ func buildIRProgramWithDropout(
 				prog.Add("x", skipScaled, "x")
 			}
 			blockIdx := numEncoder + decIdx
-			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, rec, weightStarts, kvCache, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
 			if err != nil {
 				return nil, err
 			}
 			opIdx++
 		}
 	} else {
-		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, rec, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout)
+		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout)
 		if err != nil {
 			return nil, err
 		}

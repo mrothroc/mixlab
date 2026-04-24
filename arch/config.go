@@ -78,6 +78,7 @@ type CustomOpSpec = OpSpec
 type BlockSpec struct {
 	Type          string       `json:"type"`
 	Name          string       `json:"name,omitempty"` // custom block name (required for type=custom)
+	WeightGroup   string       `json:"weight_group,omitempty"`
 	Heads         int          `json:"heads"`
 	KVHeads       int          `json:"kv_heads,omitempty"`
 	KVSource      int          `json:"kv_source,omitempty"`      // -1 or 0 = compute own KV; positive = reuse KV from block N (1-indexed)
@@ -309,6 +310,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if len(cfg.Blocks) == 0 {
 		return nil, fmt.Errorf("config %q must define at least one block", source)
 	}
+	if err := validateWeightGroups(cfg, source); err != nil {
+		return nil, err
+	}
 	if err := validateRecurrence(cfg, source); err != nil {
 		return nil, err
 	}
@@ -499,6 +503,87 @@ func validateRecurrence(cfg *ArchConfig, source string) error {
 		}
 		if cfg.Blocks[i].Type != cfg.Blocks[ref].Type {
 			return fmt.Errorf("config %q recurrence[%d]=%d type mismatch: blocks[%d].type=%q blocks[%d].type=%q", source, i, ref, i, cfg.Blocks[i].Type, ref, cfg.Blocks[ref].Type)
+		}
+	}
+	return nil
+}
+
+func validateWeightGroups(cfg *ArchConfig, source string) error {
+	type weightGroupInfo struct {
+		idx  int
+		spec BlockSpec
+	}
+
+	groups := make(map[string]weightGroupInfo)
+	for i, block := range cfg.Blocks {
+		group := strings.TrimSpace(block.WeightGroup)
+		cfg.Blocks[i].WeightGroup = group
+		if group == "" {
+			continue
+		}
+
+		prev, ok := groups[group]
+		if !ok {
+			groups[group] = weightGroupInfo{idx: i, spec: cfg.Blocks[i]}
+			continue
+		}
+
+		if blockTypeKey(prev.spec) != blockTypeKey(block) {
+			return fmt.Errorf("config %q blocks[%d] weight_group=%q type mismatch with blocks[%d] (%q vs %q)", source, i, group, prev.idx, block.Type, prev.spec.Type)
+		}
+
+		if prevHeads, ok := weightGroupHeadCount(prev.spec); ok {
+			gotHeads, gotOK := weightGroupHeadCount(block)
+			if !gotOK || gotHeads != prevHeads {
+				return fmt.Errorf("config %q blocks[%d] weight_group=%q heads=%d must match blocks[%d] heads=%d", source, i, group, gotHeads, prev.idx, prevHeads)
+			}
+		}
+
+		if err := validateWeightGroupLayout(cfg, prev.idx, prev.spec, i, block); err != nil {
+			return fmt.Errorf("config %q %w", source, err)
+		}
+	}
+
+	return nil
+}
+
+func weightGroupHeadCount(spec BlockSpec) (int, bool) {
+	switch blockTypeKey(spec) {
+	case "plain", "retnet", "perceiver", "bottleneck", "cross_attention":
+		return spec.Heads, true
+	case "custom":
+		if spec.Heads <= 0 {
+			return 1, true
+		}
+		return spec.Heads, true
+	default:
+		return 0, false
+	}
+}
+
+func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, curIdx int, cur BlockSpec) error {
+	firstShapes, err := blockWeightShapes(first, cfg.ModelDim, cfg.SeqLen, 1, cfg.VocabSize, cfg.EffectiveMLPMult(), cfg.BlockScales, cfg.ResidMix)
+	if err != nil {
+		return fmt.Errorf("blocks[%d] weight_group=%q references invalid weight layout: %w", firstIdx, first.WeightGroup, err)
+	}
+	curShapes, err := blockWeightShapes(cur, cfg.ModelDim, cfg.SeqLen, 1, cfg.VocabSize, cfg.EffectiveMLPMult(), cfg.BlockScales, cfg.ResidMix)
+	if err != nil {
+		return fmt.Errorf("blocks[%d] weight_group=%q has invalid weight layout: %w", curIdx, cur.WeightGroup, err)
+	}
+	if len(firstShapes) != len(curShapes) {
+		return fmt.Errorf("blocks[%d] weight_group=%q must match blocks[%d] weight layout", curIdx, cur.WeightGroup, firstIdx)
+	}
+	for i := range firstShapes {
+		if firstShapes[i].Name != curShapes[i].Name {
+			return fmt.Errorf("blocks[%d] weight_group=%q must match blocks[%d] weight layout", curIdx, cur.WeightGroup, firstIdx)
+		}
+		if len(firstShapes[i].Shape) != len(curShapes[i].Shape) {
+			return fmt.Errorf("blocks[%d] weight_group=%q must match blocks[%d] weight layout", curIdx, cur.WeightGroup, firstIdx)
+		}
+		for dim := range firstShapes[i].Shape {
+			if firstShapes[i].Shape[dim] != curShapes[i].Shape[dim] {
+				return fmt.Errorf("blocks[%d] weight_group=%q must match blocks[%d] weight layout", curIdx, cur.WeightGroup, firstIdx)
+			}
 		}
 	}
 	return nil

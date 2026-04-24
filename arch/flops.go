@@ -1,18 +1,27 @@
 package arch
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // FLOPsEstimate summarizes analytical floating-point operation counts for an
 // architecture and training batch.
 type FLOPsEstimate struct {
-	ForwardFLOPs  int64 // FLOPs per forward pass
-	TrainingFLOPs int64 // FLOPs per training step (3x forward)
-	FLOPsPerToken int64 // TrainingFLOPs / batch_tokens
+	ForwardFLOPs       int64 // FLOPs per forward pass
+	TrainingFLOPs      int64 // FLOPs per training step (3x forward)
+	FLOPsPerToken      int64 // TrainingFLOPs / batch_tokens
+	ParamCount         int64 // Unique parameter count after sharing
+	ExpandedParamCount int64 // Parameter count with recurrent/shared blocks expanded
 }
 
 // EstimateFLOPs returns an analytical FLOPs estimate for one configured batch.
 func EstimateFLOPs(cfg *ArchConfig) FLOPsEstimate {
 	if cfg == nil || cfg.ModelDim <= 0 || cfg.VocabSize <= 0 || cfg.SeqLen <= 0 || cfg.Training.BatchTokens <= 0 {
+		return FLOPsEstimate{}
+	}
+	paramCount, expandedParamCount, err := ParameterCountsFromConfig(cfg)
+	if err != nil {
 		return FLOPsEstimate{}
 	}
 
@@ -39,10 +48,74 @@ func EstimateFLOPs(cfg *ArchConfig) FLOPsEstimate {
 		perToken = training / int64(cfg.Training.BatchTokens)
 	}
 	return FLOPsEstimate{
-		ForwardFLOPs:  forward,
-		TrainingFLOPs: training,
-		FLOPsPerToken: perToken,
+		ForwardFLOPs:       forward,
+		TrainingFLOPs:      training,
+		FLOPsPerToken:      perToken,
+		ParamCount:         paramCount,
+		ExpandedParamCount: expandedParamCount,
 	}
+}
+
+func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
+	if cfg == nil {
+		return 0, 0, fmt.Errorf("nil config")
+	}
+
+	uniqueRefs, err := normalizeWeightRefs(cfg.Blocks, cfg.Recurrence)
+	if err != nil {
+		return 0, 0, err
+	}
+	uniqueShapes, err := collectWeightShapesWithRefs(
+		cfg.ModelDim,
+		cfg.VocabSize,
+		cfg.SeqLen,
+		cfg.EffectiveMLPMult(),
+		cfg.TieEmbeddings,
+		cfg.BlockScales,
+		cfg.ResidMix,
+		cfg.UNet,
+		cfg.ParallelResidual,
+		cfg.BigramVocabSize,
+		cfg.EffectiveBigramDim(),
+		cfg.Blocks,
+		uniqueRefs,
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	expandedShapes, err := collectWeightShapesWithRefs(
+		cfg.ModelDim,
+		cfg.VocabSize,
+		cfg.SeqLen,
+		cfg.EffectiveMLPMult(),
+		cfg.TieEmbeddings,
+		cfg.BlockScales,
+		cfg.ResidMix,
+		cfg.UNet,
+		cfg.ParallelResidual,
+		cfg.BigramVocabSize,
+		cfg.EffectiveBigramDim(),
+		cfg.Blocks,
+		identityWeightRefs(cfg.Blocks),
+	)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return countWeightMetaElements(uniqueShapes), countWeightMetaElements(expandedShapes), nil
+}
+
+func countWeightMetaElements(metas []WeightMeta) int64 {
+	total := int64(0)
+	for _, meta := range metas {
+		elements := int64(1)
+		for _, dim := range meta.Shape {
+			elements *= int64(dim)
+		}
+		total += elements
+	}
+	return total
 }
 
 func estimateBlockFLOPs(block BlockSpec, B, T, D, V, ffn int, mlpMult float64, blockScales, residMix bool) int64 {
