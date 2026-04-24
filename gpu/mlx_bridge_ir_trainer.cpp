@@ -283,6 +283,42 @@ float mlx_ir_trainer_evaluate_named(int64_t trainer, const mlx_tensor_input* inp
   }
 }
 
+int mlx_ir_trainer_evaluate_per_token(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    float* out_nlls,
+    int max_nlls,
+    int* actual_nlls) {
+  if (!actual_nlls) {
+    return -1;
+  }
+  *actual_nlls = 0;
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return -1;
+    }
+    auto* t = get_ir_trainer(trainer);
+    if (!t || !inputs || n_inputs <= 0) {
+      return -1;
+    }
+    auto tensor_map = to_tensor_map(inputs, n_inputs);
+    auto nlls = t->evaluate_per_token(tensor_map);
+    *actual_nlls = static_cast<int>(nlls.size());
+    if (!out_nlls || max_nlls < *actual_nlls) {
+      return -1;
+    }
+    std::memcpy(out_nlls, nlls.data(), static_cast<size_t>(*actual_nlls) * sizeof(float));
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_evaluate_per_token", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_evaluate_per_token unknown exception" << std::endl;
+    return -1;
+  }
+}
+
 float mlx_ir_trainer_evaluate_lora_named(
     int64_t trainer,
     const mlx_tensor_input* inputs,

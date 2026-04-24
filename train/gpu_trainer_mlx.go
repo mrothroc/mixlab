@@ -245,6 +245,18 @@ func (t *mlxGPUTrainer) EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (fl
 	return gpu.TrainerEvaluate(t.handle, inputs)
 }
 
+// EvaluatePerTokenGPU runs a forward pass without gradients and returns per-token NLLs.
+func (t *mlxGPUTrainer) EvaluatePerTokenGPU(xTok, yTok []int, batchSize, seqLen int) ([]float32, error) {
+	if err := t.FlushGPU(); err != nil {
+		return nil, err
+	}
+	inputs, err := t.makeInputs(xTok, yTok, batchSize, seqLen)
+	if err != nil {
+		return nil, err
+	}
+	return gpu.TrainerEvaluatePerToken(t.handle, inputs)
+}
+
 // EvaluateLoRATTTGPU runs per-batch LoRA TTT without mutating the base trainer weights.
 func (t *mlxGPUTrainer) EvaluateLoRATTTGPU(xTok, yTok []int, batchSize, seqLen, tttSteps int, tttLR float32, tttRank int) (float32, error) {
 	if err := t.FlushGPU(); err != nil {

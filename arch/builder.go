@@ -601,7 +601,9 @@ func buildIRProgramWithDropout(
 
 	// Cross-entropy loss
 	prog.CrossEntropy(logitsState, "targets", "loss")
+	prog.CrossEntropyPerToken(logitsState, "targets", "per_token_nll")
 	prog.DeclareOutput("loss", TensorFloat32, []int{1})
+	prog.DeclareOutput("per_token_nll", TensorFloat32, []int{B * T})
 	prog.DeclareOutput("x_hidden", TensorFloat32, []int{B, T, D})
 	prog.DeclareOutput("logits", TensorFloat32, []int{B * T, V})
 

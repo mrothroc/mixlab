@@ -7,40 +7,41 @@ import "fmt"
 
 // Op codes for IR operations. These MUST match the C++ enum in h.
 const (
-	OpEmbed            = 1  // OP_EMBED
-	OpMatMul           = 2  // OP_MATMUL
-	OpAdd              = 3  // OP_ADD
-	OpMul              = 4  // OP_MUL
-	OpScalarMul        = 5  // OP_SCALAR_MUL
-	OpSigmoid          = 6  // OP_SIGMOID
-	OpSiLU             = 7  // OP_SILU
-	OpSoftmax          = 8  // OP_SOFTMAX
-	OpReshape          = 9  // OP_RESHAPE
-	OpTranspose        = 10 // OP_TRANSPOSE
-	OpSlice            = 11 // OP_SLICE
-	OpConcat           = 12 // OP_CONCAT
-	OpCausalMask       = 13 // OP_CAUSAL_MASK
-	OpCrossEntropy     = 14 // OP_CROSS_ENTROPY
-	OpDropout          = 15 // OP_DROPOUT
-	OpSquare           = 20 // OP_SQUARE
-	OpSub              = 21 // OP_SUB
-	OpDiv              = 22 // OP_DIV
-	OpArange           = 28 // OP_ARANGE
-	OpMeanAxis         = 29 // OP_MEAN_AXIS
-	OpFull             = 30 // OP_FULL
-	OpRMSNorm          = 33 // OP_RMSNORM
-	OpRoPE             = 34 // OP_ROPE
-	OpExp              = 39 // OP_EXP
-	OpOuter            = 40 // OP_OUTER
-	OpGELU             = 42 // OP_GELU
-	OpReLU             = 43 // OP_RELU
-	OpTanh             = 44 // OP_TANH
-	OpScan             = 49 // OP_SCAN
-	OpGatherPositions  = 51 // OP_GATHER_POSITIONS
-	OpScatterPositions = 52 // OP_SCATTER_POSITIONS
-	OpRoPEIndexed      = 53 // OP_ROPE_INDEXED
-	OpLeakyReLU        = 54 // OP_LEAKY_RELU
-	OpXSAProject       = 55 // OP_XSA_PROJECT
+	OpEmbed                = 1  // OP_EMBED
+	OpMatMul               = 2  // OP_MATMUL
+	OpAdd                  = 3  // OP_ADD
+	OpMul                  = 4  // OP_MUL
+	OpScalarMul            = 5  // OP_SCALAR_MUL
+	OpSigmoid              = 6  // OP_SIGMOID
+	OpSiLU                 = 7  // OP_SILU
+	OpSoftmax              = 8  // OP_SOFTMAX
+	OpReshape              = 9  // OP_RESHAPE
+	OpTranspose            = 10 // OP_TRANSPOSE
+	OpSlice                = 11 // OP_SLICE
+	OpConcat               = 12 // OP_CONCAT
+	OpCausalMask           = 13 // OP_CAUSAL_MASK
+	OpCrossEntropy         = 14 // OP_CROSS_ENTROPY
+	OpDropout              = 15 // OP_DROPOUT
+	OpSquare               = 20 // OP_SQUARE
+	OpSub                  = 21 // OP_SUB
+	OpDiv                  = 22 // OP_DIV
+	OpArange               = 28 // OP_ARANGE
+	OpMeanAxis             = 29 // OP_MEAN_AXIS
+	OpFull                 = 30 // OP_FULL
+	OpRMSNorm              = 33 // OP_RMSNORM
+	OpRoPE                 = 34 // OP_ROPE
+	OpExp                  = 39 // OP_EXP
+	OpOuter                = 40 // OP_OUTER
+	OpGELU                 = 42 // OP_GELU
+	OpReLU                 = 43 // OP_RELU
+	OpTanh                 = 44 // OP_TANH
+	OpScan                 = 49 // OP_SCAN
+	OpGatherPositions      = 51 // OP_GATHER_POSITIONS
+	OpScatterPositions     = 52 // OP_SCATTER_POSITIONS
+	OpRoPEIndexed          = 53 // OP_ROPE_INDEXED
+	OpLeakyReLU            = 54 // OP_LEAKY_RELU
+	OpXSAProject           = 55 // OP_XSA_PROJECT
+	OpCrossEntropyPerToken = 56 // OP_CROSS_ENTROPY_PER_TOKEN
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -174,6 +175,11 @@ func (p *Program) CausalMask(scores string, T int, output string) {
 // CrossEntropy emits a cross-entropy loss computation.
 func (p *Program) CrossEntropy(logits, targets, output string) {
 	p.AddOp(OpCrossEntropy, []string{logits, targets}, []string{output}, nil, nil)
+}
+
+// CrossEntropyPerToken emits per-token negative log-likelihoods.
+func (p *Program) CrossEntropyPerToken(logits, targets, output string) {
+	p.AddOp(OpCrossEntropyPerToken, []string{logits, targets}, []string{output}, nil, nil)
 }
 
 // RMSNorm emits RMS normalization with a learned scale parameter.

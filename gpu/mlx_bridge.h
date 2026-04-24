@@ -149,6 +149,13 @@ float mlx_ir_trainer_evaluate_named(
     int64_t trainer,
     const mlx_tensor_input* inputs,
     int n_inputs);
+int mlx_ir_trainer_evaluate_per_token(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    float* out_nlls,
+    int max_nlls,
+    int* actual_nlls);
 float mlx_ir_trainer_evaluate_lora_named(
     int64_t trainer,
     const mlx_tensor_input* inputs,

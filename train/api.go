@@ -50,6 +50,10 @@ func RunEvalMode(configPath, trainPattern, safetensorsLoad string) error {
 	return runEvalMode(configPath, trainPattern, safetensorsLoad)
 }
 
+func RunEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut string) error {
+	return runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut)
+}
+
 func RunGenerate(configPath, safetensorsLoad string, maxTokens int, temperature float32, topK int, prompt string) error {
 	return runGenerate(configPath, safetensorsLoad, maxTokens, temperature, topK, prompt)
 }

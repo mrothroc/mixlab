@@ -177,18 +177,21 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 				t.Errorf("input[2].Name = %q, want \"bigram_ids\"", prog.Inputs[2].Name)
 			}
 
-			// Check outputs: loss scalar plus hidden-state/logit exports.
-			if len(prog.Outputs) != 3 {
-				t.Fatalf("expected 3 outputs, got %d", len(prog.Outputs))
+			// Check outputs: scalar loss, per-token NLLs, plus hidden-state/logit exports.
+			if len(prog.Outputs) != 4 {
+				t.Fatalf("expected 4 outputs, got %d", len(prog.Outputs))
 			}
 			if prog.Outputs[0].Name != "loss" {
 				t.Errorf("output[0].Name = %q, want \"loss\"", prog.Outputs[0].Name)
 			}
-			if prog.Outputs[1].Name != "x_hidden" {
-				t.Errorf("output[1].Name = %q, want \"x_hidden\"", prog.Outputs[1].Name)
+			if prog.Outputs[1].Name != "per_token_nll" {
+				t.Errorf("output[1].Name = %q, want \"per_token_nll\"", prog.Outputs[1].Name)
 			}
-			if prog.Outputs[2].Name != "logits" {
-				t.Errorf("output[2].Name = %q, want \"logits\"", prog.Outputs[2].Name)
+			if prog.Outputs[2].Name != "x_hidden" {
+				t.Errorf("output[2].Name = %q, want \"x_hidden\"", prog.Outputs[2].Name)
+			}
+			if prog.Outputs[3].Name != "logits" {
+				t.Errorf("output[3].Name = %q, want \"logits\"", prog.Outputs[3].Name)
 			}
 		})
 	}

@@ -183,8 +183,8 @@ func TestBuildIRProgram_Plain3L(t *testing.T) {
 	if prog.Inputs[1].Name != "targets" {
 		t.Fatalf("expected second input 'targets', got %q", prog.Inputs[1].Name)
 	}
-	if len(prog.Outputs) != 3 || prog.Outputs[0].Name != "loss" || prog.Outputs[1].Name != "x_hidden" || prog.Outputs[2].Name != "logits" {
-		t.Fatalf("expected outputs [loss x_hidden logits], got %+v", prog.Outputs)
+	if len(prog.Outputs) != 4 || prog.Outputs[0].Name != "loss" || prog.Outputs[1].Name != "per_token_nll" || prog.Outputs[2].Name != "x_hidden" || prog.Outputs[3].Name != "logits" {
+		t.Fatalf("expected outputs [loss per_token_nll x_hidden logits], got %+v", prog.Outputs)
 	}
 	if len(prog.Ops) < 10 {
 		t.Fatalf("program has too few ops: %d", len(prog.Ops))
@@ -193,8 +193,8 @@ func TestBuildIRProgram_Plain3L(t *testing.T) {
 		t.Fatalf("first op should be Embed, got %d", prog.Ops[0].Code)
 	}
 	last := prog.Ops[len(prog.Ops)-1]
-	if last.Code != OpCrossEntropy {
-		t.Fatalf("last op should be CrossEntropy, got %d", last.Code)
+	if last.Code != OpCrossEntropyPerToken {
+		t.Fatalf("last op should be CrossEntropyPerToken, got %d", last.Code)
 	}
 }
 
@@ -500,6 +500,9 @@ func TestPlain3L_OpCounts(t *testing.T) {
 	if n := countOps(prog, OpCrossEntropy); n != 1 {
 		t.Errorf("expected 1 CrossEntropy op, got %d", n)
 	}
+	if n := countOps(prog, OpCrossEntropyPerToken); n != 1 {
+		t.Errorf("expected 1 CrossEntropyPerToken op, got %d", n)
+	}
 	if n := countOps(prog, OpRMSNorm); n != 7 {
 		t.Errorf("expected 7 RMSNorm ops, got %d", n)
 	}
@@ -569,8 +572,8 @@ func TestBuildIRProgram_RWKV(t *testing.T) {
 		t.Fatalf("first op should be Embed, got %d", prog.Ops[0].Code)
 	}
 	last := prog.Ops[len(prog.Ops)-1]
-	if last.Code != OpCrossEntropy {
-		t.Fatalf("last op should be CrossEntropy, got %d", last.Code)
+	if last.Code != OpCrossEntropyPerToken {
+		t.Fatalf("last op should be CrossEntropyPerToken, got %d", last.Code)
 	}
 	if n := countOps(prog, OpConcat); n != 4 {
 		t.Errorf("expected 4 Concat ops, got %d", n)
@@ -598,8 +601,8 @@ func TestBuildIRProgram_RetNet(t *testing.T) {
 	if len(prog.Inputs) != 2 {
 		t.Fatalf("expected 2 inputs, got %d", len(prog.Inputs))
 	}
-	if len(prog.Outputs) != 3 || prog.Outputs[0].Name != "loss" || prog.Outputs[1].Name != "x_hidden" || prog.Outputs[2].Name != "logits" {
-		t.Fatalf("expected outputs [loss x_hidden logits], got %+v", prog.Outputs)
+	if len(prog.Outputs) != 4 || prog.Outputs[0].Name != "loss" || prog.Outputs[1].Name != "per_token_nll" || prog.Outputs[2].Name != "x_hidden" || prog.Outputs[3].Name != "logits" {
+		t.Fatalf("expected outputs [loss per_token_nll x_hidden logits], got %+v", prog.Outputs)
 	}
 	if n := countOps(prog, OpCausalMask); n != 2 {
 		t.Errorf("expected 2 CausalMask ops, got %d", n)
@@ -611,8 +614,8 @@ func TestBuildIRProgram_RetNet(t *testing.T) {
 		t.Fatalf("first op should be Embed, got %d", prog.Ops[0].Code)
 	}
 	last := prog.Ops[len(prog.Ops)-1]
-	if last.Code != OpCrossEntropy {
-		t.Fatalf("last op should be CrossEntropy, got %d", last.Code)
+	if last.Code != OpCrossEntropyPerToken {
+		t.Fatalf("last op should be CrossEntropyPerToken, got %d", last.Code)
 	}
 }
 
@@ -635,8 +638,8 @@ func TestBuildIRProgram_MambaSequential(t *testing.T) {
 	if prog.Ops[0].Code != OpEmbed {
 		t.Errorf("first op should be Embed, got %d", prog.Ops[0].Code)
 	}
-	if last := prog.Ops[len(prog.Ops)-1]; last.Code != OpCrossEntropy {
-		t.Errorf("last op should be CrossEntropy, got %d", last.Code)
+	if last := prog.Ops[len(prog.Ops)-1]; last.Code != OpCrossEntropyPerToken {
+		t.Errorf("last op should be CrossEntropyPerToken, got %d", last.Code)
 	}
 }
 
@@ -670,7 +673,7 @@ func TestBuildIRProgram_LogitSoftcapEnabled_AppendsTailOps(t *testing.T) {
 	if n := countOps(prog, OpTanh); n != 1 {
 		t.Fatalf("expected 1 Tanh op, got %d", n)
 	}
-	requireTailOpCodes(t, prog, OpRMSNorm, OpReshape, OpMatMul, OpScalarMul, OpTanh, OpScalarMul, OpScalarMul, OpCrossEntropy)
+	requireTailOpCodes(t, prog, OpRMSNorm, OpReshape, OpMatMul, OpScalarMul, OpTanh, OpScalarMul, OpScalarMul, OpCrossEntropy, OpCrossEntropyPerToken)
 }
 
 func TestBuildIRProgram_LogitSoftcapDisabled_HasNoTanh(t *testing.T) {
@@ -685,5 +688,5 @@ func TestBuildIRProgram_LogitSoftcapDisabled_HasNoTanh(t *testing.T) {
 	if n := countOps(prog, OpTanh); n != 0 {
 		t.Fatalf("expected 0 Tanh ops, got %d", n)
 	}
-	requireTailOpCodes(t, prog, OpRMSNorm, OpReshape, OpMatMul, OpCrossEntropy)
+	requireTailOpCodes(t, prog, OpRMSNorm, OpReshape, OpMatMul, OpCrossEntropy, OpCrossEntropyPerToken)
 }

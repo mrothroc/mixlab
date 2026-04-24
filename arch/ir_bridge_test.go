@@ -24,8 +24,8 @@ func TestBuildIRProgramFromConfig_Plain3L(t *testing.T) {
 	if len(prog.Inputs) != 2 {
 		t.Fatalf("expected 2 inputs, got %d", len(prog.Inputs))
 	}
-	if len(prog.Outputs) != 3 || prog.Outputs[0].Name != "loss" || prog.Outputs[1].Name != "x_hidden" || prog.Outputs[2].Name != "logits" {
-		t.Fatalf("expected outputs [loss x_hidden logits], got %+v", prog.Outputs)
+	if len(prog.Outputs) != 4 || prog.Outputs[0].Name != "loss" || prog.Outputs[1].Name != "per_token_nll" || prog.Outputs[2].Name != "x_hidden" || prog.Outputs[3].Name != "logits" {
+		t.Fatalf("expected outputs [loss per_token_nll x_hidden logits], got %+v", prog.Outputs)
 	}
 }
 

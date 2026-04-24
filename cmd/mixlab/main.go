@@ -33,6 +33,7 @@ func main() {
 	temperature := flag.Float64("temperature", 0.8, "sampling temperature (generate mode)")
 	topK := flag.Int("top-k", 40, "top-k sampling cutoff (generate mode)")
 	prompt := flag.String("prompt", "", "prompt for generate mode, e.g. token_ids:0,1,2")
+	logprobsOut := flag.String("logprobs-out", "", "write per-token eval NLLs to a binary file (eval mode)")
 
 	// profiling flags
 	cpuProfile := flag.String("cpuprofile", "", "write CPU profile to file")
@@ -149,7 +150,11 @@ func main() {
 	case "arch_race":
 		must(train.RunArchRace(*configsDir, *trainPattern, opts))
 	case "eval":
-		must(train.RunEvalMode(*configPath, *trainPattern, *safetensorsLoad))
+		if *logprobsOut != "" {
+			must(train.RunEvalLogprobs(*configPath, *trainPattern, *safetensorsLoad, *lutDir, *logprobsOut))
+		} else {
+			must(train.RunEvalMode(*configPath, *trainPattern, *safetensorsLoad))
+		}
 	case "hiddenstats":
 		must(train.RunHiddenstats(*configPath, *trainPattern, *safetensorsLoad, *prepOutput))
 	case "generate":

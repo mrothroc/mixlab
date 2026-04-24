@@ -32,6 +32,16 @@ mx::array cross_entropy_mean(const mx::array& logits, const mx::array& targets) 
   return -mx::mean(chosen);
 }
 
+mx::array cross_entropy_per_token(const mx::array& logits, const mx::array& targets) {
+  auto row_max = mx::max(logits, 1, true);
+  auto shifted = logits - row_max;
+  auto log_norm = mx::log(mx::sum(mx::exp(shifted), 1, true));
+  auto log_probs = shifted - log_norm;
+  auto idx = mx::reshape(targets, {targets.shape(0), 1});
+  auto chosen = mx::take_along_axis(log_probs, idx, 1);
+  return -mx::reshape(chosen, {targets.shape(0)});
+}
+
 mx::array running_variance_raw(const mx::array& x_flat, int B, int T, int D, float alpha) {
   auto x = mx::reshape(x_flat, {B, T, D});
   auto out = mx::zeros({B, T, D}, mx::float32);
@@ -467,6 +477,10 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
       }
       case OP_CROSS_ENTROPY: {
         set_out(op, 0, cross_entropy_mean(get(op, 0), mx::astype(get(op, 1), mx::int32)));
+        break;
+      }
+      case OP_CROSS_ENTROPY_PER_TOKEN: {
+        set_out(op, 0, cross_entropy_per_token(get(op, 0), mx::astype(get(op, 1), mx::int32)));
         break;
       }
       case OP_DROPOUT: {

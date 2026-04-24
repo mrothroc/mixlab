@@ -8,40 +8,41 @@ import (
 )
 
 const (
-	OpEmbed            = 1
-	OpMatMul           = 2
-	OpAdd              = 3
-	OpMul              = 4
-	OpScalarMul        = 5
-	OpSigmoid          = 6
-	OpSiLU             = 7
-	OpSoftmax          = 8
-	OpReshape          = 9
-	OpTranspose        = 10
-	OpSlice            = 11
-	OpConcat           = 12
-	OpCausalMask       = 13
-	OpCrossEntropy     = 14
-	OpDropout          = 15
-	OpSquare           = 20
-	OpSub              = 21
-	OpDiv              = 22
-	OpArange           = 28
-	OpMeanAxis         = 29
-	OpFull             = 30
-	OpRMSNorm          = 33
-	OpRoPE             = 34
-	OpExp              = 39
-	OpOuter            = 40
-	OpGELU             = 42
-	OpReLU             = 43
-	OpTanh             = 44
-	OpScan             = 49
-	OpGatherPositions  = 51
-	OpScatterPositions = 52
-	OpRoPEIndexed      = 53
-	OpLeakyReLU        = 54
-	OpXSAProject       = 55
+	OpEmbed                = 1
+	OpMatMul               = 2
+	OpAdd                  = 3
+	OpMul                  = 4
+	OpScalarMul            = 5
+	OpSigmoid              = 6
+	OpSiLU                 = 7
+	OpSoftmax              = 8
+	OpReshape              = 9
+	OpTranspose            = 10
+	OpSlice                = 11
+	OpConcat               = 12
+	OpCausalMask           = 13
+	OpCrossEntropy         = 14
+	OpDropout              = 15
+	OpSquare               = 20
+	OpSub                  = 21
+	OpDiv                  = 22
+	OpArange               = 28
+	OpMeanAxis             = 29
+	OpFull                 = 30
+	OpRMSNorm              = 33
+	OpRoPE                 = 34
+	OpExp                  = 39
+	OpOuter                = 40
+	OpGELU                 = 42
+	OpReLU                 = 43
+	OpTanh                 = 44
+	OpScan                 = 49
+	OpGatherPositions      = 51
+	OpScatterPositions     = 52
+	OpRoPEIndexed          = 53
+	OpLeakyReLU            = 54
+	OpXSAProject           = 55
+	OpCrossEntropyPerToken = 56
 )
 
 const (

@@ -85,6 +85,24 @@ func TestRMSNorm(t *testing.T) {
 	}
 }
 
+func TestCrossEntropyPerToken(t *testing.T) {
+	p := NewProgram(0)
+	p.CrossEntropyPerToken("logits", "targets", "per_token_nll")
+	if len(p.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(p.Ops))
+	}
+	op := p.Ops[0]
+	if op.Code != OpCrossEntropyPerToken {
+		t.Fatalf("expected OpCrossEntropyPerToken (%d), got %d", OpCrossEntropyPerToken, op.Code)
+	}
+	if len(op.Inputs) != 2 || op.Inputs[0] != "logits" || op.Inputs[1] != "targets" {
+		t.Fatalf("bad per-token cross-entropy inputs: %v", op.Inputs)
+	}
+	if len(op.Outputs) != 1 || op.Outputs[0] != "per_token_nll" {
+		t.Fatalf("bad per-token cross-entropy outputs: %v", op.Outputs)
+	}
+}
+
 func TestRoPE(t *testing.T) {
 	p := NewProgram(0)
 	p.RoPE("q", "k", "qr", "kr", 128, 32, 16, 10000.0)

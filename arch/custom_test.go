@@ -324,8 +324,8 @@ func TestBuildIRProgram_WithCustomBlocks(t *testing.T) {
 	}
 	// Last op should be cross-entropy.
 	last := prog.Ops[len(prog.Ops)-1]
-	if last.Code != OpCrossEntropy {
-		t.Fatalf("last op should be CrossEntropy, got %d", last.Code)
+	if last.Code != OpCrossEntropyPerToken {
+		t.Fatalf("last op should be CrossEntropyPerToken, got %d", last.Code)
 	}
 }
 

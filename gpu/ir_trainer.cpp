@@ -473,6 +473,22 @@ float IRTrainer::evaluate_named(const TensorMap& inputs) {
   return loss.item<float>();
 }
 
+std::vector<float> IRTrainer::evaluate_per_token(const TensorMap& inputs) {
+  flush();
+  if (weights.empty()) {
+    throw std::runtime_error("IR trainer has no weights");
+  }
+  auto output_names = collect_cached_output_names(program);
+  output_names.push_back("per_token_nll");
+  last_outputs = ir_interpret_outputs(program, weights, inputs, output_names);
+  auto nll = mx::astype(last_outputs.at("per_token_nll"), mx::float32);
+  auto flat = mx::reshape(nll, {static_cast<mx::ShapeElem>(nll.size())});
+  mx::eval(flat);
+  std::vector<float> result(static_cast<size_t>(flat.shape(0)));
+  std::memcpy(result.data(), flat.data<float>(), result.size() * sizeof(float));
+  return result;
+}
+
 float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int steps, float lr) {
   flush();
   if (weights.empty()) {

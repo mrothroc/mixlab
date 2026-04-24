@@ -60,6 +60,7 @@ enum OpType {
   OP_ROPE_INDEXED = 53,
   OP_LEAKY_RELU = 54,
   OP_XSA_PROJECT = 55,
+  OP_CROSS_ENTROPY_PER_TOKEN = 56,
 };
 
 struct IRop {

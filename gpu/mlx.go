@@ -372,6 +372,48 @@ func mlxTrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) 
 	return loss, nil
 }
 
+func mlxTrainerEvaluatePerToken(t TrainerHandle, inputs []TensorInput) ([]float32, error) {
+	cInputs, cleanup, err := marshalTensorInputs(inputs)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	total := 1
+	foundTargets := false
+	for _, in := range inputs {
+		if in.Name != "targets" {
+			continue
+		}
+		foundTargets = true
+		total = 1
+		for _, dim := range in.Shape {
+			total *= dim
+		}
+		break
+	}
+	if !foundTargets || total <= 0 {
+		return nil, fmt.Errorf("mlx_ir_trainer_evaluate_per_token requires non-empty targets input")
+	}
+	out := make([]float32, total)
+	actual := C.int(0)
+	rc := C.mlx_ir_trainer_evaluate_per_token(
+		C.int64_t(t),
+		(*C.mlx_tensor_input)(unsafe.Pointer(&cInputs[0])),
+		C.int(len(cInputs)),
+		(*C.float)(unsafe.Pointer(&out[0])),
+		C.int(len(out)),
+		&actual,
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("mlx_ir_trainer_evaluate_per_token failed")
+	}
+	if int(actual) < 0 || int(actual) > len(out) {
+		return nil, fmt.Errorf("mlx_ir_trainer_evaluate_per_token returned invalid size %d", int(actual))
+	}
+	return out[:int(actual)], nil
+}
+
 func mlxTrainerEvaluateLoRA(t TrainerHandle, inputs []TensorInput, rank, steps int, lr float32) (float32, error) {
 	cInputs, cleanup, err := marshalTensorInputs(inputs)
 	if err != nil {

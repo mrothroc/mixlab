@@ -56,6 +56,12 @@ func (t *fakeTTTTrainer) EvaluateGPU(_ []int, _ []int, _, _ int) (float32, error
 	return t.loss, nil
 }
 
+func (t *fakeTTTTrainer) EvaluatePerTokenGPU(_ []int, _ []int, _, _ int) ([]float32, error) {
+	t.evalCalls++
+	t.events = append(t.events, "eval_per_token")
+	return []float32{t.loss}, nil
+}
+
 func (t *fakeTTTTrainer) EvaluateLoRATTTGPU(_ []int, _ []int, _, _, tttSteps int, lr float32, rank int) (float32, error) {
 	t.loraCalls++
 	t.lrs = append(t.lrs, lr)
