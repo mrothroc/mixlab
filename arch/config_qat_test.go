@@ -42,6 +42,75 @@ func TestParseArchConfig_QATModes(t *testing.T) {
 	}
 }
 
+func TestQATStart(t *testing.T) {
+	cfg := ArchConfig{
+		Name:      "test_qat_start",
+		ModelDim:  64,
+		VocabSize: 256,
+		SeqLen:    32,
+		Blocks:    []BlockSpec{{Type: "plain", Heads: 2}, {Type: "swiglu"}},
+		Training:  TrainingSpec{Steps: 100, LR: 3e-4, QAT: "int6", QATStart: 100},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got, err := ParseArchConfig(data, "test_qat_start")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if got.Training.QATStart != 100 {
+		t.Fatalf("training.qat_start = %d, want 100", got.Training.QATStart)
+	}
+	if got.Training.QAT != "int6" {
+		t.Fatalf("training.qat = %q, want int6", got.Training.QAT)
+	}
+}
+
+func TestQATStartNegative(t *testing.T) {
+	cfg := ArchConfig{
+		Name:      "test_qat_start_negative",
+		ModelDim:  64,
+		VocabSize: 256,
+		SeqLen:    32,
+		Blocks:    []BlockSpec{{Type: "plain", Heads: 2}, {Type: "swiglu"}},
+		Training:  TrainingSpec{Steps: 100, LR: 3e-4, QAT: "int6", QATStart: -1},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	_, err = ParseArchConfig(data, "test_qat_start_negative")
+	if err == nil {
+		t.Fatal("expected error for negative qat_start")
+	}
+	if !strings.Contains(err.Error(), "training.qat_start") {
+		t.Fatalf("error = %q, want mention of training.qat_start", err.Error())
+	}
+}
+
+func TestQATStartWithoutQAT(t *testing.T) {
+	cfg := ArchConfig{
+		Name:      "test_qat_start_without_qat",
+		ModelDim:  64,
+		VocabSize: 256,
+		SeqLen:    32,
+		Blocks:    []BlockSpec{{Type: "plain", Heads: 2}, {Type: "swiglu"}},
+		Training:  TrainingSpec{Steps: 100, LR: 3e-4, QATStart: 100},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	_, err = ParseArchConfig(data, "test_qat_start_without_qat")
+	if err == nil {
+		t.Fatal("expected error for qat_start without qat")
+	}
+	if !strings.Contains(err.Error(), "training.qat_start") {
+		t.Fatalf("error = %q, want mention of training.qat_start", err.Error())
+	}
+}
+
 func TestParseArchConfig_InvalidQAT(t *testing.T) {
 	cfg := ArchConfig{
 		Name:      "test_invalid_qat",

@@ -953,3 +953,5 @@ func TestJSONCCommentInString(t *testing.T) {
 		t.Errorf("name = %q, want %q", parsed.Name, "has // slashes")
 	}
 }
+
+// QAT start tests are in config_qat_test.go.

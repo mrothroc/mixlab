@@ -50,6 +50,10 @@ func (t *fakeTTTTrainer) FlushGPU() error {
 	return nil
 }
 
+func (t *fakeTTTTrainer) SetQATGPU(_ string) error {
+	return nil
+}
+
 func (t *fakeTTTTrainer) EvaluateGPU(_ []int, _ []int, _, _ int) (float32, error) {
 	t.evalCalls++
 	t.events = append(t.events, "eval")

@@ -129,8 +129,9 @@ type TrainingSpec struct {
 	MuonMomentum       float32         `json:"muon_momentum,omitempty"`
 	MuonBackendSteps   int             `json:"muon_backend_steps,omitempty"`
 	MuonNesterov       *bool           `json:"muon_nesterov,omitempty"`
-	Optimizer          string          `json:"optimizer,omitempty"`       // "muon" (default) or "adamw" for matrix weights
-	QAT                string          `json:"qat,omitempty"`             // "none" (default), "int8", or "int6"
+	Optimizer          string          `json:"optimizer,omitempty"` // "muon" (default) or "adamw" for matrix weights
+	QAT                string          `json:"qat,omitempty"`       // "none" (default), "int8", or "int6"
+	QATStart           int             `json:"qat_start,omitempty"`
 	WeightInit         string          `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
 	WeightInitStd      float32         `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
 	EmbedWeightDecay   float32         `json:"embed_weight_decay,omitempty"`
@@ -444,6 +445,12 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Training.QAT != "none" && cfg.Training.QAT != "int8" && cfg.Training.QAT != "int6" {
 		return nil, fmt.Errorf("config %q has invalid training.qat=%q (must be \"none\", \"int8\", or \"int6\")", source, cfg.Training.QAT)
+	}
+	if cfg.Training.QATStart < 0 {
+		return nil, fmt.Errorf("config %q has invalid training.qat_start=%d (must be >= 0)", source, cfg.Training.QATStart)
+	}
+	if cfg.Training.QATStart > 0 && cfg.Training.QAT == "none" {
+		return nil, fmt.Errorf("config %q has training.qat_start=%d but training.qat is not set", source, cfg.Training.QATStart)
 	}
 	if cfg.Training.TTTLR < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.ttt_lr=%g (must be >= 0)", source, cfg.Training.TTTLR)

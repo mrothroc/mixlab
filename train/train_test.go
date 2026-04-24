@@ -487,3 +487,21 @@ func TestFormatSummary_NamePadding(t *testing.T) {
 		t.Errorf("name not left-padded to 12 chars: %q", got)
 	}
 }
+
+func TestLateQAT(t *testing.T) {
+	spec := TrainingSpec{QAT: "int6", QATStart: 5}
+	tests := []struct {
+		step int
+		want string
+	}{
+		{step: 0, want: "none"},
+		{step: 4, want: "none"},
+		{step: 5, want: "int6"},
+		{step: 6, want: "int6"},
+	}
+	for _, tt := range tests {
+		if got := qatModeForStep(spec, tt.step); got != tt.want {
+			t.Fatalf("qatModeForStep(step=%d) = %q, want %q", tt.step, got, tt.want)
+		}
+	}
+}

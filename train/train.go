@@ -226,6 +226,7 @@ type GPUTrainer interface {
 	SubmitStepGPU(xTok, yTok []int, batchSize, seqLen int, lr float32) error
 	CollectLossGPU() (float32, error)
 	FlushGPU() error
+	SetQATGPU(mode string) error
 	EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (float32, error)
 	EvaluatePerTokenGPU(xTok, yTok []int, batchSize, seqLen int) ([]float32, error)
 	EvaluateLoRATTTGPU(xTok, yTok []int, batchSize, seqLen, tttSteps int, tttLR float32, tttRank int) (float32, error)
@@ -250,6 +251,17 @@ type TrainOptions struct {
 type trainBatch struct {
 	x, y []int
 	err  error
+}
+
+func qatModeForStep(spec TrainingSpec, step int) string {
+	mode := strings.TrimSpace(strings.ToLower(spec.QAT))
+	if mode == "" {
+		mode = "none"
+	}
+	if spec.QATStart > 0 && step < spec.QATStart {
+		return "none"
+	}
+	return mode
 }
 
 // runTrain is the core training loop. It:
@@ -507,9 +519,18 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			// Submit next step AFTER validation/checkpoint/logging so flush
 			// inside EvaluateGPU doesn't discard the pending step.
 			if step < steps-1 {
+				nextStep := step + 1
+				if nextMode := qatModeForStep(cfg.Training, nextStep); nextMode != qatModeForStep(cfg.Training, step) {
+					if err := trainer.SetQATGPU(nextMode); err != nil {
+						return TrainResult{}, fmt.Errorf("set QAT mode at step %d: %w", nextStep, err)
+					}
+					if nextMode != "none" {
+						fmt.Printf("  [%s] QAT enabled at step %d\n", name, nextStep)
+					}
+				}
 				submitStart := time.Now()
-				if err := trainer.SubmitStepGPU(nextBatch.x, nextBatch.y, batchSize, seqLen, sched.At(step+1)); err != nil {
-					return TrainResult{}, fmt.Errorf("submit step %d: %w", step+1, err)
+				if err := trainer.SubmitStepGPU(nextBatch.x, nextBatch.y, batchSize, seqLen, sched.At(nextStep)); err != nil {
+					return TrainResult{}, fmt.Errorf("submit step %d: %w", nextStep, err)
 				}
 				currentSubmitDuration = time.Since(submitStart)
 			}

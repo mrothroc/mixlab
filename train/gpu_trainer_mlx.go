@@ -94,7 +94,7 @@ func initMLXGPUTrainer(irProg *ir.Program, cfg *ArchConfig, loadedWeights [][]fl
 		gpu.FreeHandles(handles)
 		return nil, fmt.Errorf("create GPU trainer: %w", err)
 	}
-	if err := gpu.TrainerSetQAT(trainerHandle, cfg.Training.QAT); err != nil {
+	if err := gpu.TrainerSetQAT(trainerHandle, qatModeForStep(cfg.Training, 0)); err != nil {
 		gpu.TrainerDestroy(trainerHandle)
 		gpuProg.Destroy()
 		gpu.FreeHandles(handles)
@@ -231,6 +231,10 @@ func (t *mlxGPUTrainer) CollectLossGPU() (float32, error) {
 // FlushGPU waits for any submitted work and discards uncollected losses.
 func (t *mlxGPUTrainer) FlushGPU() error {
 	return gpu.TrainerFlush(t.handle)
+}
+
+func (t *mlxGPUTrainer) SetQATGPU(mode string) error {
+	return gpu.TrainerSetQAT(t.handle, mode)
 }
 
 // EvaluateGPU runs a forward pass without gradients and returns the loss.
