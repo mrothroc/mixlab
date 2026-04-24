@@ -441,3 +441,11 @@ both be updated when adding a new block type.
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Author
+
+[Michael Rothrock](https://michael.roth.rocks) · [GitHub](https://github.com/mrothroc)
+
+Other work:
+- [Trust Topology](https://michael.roth.rocks/research/trust-topology/) — a framework for engineering reliability from unreliable AI agents
+- [claude-code-log-analyzer](https://github.com/mrothroc/claude-code-log-analyzer) — compute overlap ratios on your own Claude Code session logs
