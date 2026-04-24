@@ -251,8 +251,6 @@ type trainBatch struct {
 	err  error
 }
 
-const stepDurationEMADecay = 0.95
-
 // runTrain is the core training loop. It:
 // 1. Builds the IR program from the config
 // 2. Initializes the GPU trainer
@@ -354,7 +352,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	lastValLoss := math.NaN()
 	hasValLoss := false
 	start := time.Now()
-	var stepDurationEMA time.Duration
 	done := make(chan struct{})
 	batchCh := make(chan trainBatch, 4)
 	var loadWG sync.WaitGroup
@@ -400,7 +397,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		currentPhaseIdx := -1
 
 		for step := 0; step < steps; step++ {
-			stepStart := time.Now()
 			dataDuration := time.Duration(0)
 			if step == 0 {
 				dataDuration = initialDataDuration
@@ -441,13 +437,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 			lastLoss = v
 
-			stepDuration := time.Since(stepStart)
-			if step == 0 {
-				stepDurationEMA = stepDuration
-			} else {
-				stepDurationEMA = time.Duration(stepDurationEMADecay*float64(stepDurationEMA) + (1-stepDurationEMADecay)*float64(stepDuration))
-			}
-
 			if shouldUpdateSWA(step, swaStart, swaInterval) {
 				weights, err := readTrainerWeights(trainer)
 				if err != nil {
@@ -474,10 +463,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 						valStr = fmt.Sprintf(" val=%.4f", valAvg)
 					}
 				}
-				tokensPerSec := float64(batchTokens) / stepDuration.Seconds()
+				// Use wall-clock average for tok/s and MFU — per-step EMA is
+				// unreliable with pipelined training because collect returns
+				// near-instantly when the GPU has already finished.
+				elapsed := time.Since(start)
+				tokensPerSec := float64(batchTokens) * float64(step+1) / elapsed.Seconds()
 				mfuStr := ""
 				if cfg.Training.HardwareTFLOPs > 0 && flops.TrainingFLOPs > 0 {
-					mfu := (float64(flops.TrainingFLOPs) / stepDuration.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
+					mfu := (float64(flops.TrainingFLOPs) * float64(step+1) / elapsed.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
 					mfuStr = fmt.Sprintf(" MFU=%.1f%%", mfu*100)
 				}
 				phaseStr := ""
@@ -486,7 +479,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					phaseStr = fmt.Sprintf(" phase=%s", phaseDisplayLabel(phase, currentPhaseIdx))
 				}
 				fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f%s tok/s=%.0f%s %s\n",
-					name, step, steps, v, valStr, sched.At(step), phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), stepDurationEMA, step, steps))
+					name, step, steps, v, valStr, sched.At(step), phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), step, steps))
 				logDuration := time.Since(logStart)
 				if opts.Timing {
 					fmt.Printf("  [%s] [timing] data=%.1fms gpu=%.1fms val=%.1fms log=%.1fms\n",
@@ -731,14 +724,16 @@ func writeCheckpoint(cfg *ArchConfig, trainer GPUTrainer, shapes []WeightShape, 
 	return nil
 }
 
-func formatProgressTiming(elapsed, stepDurationEMA time.Duration, step, totalSteps int) string {
-	if step < 10 || stepDurationEMA <= 0 || totalSteps <= 0 {
+func formatProgressTiming(elapsed time.Duration, step, totalSteps int) string {
+	if step < 1 || totalSteps <= 0 {
 		return fmt.Sprintf("(%.1fs)", elapsed.Seconds())
 	}
+	// Wall-clock ETA: time_so_far / steps_done * steps_remaining
+	avgStepDuration := elapsed / time.Duration(step+1)
 	remainingSteps := totalSteps - (step + 1)
 	if remainingSteps < 0 {
 		remainingSteps = 0
 	}
-	eta := time.Duration(remainingSteps) * stepDurationEMA
+	eta := time.Duration(remainingSteps) * avgStepDuration
 	return fmt.Sprintf("(%.1fs, ~%s remaining)", elapsed.Seconds(), eta.Round(time.Second))
 }

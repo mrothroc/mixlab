@@ -369,16 +369,31 @@ func TestExportWeightsForTrainerPrefersSWA(t *testing.T) {
 }
 
 func TestFormatProgressTiming_BeforeETAThreshold(t *testing.T) {
-	got := formatProgressTiming(12500*time.Millisecond, 2*time.Second, 9, 100)
+	// step 0 (< 1): no ETA, just elapsed
+	got := formatProgressTiming(12500*time.Millisecond, 0, 100)
 	if got != "(12.5s)" {
 		t.Fatalf("formatProgressTiming = %q, want %q", got, "(12.5s)")
 	}
 }
 
 func TestFormatProgressTiming_WithETA(t *testing.T) {
-	got := formatProgressTiming(42*time.Second, 2500*time.Millisecond, 10, 20)
-	if got != "(42.0s, ~23s remaining)" {
-		t.Fatalf("formatProgressTiming = %q, want %q", got, "(42.0s, ~23s remaining)")
+	// 42s elapsed over 11 steps (0-10), 9 remaining
+	// avg = 42s/11 ≈ 3.818s, eta = 9 * 3.818 ≈ 34s
+	got := formatProgressTiming(42*time.Second, 10, 20)
+	want := "(42.0s, ~34s remaining)"
+	if got != want {
+		t.Fatalf("formatProgressTiming = %q, want %q", got, want)
+	}
+}
+
+func TestFormatProgressTiming_TokPerSec(t *testing.T) {
+	// Verify wall-clock based tok/s: 1000 steps * 16384 batch_tokens / 100s = 163840 tok/s
+	elapsed := 100 * time.Second
+	step := 999
+	batchTokens := 16384
+	tokPerSec := float64(batchTokens) * float64(step+1) / elapsed.Seconds()
+	if tokPerSec < 163000 || tokPerSec > 164000 {
+		t.Fatalf("tok/s = %.0f, want ~163840", tokPerSec)
 	}
 }
 
