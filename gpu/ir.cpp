@@ -886,10 +886,15 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         break;
       }
       case OP_OUTER: {
+        // Batched outer product: a [B, Da], b [B, Db] -> out [B, Da, Db]
         auto a = get(op, 0);
         auto b = get(op, 1);
-        set_out(op, 0, mx::reshape(a, {static_cast<mx::ShapeElem>(a.size()), 1}) *
-                           mx::reshape(b, {1, static_cast<mx::ShapeElem>(b.size())}));
+        int B_dim = a.shape(0);
+        int Da = a.shape(1);
+        int Db = b.shape(1);
+        auto a_exp = mx::reshape(a, {B_dim, Da, 1});
+        auto b_exp = mx::reshape(b, {B_dim, 1, Db});
+        set_out(op, 0, a_exp * b_exp);
         break;
       }
       case OP_SQUEEZE: {

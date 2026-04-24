@@ -170,6 +170,24 @@ func TestScanOp(t *testing.T) {
 	}
 }
 
+func TestOuterOp(t *testing.T) {
+	p := NewProgram(0)
+	p.Outer("a", "b", "out")
+	if len(p.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(p.Ops))
+	}
+	op := p.Ops[0]
+	if op.Code != OpOuter {
+		t.Fatalf("expected OpOuter (%d), got %d", OpOuter, op.Code)
+	}
+	if len(op.Inputs) != 2 || op.Inputs[0] != "a" || op.Inputs[1] != "b" {
+		t.Fatalf("bad outer inputs: %v", op.Inputs)
+	}
+	if len(op.Outputs) != 1 || op.Outputs[0] != "out" {
+		t.Fatalf("bad outer outputs: %v", op.Outputs)
+	}
+}
+
 func TestPositionIndexingOps(t *testing.T) {
 	p := NewProgram(0)
 	p.DeclareInput("x", TensorFloat32, []int{2, 5, 3})
