@@ -88,19 +88,7 @@ def main():
         )
         sys.exit(1)
 
-    # Step 1: Download FineWeb-Edu
-    print(f"Downloading FineWeb-Edu from HuggingFace...")
-    print(f"  This may take a while on the first run (~20GB download).")
-    print(f"  Subsequent runs use the HuggingFace cache.\n")
-
-    ds = load_dataset(
-        "HuggingFaceFW/fineweb-edu",
-        name="sample-10BT",
-        split="train",
-        streaming=False,
-    )
-
-    # Step 2: Write raw text to a temporary JSONL file
+    # Step 1: Download FineWeb-Edu and write JSONL
     raw_dir = os.path.join(args.output, "raw")
     os.makedirs(raw_dir, exist_ok=True)
     jsonl_path = os.path.join(raw_dir, "fineweb_edu.jsonl")
@@ -109,6 +97,24 @@ def main():
         print(f"  [cached] {jsonl_path}")
     else:
         import json
+
+        # Use streaming when --max-docs is set to avoid downloading the
+        # entire dataset just to take a subset.
+        use_streaming = args.max_docs > 0
+        if use_streaming:
+            print(f"Streaming FineWeb-Edu from HuggingFace ({args.max_docs:,} docs)...")
+        else:
+            print(f"Downloading FineWeb-Edu from HuggingFace...")
+            print(f"  This may take a while on the first run (~20GB download).")
+            print(f"  Subsequent runs use the HuggingFace cache.")
+        print()
+
+        ds = load_dataset(
+            "HuggingFaceFW/fineweb-edu",
+            name="sample-10BT",
+            split="train",
+            streaming=use_streaming,
+        )
 
         print(f"  Writing JSONL to {jsonl_path}...")
         count = 0
@@ -119,7 +125,7 @@ def main():
                 json.dump({"text": doc["text"]}, f, ensure_ascii=False)
                 f.write("\n")
                 count += 1
-                if count % 100_000 == 0:
+                if count % 10_000 == 0:
                     print(f"    {count:,} documents written...")
         print(f"  Wrote {count:,} documents to {jsonl_path}")
 

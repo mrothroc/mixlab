@@ -115,15 +115,15 @@ def write_shard(path: str, tokens: np.ndarray):
         f.write(tokens.tobytes())
 
 
-def write_shards(tokens: np.ndarray, output_dir: str, prefix: str, shuffle: bool = True) -> int:
-    """Split tokens into shards of TOKENS_PER_SHARD and write them out."""
+def write_shards(tokens: np.ndarray, output_dir: str, prefix: str, shuffle: bool = True, tokens_per_shard: int = TOKENS_PER_SHARD) -> int:
+    """Split tokens into shards of tokens_per_shard and write them out."""
     rng = np.random.default_rng(42)
-    n_shards = max(1, (len(tokens) + TOKENS_PER_SHARD - 1) // TOKENS_PER_SHARD)
+    n_shards = max(1, (len(tokens) + tokens_per_shard - 1) // tokens_per_shard)
     written = 0
 
     for i in range(n_shards):
-        start = i * TOKENS_PER_SHARD
-        end = min(start + TOKENS_PER_SHARD, len(tokens))
+        start = i * tokens_per_shard
+        end = min(start + tokens_per_shard, len(tokens))
         chunk = tokens[start:end].copy()
 
         if shuffle and len(chunk) > 2048:
@@ -154,8 +154,7 @@ def main():
     parser.add_argument("--no-shuffle", action="store_true", help="Disable token shuffling within shards")
     args = parser.parse_args()
 
-    global TOKENS_PER_SHARD
-    TOKENS_PER_SHARD = args.tokens_per_shard
+    tokens_per_shard = args.tokens_per_shard
 
     # Read input
     print(f"Reading input from {args.input}...")
@@ -195,10 +194,10 @@ def main():
 
     # Write shards
     print("\nWriting training shards...")
-    n_train_shards = write_shards(train_tokens, args.output, "train", shuffle=not args.no_shuffle)
+    n_train_shards = write_shards(train_tokens, args.output, "train", shuffle=not args.no_shuffle, tokens_per_shard=tokens_per_shard)
 
     print("\nWriting validation shards...")
-    n_val_shards = write_shards(val_tokens, args.output, "val", shuffle=False)
+    n_val_shards = write_shards(val_tokens, args.output, "val", shuffle=False, tokens_per_shard=tokens_per_shard)
 
     print(f"\nDone! {n_train_shards} train shard(s), {n_val_shards} val shard(s) in {args.output}")
     print(f"Train pattern: {args.output}/train_*.bin")
