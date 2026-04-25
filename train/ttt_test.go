@@ -175,3 +175,24 @@ func TestMeanValidationLossWithLoRATTTImprovesOverNoTTT(t *testing.T) {
 		}
 	}
 }
+
+func TestFakeTTTTrainerEvaluatePerTokenGPU(t *testing.T) {
+	trainer := &fakeTTTTrainer{loss: 1.25}
+
+	got, err := trainer.EvaluatePerTokenGPU([]int{1, 2}, []int{2, 3}, 1, 2)
+	if err != nil {
+		t.Fatalf("EvaluatePerTokenGPU: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1", len(got))
+	}
+	if got[0] != trainer.loss {
+		t.Fatalf("got[0] = %g, want %g", got[0], trainer.loss)
+	}
+	if trainer.evalCalls != 1 {
+		t.Fatalf("evalCalls = %d, want 1", trainer.evalCalls)
+	}
+	if len(trainer.events) != 1 || trainer.events[0] != "eval_per_token" {
+		t.Fatalf("events = %v, want [eval_per_token]", trainer.events)
+	}
+}
