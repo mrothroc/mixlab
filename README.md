@@ -17,10 +17,17 @@ U-Net layouts, and fully custom JSON-defined blocks.
 
 **Platforms:** macOS (Apple Silicon) and Linux (NVIDIA CUDA via Docker).
 
+## Prerequisites (macOS)
+
+- Apple Silicon Mac (M1 or later)
+- Go 1.24+ ([go.dev/dl](https://go.dev/dl/))
+- Python 3.10+ (for data preparation)
+- Xcode Command Line Tools (`xcode-select --install`)
+
 ## Quickstart (macOS)
 
 ```bash
-# 1. Install Go 1.24+ (https://go.dev/dl/) and MLX
+# 1. Set up Python environment and install dependencies
 python3 -m venv .venv && source .venv/bin/activate
 pip install mlx numpy tokenizers
 
@@ -310,6 +317,38 @@ Or use a pre-trained tokenizer:
 mixlab -mode prepare -input corpus.txt -output data/my_data \
     -tokenizer-path path/to/tokenizer.json
 ```
+
+### Data/config compatibility
+
+**The `vocab_size` in your JSON config must match the tokenizer used to create
+the `.bin` shards.** This is the most common source of silent failures. The
+example data uses vocab 1024; the larger example configs use 8192. If you see
+garbage loss values, check this first.
+
+```jsonc
+// Config says vocab_size: 1024 → train on SP-1024 shards
+{"vocab_size": 1024, ...}   // use with data/fineweb_sp1024/train_*.bin
+
+// Config says vocab_size: 8192 → train on SP-8192 shards
+{"vocab_size": 8192, ...}   // use with data/fineweb_sp8192/train_*.bin
+```
+
+## Customizing configs
+
+Start by copying `examples/plain_3L.json` and changing these five knobs:
+
+| Knob | Field | Effect |
+|------|-------|--------|
+| **Width** | `model_dim` | Hidden size. Larger = more capacity, more memory |
+| **Depth** | Add more blocks to `blocks` array | More layers = more capacity |
+| **Heads** | `heads` on `plain` blocks | Attention heads (must divide `model_dim`) |
+| **Vocab** | `vocab_size` | Must match your tokenizer (see above) |
+| **Context** | `seq_len` | Sequence length in tokens |
+
+To try a different block family, swap `"type": "plain"` for `"mamba"`,
+`"retnet"`, `"rwkv"`, or any other registered type. See
+[docs/config-reference.md](docs/config-reference.md) for all fields and
+[examples/](examples/) for working configs at various complexity levels.
 
 ## Architecture
 

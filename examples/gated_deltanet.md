@@ -16,5 +16,5 @@ The custom ops map to the architecture like this:
 Train it with:
 
 ```bash
-./mixlab -mode arch -config examples/gated_deltanet.json -train 'benchmarks/data/shakespeare_char/train_*.bin'
+./mixlab -mode arch -config examples/gated_deltanet.json -train 'data/example/train_*.bin'
 ```

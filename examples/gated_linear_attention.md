@@ -13,11 +13,11 @@ Key features:
 Note: mixlab's `kv_source` feature only applies to `plain` attention blocks
 today, so stride-2 KV sharing is not encoded in this custom-block example.
 
-Train with example data (quick test):
+Train with example data (quick test — run `bash scripts/download_example_data.sh` first):
 
 ```bash
 mixlab -mode arch -config examples/gated_linear_attention.json \
-    -train 'benchmarks/data/shakespeare_char/train_*.bin'
+    -train 'data/example/train_*.bin'
 ```
 
 Train on FineWeb-Edu (real-scale):

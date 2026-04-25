@@ -11,11 +11,11 @@ Key features:
 - `parallel_residual: true` so each attention/FFN pair shares the same pre-norm input
 - Full depth recurrence via `weight_group`, giving 10 executed blocks from 1 shared attention block and 1 shared FFN block
 
-Train with example data (quick test):
+Train with example data (quick test — run `bash scripts/download_example_data.sh` first):
 
 ```bash
 mixlab -mode arch -config examples/depth_recurrent_gqa.json \
-    -train 'benchmarks/data/shakespeare_char/train_*.bin'
+    -train 'data/example/train_*.bin'
 ```
 
 Train on FineWeb-Edu (real-scale):

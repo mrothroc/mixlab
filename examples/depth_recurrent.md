@@ -17,5 +17,5 @@ The count output should show `unique / with sharing expanded`, where the expande
 Train it with:
 
 ```bash
-./mixlab -mode arch -config examples/depth_recurrent.json -train 'benchmarks/data/shakespeare_char/train_*.bin'
+./mixlab -mode arch -config examples/depth_recurrent.json -train 'data/example/train_*.bin'
 ```
