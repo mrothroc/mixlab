@@ -1,0 +1,50 @@
+{
+  "name": "depth_recurrent_gqa",
+
+  // Competition-inspired depth-recurrent transformer:
+  // SP8192-scale vocab, 544-wide model, 8 query heads / 4 KV heads.
+  "model_dim": 544,
+  "vocab_size": 8192,
+  "seq_len": 1024,
+
+  // Parallel residuals require strict (plain, swiglu) pairs in mixlab.
+  // This matches the attention+FFN pairing while letting both branches
+  // consume the same pre-norm input.
+  "parallel_residual": true,
+
+  "blocks": [
+    // All five attention blocks share one parameter set.
+    // qk_gain is numeric in mixlab; 1.0 enables a learnable gain initialized at 1.
+    {"type": "plain", "heads": 8, "kv_heads": 4, "qk_gain": 1.0, "weight_group": "recurrent_attn"},
+    // All five FFN blocks share one parameter set as the recurrent MLP half.
+    // The original competition entry used a LeakyReLU^2 FFN variant, but
+    // parallel_residual currently requires swiglu as the paired feed-forward block.
+    {"type": "swiglu", "weight_group": "recurrent_ffn"},
+
+    {"type": "plain", "heads": 8, "kv_heads": 4, "qk_gain": 1.0, "weight_group": "recurrent_attn"},
+    {"type": "swiglu", "weight_group": "recurrent_ffn"},
+
+    {"type": "plain", "heads": 8, "kv_heads": 4, "qk_gain": 1.0, "weight_group": "recurrent_attn"},
+    {"type": "swiglu", "weight_group": "recurrent_ffn"},
+
+    {"type": "plain", "heads": 8, "kv_heads": 4, "qk_gain": 1.0, "weight_group": "recurrent_attn"},
+    {"type": "swiglu", "weight_group": "recurrent_ffn"},
+
+    {"type": "plain", "heads": 8, "kv_heads": 4, "qk_gain": 1.0, "weight_group": "recurrent_attn"},
+    {"type": "swiglu", "weight_group": "recurrent_ffn"}
+  ],
+
+  "training": {
+    "steps": 100,
+    "lr": 1e-3,
+    "optimizer": "muon",
+    "grad_clip": 1.0,
+    "weight_decay": 0.04,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+    "seed": 42,
+    "batch_tokens": 2048
+  }
+}

@@ -409,10 +409,13 @@ func emitMLPIR(prog *Program, x string, wi, idx int, activation string, leakySlo
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, qkGain float64) (string, int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return "", wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
+	}
+	if qkGain < 0 {
+		return "", wi, fmt.Errorf("invalid qk_gain=%g", qkGain)
 	}
 	kvH, err := normalizePlainKVHeads(H, kvH)
 	if err != nil {
@@ -438,6 +441,8 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 	khRot := k + "_rot"
 	scores := prefix + "_scores"
 	scaled := scores + "_scaled"
+	gain := scores + "_qk_gain"
+	gained := scores + "_gained"
 	masked := scores + "_masked"
 	attn := prefix + "_attn"
 	ctx := prefix + "_ctx"
@@ -483,6 +488,12 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 	prog.Transpose(khRot, []int{0, 1, 3, 2}, kt)
 	prog.MatMul(qhRot, kt, scores)
 	prog.ScalarMul(scores, scale, scaled)
+	if qkGain > 0 {
+		prog.Reshape(weightName(wi), []int{1, H, 1, 1}, gain)
+		wi++
+		prog.Mul(scaled, gain, gained)
+		scaled = gained
+	}
 	prog.CausalMask(scaled, T, masked)
 	prog.Softmax(masked, -1, attn)
 	prog.MatMul(attn, vh, ctx)

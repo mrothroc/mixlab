@@ -1,0 +1,331 @@
+{
+  "name": "gated_linear_attention",
+
+  // Competition-inspired GatedDeltaNet / linear-attention example.
+  // mixlab's kv_source is plain-only, so this example uses the working
+  // custom-block recurrence path from gated_deltanet.json and scales it up.
+  "model_dim": 544,
+  "vocab_size": 8192,
+  "seq_len": 1024,
+  "logit_softcap": 30.0,
+  "bigram_vocab_size": 3072,
+  "bigram_dim": 112,
+
+  "blocks": [
+    // Ten recurrent layers total. Each custom block is followed by an MLP
+    // using LeakyReLU^2 with zero negative slope, which is equivalent to ReLU^2.
+    {
+      "type": "custom",
+      "name": "gated_linear_attention",
+      "heads": 8,
+      "weights": [
+        {"name": "norm_scale",   "shape": ["D"]},
+        {"name": "w_gate",       "shape": ["D", "D"]},
+        {"name": "w_val",        "shape": ["D", "D"]},
+        {"name": "w_out",        "shape": ["D", "D"]},
+        {"name": "w_k",          "shape": ["D", "HD"]},
+        {"name": "w_beta",       "shape": ["D", "HD"]},
+        {"name": "w_v_aux",      "shape": ["D", "HD"]},
+        {"name": "w_state_gate", "shape": ["D", "HD"]}
+      ],
+      "ops": [
+        {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+        {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+        {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+        {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+        {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+
+        // Auxiliary low-rank KV-state path keeps outer/matrix_scan in the block
+        // while staying tractable at model_dim=544 and heads=8 (HD = 68).
+        {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+        {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+        {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+        {"op": "matmul",  "inputs": ["x_norm", "w_v_aux"],      "output": "value_aux"},
+        {"op": "mul",     "inputs": ["value_aux", "beta"],      "output": "value_beta"},
+        {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+        {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+        {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+        {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "HD", "Db": "HD"}},
+
+        {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+        {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+      ]
+    },
+    {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.0},
+
+    {"type": "custom", "name": "gated_linear_attention", "heads": 8, "weights": [
+      {"name": "norm_scale",   "shape": ["D"]},
+      {"name": "w_gate",       "shape": ["D", "D"]},
+      {"name": "w_val",        "shape": ["D", "D"]},
+      {"name": "w_out",        "shape": ["D", "D"]},
+      {"name": "w_k",          "shape": ["D", "HD"]},
+      {"name": "w_beta",       "shape": ["D", "HD"]},
+      {"name": "w_v_aux",      "shape": ["D", "HD"]},
+      {"name": "w_state_gate", "shape": ["D", "HD"]}
+    ], "ops": [
+      {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+      {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+      {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+      {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_v_aux"],      "output": "value_aux"},
+      {"op": "mul",     "inputs": ["value_aux", "beta"],      "output": "value_beta"},
+      {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+      {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+      {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "HD", "Db": "HD"}},
+      {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+      {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+    ]},
+    {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.0},
+
+    {"type": "custom", "name": "gated_linear_attention", "heads": 8, "weights": [
+      {"name": "norm_scale",   "shape": ["D"]},
+      {"name": "w_gate",       "shape": ["D", "D"]},
+      {"name": "w_val",        "shape": ["D", "D"]},
+      {"name": "w_out",        "shape": ["D", "D"]},
+      {"name": "w_k",          "shape": ["D", "HD"]},
+      {"name": "w_beta",       "shape": ["D", "HD"]},
+      {"name": "w_v_aux",      "shape": ["D", "HD"]},
+      {"name": "w_state_gate", "shape": ["D", "HD"]}
+    ], "ops": [
+      {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+      {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+      {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+      {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_v_aux"],      "output": "value_aux"},
+      {"op": "mul",     "inputs": ["value_aux", "beta"],      "output": "value_beta"},
+      {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+      {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+      {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "HD", "Db": "HD"}},
+      {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+      {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+    ]},
+    {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.0},
+
+    {"type": "custom", "name": "gated_linear_attention", "heads": 8, "weights": [
+      {"name": "norm_scale",   "shape": ["D"]},
+      {"name": "w_gate",       "shape": ["D", "D"]},
+      {"name": "w_val",        "shape": ["D", "D"]},
+      {"name": "w_out",        "shape": ["D", "D"]},
+      {"name": "w_k",          "shape": ["D", "HD"]},
+      {"name": "w_beta",       "shape": ["D", "HD"]},
+      {"name": "w_v_aux",      "shape": ["D", "HD"]},
+      {"name": "w_state_gate", "shape": ["D", "HD"]}
+    ], "ops": [
+      {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+      {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+      {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+      {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_v_aux"],      "output": "value_aux"},
+      {"op": "mul",     "inputs": ["value_aux", "beta"],      "output": "value_beta"},
+      {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+      {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+      {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "HD", "Db": "HD"}},
+      {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+      {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+    ]},
+    {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.0},
+
+    {"type": "custom", "name": "gated_linear_attention", "heads": 8, "weights": [
+      {"name": "norm_scale",   "shape": ["D"]},
+      {"name": "w_gate",       "shape": ["D", "D"]},
+      {"name": "w_val",        "shape": ["D", "D"]},
+      {"name": "w_out",        "shape": ["D", "D"]},
+      {"name": "w_k",          "shape": ["D", "HD"]},
+      {"name": "w_beta",       "shape": ["D", "HD"]},
+      {"name": "w_v_aux",      "shape": ["D", "HD"]},
+      {"name": "w_state_gate", "shape": ["D", "HD"]}
+    ], "ops": [
+      {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+      {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+      {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+      {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_v_aux"],      "output": "value_aux"},
+      {"op": "mul",     "inputs": ["value_aux", "beta"],      "output": "value_beta"},
+      {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+      {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+      {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "HD", "Db": "HD"}},
+      {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+      {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+    ]},
+    {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.0},
+
+    {"type": "custom", "name": "gated_linear_attention", "heads": 8, "weights": [
+      {"name": "norm_scale",   "shape": ["D"]},
+      {"name": "w_gate",       "shape": ["D", "D"]},
+      {"name": "w_val",        "shape": ["D", "D"]},
+      {"name": "w_out",        "shape": ["D", "D"]},
+      {"name": "w_k",          "shape": ["D", "HD"]},
+      {"name": "w_beta",       "shape": ["D", "HD"]},
+      {"name": "w_v_aux",      "shape": ["D", "HD"]},
+      {"name": "w_state_gate", "shape": ["D", "HD"]}
+    ], "ops": [
+      {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+      {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+      {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+      {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_v_aux"],      "output": "value_aux"},
+      {"op": "mul",     "inputs": ["value_aux", "beta"],      "output": "value_beta"},
+      {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+      {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+      {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "HD", "Db": "HD"}},
+      {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+      {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+    ]},
+    {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.0},
+
+    {"type": "custom", "name": "gated_linear_attention", "heads": 8, "weights": [
+      {"name": "norm_scale",   "shape": ["D"]},
+      {"name": "w_gate",       "shape": ["D", "D"]},
+      {"name": "w_val",        "shape": ["D", "D"]},
+      {"name": "w_out",        "shape": ["D", "D"]},
+      {"name": "w_k",          "shape": ["D", "HD"]},
+      {"name": "w_beta",       "shape": ["D", "HD"]},
+      {"name": "w_v_aux",      "shape": ["D", "HD"]},
+      {"name": "w_state_gate", "shape": ["D", "HD"]}
+    ], "ops": [
+      {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+      {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+      {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+      {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_v_aux"],      "output": "value_aux"},
+      {"op": "mul",     "inputs": ["value_aux", "beta"],      "output": "value_beta"},
+      {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+      {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+      {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "HD", "Db": "HD"}},
+      {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+      {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+    ]},
+    {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.0},
+
+    {"type": "custom", "name": "gated_linear_attention", "heads": 8, "weights": [
+      {"name": "norm_scale",   "shape": ["D"]},
+      {"name": "w_gate",       "shape": ["D", "D"]},
+      {"name": "w_val",        "shape": ["D", "D"]},
+      {"name": "w_out",        "shape": ["D", "D"]},
+      {"name": "w_k",          "shape": ["D", "HD"]},
+      {"name": "w_beta",       "shape": ["D", "HD"]},
+      {"name": "w_v_aux",      "shape": ["D", "HD"]},
+      {"name": "w_state_gate", "shape": ["D", "HD"]}
+    ], "ops": [
+      {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+      {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+      {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+      {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_v_aux"],      "output": "value_aux"},
+      {"op": "mul",     "inputs": ["value_aux", "beta"],      "output": "value_beta"},
+      {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+      {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+      {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "HD", "Db": "HD"}},
+      {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+      {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+    ]},
+    {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.0},
+
+    {"type": "custom", "name": "gated_linear_attention", "heads": 8, "weights": [
+      {"name": "norm_scale",   "shape": ["D"]},
+      {"name": "w_gate",       "shape": ["D", "D"]},
+      {"name": "w_val",        "shape": ["D", "D"]},
+      {"name": "w_out",        "shape": ["D", "D"]},
+      {"name": "w_k",          "shape": ["D", "HD"]},
+      {"name": "w_beta",       "shape": ["D", "HD"]},
+      {"name": "w_v_aux",      "shape": ["D", "HD"]},
+      {"name": "w_state_gate", "shape": ["D", "HD"]}
+    ], "ops": [
+      {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+      {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+      {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+      {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_v_aux"],      "output": "value_aux"},
+      {"op": "mul",     "inputs": ["value_aux", "beta"],      "output": "value_beta"},
+      {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+      {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+      {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "HD", "Db": "HD"}},
+      {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+      {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+    ]},
+    {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.0},
+
+    {"type": "custom", "name": "gated_linear_attention", "heads": 8, "weights": [
+      {"name": "norm_scale",   "shape": ["D"]},
+      {"name": "w_gate",       "shape": ["D", "D"]},
+      {"name": "w_val",        "shape": ["D", "D"]},
+      {"name": "w_out",        "shape": ["D", "D"]},
+      {"name": "w_k",          "shape": ["D", "HD"]},
+      {"name": "w_beta",       "shape": ["D", "HD"]},
+      {"name": "w_v_aux",      "shape": ["D", "HD"]},
+      {"name": "w_state_gate", "shape": ["D", "HD"]}
+    ], "ops": [
+      {"op": "rmsnorm", "inputs": ["x", "norm_scale"], "output": "x_norm", "params": {"eps": 1e-5}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_gate"], "output": "gate_logits"},
+      {"op": "sigmoid", "inputs": ["gate_logits"],      "output": "gate"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_val"],  "output": "value"},
+      {"op": "scan_tv", "inputs": ["value", "gate"],    "output": "state", "params": {"B": "B", "T": "T", "D": "D"}},
+      {"op": "matmul",  "inputs": ["x_norm", "w_k"],          "output": "key"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_beta"],       "output": "beta_logits"},
+      {"op": "sigmoid", "inputs": ["beta_logits"],            "output": "beta"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_v_aux"],      "output": "value_aux"},
+      {"op": "mul",     "inputs": ["value_aux", "beta"],      "output": "value_beta"},
+      {"op": "outer",   "inputs": ["key", "value_beta"],      "output": "kv"},
+      {"op": "matmul",  "inputs": ["x_norm", "w_state_gate"], "output": "state_gate_logits"},
+      {"op": "sigmoid", "inputs": ["state_gate_logits"],      "output": "state_gate"},
+      {"op": "matrix_scan", "inputs": ["kv", "state_gate"],   "output": "kv_state", "params": {"B": "B", "T": "T", "Da": "HD", "Db": "HD"}},
+      {"op": "matmul",  "inputs": ["state", "w_out"], "output": "proj"},
+      {"op": "add",     "inputs": ["x", "proj"],      "output": "x"}
+    ]},
+    {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.0}
+  ],
+
+  "training": {
+    "steps": 100,
+    "lr": 1e-3,
+    "optimizer": "muon",
+    "grad_clip": 1.0,
+    "weight_decay": 0.04,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+    "seed": 42,
+    "batch_tokens": 2048
+  }
+}
