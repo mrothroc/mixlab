@@ -21,13 +21,13 @@ U-Net layouts, and fully custom JSON-defined blocks.
 
 ```bash
 # 1. Install Go 1.24+ (https://go.dev/dl/) and MLX
-pip install mlx
+python3 -m venv .venv && source .venv/bin/activate
+pip install mlx numpy tokenizers
 
 # 2. Build mixlab
 make build
 
-# 3. Install Python deps for data preparation, then download example data (~5 MB)
-pip install numpy tokenizers
+# 3. Download example data (~5 MB of public domain text)
 bash scripts/download_example_data.sh
 
 # 4. Train a 3-layer attention model
@@ -109,10 +109,11 @@ brew install mrothroc/tap/mixlab
 
 This installs MLX automatically as a dependency.
 
-For data preparation (`prepare` mode), also install Python deps:
+For data preparation (`prepare` mode) and FineWeb downloads, also install Python deps:
 
 ```bash
-pip install numpy tokenizers
+python3 -m venv .venv && source .venv/bin/activate
+pip install numpy tokenizers datasets
 ```
 
 ### Build from source (macOS Apple Silicon)
@@ -120,7 +121,8 @@ pip install numpy tokenizers
 Requires Go 1.24+ and MLX (`brew install mlx` or `pip install mlx`).
 
 ```bash
-pip install numpy tokenizers   # for data preparation
+python3 -m venv .venv && source .venv/bin/activate
+pip install mlx numpy tokenizers   # MLX + data preparation deps
 make build
 ```
 
@@ -256,19 +258,24 @@ everything: fetching the data from HuggingFace, training a BPE tokenizer at
 your chosen vocab size, and writing binary shards ready for mixlab.
 
 ```bash
-pip install numpy tokenizers datasets
+pip install numpy tokenizers datasets   # if not already installed
 
-# SP-1024 (small vocab, fast iteration, good for architecture search)
+# Quick test (~30 seconds, streams 5000 documents)
+python3 scripts/download_fineweb.py --output data/fineweb_sp1024 \
+    --vocab-size 1024 --max-docs 5000
+
+# Full dataset — SP-1024 (small vocab, fast iteration, good for architecture search)
 python3 scripts/download_fineweb.py --output data/fineweb_sp1024 --vocab-size 1024
 
-# SP-8192 (larger vocab, better BPB, used by competition leaders)
+# Full dataset — SP-8192 (larger vocab, better BPB for production models)
 python3 scripts/download_fineweb.py --output data/fineweb_sp8192 --vocab-size 8192
 ```
 
-The first run downloads ~20 GB from HuggingFace (cached for subsequent runs).
-Tokenization takes 30-60 minutes depending on your machine. The output is a
-set of binary shards (~10 GB for SP-1024, ~5 GB for SP-8192) plus a tokenizer
-and BPB lookup tables.
+The `--max-docs` flag streams only a subset — useful for verifying your setup
+before committing to the full download. Without it, the first run downloads
+~20 GB from HuggingFace (cached for subsequent runs). Tokenization takes
+30-60 minutes. The output is a set of binary shards plus a tokenizer and BPB
+lookup tables.
 
 Train on the prepared data:
 
