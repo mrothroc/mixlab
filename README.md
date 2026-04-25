@@ -239,6 +239,71 @@ Tokens are stored as uint16, so `vocab-size` must be 65,535 or less.
 | `-tokenizer-path` | Path to a pre-trained `tokenizer.json` (optional) |
 | `-text-field` | JSON field name for text in JSONL input (default: `text`) |
 
+## Training data
+
+### Quick start: example data (~5 MB)
+
+The quickstart above uses `scripts/download_example_data.sh` to download
+public domain books from Project Gutenberg. This is enough to verify your
+setup and see loss curves, but too small for real experiments.
+
+### Real-world: FineWeb-Edu (10B tokens)
+
+For serious architecture exploration, use
+[FineWeb-Edu](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu)
+(a curated, deduplicated web text corpus). The download script handles
+everything: fetching the data from HuggingFace, training a BPE tokenizer at
+your chosen vocab size, and writing binary shards ready for mixlab.
+
+```bash
+pip install numpy tokenizers datasets
+
+# SP-1024 (small vocab, fast iteration, good for architecture search)
+python3 scripts/download_fineweb.py --output data/fineweb_sp1024 --vocab-size 1024
+
+# SP-8192 (larger vocab, better BPB, used by competition leaders)
+python3 scripts/download_fineweb.py --output data/fineweb_sp8192 --vocab-size 8192
+```
+
+The first run downloads ~20 GB from HuggingFace (cached for subsequent runs).
+Tokenization takes 30-60 minutes depending on your machine. The output is a
+set of binary shards (~10 GB for SP-1024, ~5 GB for SP-8192) plus a tokenizer
+and BPB lookup tables.
+
+Train on the prepared data:
+
+```bash
+mixlab -mode arch -config examples/plain_3L.json \
+    -train 'data/fineweb_sp1024/train_*.bin'
+
+# Race two architectures head-to-head
+mixlab -mode arch_race -configs examples/ \
+    -train 'data/fineweb_sp8192/train_*.bin'
+```
+
+### Bring your own data
+
+mixlab can tokenize any UTF-8 text file, directory of text files, or JSONL:
+
+```bash
+# Single text file
+mixlab -mode prepare -input corpus.txt -output data/my_data -vocab-size 1024
+
+# Directory of text files
+mixlab -mode prepare -input texts/ -output data/my_data -vocab-size 4096
+
+# JSONL (specify which field contains text)
+mixlab -mode prepare -input data.jsonl -output data/my_data \
+    -vocab-size 8192 -text-field content
+```
+
+Or use a pre-trained tokenizer:
+
+```bash
+mixlab -mode prepare -input corpus.txt -output data/my_data \
+    -tokenizer-path path/to/tokenizer.json
+```
+
 ## Architecture
 
 ```text
