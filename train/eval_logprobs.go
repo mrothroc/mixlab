@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"runtime"
 	"strings"
 	"time"
 
@@ -13,9 +12,6 @@ import (
 )
 
 func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, outputPath string) error {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	if configPath == "" {
 		return fmt.Errorf("-config is required for eval mode; pass a JSON config file, e.g.: mixlab -mode eval -config examples/plain_3L.json -safetensors-load weights.st -train 'data/train_*.bin'")
 	}
@@ -29,44 +25,31 @@ func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, outputPa
 		return fmt.Errorf("-logprobs-out is required for logprob export")
 	}
 
-	cfg, err := LoadArchConfig(configPath)
+	session, err := NewInferenceSession(configPath, safetensorsLoad)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = session.Close() }()
+
+	cfg := session.Config()
 	if cfg.VocabSize > math.MaxUint16 {
 		return fmt.Errorf("vocab_size=%d exceeds uint16 record format limit", cfg.VocabSize)
 	}
-	prog, err := BuildIRProgramFromConfig(cfg)
-	if err != nil {
-		return fmt.Errorf("build IR program: %w", err)
-	}
-	shapes, err := computeWeightShapes(cfg)
-	if err != nil {
-		return fmt.Errorf("compute weight shapes: %w", err)
-	}
-	loadedWeights, err := loadSafetensorsWeights(safetensorsLoad, shapes)
-	if err != nil {
-		return fmt.Errorf("load safetensors %q: %w", safetensorsLoad, err)
-	}
-	trainer, err := initGPUTrainer(prog, cfg, loadedWeights)
-	if err != nil {
-		return fmt.Errorf("init GPU trainer: %w", err)
-	}
-	defer trainer.CloseTrainer()
 
 	valPattern := strings.Replace(trainPattern, "train", "val", 1)
-	if err := runFullEvalLogprobs(cfg, valPattern, trainer, lutDir, outputPath); err != nil {
+	if err := runFullEvalLogprobs(session, valPattern, lutDir, outputPath); err != nil {
 		return err
 	}
 
 	fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
 		cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
-	fmt.Printf("  [%s] loaded %d weights from %s\n", cfg.Name, len(loadedWeights), safetensorsLoad)
+	fmt.Printf("  [%s] loaded %d weights from %s\n", cfg.Name, session.weightCount, safetensorsLoad)
 	fmt.Printf("  [%s] wrote per-token eval NLLs to %s\n", cfg.Name, outputPath)
 	return nil
 }
 
-func runFullEvalLogprobs(cfg *ArchConfig, valPattern string, trainer GPUTrainer, lutDir, outputPath string) error {
+func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, outputPath string) error {
+	cfg := session.Config()
 	seqLen := cfg.SeqLen
 	batchTokens := cfg.Training.BatchTokens
 	if batchTokens%seqLen != 0 {
@@ -125,18 +108,14 @@ func runFullEvalLogprobs(cfg *ArchConfig, valPattern string, trainer GPUTrainer,
 		}
 
 		local := valTokens[rawStart : rawStart+chunkTokens+1]
-		xTok := make([]int, chunkTokens)
-		yTok := make([]int, chunkTokens)
 		yIDs := make([]uint16, chunkTokens)
 		for i := 0; i < chunkTokens; i++ {
-			xTok[i] = int(local[i])
-			yTok[i] = int(local[i+1])
-			if yTok[i] < 0 || yTok[i] > math.MaxUint16 {
-				return fmt.Errorf("target token id out of uint16 range at offset %d: %d", rawStart+i, yTok[i])
+			tgtID := int(local[i+1])
+			if tgtID < 0 || tgtID > math.MaxUint16 {
+				return fmt.Errorf("target token id out of uint16 range at offset %d: %d", rawStart+i, tgtID)
 			}
-			yIDs[i] = uint16(yTok[i])
-			prevID := xTok[i]
-			tgtID := yTok[i]
+			yIDs[i] = uint16(tgtID)
+			prevID := int(local[i])
 			if prevID < 0 || prevID >= len(luts.isBoundary) || tgtID < 0 || tgtID >= len(luts.baseBytes) || tgtID >= len(luts.hasLeading) {
 				return fmt.Errorf("token id out of LUT bounds at offset %d: prev=%d tgt=%d", rawStart+i, prevID, tgtID)
 			}
@@ -146,9 +125,7 @@ func runFullEvalLogprobs(cfg *ArchConfig, valPattern string, trainer GPUTrainer,
 			}
 			totalBytes += tokenBytes
 		}
-		batchSize := chunkTokens / seqLen
-
-		nlls, err := trainer.EvaluatePerTokenGPU(xTok, yTok, batchSize, seqLen)
+		nlls, err := session.EvalTokens(local)
 		if err != nil {
 			return fmt.Errorf("eval failed at token offset %d: %w", rawStart, err)
 		}
@@ -169,15 +146,22 @@ func runFullEvalLogprobs(cfg *ArchConfig, valPattern string, trainer GPUTrainer,
 		writtenTokens += chunkTokens
 
 		if cfg.Training.TTTSteps > 0 {
+			xTok := make([]int, chunkTokens)
+			yTok := make([]int, chunkTokens)
+			for i := 0; i < chunkTokens; i++ {
+				xTok[i] = int(local[i])
+				yTok[i] = int(local[i+1])
+			}
+			batchSize := chunkTokens / seqLen
 			for step := 0; step < cfg.Training.TTTSteps; step++ {
-				if _, err := trainer.TrainStepGPU(xTok, yTok, batchSize, seqLen, float32(cfg.Training.TTTLR)); err != nil {
+				if _, err := session.trainer.TrainStepGPU(xTok, yTok, batchSize, seqLen, float32(cfg.Training.TTTLR)); err != nil {
 					return fmt.Errorf("ttt step %d failed at token offset %d: %w", step+1, rawStart, err)
 				}
 			}
 		}
 
 		rawStart += chunkTokens
-		processedSeqs += batchSize
+		processedSeqs += chunkTokens / seqLen
 
 		now := time.Now()
 		if now.Sub(lastProgress) >= 30*time.Second || processedSeqs >= totalSeqs {
