@@ -65,7 +65,7 @@ func runIRHealthCheck() error {
 	fmt.Printf("  IR program: %d weights, %d ops\n", prog.NumWeights, len(prog.Ops))
 
 	// Create GPU trainer (nil loadedWeights = Xavier init from scratch)
-	trainer, err := initGPUTrainer(prog, cfg, nil)
+	trainer, err := initGPUTrainer(prog, cfg, nil, nil)
 	if err != nil {
 		return fmt.Errorf("init GPU trainer: %w", err)
 	}

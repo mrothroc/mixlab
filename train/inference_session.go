@@ -65,7 +65,7 @@ func NewInferenceSession(configPath, safetensorsLoad string) (*InferenceSession,
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("load safetensors %q: %w", safetensorsLoad, err)
 	}
-	trainer, err := initGPUTrainer(prog, cfg, loadedWeights)
+	trainer, err := initGPUTrainer(prog, cfg, loadedWeights, nil)
 	if err != nil {
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("init GPU trainer: %w", err)

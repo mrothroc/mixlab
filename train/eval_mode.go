@@ -39,7 +39,7 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad string) error {
 	if err != nil {
 		return fmt.Errorf("load safetensors %q: %w", safetensorsLoad, err)
 	}
-	trainer, err := initGPUTrainer(prog, cfg, loadedWeights)
+	trainer, err := initGPUTrainer(prog, cfg, loadedWeights, nil)
 	if err != nil {
 		return fmt.Errorf("init GPU trainer: %w", err)
 	}

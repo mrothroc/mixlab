@@ -50,7 +50,7 @@ func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 	if err != nil {
 		return fmt.Errorf("load safetensors %q: %w", safetensorsLoad, err)
 	}
-	trainer, err := initGPUTrainer(prog, &genCfg, loadedWeights)
+	trainer, err := initGPUTrainer(prog, &genCfg, loadedWeights, nil)
 	if err != nil {
 		return fmt.Errorf("init GPU trainer: %w", err)
 	}

@@ -86,7 +86,7 @@ func TestIntegrationExampleConfigs_TrainStable(t *testing.T) {
 				t.Fatalf("BuildIRProgramFromConfig: %v", err)
 			}
 
-			trainer, err := initGPUTrainer(prog, cfg, nil)
+			trainer, err := initGPUTrainer(prog, cfg, nil, nil)
 			if err != nil {
 				t.Fatalf("initGPUTrainer: %v", err)
 			}
@@ -142,7 +142,7 @@ func TestIntegrationExampleConfigs_EvalForwardPass(t *testing.T) {
 				t.Fatalf("BuildIRProgramFromConfig: %v", err)
 			}
 
-			trainer, err := initGPUTrainer(prog, cfg, nil)
+			trainer, err := initGPUTrainer(prog, cfg, nil, nil)
 			if err != nil {
 				t.Fatalf("initGPUTrainer: %v", err)
 			}

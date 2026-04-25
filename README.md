@@ -76,6 +76,9 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
   logging via `training.hardware_tflops`.
 - Quantization: int8 and int6 with per-row scaling, SDClip clipping (`-quant-method sdclip`),
   quantization-aware training (`training.qat: "int6"`).
+- Public Go API hooks: reusable `train.InferenceSession` for repeated evals and
+  `train.TrainOptions.OptimizerOverride` for custom optimizer-group plans such
+  as frozen-weight classes.
 - Custom blocks: declare weights and op graphs directly in JSON.
 
 ## When to use mixlab

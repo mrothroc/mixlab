@@ -27,7 +27,12 @@ type mlxGPUTrainer struct {
 
 // initMLXGPUTrainer creates a GPU trainer backed by the MLX IR interpreter.
 // If loadedWeights is non-nil, those weights are used instead of random init.
-func initMLXGPUTrainer(irProg *ir.Program, cfg *ArchConfig, loadedWeights [][]float32) (*mlxGPUTrainer, error) {
+func initMLXGPUTrainer(
+	irProg *ir.Program,
+	cfg *ArchConfig,
+	loadedWeights [][]float32,
+	optimizerOverride func(gpu.TrainerOptimizerSpec, []WeightShape) (gpu.TrainerOptimizerSpec, error),
+) (*mlxGPUTrainer, error) {
 	if !gpu.Available() {
 		return nil, fmt.Errorf("MLX backend unavailable; rebuild with: CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab")
 	}
@@ -86,6 +91,19 @@ func initMLXGPUTrainer(irProg *ir.Program, cfg *ArchConfig, loadedWeights [][]fl
 		gpuProg.Destroy()
 		gpu.FreeHandles(handles)
 		return nil, fmt.Errorf("build optimizer spec: %w", err)
+	}
+	if optimizerOverride != nil {
+		optimizerSpec, err = optimizerOverride(optimizerSpec, shapes)
+		if err != nil {
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, fmt.Errorf("optimizer override failed: %w", err)
+		}
+		if err := validateOptimizerSpecCoverage(optimizerSpec, shapes); err != nil {
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, fmt.Errorf("optimizer override returned invalid spec: %w", err)
+		}
 	}
 
 	trainerHandle, err := gpu.CreateTrainer(gpuProg, handles, optimizerSpec)
