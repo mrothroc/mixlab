@@ -1,0 +1,43 @@
+{
+  "name": "01_attn_native",
+
+  // Attention in its native regime — exact replica of the leader-clone from
+  // race v2: SP-8192, T=1024, depth recurrence, parallel residuals, QK-Gain
+  // 5.25, Muon, late QAT (int6), SWA, softcap, bigrams. This is the
+  // upper-half competition stack as expressible in mixlab.
+  "model_dim": 320,
+  "vocab_size": 8192,
+  "seq_len": 1024,
+  "parallel_residual": true,
+  "logit_softcap": 30.0,
+  "bigram_vocab_size": 3072,
+  "bigram_dim": 80,
+  "blocks": [
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_c"},
+    {"type": "swiglu", "weight_group": "ffn_c"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"}
+  ],
+  "training": {
+    "steps": 10000,
+    "lr": 1e-3,
+    "grad_clip": 1.0,
+    "weight_decay": 0.04,
+    "seed": 42,
+    "batch_tokens": 4096,
+    "optimizer": "muon",
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+    "qat": "int6",
+    "qat_start": 7000,
+    "swa_start": 7000,
+    "swa_decay": 0.997,
+    "swa_interval": 50
+  }
+}

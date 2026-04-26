@@ -1,0 +1,43 @@
+{
+  "name": "03_mamba_native_T4096",
+
+  // Mamba in its native regime: SP-1024 (small vocab, more tokens per byte,
+  // less parameter budget on embed/head, more left for SSM body), T=4096
+  // (linear-cost long context), AdamW (Muon's NS hurts SSM weights),
+  // weight_group depth recurrence (still relatively cheap).
+  //
+  // model_dim bumped to 384 to keep total params comparable to the attention
+  // SP-8192 config (whose embed+head eat 5M+ params at SP-8192/d=320).
+  //
+  // batch_tokens=4096 with T=4096 means B=1. Same per-step compute as
+  // mamba_handicapped (linear in T at fixed B*T), but each sequence carries
+  // ~2.5x more bytes than the attention config — direct test of mamba's
+  // long-context advantage.
+  "model_dim": 448,
+  "vocab_size": 1024,
+  "seq_len": 4096,
+  "logit_softcap": 30.0,
+  "bigram_vocab_size": 3072,
+  "bigram_dim": 112,
+  "blocks": [
+    {"type": "mamba3", "weight_group": "ssm_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "mamba3", "weight_group": "ssm_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"},
+    {"type": "mamba3", "weight_group": "ssm_c"},
+    {"type": "swiglu", "weight_group": "ffn_c"},
+    {"type": "mamba3", "weight_group": "ssm_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "mamba3", "weight_group": "ssm_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"}
+  ],
+  "training": {
+    "steps": 10000,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 4096,
+    "optimizer": "adamw"
+  }
+}

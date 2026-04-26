@@ -1,0 +1,35 @@
+{
+  "name": "04_mamba_native_T2048",
+
+  // Mamba native regime, intermediate seq_len: SP-1024, T=2048, B=2.
+  // Useful middle data point — does the long-context win compound smoothly
+  // with T, or is the T=4096 config picking up something specific to that
+  // length? Same model_dim and optimizer as T=4096 native config.
+  "model_dim": 448,
+  "vocab_size": 1024,
+  "seq_len": 2048,
+  "logit_softcap": 30.0,
+  "bigram_vocab_size": 3072,
+  "bigram_dim": 112,
+  "blocks": [
+    {"type": "mamba3", "weight_group": "ssm_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "mamba3", "weight_group": "ssm_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"},
+    {"type": "mamba3", "weight_group": "ssm_c"},
+    {"type": "swiglu", "weight_group": "ffn_c"},
+    {"type": "mamba3", "weight_group": "ssm_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "mamba3", "weight_group": "ssm_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"}
+  ],
+  "training": {
+    "steps": 10000,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 4096,
+    "optimizer": "adamw"
+  }
+}
