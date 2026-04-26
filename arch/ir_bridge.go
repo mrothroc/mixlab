@@ -17,7 +17,7 @@ func BuildIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		}
 	}
 
-	return BuildIRProgramWithBigramRecurrenceParallelDropout(
+	return buildIRProgramWithDropoutAndNgrams(
 		cfg.ModelDim,
 		cfg.VocabSize,
 		cfg.SeqLen,
@@ -30,6 +30,8 @@ func BuildIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		cfg.ParallelResidual,
 		cfg.BigramVocabSize,
 		cfg.EffectiveBigramDim(),
+		cfg.TrigramVocabSize,
+		cfg.EffectiveTrigramDim(),
 		cfg.LogitSoftcap,
 		cfg.Dropout,
 		cfg.Blocks,
@@ -43,7 +45,7 @@ func CountIRWeightsFromConfig(cfg *ArchConfig) (int, error) {
 		return 0, fmt.Errorf("nil config")
 	}
 
-	return CountWeightsWithBigramRecurrenceAndParallel(
+	return countWeightsWithNgramsRecurrenceAndParallel(
 		cfg.ModelDim,
 		cfg.EffectiveMLPMult(),
 		cfg.TieEmbeddings,
@@ -53,6 +55,8 @@ func CountIRWeightsFromConfig(cfg *ArchConfig) (int, error) {
 		cfg.ParallelResidual,
 		cfg.BigramVocabSize,
 		cfg.EffectiveBigramDim(),
+		cfg.TrigramVocabSize,
+		cfg.EffectiveTrigramDim(),
 		cfg.Blocks,
 		cfg.Recurrence,
 	)

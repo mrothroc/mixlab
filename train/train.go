@@ -17,12 +17,13 @@ import (
 
 // LRSchedule defines a cosine learning rate schedule with warmup and hold.
 type LRSchedule struct {
-	BaseLR   float32
-	MinLR    float32
-	Warmup   int
-	Hold     int
-	Warmdown int
-	MaxSteps int
+	BaseLR             float32
+	MinLR              float32
+	Warmup             int
+	Hold               int
+	Warmdown           int
+	MaxSteps           int
+	ClampWarmdownToMin bool
 }
 
 type trainingScheduler interface {
@@ -72,6 +73,9 @@ func (s LRSchedule) At(step int) float32 {
 	}
 	startLR := baseAt(warmdownStart)
 	targetLR := s.MinLR / 10
+	if s.ClampWarmdownToMin && targetLR < s.MinLR {
+		targetLR = s.MinLR
+	}
 	progress := float32(step-warmdownStart) / float32(s.Warmdown)
 	if progress > 1 {
 		progress = 1
@@ -111,7 +115,7 @@ func (s phaseSchedule) PhaseAt(step int) TrainingPhase {
 }
 
 // trainingSchedule constructs the standard LR schedule from base LR and total steps.
-func trainingSchedule(lr float32, steps, warmdown int) LRSchedule {
+func trainingSchedule(lr float32, steps, warmdown int, minLRFraction float32) LRSchedule {
 	if warmdown < 0 {
 		warmdown = 0
 	}
@@ -129,17 +133,22 @@ func trainingSchedule(lr float32, steps, warmdown int) LRSchedule {
 			hold = 0
 		}
 	}
+	minLR := lr * 0.1
+	if minLRFraction > 0 {
+		minLR = lr * minLRFraction
+	}
 	return LRSchedule{
-		BaseLR:   lr,
-		MinLR:    lr * 0.1,
-		Warmup:   warmup,
-		Hold:     hold,
-		Warmdown: warmdown,
-		MaxSteps: steps,
+		BaseLR:             lr,
+		MinLR:              minLR,
+		Warmup:             warmup,
+		Hold:               hold,
+		Warmdown:           warmdown,
+		MaxSteps:           steps,
+		ClampWarmdownToMin: minLRFraction > 0,
 	}
 }
 
-func newPhaseSchedule(phases []TrainingPhase, warmdown int) phaseSchedule {
+func newPhaseSchedule(phases []TrainingPhase, warmdown int, minLRFraction float32) phaseSchedule {
 	totalSteps := 0
 	for _, phase := range phases {
 		totalSteps += phase.Steps
@@ -172,6 +181,12 @@ func newPhaseSchedule(phases []TrainingPhase, warmdown int) phaseSchedule {
 	warmdownStart := totalSteps - lastPhaseWarmdown
 	startLR := sched.lrs[warmdownStart]
 	targetLR := float32(lastPhase.LR) * 0.01
+	if minLRFraction > 0 {
+		minLR := float32(lastPhase.LR) * minLRFraction
+		if targetLR < minLR {
+			targetLR = minLR
+		}
+	}
 	for step := warmdownStart; step < totalSteps; step++ {
 		progress := float32(step-warmdownStart) / float32(lastPhaseWarmdown)
 		if progress > 1 {
@@ -185,9 +200,9 @@ func newPhaseSchedule(phases []TrainingPhase, warmdown int) phaseSchedule {
 func buildTrainingScheduler(spec TrainingSpec) (trainingScheduler, int) {
 	if len(spec.Phases) > 0 {
 		totalSteps := spec.TotalSteps()
-		return newPhaseSchedule(spec.Phases, spec.WarmdownSteps), totalSteps
+		return newPhaseSchedule(spec.Phases, spec.WarmdownSteps, spec.MinLRFraction), totalSteps
 	}
-	return trainingSchedule(float32(spec.LR), spec.Steps, spec.WarmdownSteps), spec.Steps
+	return trainingSchedule(float32(spec.LR), spec.Steps, spec.WarmdownSteps, spec.MinLRFraction), spec.Steps
 }
 
 func phaseDisplayLabel(phase TrainingPhase, index int) string {

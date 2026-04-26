@@ -144,6 +144,20 @@ func bigramWeightCount(modelDim, bigramVocabSize, bigramDim int) int {
 	return count
 }
 
+func trigramWeightCount(modelDim, trigramVocabSize, trigramDim int) int {
+	if trigramVocabSize <= 0 {
+		return 0
+	}
+	if trigramDim <= 0 {
+		trigramDim = modelDim
+	}
+	count := 2 // embed table + learned scale
+	if trigramDim != modelDim {
+		count++
+	}
+	return count
+}
+
 func emitBigramIR(prog *Program, B, T, D, wi, bigramVocabSize, bigramDim int) int {
 	if bigramVocabSize <= 0 {
 		return wi
@@ -164,6 +178,29 @@ func emitBigramIR(prog *Program, B, T, D, wi, bigramVocabSize, bigramDim int) in
 	prog.Mul(bigramState, weightName(wi), "bigram_scaled")
 	wi++
 	prog.Add("x_tok", "bigram_scaled", "x")
+	return wi
+}
+
+func emitTrigramIR(prog *Program, baseState string, B, T, D, wi, trigramVocabSize, trigramDim int) int {
+	if trigramVocabSize <= 0 {
+		return wi
+	}
+	if trigramDim <= 0 {
+		trigramDim = D
+	}
+	prog.DeclareInput("trigram_ids", TensorInt32, []int{B, T})
+	prog.Embed(weightName(wi), "trigram_ids", "trigram_embed")
+	wi++
+	prog.Reshape("trigram_embed", []int{B * T, trigramDim}, "trigram_flat")
+	trigramState := "trigram_flat"
+	if trigramDim != D {
+		prog.MatMul(trigramState, weightName(wi), "trigram_proj")
+		wi++
+		trigramState = "trigram_proj"
+	}
+	prog.Mul(trigramState, weightName(wi), "trigram_scaled")
+	wi++
+	prog.Add(baseState, "trigram_scaled", "x")
 	return wi
 }
 
@@ -266,6 +303,43 @@ func CountWeightsWithBigramRecurrenceAndParallel(
 	}
 
 	return total, nil
+}
+
+func countWeightsWithNgramsRecurrenceAndParallel(
+	modelDim int,
+	mlpMult float64,
+	tieEmbeddings bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	blocks []BlockSpec,
+	recurrence []int,
+) (int, error) {
+	total, err := CountWeightsWithBigramRecurrenceAndParallel(modelDim, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, blocks, recurrence)
+	if err != nil {
+		return 0, err
+	}
+	return total + trigramWeightCount(modelDim, trigramVocabSize, trigramDim), nil
+}
+
+// CountWeightsWithNgramsRecurrenceAndParallel returns the IR weight tensor
+// count, including optional bigram/trigram embeddings, sequential block weight
+// tying, and parallel residual block pairs.
+func CountWeightsWithNgramsRecurrenceAndParallel(
+	modelDim int,
+	mlpMult float64,
+	tieEmbeddings bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	blocks []BlockSpec,
+	recurrence []int,
+) (int, error) {
+	return countWeightsWithNgramsRecurrenceAndParallel(modelDim, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
 }
 
 func unetLayout(numBlocks int) (numEncoder, numSkip int) {
@@ -497,6 +571,26 @@ func buildIRProgramWithDropout(
 	blocks []BlockSpec,
 	recurrence []int,
 ) (*Program, error) {
+	return buildIRProgramWithDropoutAndNgrams(
+		modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix,
+		unet, parallelResidual, bigramVocabSize, bigramDim, 0, 0, logitSoftcap, dropout, blocks, recurrence,
+	)
+}
+
+func buildIRProgramWithDropoutAndNgrams(
+	modelDim, vocabSize, seqLen, batchSize int,
+	mlpMult float64,
+	tieEmbeddings bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	logitSoftcap float32,
+	dropout float32,
+	blocks []BlockSpec,
+	recurrence []int,
+) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
 	}
@@ -524,6 +618,15 @@ func buildIRProgramWithDropout(
 	if bigramDim < 0 {
 		return nil, fmt.Errorf("invalid bigram_dim=%d", bigramDim)
 	}
+	if trigramVocabSize < 0 {
+		return nil, fmt.Errorf("invalid trigram_vocab_size=%d", trigramVocabSize)
+	}
+	if trigramVocabSize == 1 {
+		return nil, fmt.Errorf("invalid trigram_vocab_size=%d", trigramVocabSize)
+	}
+	if trigramDim < 0 {
+		return nil, fmt.Errorf("invalid trigram_dim=%d", trigramDim)
+	}
 	if parallelResidual {
 		if err := validateParallelResidualBlocks(blocks); err != nil {
 			return nil, err
@@ -533,7 +636,7 @@ func buildIRProgramWithDropout(
 		}
 	}
 
-	nWeights, err := CountWeightsWithBigramRecurrenceAndParallel(D, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, blocks, recurrence)
+	nWeights, err := countWeightsWithNgramsRecurrenceAndParallel(D, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
 	if err != nil {
 		return nil, err
 	}
@@ -547,13 +650,18 @@ func buildIRProgramWithDropout(
 	prog.Embed(weightName(wi), "tokens", "x_embed")
 	wi = fixedWeightCount(tieEmbeddings)
 
-	// Flatten to [B*T, D], leaving room to inject model-level bigram embeddings.
+	// Flatten to [B*T, D], leaving room to inject model-level n-gram embeddings.
 	xState := "x"
-	if bigramVocabSize > 0 {
+	if bigramVocabSize > 0 || trigramVocabSize > 0 {
 		xState = "x_tok"
 	}
 	prog.Reshape("x_embed", []int{B * T, D}, xState)
 	wi = emitBigramIR(prog, B, T, D, wi, bigramVocabSize, bigramDim)
+	trigramBase := "x_tok"
+	if bigramVocabSize > 0 {
+		trigramBase = "x"
+	}
+	wi = emitTrigramIR(prog, trigramBase, B, T, D, wi, trigramVocabSize, trigramDim)
 	if residMix {
 		prog.ScalarMul("x", 1.0, "x0")
 	}

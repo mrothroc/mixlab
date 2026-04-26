@@ -12,14 +12,15 @@ type OptimizerWeightMetadata struct {
 }
 
 type OptimizerSettings struct {
-	Name         string
-	LR           float32
-	Beta1        float32
-	Beta2        float32
-	Epsilon      float32
-	WeightDecay  float32
-	BackendSteps int
-	Nesterov     bool
+	Name                string
+	LR                  float32
+	Beta1               float32
+	Beta2               float32
+	Epsilon             float32
+	WeightDecay         float32
+	BackendSteps        int
+	NewtonSchulzVariant string
+	Nesterov            bool
 }
 
 type TrainerOptimizerConfig struct {
@@ -107,14 +108,15 @@ func optimizerGroup(settings OptimizerSettings) (OptimizerGroup, error) {
 		return OptimizerGroup{}, err
 	}
 	return OptimizerGroup{
-		Kind:         kind,
-		LR:           settings.LR,
-		Beta1:        settings.Beta1,
-		Beta2:        settings.Beta2,
-		Epsilon:      settings.Epsilon,
-		WeightDecay:  settings.WeightDecay,
-		BackendSteps: settings.BackendSteps,
-		Nesterov:     settings.Nesterov,
+		Kind:                kind,
+		LR:                  settings.LR,
+		Beta1:               settings.Beta1,
+		Beta2:               settings.Beta2,
+		Epsilon:             settings.Epsilon,
+		WeightDecay:         settings.WeightDecay,
+		BackendSteps:        settings.BackendSteps,
+		NewtonSchulzVariant: parseNewtonSchulzVariant(settings.NewtonSchulzVariant),
+		Nesterov:            settings.Nesterov,
 	}, nil
 }
 
@@ -131,7 +133,7 @@ func optimizerKind(name string) (OptimizerKind, error) {
 
 func classifyWeightOptimizer(ws OptimizerWeightMetadata) (optimizerClass, error) {
 	switch {
-	case ws.Name == "embed" || ws.Name == "bigram_table":
+	case ws.Name == "embed" || ws.Name == "bigram_table" || ws.Name == "trigram_table":
 		return optimizerClassEmbed, nil
 	case ws.Name == "head":
 		return optimizerClassHead, nil
@@ -154,8 +156,17 @@ func shouldDecayWeight(shape []int) bool {
 
 func isScalarOptimizerName(name string) bool {
 	switch name {
-	case "bigram_scale", "decay", "scan_decay", "w_decay", "mu", "mu2":
+	case "bigram_scale", "trigram_scale", "decay", "scan_decay", "w_decay", "mu", "mu2":
 		return true
 	}
 	return strings.HasSuffix(name, "_scale")
+}
+
+func parseNewtonSchulzVariant(name string) NewtonSchulzVariant {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "polar_express":
+		return NewtonSchulzPolarExpress
+	default:
+		return NewtonSchulzFixed
+	}
 }

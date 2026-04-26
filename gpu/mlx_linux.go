@@ -253,14 +253,15 @@ func mlxCreateTrainer(programHandle int64, weightHandles []int64, spec TrainerOp
 			return 0, fmt.Errorf("optimizer group %d has unsupported kind %d", i, group.Kind)
 		}
 		cGroups[i] = C.mlx_ir_optimizer_group{
-			kind:          C.int(group.Kind),
-			lr:            C.float(group.LR),
-			beta1:         C.float(group.Beta1),
-			beta2:         C.float(group.Beta2),
-			eps:           C.float(group.Epsilon),
-			weight_decay:  C.float(group.WeightDecay),
-			backend_steps: C.int(group.BackendSteps),
-			nesterov:      0,
+			kind:                  C.int(group.Kind),
+			lr:                    C.float(group.LR),
+			beta1:                 C.float(group.Beta1),
+			beta2:                 C.float(group.Beta2),
+			eps:                   C.float(group.Epsilon),
+			weight_decay:          C.float(group.WeightDecay),
+			backend_steps:         C.int(group.BackendSteps),
+			newton_schulz_variant: C.int(group.NewtonSchulzVariant),
+			nesterov:              0,
 		}
 		if group.Nesterov {
 			cGroups[i].nesterov = 1

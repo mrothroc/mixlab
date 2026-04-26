@@ -29,8 +29,34 @@ struct LoRAAdapterState {
   LoraOptimizerState b_state;
 };
 
-static mx::array zeropower_via_newtonschulz5(const mx::array& grad, int steps, float eps = 1e-7f) {
-  constexpr float a = 3.4445f, b = -4.7750f, c = 2.0315f;
+// Polar Express NS coefficients for 5 iterations.
+// Source: You Jiacheng et al., "The Polar Express", arXiv:2505.16932 /
+// ICLR 2026 Implementation 1 (public OpenReview PDF, coeffs_list[:5]).
+static constexpr float POLAR_EXPRESS_COEFFS[5][3] = {
+    {8.28721201814563f, -23.595886519098837f, 17.300387312530933f},
+    {4.107059111542203f, -2.9478499167379106f, 0.5448431082926601f},
+    {3.9486908534822946f, -2.908902115962949f, 0.5518191394370137f},
+    {3.3184196573706015f, -2.488488024314874f, 0.51004894012372f},
+    {2.300652019954817f, -1.6689039845747493f, 0.4188073119525673f},
+};
+
+// Polar Express NS coefficients for 4 iterations.
+// TODO: verify against the public 4-step reference used by downstream PRs.
+static constexpr float POLAR_EXPRESS_COEFFS_4[4][3] = {
+    {8.205143229901171f, -23.388676146107957f, 17.18176706298294f},
+    {4.103027595395544f, -2.943094594729132f, 0.5443447237556095f},
+    {3.948067509815022f, -2.908901580537106f, 0.5497770787381114f},
+    {2.4869497712926485f, -1.7693988155519828f, 0.42942000953867464f},
+};
+
+static mx::array zeropower_via_newtonschulz5(
+    const mx::array& grad,
+    int steps,
+    NewtonSchulzVariant variant = NewtonSchulzVariant::Fixed,
+    float eps = 1e-7f) {
+  constexpr float fixed_a = 3.4445f;
+  constexpr float fixed_b = -4.7750f;
+  constexpr float fixed_c = 2.0315f;
   auto x = mx::astype(grad, mx::bfloat16);
   auto norm = mx::sqrt(mx::sum(mx::square(mx::astype(x, mx::float32))));
   x = x / (norm + mx::array(eps, mx::float32));
@@ -38,7 +64,18 @@ static mx::array zeropower_via_newtonschulz5(const mx::array& grad, int steps, f
   if (transposed) {
     x = mx::transpose(x, {1, 0});
   }
+  const bool use_polar_express =
+      variant == NewtonSchulzVariant::PolarExpress && (steps == 4 || steps == 5);
   for (int i = 0; i < steps; ++i) {
+    float a = fixed_a;
+    float b = fixed_b;
+    float c = fixed_c;
+    if (use_polar_express) {
+      const float(*coeffs)[3] = steps == 4 ? POLAR_EXPRESS_COEFFS_4 : POLAR_EXPRESS_COEFFS;
+      a = coeffs[i][0];
+      b = coeffs[i][1];
+      c = coeffs[i][2];
+    }
     auto xt = mx::transpose(x, {1, 0});
     auto A = mx::matmul(x, xt);
     auto B = b * A + c * mx::matmul(A, A);
@@ -130,7 +167,7 @@ void apply_optimizer_update(
       }
       state.muon_momentum = group.beta1 * state.muon_momentum + g;
       mx::array update = group.nesterov ? (g + group.beta1 * state.muon_momentum) : state.muon_momentum;
-      update = zeropower_via_newtonschulz5(update, group.backend_steps);
+      update = zeropower_via_newtonschulz5(update, group.backend_steps, group.newton_schulz_variant);
       const auto rows = static_cast<float>(w.shape(0));
       const auto cols = static_cast<float>(w.shape(1));
       const float aspect = std::sqrt(std::max(1.0f, rows / cols));
@@ -361,7 +398,7 @@ void IRTrainer::apply_optimizer_updates(const std::vector<mx::array>& grads) {
         }
         muon_momentum[i] = group.beta1 * muon_momentum[i] + g;
         mx::array update = group.nesterov ? (g + group.beta1 * muon_momentum[i]) : muon_momentum[i];
-        update = zeropower_via_newtonschulz5(update, group.backend_steps);
+        update = zeropower_via_newtonschulz5(update, group.backend_steps, group.newton_schulz_variant);
         const auto rows = static_cast<float>(w.shape(0));
         const auto cols = static_cast<float>(w.shape(1));
         const float aspect = std::sqrt(std::max(1.0f, rows / cols));

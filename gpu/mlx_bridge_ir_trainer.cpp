@@ -56,6 +56,17 @@ std::vector<mlx_ir::OptimizerGroupConfig> read_optimizer_groups(
       default:
         throw std::runtime_error("unsupported optimizer kind");
     }
+    mlx_ir::NewtonSchulzVariant newton_schulz_variant;
+    switch (optimizer_groups[i].newton_schulz_variant) {
+      case 0:
+        newton_schulz_variant = mlx_ir::NewtonSchulzVariant::Fixed;
+        break;
+      case 1:
+        newton_schulz_variant = mlx_ir::NewtonSchulzVariant::PolarExpress;
+        break;
+      default:
+        throw std::runtime_error("unsupported newton-schulz variant");
+    }
     groups.push_back(mlx_ir::OptimizerGroupConfig{
         kind,
         optimizer_groups[i].lr,
@@ -64,6 +75,7 @@ std::vector<mlx_ir::OptimizerGroupConfig> read_optimizer_groups(
         optimizer_groups[i].eps,
         optimizer_groups[i].weight_decay,
         optimizer_groups[i].backend_steps,
+        newton_schulz_variant,
         optimizer_groups[i].nesterov != 0,
     });
   }
@@ -119,6 +131,7 @@ int64_t mlx_ir_create_trainer(
       eps,
       wd,
       5,
+      0,
       1,
   };
   std::vector<mlx_ir_weight_optimizer> specs(static_cast<size_t>(n_weights));

@@ -18,11 +18,13 @@ type mlxGPUTrainer struct {
 	shapes             []WeightShape
 	baseLR             float32
 	bigramVocabSize    int
+	trigramVocabSize   int
 	declaredTargetSize int
 	// Pre-allocated input buffers to avoid per-step allocation.
-	tokBuf    []int32
-	tgtBuf    []int32
-	bigramBuf []int32
+	tokBuf     []int32
+	tgtBuf     []int32
+	bigramBuf  []int32
+	trigramBuf []int32
 }
 
 // initMLXGPUTrainer creates a GPU trainer backed by the MLX IR interpreter.
@@ -134,10 +136,12 @@ func initMLXGPUTrainer(
 		shapes:             shapes,
 		baseLR:             optimizerSpec.DefaultBaseLR,
 		bigramVocabSize:    cfg.BigramVocabSize,
+		trigramVocabSize:   cfg.TrigramVocabSize,
 		declaredTargetSize: declaredTargetSize,
 		tokBuf:             make([]int32, batchElems),
 		tgtBuf:             make([]int32, batchElems),
 		bigramBuf:          make([]int32, batchElems),
+		trigramBuf:         make([]int32, batchElems),
 	}, nil
 }
 
@@ -152,6 +156,7 @@ func (t *mlxGPUTrainer) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([]g
 		t.tokBuf = make([]int32, need)
 		t.tgtBuf = make([]int32, need)
 		t.bigramBuf = make([]int32, need)
+		t.trigramBuf = make([]int32, need)
 	}
 	for i := 0; i < need; i++ {
 		t.tokBuf[i] = int32(xTok[i])
@@ -173,6 +178,16 @@ func (t *mlxGPUTrainer) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([]g
 		copy(t.bigramBuf[:need], bigramIDs)
 		inputs = append(inputs, gpu.TensorInput{
 			Name: "bigram_ids", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.bigramBuf[:need],
+		})
+	}
+	if t.trigramVocabSize > 0 {
+		trigramIDs, err := ComputeTrigramIDs(t.tokBuf[:need], batchSize, seqLen, t.trigramVocabSize)
+		if err != nil {
+			return nil, err
+		}
+		copy(t.trigramBuf[:need], trigramIDs)
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "trigram_ids", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.trigramBuf[:need],
 		})
 	}
 	return inputs, nil
@@ -440,14 +455,15 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 			WeightDecay: cfg.Training.ScalarWeightDecay,
 		},
 		Matrix: gpu.OptimizerSettings{
-			Name:         matrixOptimizer(cfg),
-			LR:           cfg.Training.MatrixLR,
-			Beta1:        cfg.Training.MuonMomentum,
-			Beta2:        cfg.Training.Beta2,
-			Epsilon:      cfg.Training.Epsilon,
-			WeightDecay:  cfg.Training.MatrixWeightDecay,
-			BackendSteps: cfg.Training.MuonBackendSteps,
-			Nesterov:     muonNesterov,
+			Name:                matrixOptimizer(cfg),
+			LR:                  cfg.Training.MatrixLR,
+			Beta1:               cfg.Training.MuonMomentum,
+			Beta2:               cfg.Training.Beta2,
+			Epsilon:             cfg.Training.Epsilon,
+			WeightDecay:         cfg.Training.MatrixWeightDecay,
+			BackendSteps:        cfg.Training.MuonBackendSteps,
+			NewtonSchulzVariant: cfg.Training.NewtonSchulzVariant,
+			Nesterov:            muonNesterov,
 		},
 		MaxGradNorm:   cfg.Training.GradClip,
 		DefaultBaseLR: float32(cfg.Training.LR),

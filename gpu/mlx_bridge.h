@@ -62,6 +62,7 @@ typedef struct {
     float eps;
     float weight_decay;
     int backend_steps;
+    int newton_schulz_variant; // 0=fixed, 1=polar_express
     int nesterov;
 } mlx_ir_optimizer_group;
 

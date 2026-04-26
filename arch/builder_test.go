@@ -305,6 +305,70 @@ func TestBuildIRProgramWithBigram_DisabledLeavesInputsUnchanged(t *testing.T) {
 	}
 }
 
+func TestBuildIRProgramFromConfig_WithTrigramAddsInputAndOps(t *testing.T) {
+	cfg := &ArchConfig{
+		ModelDim:         64,
+		VocabSize:        256,
+		SeqLen:           16,
+		BigramVocabSize:  257,
+		BigramDim:        32,
+		TrigramVocabSize: 513,
+		TrigramDim:       48,
+		Blocks:           []BlockSpec{{Type: "plain", Heads: 4}},
+		Training:         TrainingSpec{BatchTokens: 32},
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	if prog.NumWeights != 16 {
+		t.Fatalf("expected 16 weights, got %d", prog.NumWeights)
+	}
+	foundTrigramInput := false
+	for _, in := range prog.Inputs {
+		if in.Name == "trigram_ids" {
+			foundTrigramInput = true
+			if in.Shape[0] != 2 || in.Shape[1] != 16 {
+				t.Fatalf("unexpected trigram input shape %v", in.Shape)
+			}
+		}
+	}
+	if !foundTrigramInput {
+		t.Fatal("missing trigram_ids input")
+	}
+
+	hasTrigramEmbed := false
+	hasTrigramProj := false
+	hasTrigramScale := false
+	hasTrigramAdd := false
+	for _, op := range prog.Ops {
+		if op.Code == OpEmbed && len(op.Inputs) == 2 && op.Inputs[1] == "trigram_ids" {
+			hasTrigramEmbed = true
+		}
+		if op.Code == OpMatMul && len(op.Inputs) == 2 && op.Inputs[0] == "trigram_flat" && op.Inputs[1] == "w7" {
+			hasTrigramProj = true
+		}
+		if op.Code == OpMul && len(op.Inputs) == 2 && op.Inputs[0] == "trigram_proj" && op.Inputs[1] == "w8" {
+			hasTrigramScale = true
+		}
+		if op.Code == OpAdd && len(op.Inputs) == 2 && op.Inputs[0] == "x" && op.Inputs[1] == "trigram_scaled" {
+			hasTrigramAdd = true
+		}
+	}
+	if !hasTrigramEmbed {
+		t.Fatal("missing trigram embedding op")
+	}
+	if !hasTrigramProj {
+		t.Fatal("missing trigram projection op")
+	}
+	if !hasTrigramScale {
+		t.Fatal("missing trigram learned scale op")
+	}
+	if !hasTrigramAdd {
+		t.Fatal("missing trigram residual add op")
+	}
+}
+
 func TestBuildIRProgram_TiedEmbeddingsUsesTransposeHead(t *testing.T) {
 	blocks := []BlockSpec{{Type: "plain", Heads: 4}}
 	prog, err := BuildIRProgram(64, 256, 16, 1, DefaultFFNMultiplier, true, false, false, false, 0, blocks)

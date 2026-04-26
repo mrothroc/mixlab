@@ -23,6 +23,8 @@ type ArchConfig struct {
 	UNet             bool    `json:"unet,omitempty"`
 	BigramVocabSize  int     `json:"bigram_vocab_size,omitempty"`
 	BigramDim        int     `json:"bigram_dim,omitempty"`
+	TrigramVocabSize int     `json:"trigram_vocab_size,omitempty"`
+	TrigramDim       int     `json:"trigram_dim,omitempty"`
 	LogitSoftcap     float32 `json:"logit_softcap,omitempty"`
 	Dropout          float32 `json:"dropout,omitempty"`
 
@@ -42,6 +44,22 @@ func (c *ArchConfig) EffectiveBigramDim() int {
 		return c.ModelDim
 	}
 	return c.BigramDim
+}
+
+// EffectiveTrigramDim returns the configured trigram embedding dimension,
+// defaulting to bigram_dim or model_dim when trigram embeddings are enabled
+// but trigram_dim is unset.
+func (c *ArchConfig) EffectiveTrigramDim() int {
+	if c == nil || c.TrigramVocabSize <= 0 {
+		return 0
+	}
+	if c.TrigramDim > 0 {
+		return c.TrigramDim
+	}
+	if c.BigramDim > 0 {
+		return c.BigramDim
+	}
+	return c.ModelDim
 }
 
 // EffectiveMLPMult returns the configured FFN expansion multiplier,
@@ -129,19 +147,29 @@ type TrainingSpec struct {
 	HeadLR             float32         `json:"head_lr,omitempty"`
 	MuonMomentum       float32         `json:"muon_momentum,omitempty"`
 	MuonBackendSteps   int             `json:"muon_backend_steps,omitempty"`
-	MuonNesterov       *bool           `json:"muon_nesterov,omitempty"`
-	Optimizer          string          `json:"optimizer,omitempty"` // "muon" (default) or "adamw" for matrix weights
-	QAT                string          `json:"qat,omitempty"`       // "none" (default), "int8", or "int6"
-	QATStart           int             `json:"qat_start,omitempty"`
-	WeightInit         string          `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
-	WeightInitStd      float32         `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
-	EmbedWeightDecay   float32         `json:"embed_weight_decay,omitempty"`
-	MatrixWeightDecay  float32         `json:"matrix_weight_decay,omitempty"`
-	ScalarWeightDecay  float32         `json:"scalar_weight_decay,omitempty"`
-	HeadWeightDecay    float32         `json:"head_weight_decay,omitempty"`
-	SWAStart           int             `json:"swa_start,omitempty"`
-	SWADecay           float32         `json:"swa_decay,omitempty"`
-	SWAInterval        int             `json:"swa_interval,omitempty"`
+	// NewtonSchulzVariant controls Muon's Newton-Schulz coefficient choice.
+	// "" or "fixed" = canonical (3.4445, -4.7750, 2.0315) per iteration.
+	// "polar_express" = per-iteration Chebyshev minimax-optimal tuples
+	// (You Jiacheng, arXiv:2505.16932).
+	NewtonSchulzVariant string  `json:"newton_schulz_variant,omitempty"`
+	MuonNesterov        *bool   `json:"muon_nesterov,omitempty"`
+	Optimizer           string  `json:"optimizer,omitempty"` // "muon" (default) or "adamw" for matrix weights
+	QAT                 string  `json:"qat,omitempty"`       // "none" (default), "int8", or "int6"
+	QATStart            int     `json:"qat_start,omitempty"`
+	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
+	WeightInitStd       float32 `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
+	EmbedWeightDecay    float32 `json:"embed_weight_decay,omitempty"`
+	MatrixWeightDecay   float32 `json:"matrix_weight_decay,omitempty"`
+	ScalarWeightDecay   float32 `json:"scalar_weight_decay,omitempty"`
+	HeadWeightDecay     float32 `json:"head_weight_decay,omitempty"`
+	// MinLRFraction sets the minimum LR as a fraction of peak LR.
+	// 0 (default) = current behavior (warmdown ends near 0).
+	// 0.10 = recommended (LR never drops below 10% of peak).
+	// Used as an absolute floor across both cosine decay and warmdown phases.
+	MinLRFraction float32 `json:"min_lr_fraction,omitempty"`
+	SWAStart      int     `json:"swa_start,omitempty"`
+	SWADecay      float32 `json:"swa_decay,omitempty"`
+	SWAInterval   int     `json:"swa_interval,omitempty"`
 }
 
 // TotalSteps returns the effective training step count.
@@ -278,6 +306,12 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.BigramDim < 0 {
 		return nil, fmt.Errorf("config %q has invalid bigram_dim=%d (must be >= 0)", source, cfg.BigramDim)
 	}
+	if cfg.TrigramVocabSize < 0 {
+		return nil, fmt.Errorf("config %q has invalid trigram_vocab_size=%d (must be >= 0)", source, cfg.TrigramVocabSize)
+	}
+	if cfg.TrigramDim < 0 {
+		return nil, fmt.Errorf("config %q has invalid trigram_dim=%d (must be >= 0)", source, cfg.TrigramDim)
+	}
 	if cfg.BigramVocabSize > 0 {
 		if cfg.BigramVocabSize <= 1 {
 			return nil, fmt.Errorf("config %q has invalid bigram_vocab_size=%d (must be > 1 when enabled)", source, cfg.BigramVocabSize)
@@ -287,6 +321,16 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		}
 	} else {
 		cfg.BigramDim = 0
+	}
+	if cfg.TrigramVocabSize > 0 {
+		if cfg.TrigramVocabSize <= 1 {
+			return nil, fmt.Errorf("config %q has invalid trigram_vocab_size=%d (must be > 1 when enabled)", source, cfg.TrigramVocabSize)
+		}
+		if cfg.TrigramDim == 0 {
+			cfg.TrigramDim = cfg.EffectiveTrigramDim()
+		}
+	} else {
+		cfg.TrigramDim = 0
 	}
 	if cfg.MLPMult == 0 {
 		cfg.MLPMult = 2.67
@@ -408,8 +452,19 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.Training.MuonMomentum < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.muon_momentum=%g (must be >= 0)", source, cfg.Training.MuonMomentum)
 	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Training.NewtonSchulzVariant)) {
+	case "", "fixed":
+		cfg.Training.NewtonSchulzVariant = "fixed"
+	case "polar_express":
+		cfg.Training.NewtonSchulzVariant = "polar_express"
+	default:
+		return nil, fmt.Errorf("config %q has invalid training.newton_schulz_variant=%q (must be \"fixed\" or \"polar_express\")", source, cfg.Training.NewtonSchulzVariant)
+	}
 	if cfg.Training.GradClip < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.grad_clip=%g (must be >= 0)", source, cfg.Training.GradClip)
+	}
+	if cfg.Training.MinLRFraction < 0 || cfg.Training.MinLRFraction >= 1 {
+		return nil, fmt.Errorf("config %q has invalid training.min_lr_fraction=%g (must be in [0,1))", source, cfg.Training.MinLRFraction)
 	}
 	if cfg.Training.EmbedWeightDecay < 0 || cfg.Training.MatrixWeightDecay < 0 ||
 		cfg.Training.ScalarWeightDecay < 0 || cfg.Training.HeadWeightDecay < 0 {

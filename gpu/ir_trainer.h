@@ -25,6 +25,11 @@ enum class QATMode : uint8_t {
   Int6 = 2,
 };
 
+enum class NewtonSchulzVariant : uint8_t {
+  Fixed = 0,
+  PolarExpress = 1,
+};
+
 struct OptimizerGroupConfig {
   OptimizerKind kind = OptimizerKind::AdamW;
   float lr = 0.0f;
@@ -33,6 +38,7 @@ struct OptimizerGroupConfig {
   float eps = 1e-8f;
   float weight_decay = 0.0f;
   int backend_steps = 5;
+  NewtonSchulzVariant newton_schulz_variant = NewtonSchulzVariant::Fixed;
   bool nesterov = true;
 };
 

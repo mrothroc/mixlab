@@ -77,6 +77,8 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 		cfg.ParallelResidual,
 		cfg.BigramVocabSize,
 		cfg.EffectiveBigramDim(),
+		cfg.TrigramVocabSize,
+		cfg.EffectiveTrigramDim(),
 		cfg.Blocks,
 		uniqueRefs,
 	)
@@ -96,6 +98,8 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 		cfg.ParallelResidual,
 		cfg.BigramVocabSize,
 		cfg.EffectiveBigramDim(),
+		cfg.TrigramVocabSize,
+		cfg.EffectiveTrigramDim(),
 		cfg.Blocks,
 		identityWeightRefs(cfg.Blocks),
 	)

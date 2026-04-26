@@ -151,7 +151,7 @@ func TestLRScheduleAt_WarmdownDisabled(t *testing.T) {
 // ---------- trainingSchedule ----------
 
 func TestTrainingSchedule_Default(t *testing.T) {
-	s := trainingSchedule(0.001, 10000, 0)
+	s := trainingSchedule(0.001, 10000, 0, 0)
 	if s.Warmup != 100 {
 		t.Errorf("Warmup = %d, want 100", s.Warmup)
 	}
@@ -170,7 +170,7 @@ func TestTrainingSchedule_Default(t *testing.T) {
 }
 
 func TestTrainingSchedule_StepsLessThanWarmup(t *testing.T) {
-	s := trainingSchedule(0.01, 50, 0)
+	s := trainingSchedule(0.01, 50, 0, 0)
 	if s.Warmup != 50 {
 		t.Errorf("Warmup = %d, want 50 (clamped to steps)", s.Warmup)
 	}
@@ -184,7 +184,7 @@ func TestTrainingSchedule_StepsLessThanWarmup(t *testing.T) {
 
 func TestTrainingSchedule_StepsBetweenWarmupAndWarmupPlusHold(t *testing.T) {
 	// steps=150: warmup stays 100, hold should be clamped to 50
-	s := trainingSchedule(0.01, 150, 0)
+	s := trainingSchedule(0.01, 150, 0, 0)
 	if s.Warmup != 100 {
 		t.Errorf("Warmup = %d, want 100", s.Warmup)
 	}
@@ -194,7 +194,7 @@ func TestTrainingSchedule_StepsBetweenWarmupAndWarmupPlusHold(t *testing.T) {
 }
 
 func TestTrainingSchedule_StepsExactlyWarmup(t *testing.T) {
-	s := trainingSchedule(0.01, 100, 0)
+	s := trainingSchedule(0.01, 100, 0, 0)
 	if s.Warmup != 100 {
 		t.Errorf("Warmup = %d, want 100", s.Warmup)
 	}
@@ -204,7 +204,7 @@ func TestTrainingSchedule_StepsExactlyWarmup(t *testing.T) {
 }
 
 func TestTrainingSchedule_StepsExactlyWarmupPlusHold(t *testing.T) {
-	s := trainingSchedule(0.01, 300, 0)
+	s := trainingSchedule(0.01, 300, 0, 0)
 	if s.Warmup != 100 {
 		t.Errorf("Warmup = %d, want 100", s.Warmup)
 	}
@@ -214,7 +214,7 @@ func TestTrainingSchedule_StepsExactlyWarmupPlusHold(t *testing.T) {
 }
 
 func TestTrainingSchedule_ZeroSteps(t *testing.T) {
-	s := trainingSchedule(0.01, 0, 0)
+	s := trainingSchedule(0.01, 0, 0, 0)
 	if s.Warmup != 0 {
 		t.Errorf("Warmup = %d, want 0", s.Warmup)
 	}
@@ -224,9 +224,22 @@ func TestTrainingSchedule_ZeroSteps(t *testing.T) {
 }
 
 func TestTrainingSchedule_WarmdownClampedToSteps(t *testing.T) {
-	s := trainingSchedule(0.01, 50, 100)
+	s := trainingSchedule(0.01, 50, 100, 0)
 	if s.Warmdown != 50 {
 		t.Fatalf("Warmdown = %d, want 50", s.Warmdown)
+	}
+}
+
+func TestTrainingSchedule_MinLRFloorNeverDropsBelowFraction(t *testing.T) {
+	s := trainingSchedule(0.01, 300, 60, 0.10)
+	minFloor := float32(0.001)
+	for step := s.Warmup; step <= s.MaxSteps+10; step++ {
+		if got := s.At(step); got < minFloor {
+			t.Fatalf("At(%d) = %g, want >= %g", step, got, minFloor)
+		}
+	}
+	if got := s.At(s.MaxSteps); math.Abs(float64(got-minFloor)) > 1e-8 {
+		t.Fatalf("At(MaxSteps) = %g, want %g", got, minFloor)
 	}
 }
 
@@ -235,7 +248,7 @@ func TestPhaseScheduleAt_Boundaries(t *testing.T) {
 		{Steps: 2, LR: 1e-4, Label: "warmup"},
 		{Steps: 3, LR: 1e-3, Label: "main"},
 		{Steps: 2, LR: 5e-4, Label: "cooldown"},
-	}, 0)
+	}, 0, 0)
 
 	if got := s.At(0); math.Abs(float64(got-1e-4)) > 1e-8 {
 		t.Fatalf("At(0) = %g, want 1e-4", got)
@@ -261,7 +274,7 @@ func TestPhaseSchedule_WarmdownWithinLastPhase(t *testing.T) {
 	s := newPhaseSchedule([]TrainingPhase{
 		{Steps: 2, LR: 1e-4},
 		{Steps: 4, LR: 1e-3},
-	}, 2)
+	}, 2, 0)
 
 	if got := s.At(3); math.Abs(float64(got-1e-3)) > 1e-8 {
 		t.Fatalf("At(3) = %g, want 1e-3 before warmdown", got)

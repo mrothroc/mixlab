@@ -67,6 +67,97 @@ func TestParseArchConfig_BigramDisabledZerosDim(t *testing.T) {
 	}
 }
 
+func TestParseArchConfig_TrigramDefaultsAndTrainingKnobs(t *testing.T) {
+	cfg := ArchConfig{
+		Name:             "trigram",
+		ModelDim:         64,
+		VocabSize:        256,
+		SeqLen:           32,
+		BigramVocabSize:  512,
+		BigramDim:        24,
+		TrigramVocabSize: 1024,
+		Blocks:           []BlockSpec{{Type: "plain", Heads: 4}},
+		Training: TrainingSpec{
+			NewtonSchulzVariant: "polar_express",
+			MinLRFraction:       0.1,
+		},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	got, err := ParseArchConfig(data, "test_trigram_defaults")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if got.TrigramDim != 24 {
+		t.Fatalf("TrigramDim=%d want 24", got.TrigramDim)
+	}
+	if got.Training.NewtonSchulzVariant != "polar_express" {
+		t.Fatalf("NewtonSchulzVariant=%q want polar_express", got.Training.NewtonSchulzVariant)
+	}
+	if got.Training.MinLRFraction != 0.1 {
+		t.Fatalf("MinLRFraction=%g want 0.1", got.Training.MinLRFraction)
+	}
+}
+
+func TestParseArchConfig_RejectsInvalidTrigramAndTrainingKnobs(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  ArchConfig
+		want string
+	}{
+		{
+			name: "bad_trigram_vocab",
+			cfg: ArchConfig{
+				ModelDim:         64,
+				VocabSize:        256,
+				SeqLen:           32,
+				TrigramVocabSize: 1,
+				Blocks:           []BlockSpec{{Type: "plain", Heads: 4}},
+			},
+			want: "trigram_vocab_size",
+		},
+		{
+			name: "bad_variant",
+			cfg: ArchConfig{
+				ModelDim:  64,
+				VocabSize: 256,
+				SeqLen:    32,
+				Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
+				Training:  TrainingSpec{NewtonSchulzVariant: "weird"},
+			},
+			want: "newton_schulz_variant",
+		},
+		{
+			name: "bad_min_lr_fraction",
+			cfg: ArchConfig{
+				ModelDim:  64,
+				VocabSize: 256,
+				SeqLen:    32,
+				Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
+				Training:  TrainingSpec{MinLRFraction: 1},
+			},
+			want: "min_lr_fraction",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.cfg)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			_, err = ParseArchConfig(data, tt.name)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error %q missing %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseArchConfig_LogitSoftcapPreserved(t *testing.T) {
 	cfg := ArchConfig{
 		Name:         "softcap",

@@ -94,15 +94,23 @@ const (
 	OptimizerMuon
 )
 
+type NewtonSchulzVariant int
+
+const (
+	NewtonSchulzFixed NewtonSchulzVariant = iota
+	NewtonSchulzPolarExpress
+)
+
 type OptimizerGroup struct {
-	Kind         OptimizerKind
-	LR           float32
-	Beta1        float32
-	Beta2        float32
-	Epsilon      float32
-	WeightDecay  float32
-	BackendSteps int
-	Nesterov     bool
+	Kind                OptimizerKind
+	LR                  float32
+	Beta1               float32
+	Beta2               float32
+	Epsilon             float32
+	WeightDecay         float32
+	BackendSteps        int
+	NewtonSchulzVariant NewtonSchulzVariant
+	Nesterov            bool
 }
 
 type WeightOptimizer struct {

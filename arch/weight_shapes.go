@@ -328,6 +328,24 @@ func bigramWeightShapes(modelDim, bigramVocabSize, bigramDim int) []WeightMeta {
 	return shapes
 }
 
+func trigramWeightShapes(modelDim, trigramVocabSize, trigramDim int) []WeightMeta {
+	if trigramVocabSize <= 0 {
+		return nil
+	}
+	D := modelDim
+	if trigramDim <= 0 {
+		trigramDim = D
+	}
+	shapes := []WeightMeta{
+		{Name: "trigram_table", Shape: []int{trigramVocabSize, trigramDim}},
+	}
+	if trigramDim != D {
+		shapes = append(shapes, WeightMeta{Name: "trigram_proj", Shape: []int{trigramDim, D}})
+	}
+	shapes = append(shapes, WeightMeta{Name: "trigram_scale", Shape: []int{1}, InitOne: true})
+	return shapes
+}
+
 // CollectWeightShapes returns the complete ordered list of WeightMeta for an
 // architecture configuration. The order matches the weight indices used by
 // BuildIRProgram: embed, head, final_norm, then block weights in emission order.
@@ -392,7 +410,29 @@ func CollectWeightShapesWithBigramRecurrenceAndParallel(
 	if err != nil {
 		return nil, fmt.Errorf("blocks: %w", err)
 	}
-	return collectWeightShapesWithRefs(modelDim, vocabSize, seqLen, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, blocks, refs)
+	return collectWeightShapesWithRefs(modelDim, vocabSize, seqLen, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, 0, 0, blocks, refs)
+}
+
+// CollectWeightShapesWithNgramsRecurrenceAndParallel returns ordered weight
+// metadata including optional bigram and trigram weights, original sequential
+// block weights, and parallel residual norm sharing.
+func CollectWeightShapesWithNgramsRecurrenceAndParallel(
+	modelDim, vocabSize, seqLen int,
+	mlpMult float64,
+	tieEmbeddings bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	blocks []BlockSpec,
+	recurrence []int,
+) ([]WeightMeta, error) {
+	refs, err := normalizeWeightRefs(blocks, recurrence)
+	if err != nil {
+		return nil, fmt.Errorf("blocks: %w", err)
+	}
+	return collectWeightShapesWithRefs(modelDim, vocabSize, seqLen, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, refs)
 }
 
 func collectWeightShapesWithRefs(
@@ -403,6 +443,7 @@ func collectWeightShapesWithRefs(
 	unet bool,
 	parallelResidual bool,
 	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
 	blocks []BlockSpec,
 	refs []int,
 ) ([]WeightMeta, error) {
@@ -424,6 +465,15 @@ func collectWeightShapesWithRefs(
 	if bigramDim < 0 {
 		return nil, fmt.Errorf("invalid bigram_dim=%d", bigramDim)
 	}
+	if trigramVocabSize < 0 {
+		return nil, fmt.Errorf("invalid trigram_vocab_size=%d", trigramVocabSize)
+	}
+	if trigramVocabSize == 1 {
+		return nil, fmt.Errorf("invalid trigram_vocab_size=%d", trigramVocabSize)
+	}
+	if trigramDim < 0 {
+		return nil, fmt.Errorf("invalid trigram_dim=%d", trigramDim)
+	}
 	if len(refs) != len(blocks) {
 		return nil, fmt.Errorf("invalid weight refs length=%d for blocks length=%d", len(refs), len(blocks))
 	}
@@ -437,6 +487,7 @@ func collectWeightShapesWithRefs(
 	}
 	shapes = append(shapes, WeightMeta{Name: "final_norm", Shape: []int{D}, IsNormScale: true, InitOne: true})
 	shapes = append(shapes, bigramWeightShapes(D, bigramVocabSize, bigramDim)...)
+	shapes = append(shapes, trigramWeightShapes(D, trigramVocabSize, trigramDim)...)
 
 	if parallelResidual {
 		if err := validateParallelResidualBlocks(blocks); err != nil {

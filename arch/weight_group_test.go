@@ -108,6 +108,8 @@ func TestWeightSharingFLOPs(t *testing.T) {
 		sharedCfg.ParallelResidual,
 		sharedCfg.BigramVocabSize,
 		sharedCfg.EffectiveBigramDim(),
+		sharedCfg.TrigramVocabSize,
+		sharedCfg.EffectiveTrigramDim(),
 		nil,
 		nil,
 	)
