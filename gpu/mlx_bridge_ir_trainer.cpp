@@ -454,6 +454,30 @@ int mlx_ir_trainer_read_weight(int64_t trainer, int weight_idx, float* out, int 
   }
 }
 
+int mlx_ir_trainer_set_weight(int64_t trainer, int weight_idx, const float* data, int size) {
+  if (!data || size <= 0) {
+    return -1;
+  }
+  try {
+    auto* t = get_ir_trainer(trainer);
+    if (!t || weight_idx < 0 || static_cast<size_t>(weight_idx) >= t->weights.size()) {
+      return -1;
+    }
+    t->flush();
+    auto& existing = t->weights[static_cast<size_t>(weight_idx)];
+    if (static_cast<int>(existing.size()) != size) {
+      return -1;
+    }
+    auto shape = existing.shape();
+    auto new_array = mx::array(data, shape, mx::float32);
+    mx::eval(new_array);
+    existing = new_array;
+    return 0;
+  } catch (...) {
+    return -1;
+  }
+}
+
 void mlx_ir_trainer_set_lr(int64_t trainer, float lr) {
   auto* t = get_ir_trainer(trainer);
   if (!t) {

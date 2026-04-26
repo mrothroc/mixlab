@@ -172,6 +172,7 @@ float mlx_ir_trainer_evaluate(int64_t trainer, const int* tokens, const int* tar
 int mlx_ir_trainer_num_weights(int64_t trainer);
 int mlx_ir_trainer_weight_size(int64_t trainer, int weight_idx);
 int mlx_ir_trainer_read_weight(int64_t trainer, int weight_idx, float* out, int size);
+int mlx_ir_trainer_set_weight(int64_t trainer, int weight_idx, const float* data, int size);
 void mlx_ir_trainer_set_lr(int64_t trainer, float lr);
 void mlx_ir_trainer_set_lr_scale(int64_t trainer, float lr_scale);
 void mlx_ir_trainer_set_qat(int64_t trainer, const char* mode);

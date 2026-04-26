@@ -228,6 +228,7 @@ type GPUTrainer interface {
 	CollectLossGPU() (float32, error)
 	FlushGPU() error
 	SetQATGPU(mode string) error
+	SetWeightGPU(name string, data []float32) error
 	EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (float32, error)
 	EvaluatePerTokenGPU(xTok, yTok []int, batchSize, seqLen int) ([]float32, error)
 	EvaluateLoRATTTGPU(xTok, yTok []int, batchSize, seqLen, tttSteps int, tttLR float32, tttRank int) (float32, error)

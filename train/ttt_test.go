@@ -54,6 +54,10 @@ func (t *fakeTTTTrainer) SetQATGPU(_ string) error {
 	return nil
 }
 
+func (t *fakeTTTTrainer) SetWeightGPU(_ string, _ []float32) error {
+	return nil
+}
+
 func (t *fakeTTTTrainer) EvaluateGPU(_ []int, _ []int, _, _ int) (float32, error) {
 	t.evalCalls++
 	t.events = append(t.events, "eval")

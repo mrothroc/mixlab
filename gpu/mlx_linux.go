@@ -460,6 +460,18 @@ func mlxTrainerReadWeight(t TrainerHandle, weightIdx int, out []float32) int {
 	))
 }
 
+func mlxTrainerSetWeight(t TrainerHandle, weightIdx int, data []float32) int {
+	if len(data) == 0 {
+		return -1
+	}
+	return int(C.mlx_ir_trainer_set_weight(
+		C.int64_t(t),
+		C.int(weightIdx),
+		(*C.float)(unsafe.Pointer(&data[0])),
+		C.int(len(data)),
+	))
+}
+
 func mlxTrainerReadOutput(t TrainerHandle, name string, out []float32) error {
 	cName := C.CString(name)
 	defer C.free(unsafe.Pointer(cName))

@@ -255,6 +255,15 @@ func (t *mlxGPUTrainer) SetQATGPU(mode string) error {
 	return gpu.TrainerSetQAT(t.handle, mode)
 }
 
+func (t *mlxGPUTrainer) SetWeightGPU(name string, data []float32) error {
+	for i, shape := range t.shapes {
+		if shape.Name == name {
+			return gpu.TrainerSetWeight(t.handle, i, data)
+		}
+	}
+	return fmt.Errorf("unknown weight %q", name)
+}
+
 // EvaluateGPU runs a forward pass without gradients and returns the loss.
 func (t *mlxGPUTrainer) EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (float32, error) {
 	if err := t.FlushGPU(); err != nil {

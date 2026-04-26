@@ -103,6 +103,10 @@ func TrainerReadWeight(t TrainerHandle, weightIdx int, out []float32) error {
 	return errNotBuilt
 }
 
+func TrainerSetWeight(t TrainerHandle, weightIdx int, data []float32) error {
+	return errNotBuilt
+}
+
 func TrainerReadOutput(t TrainerHandle, name string, shape []int) ([]float32, error) {
 	return nil, errNotBuilt
 }

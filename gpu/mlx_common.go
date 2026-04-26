@@ -253,6 +253,29 @@ func TrainerReadWeight(t TrainerHandle, weightIdx int, out []float32) error {
 	return nil
 }
 
+func TrainerSetWeight(t TrainerHandle, weightIdx int, data []float32) error {
+	if t == 0 {
+		return fmt.Errorf("invalid trainer handle; create the trainer before writing weights")
+	}
+	if weightIdx < 0 {
+		return fmt.Errorf("invalid weight index %d; pass a non-negative index returned by TrainerNumWeights", weightIdx)
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("data slice is empty; SetWeight requires a fully-populated float32 buffer")
+	}
+	expected, err := TrainerWeightSize(t, weightIdx)
+	if err != nil {
+		return fmt.Errorf("TrainerSetWeight: query size: %w", err)
+	}
+	if len(data) != expected {
+		return fmt.Errorf("TrainerSetWeight: weight %d expects %d floats, got %d", weightIdx, expected, len(data))
+	}
+	if mlxTrainerSetWeight(t, weightIdx, data) != 0 {
+		return fmt.Errorf("mlx_ir_trainer_set_weight failed")
+	}
+	return nil
+}
+
 func TrainerReadOutput(t TrainerHandle, name string, shape []int) ([]float32, error) {
 	if t == 0 {
 		return nil, fmt.Errorf("invalid trainer handle; create the trainer before reading named outputs")
