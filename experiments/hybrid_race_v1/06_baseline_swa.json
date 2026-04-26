@@ -1,0 +1,36 @@
+{
+  "name": "06_baseline_swa",
+
+  // Same as baseline but with Stochastic Weight Averaging in the second
+  // half of training. Tests whether SWA alone gives the kind of free-lunch
+  // gain that competition entries see from EMA + SWA combined.
+  "model_dim": 256,
+  "vocab_size": 1024,
+  "seq_len": 1024,
+  "parallel_residual": true,
+  "logit_softcap": 30.0,
+  "bigram_vocab_size": 3072,
+  "bigram_dim": 64,
+  "blocks": [
+    {"type": "plain", "heads": 4, "qk_gain": 1.0},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4, "qk_gain": 1.0},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4, "qk_gain": 1.0},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "steps": 2000,
+    "lr": 1e-3,
+    "grad_clip": 1.0,
+    "weight_decay": 0.04,
+    "seed": 42,
+    "batch_tokens": 4096,
+    "optimizer": "muon",
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+    "swa_start": 1000,
+    "swa_decay": 0.997,
+    "swa_interval": 50
+  }
+}

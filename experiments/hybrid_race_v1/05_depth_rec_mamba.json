@@ -1,0 +1,33 @@
+{
+  "name": "05_depth_rec_mamba",
+
+  // Novel combination: depth-recurrent linear attention. Mamba blocks share
+  // weights across depth (same state-space block applied 3x). No one's
+  // published this — combines weight-sharing inductive bias with linear-
+  // attention cheap mixing.
+  "model_dim": 256,
+  "vocab_size": 1024,
+  "seq_len": 1024,
+  "logit_softcap": 30.0,
+  "bigram_vocab_size": 3072,
+  "bigram_dim": 64,
+  "blocks": [
+    {"type": "mamba3", "weight_group": "ssm"},
+    {"type": "swiglu", "weight_group": "ffn"},
+    {"type": "mamba3", "weight_group": "ssm"},
+    {"type": "swiglu", "weight_group": "ffn"},
+    {"type": "mamba3", "weight_group": "ssm"},
+    {"type": "swiglu", "weight_group": "ffn"}
+  ],
+  "training": {
+    "steps": 2000,
+    "lr": 1e-3,
+    "grad_clip": 1.0,
+    "weight_decay": 0.04,
+    "seed": 42,
+    "batch_tokens": 4096,
+    "optimizer": "muon",
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5
+  }
+}
