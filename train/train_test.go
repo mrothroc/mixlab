@@ -370,17 +370,29 @@ func TestExportWeightsForTrainerPrefersSWA(t *testing.T) {
 
 func TestFormatProgressTiming_BeforeETAThreshold(t *testing.T) {
 	// step 0 (< 1): no ETA, just elapsed
-	got := formatProgressTiming(12500*time.Millisecond, 0, 100)
+	got := formatProgressTiming(12500*time.Millisecond, 0, 0, 0, 100)
 	if got != "(12.5s)" {
 		t.Fatalf("formatProgressTiming = %q, want %q", got, "(12.5s)")
 	}
 }
 
 func TestFormatProgressTiming_WithETA(t *testing.T) {
-	// 42s elapsed over 11 steps (0-10), 9 remaining
-	// avg = 42s/11 ≈ 3.818s, eta = 9 * 3.818 ≈ 34s
-	got := formatProgressTiming(42*time.Second, 10, 20)
-	want := "(42.0s, ~34s remaining)"
+	// 42s wall-clock elapsed; 30s steady (post-warmup) over 10 steady steps,
+	// step=10 of 20 total. avg = 30s/10 = 3s, remaining = 9 steps, eta = 27s.
+	got := formatProgressTiming(42*time.Second, 30*time.Second, 10, 10, 20)
+	want := "(42.0s, ~27s remaining)"
+	if got != want {
+		t.Fatalf("formatProgressTiming = %q, want %q", got, want)
+	}
+}
+
+func TestFormatProgressTiming_ExcludesWarmup(t *testing.T) {
+	// Simulates the slow first step: 255s wall-clock total, but only 10s of
+	// steady time over 100 steady steps. ETA must use steady rate, not
+	// wall-clock-since-start, otherwise the first ETA is hugely inflated.
+	got := formatProgressTiming(265*time.Second, 10*time.Second, 100, 100, 30000)
+	// avg = 10s/100 = 100ms, remaining = 29899 steps, eta ≈ 2989.9s ≈ 49m50s
+	want := "(265.0s, ~49m50s remaining)"
 	if got != want {
 		t.Fatalf("formatProgressTiming = %q, want %q", got, want)
 	}

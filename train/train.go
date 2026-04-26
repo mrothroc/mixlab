@@ -393,6 +393,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	lastValLoss := math.NaN()
 	hasValLoss := false
 	start := time.Now()
+	// steadyStart is set after step 0 completes — excludes one-time
+	// compile/warmup costs from tok/s and ETA estimates.
+	var steadyStart time.Time
 	done := make(chan struct{})
 	batchCh := make(chan trainBatch, 4)
 	var loadWG sync.WaitGroup
@@ -475,6 +478,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 			if step == 0 {
 				firstLoss = v
+				// Anchor steady-state timing after the first step so the
+				// one-time compile/warmup cost doesn't poison tok/s and ETA.
+				steadyStart = time.Now()
 			}
 			lastLoss = v
 
@@ -507,11 +513,22 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				// Use wall-clock average for tok/s and MFU — per-step EMA is
 				// unreliable with pipelined training because collect returns
 				// near-instantly when the GPU has already finished.
+				// Anchor the rate calculation at steadyStart (set after step 0)
+				// so the one-time compile/warmup cost doesn't skew estimates.
 				elapsed := time.Since(start)
-				tokensPerSec := float64(batchTokens) * float64(step+1) / elapsed.Seconds()
+				steadyElapsed := elapsed
+				stepsForRate := step + 1
+				if !steadyStart.IsZero() && step >= 1 {
+					steadyElapsed = time.Since(steadyStart)
+					stepsForRate = step
+				}
+				var tokensPerSec float64
+				if steadyElapsed > 0 {
+					tokensPerSec = float64(batchTokens) * float64(stepsForRate) / steadyElapsed.Seconds()
+				}
 				mfuStr := ""
-				if cfg.Training.HardwareTFLOPs > 0 && flops.TrainingFLOPs > 0 {
-					mfu := (float64(flops.TrainingFLOPs) * float64(step+1) / elapsed.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
+				if cfg.Training.HardwareTFLOPs > 0 && flops.TrainingFLOPs > 0 && steadyElapsed > 0 {
+					mfu := (float64(flops.TrainingFLOPs) * float64(stepsForRate) / steadyElapsed.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
 					mfuStr = fmt.Sprintf(" MFU=%.1f%%", mfu*100)
 				}
 				phaseStr := ""
@@ -520,7 +537,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					phaseStr = fmt.Sprintf(" phase=%s", phaseDisplayLabel(phase, currentPhaseIdx))
 				}
 				fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f%s tok/s=%.0f%s %s\n",
-					name, step, steps, v, valStr, sched.At(step), phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), step, steps))
+					name, step, steps, v, valStr, sched.At(step), phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), steadyElapsed, stepsForRate, step, steps))
 				logDuration := time.Since(logStart)
 				if opts.Timing {
 					fmt.Printf("  [%s] [timing] data=%.1fms gpu=%.1fms val=%.1fms log=%.1fms\n",
@@ -774,12 +791,13 @@ func writeCheckpoint(cfg *ArchConfig, trainer GPUTrainer, shapes []WeightShape, 
 	return nil
 }
 
-func formatProgressTiming(elapsed time.Duration, step, totalSteps int) string {
-	if step < 1 || totalSteps <= 0 {
+func formatProgressTiming(elapsed, steadyElapsed time.Duration, stepsForRate, step, totalSteps int) string {
+	if step < 1 || totalSteps <= 0 || stepsForRate < 1 || steadyElapsed <= 0 {
 		return fmt.Sprintf("(%.1fs)", elapsed.Seconds())
 	}
-	// Wall-clock ETA: time_so_far / steps_done * steps_remaining
-	avgStepDuration := elapsed / time.Duration(step+1)
+	// ETA uses steady-state rate (post-warmup) so the one-time compile cost
+	// doesn't dominate early estimates.
+	avgStepDuration := steadyElapsed / time.Duration(stepsForRate)
 	remainingSteps := totalSteps - (step + 1)
 	if remainingSteps < 0 {
 		remainingSteps = 0
