@@ -1,0 +1,52 @@
+{
+  "name": "01_attn_leader_clone",
+
+  // Architectural clone of the current attention-track leaders (e.g.,
+  // #1809 PranavViswanath, #1813 djeidy):
+  //   - SP-8192 tokenizer
+  //   - Depth recurrence (3 unique attn/FFN pairs shared across 9 blocks)
+  //   - Parallel residuals
+  //   - QK-Gain (5.25, the value used by recent records)
+  //   - Muon optimizer (5-step Newton-Schulz)
+  //   - Late QAT to int6
+  //   - SWA in the last third
+  //   - Logit softcap, bigrams
+  // Missing vs. the leaders: Polar Express NS coefficients (need code
+  // change), LegalTTT (we have full/lora TTT but not the legal variant
+  // exactly), GPTQ post-processing.
+  "model_dim": 320,
+  "vocab_size": 8192,
+  "seq_len": 1024,
+  "parallel_residual": true,
+  "logit_softcap": 30.0,
+  "bigram_vocab_size": 3072,
+  "bigram_dim": 80,
+  "blocks": [
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_c"},
+    {"type": "swiglu", "weight_group": "ffn_c"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"}
+  ],
+  "training": {
+    "steps": 10000,
+    "lr": 1e-3,
+    "grad_clip": 1.0,
+    "weight_decay": 0.04,
+    "seed": 42,
+    "batch_tokens": 4096,
+    "optimizer": "muon",
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+    "qat": "int6",
+    "qat_start": 7000,
+    "swa_start": 7000,
+    "swa_decay": 0.997,
+    "swa_interval": 50
+  }
+}

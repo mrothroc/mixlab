@@ -1,0 +1,32 @@
+{
+  "name": "04_mamba_minimal",
+
+  // Control: same mamba3 architecture as config 02, but stripped of the
+  // optimization stack (no QAT, no SWA, no softcap, no bigrams, just
+  // AdamW). Measures how much the optimization stack contributes vs the
+  // architecture alone.
+  "model_dim": 320,
+  "vocab_size": 8192,
+  "seq_len": 1024,
+  "blocks": [
+    {"type": "mamba3"},
+    {"type": "swiglu"},
+    {"type": "mamba3"},
+    {"type": "swiglu"},
+    {"type": "mamba3"},
+    {"type": "swiglu"},
+    {"type": "mamba3"},
+    {"type": "swiglu"},
+    {"type": "mamba3"},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "steps": 10000,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 4096,
+    "optimizer": "adamw"
+  }
+}
