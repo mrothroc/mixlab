@@ -14,6 +14,7 @@ func TestBlockWeightCount(t *testing.T) {
 	}{
 		{BlockSpec{Type: "plain", Heads: 4}, 7},
 		{BlockSpec{Type: "plain", Heads: 4, QKGain: 5.25}, 8},
+		{BlockSpec{Type: "plain", Heads: 8, SparseAttnGate: true}, 8},
 		{BlockSpec{Type: "swiglu"}, 4},
 		{BlockSpec{Type: "mlp"}, 3},
 		{BlockSpec{Type: "mamba"}, 4},
@@ -127,7 +128,7 @@ func TestEmitPlainAttentionIR_RopeDims(t *testing.T) {
 
 func TestEmitPlainAttentionIR_SkipAttentionPreservesWeights(t *testing.T) {
 	p := NewProgram(7)
-	wi, err := emitPlainAttentionIRWithOptions(p, "x", 0, 4, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, true, 0, 0, false)
+	wi, err := emitPlainAttentionIRWithOptions(p, "x", 0, 4, 0, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, true, 0, 0, false, false, 0)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithOptions skip attention: %v", err)
 	}
@@ -240,6 +241,85 @@ func TestEmitPlainAttentionIR_QKGainBeforeMaskAndSoftmax(t *testing.T) {
 	}
 	if gainReshapeIdx >= gainMulIdx || gainMulIdx >= maskIdx || maskIdx >= softmaxIdx {
 		t.Fatalf("unexpected op order reshape=%d mul=%d mask=%d softmax=%d", gainReshapeIdx, gainMulIdx, maskIdx, softmaxIdx)
+	}
+}
+
+func TestEmitPlainAttentionIR_WindowSizeIsEncodedInCausalMask(t *testing.T) {
+	p := NewProgram(7)
+	wi, err := emitBlockIR(p, BlockSpec{Type: "plain", Heads: 4, WindowSize: 4}, "x", 0, 128, 8, 2, 1024, 0, nil, DefaultFFNMultiplier, false)
+	if err != nil {
+		t.Fatalf("emitBlockIR window_size: %v", err)
+	}
+	if wi != 7 {
+		t.Fatalf("expected wi=7, got %d", wi)
+	}
+	for _, op := range p.Ops {
+		if op.Code != OpCausalMask {
+			continue
+		}
+		if got, want := op.IntParams, []int{8, 4}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("CausalMask int params = %v, want %v", got, want)
+		}
+		return
+	}
+	t.Fatal("missing CausalMask op")
+}
+
+func TestEmitPlainAttentionIR_SparseAttnGateAppliesBeforeOutputProjection(t *testing.T) {
+	p := NewProgram(8)
+	wi, err := emitBlockIR(p, BlockSpec{Type: "plain", Heads: 8, SparseAttnGate: true}, "x", 0, 128, 64, 2, 1024, 0, nil, DefaultFFNMultiplier, false)
+	if err != nil {
+		t.Fatalf("emitBlockIR sparse gate: %v", err)
+	}
+	if wi != 8 {
+		t.Fatalf("expected wi=8, got %d", wi)
+	}
+
+	gateSliceIdx := -1
+	gateTransposeIdx := -1
+	gateMatMulIdx := -1
+	gateSigmoidIdx := -1
+	gateApplyIdx := -1
+	gateBroadcastIdx := -1
+	ctxTransposeIdx := -1
+	for i, op := range p.Ops {
+		switch op.Code {
+		case OpSlice:
+			if len(op.Inputs) == 1 && op.Inputs[0] == "x" && reflect.DeepEqual(op.IntParams, []int{0, 12, 1, 1}) {
+				gateSliceIdx = i
+			}
+		case OpTranspose:
+			if len(op.Inputs) == 1 && op.Inputs[0] == "w4" && reflect.DeepEqual(op.IntParams, []int{1, 0}) {
+				gateTransposeIdx = i
+			}
+			if len(op.Inputs) == 1 && op.Inputs[0] == "x_attn_0_gate4_bth" && reflect.DeepEqual(op.IntParams, []int{0, 2, 1, 3}) {
+				gateBroadcastIdx = i
+			}
+			if len(op.Inputs) == 1 && op.Inputs[0] == "x_attn_0_ctx_gated" {
+				ctxTransposeIdx = i
+			}
+		case OpMatMul:
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_0_gate_in" && op.Inputs[1] == "x_attn_0_gate_wt" {
+				gateMatMulIdx = i
+			}
+		case OpMul:
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_0_ctx" && op.Inputs[1] == "x_attn_0_gate4" {
+				gateApplyIdx = i
+			}
+		case OpSigmoid:
+			if len(op.Inputs) == 1 && op.Inputs[0] == "x_attn_0_gate_logits" {
+				gateSigmoidIdx = i
+			}
+		}
+	}
+	if gateSliceIdx == -1 || gateTransposeIdx == -1 || gateMatMulIdx == -1 || gateSigmoidIdx == -1 || gateBroadcastIdx == -1 || gateApplyIdx == -1 {
+		t.Fatalf("missing sparse gate ops: slice=%d transpose=%d matmul=%d sigmoid=%d broadcast=%d apply=%d", gateSliceIdx, gateTransposeIdx, gateMatMulIdx, gateSigmoidIdx, gateBroadcastIdx, gateApplyIdx)
+	}
+	if ctxTransposeIdx == -1 {
+		t.Fatal("missing transpose from gated context")
+	}
+	if gateSliceIdx >= gateMatMulIdx || gateTransposeIdx >= gateMatMulIdx || gateMatMulIdx >= gateSigmoidIdx || gateSigmoidIdx >= gateBroadcastIdx || gateBroadcastIdx >= gateApplyIdx || gateApplyIdx >= ctxTransposeIdx {
+		t.Fatalf("unexpected sparse gate op order slice=%d transpose=%d matmul=%d sigmoid=%d broadcast=%d apply=%d ctx_transpose=%d", gateSliceIdx, gateTransposeIdx, gateMatMulIdx, gateSigmoidIdx, gateBroadcastIdx, gateApplyIdx, ctxTransposeIdx)
 	}
 }
 
@@ -369,7 +449,7 @@ func TestEmitPlainAttentionIR_KVSourceReusesCachedTensors(t *testing.T) {
 	p := NewProgram(12)
 	cache := make(map[int]BlockKVOutputs)
 
-	wi, err := emitPlainAttentionIRWithKVOptions(p, "x", 0, 8, 4, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, false, 0, 0, false, 0, cache, 0)
+	wi, err := emitPlainAttentionIRWithKVOptions(p, "x", 0, 8, 4, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, false, 0, 0, false, false, 0, 0, cache, 0)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithKVOptions source: %v", err)
 	}
@@ -381,7 +461,7 @@ func TestEmitPlainAttentionIR_KVSourceReusesCachedTensors(t *testing.T) {
 		t.Fatalf("cached kv = %+v, want {K:x_attn_0_k_rot V:x_attn_0_vh}", got)
 	}
 
-	wi, err = emitPlainAttentionIRWithKVOptions(p, "x", wi, 8, 4, 128, 64, 2, 1, DefaultFFNMultiplier, false, 0, false, 0, 0, false, 1, cache, 2)
+	wi, err = emitPlainAttentionIRWithKVOptions(p, "x", wi, 8, 4, 128, 64, 2, 1, DefaultFFNMultiplier, false, 0, false, 0, 0, false, false, 0, 1, cache, 2)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithKVOptions shared: %v", err)
 	}

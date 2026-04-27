@@ -48,6 +48,8 @@ var irToGPUOp = map[int]int{
 	ir.OpXSAProject:           OpXSAProject,
 	ir.OpMatrixScan:           OpMatrixScan,
 	ir.OpScanTV:               OpScanTV,
+	ir.OpSoftplus:             OpSoftplus,
+	ir.OpGatedDeltaScan:       OpGatedDeltaScan,
 }
 
 // irToGPUDType maps ir tensor dtype codes to gpu dtype codes.

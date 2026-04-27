@@ -511,6 +511,48 @@ float IRTrainer::evaluate_named(const TensorMap& inputs) {
   return loss.item<float>();
 }
 
+float IRTrainer::compute_mean_square_grads_named(const TensorMap& inputs, const std::string& output_name) {
+  flush();
+  if (weights.empty()) {
+    throw std::runtime_error("IR trainer has no weights");
+  }
+  if (output_name.empty()) {
+    throw std::runtime_error("output name is required");
+  }
+
+  std::vector<int> argnums(weights.size());
+  std::iota(argnums.begin(), argnums.end(), 0);
+  std::unordered_map<std::string, mx::array> outputs;
+  auto fn = mx::value_and_grad(
+      [this, inputs, output_name, &outputs](const std::vector<mx::array>& w) {
+        auto effective = effective_training_weights(w, qat_mode);
+        outputs = ir_interpret_outputs(program, effective, inputs, {output_name}, true);
+        auto it = outputs.find(output_name);
+        if (it == outputs.end()) {
+          throw std::runtime_error("requested output missing: " + output_name);
+        }
+        return mx::mean(mx::square(it->second));
+      },
+      argnums);
+
+  auto out = fn(weights);
+  auto loss = out.first;
+  last_grads = std::move(out.second);
+  last_outputs = std::move(outputs);
+
+  std::vector<mx::array> eval_arrays;
+  eval_arrays.reserve(1 + last_outputs.size() + last_grads.size());
+  eval_arrays.push_back(loss);
+  for (const auto& [_, output] : last_outputs) {
+    eval_arrays.push_back(output);
+  }
+  for (const auto& grad : last_grads) {
+    eval_arrays.push_back(grad);
+  }
+  mx::eval(eval_arrays);
+  return loss.item<float>();
+}
+
 std::vector<float> IRTrainer::evaluate_per_token(const TensorMap& inputs) {
   flush();
   if (weights.empty()) {
@@ -649,6 +691,13 @@ mx::array IRTrainer::read_output(const std::string& output_name) const {
     throw std::runtime_error("IR trainer has no cached output: " + output_name);
   }
   return it->second;
+}
+
+mx::array IRTrainer::read_grad(int weight_idx) const {
+  if (weight_idx < 0 || static_cast<size_t>(weight_idx) >= last_grads.size()) {
+    throw std::runtime_error("invalid gradient weight index");
+  }
+  return last_grads[static_cast<size_t>(weight_idx)];
 }
 
 std::unique_ptr<IRTrainer> create_ir_trainer(

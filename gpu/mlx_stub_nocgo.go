@@ -61,6 +61,10 @@ func TrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return 0, errNotBuilt
 }
 
+func TrainerComputeMeanSquareGrads(t TrainerHandle, inputs []TensorInput, outputName string) (float32, error) {
+	return 0, errNotBuilt
+}
+
 func TrainerEvaluatePerToken(t TrainerHandle, inputs []TensorInput) ([]float32, error) {
 	return nil, errNotBuilt
 }
@@ -84,6 +88,10 @@ func TrainerWeightSize(t TrainerHandle, weightIdx int) (int, error) {
 }
 
 func TrainerReadWeight(t TrainerHandle, weightIdx int, out []float32) error {
+	return errNotBuilt
+}
+
+func TrainerReadGrad(t TrainerHandle, weightIdx int, out []float32) error {
 	return errNotBuilt
 }
 

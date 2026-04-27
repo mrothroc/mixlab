@@ -483,7 +483,7 @@ void mlx_ir_program_add_op(
   if (!p) {
     return;
   }
-  if (n_inputs < 0 || n_inputs > 4 || n_outputs < 0 || n_outputs > 2) {
+  if (n_inputs < 0 || n_inputs > 5 || n_outputs < 0 || n_outputs > 2) {
     return;
   }
   if (n_float_params < 0 || n_float_params > 4 || n_int_params < 0 || n_int_params > 8) {

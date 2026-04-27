@@ -63,11 +63,13 @@ enum OpType {
   OP_CROSS_ENTROPY_PER_TOKEN = 56,
   OP_MATRIX_SCAN = 57,
   OP_SCAN_TV = 58,  // time-varying gated scan
+  OP_SOFTPLUS = 59,
+  OP_GATED_DELTA_SCAN = 60,
 };
 
 struct IRop {
   int type = 0;
-  std::string inputs[4];
+  std::string inputs[5];
   int n_inputs = 0;
   std::string outputs[2];
   int n_outputs = 0;

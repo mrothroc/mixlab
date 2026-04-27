@@ -1,0 +1,24 @@
+{
+  "name": "swa_window128_smoke",
+  "model_dim": 64,
+  "vocab_size": 256,
+  "seq_len": 128,
+  "mlp_mult": 2.0,
+  "blocks": [
+    {"type": "plain", "heads": 4, "window_size": 128},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "steps": 50,
+    "lr": 0.001,
+    "seed": 1,
+    "batch_tokens": 128,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "beta1": 0.9,
+    "beta2": 0.95,
+    "epsilon": 1e-8
+  }
+}

@@ -17,6 +17,8 @@ type WeightMeta struct {
 	IsNormScale bool // true for normalization scales (init 1.0); false for other 1-D params (init 0.0)
 	InitOne     bool // true for non-norm weights that should initialize to 1.0
 	InitValue   float32
+	InitZero    bool
+	InitMode    string
 }
 
 // ffnDim computes the FFN hidden dimension, clamped to at least D.
@@ -81,6 +83,10 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 		}
 		if spec.QKGain > 0 {
 			metas = append(metas, WeightMeta{Name: "qk_gain", Shape: []int{heads}, InitValue: float32(spec.QKGain)})
+		}
+		if spec.SparseAttnGate {
+			gateDim := plainSparseAttnGateWidth(D)
+			metas = append(metas, WeightMeta{Name: "attn_gate_w", Shape: []int{heads, gateDim}, InitZero: true})
 		}
 		metas = append(metas, WeightMeta{Name: "wo", Shape: []int{D, D}})
 		if blockScales {
@@ -202,6 +208,9 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 			{Name: "wo", Shape: []int{inner, D}},
 			{Name: "scan_decay", Shape: []int{inner}},
 		}, nil
+
+	case "gated_deltanet":
+		return gatedDeltaNetWeightShapes(spec, D, T, B, V)
 
 	case "cross_attention":
 		heads := spec.Heads

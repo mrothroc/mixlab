@@ -62,6 +62,7 @@ struct IRTrainer {
   std::vector<uint8_t> has_muon_state;
   int step_count = 0;
   std::unordered_map<std::string, mlx::core::array> last_outputs;
+  std::vector<mlx::core::array> last_grads;
   bool has_pending_step_ = false;
   mlx::core::array pending_loss_;
   std::unordered_map<std::string, mlx::core::array> pending_outputs_;
@@ -83,7 +84,9 @@ struct IRTrainer {
   float evaluate_named(const TensorMap& inputs);
   std::vector<float> evaluate_per_token(const TensorMap& inputs);
   float evaluate_lora_named(const TensorMap& inputs, int rank, int steps, float lr);
+  float compute_mean_square_grads_named(const TensorMap& inputs, const std::string& output_name);
   mlx::core::array read_output(const std::string& output_name) const;
+  mlx::core::array read_grad(int weight_idx) const;
   void apply_optimizer_updates(const std::vector<mlx::core::array>& grads);
 };
 

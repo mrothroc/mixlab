@@ -71,7 +71,7 @@ func init() {
 			if heads <= 0 {
 				heads = 4
 			}
-			return emitPlainAttentionIRWithKVOptions(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, spec.SkipAttention, spec.QKGain, spec.RopeDims, spec.XSA, spec.KVSource, opts.KVCache, opts.BlockIndex)
+			return emitPlainAttentionIRWithKVOptions(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, spec.SkipAttention, spec.QKGain, spec.RopeDims, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.KVSource, opts.KVCache, opts.BlockIndex)
 		},
 		WeightCount: plainWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
@@ -105,6 +105,16 @@ func init() {
 			return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
 		},
 	})
+	RegisterBlock("gated_deltanet", blockRegistration{
+		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, _ EmitOptions) (int, error) {
+			return emitGatedDeltaNetIR(prog, spec, stream, wi, D, T, B, idx)
+		},
+		WeightCount:  gatedDeltaNetWeightCount,
+		WeightShapes: gatedDeltaNetWeightShapes,
+		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, _ EmitOptions) ([]WeightMeta, error) {
+			return gatedDeltaNetWeightShapes(spec, D, T, B, V)
+		},
+	})
 	for _, name := range []string{"mamba", "mamba3", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
 		RegisterBlock(name, blockRegistration{
 			Emitter:     builtinBlockEmitter,
@@ -125,6 +135,9 @@ func plainWeightCount(spec BlockSpec, blockScales, residMix bool) (int, error) {
 		total -= 2
 	}
 	if spec.QKGain > 0 {
+		total++
+	}
+	if spec.SparseAttnGate {
 		total++
 	}
 	if blockScales {

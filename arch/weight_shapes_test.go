@@ -17,6 +17,7 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 	specs := []BlockSpec{
 		{Type: "plain", Heads: 4},
 		{Type: "plain", Heads: 4, QKGain: 5.25},
+		{Type: "plain", Heads: 8, SparseAttnGate: true},
 		{Type: "swiglu"},
 		{Type: "mlp"},
 		{Type: "mamba", InnerDim: 32},
@@ -105,6 +106,32 @@ func TestBlockWeightShapes_QKGainMeta(t *testing.T) {
 	}
 	if metas[4].IsNormScale || metas[4].InitOne {
 		t.Fatalf("qk_gain should use InitValue only, got %+v", metas[4])
+	}
+}
+
+func TestBlockWeightShapes_SparseAttnGateMeta(t *testing.T) {
+	metas, err := blockWeightShapes(BlockSpec{Type: "plain", Heads: 8, SparseAttnGate: true}, 384, 32, 1, 256, DefaultFFNMultiplier, false, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes: %v", err)
+	}
+	if len(metas) != 8 {
+		t.Fatalf("weight count = %d, want 8", len(metas))
+	}
+	if got, want := metas[4].Name, "attn_gate_w"; got != want {
+		t.Fatalf("weight[4].Name = %q, want %q", got, want)
+	}
+	if got, want := metas[4].Shape, []int{8, 12}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("attn_gate_w shape = %v, want %v", got, want)
+	}
+	if !metas[4].InitZero {
+		t.Fatalf("attn_gate_w should be zero-initialized, got %+v", metas[4])
+	}
+	total := 1
+	for _, d := range metas[4].Shape {
+		total *= d
+	}
+	if total != 96 {
+		t.Fatalf("attn_gate_w params = %d, want 96", total)
 	}
 }
 

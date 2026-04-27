@@ -14,6 +14,8 @@ type WeightShape struct {
 	IsNormScale bool
 	InitOne     bool
 	InitValue   float32
+	InitZero    bool
+	InitMode    string
 }
 
 func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
@@ -50,6 +52,8 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 			IsNormScale: m.IsNormScale,
 			InitOne:     m.InitOne,
 			InitValue:   m.InitValue,
+			InitZero:    m.InitZero,
+			InitMode:    m.InitMode,
 		}
 	}
 	return shapes, nil
@@ -64,11 +68,17 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 			n *= d
 		}
 		data := make([]float32, n)
+		if applySpecialWeightInit(data, ws, rng) {
+			weights[i] = data
+			continue
+		}
 		switch {
 		case ws.InitValue != 0:
 			for j := range data {
 				data[j] = ws.InitValue
 			}
+		case ws.InitZero:
+			// Leave the buffer zeroed for explicitly transparent starts such as SparseAttnGate.
 		case len(ws.Shape) == 1:
 			if ws.IsNormScale || ws.InitOne {
 				for j := range data {
@@ -96,6 +106,60 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 		weights[i] = data
 	}
 	return weights
+}
+
+func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool {
+	switch ws.InitMode {
+	case "torch_linear_uniform":
+		if len(ws.Shape) < 2 || ws.Shape[0] <= 0 {
+			return false
+		}
+		bound := 1.0 / math.Sqrt(float64(ws.Shape[0]))
+		for i := range data {
+			data[i] = float32(rng.Float64()*2*bound - bound)
+		}
+		return true
+	case "torch_depthwise_conv1d_uniform":
+		if len(ws.Shape) < 1 || ws.Shape[0] <= 0 {
+			return false
+		}
+		bound := 1.0 / math.Sqrt(float64(ws.Shape[0]))
+		for i := range data {
+			data[i] = float32(rng.Float64()*2*bound - bound)
+		}
+		return true
+	case "gated_deltanet_A_log", "A_log":
+		for i := range data {
+			v := rng.Float64() * 16.0
+			if v == 0 {
+				v = math.SmallestNonzeroFloat64
+			}
+			data[i] = float32(math.Log(v))
+		}
+		return true
+	case "gated_deltanet_dt_bias", "dt_bias":
+		const (
+			dtMin       = 0.001
+			dtMax       = 0.1
+			dtInitFloor = 1e-4
+		)
+		logMin := math.Log(dtMin)
+		logMax := math.Log(dtMax)
+		for i := range data {
+			dt := math.Exp(rng.Float64()*(logMax-logMin) + logMin)
+			if dt < dtInitFloor {
+				dt = dtInitFloor
+			}
+			data[i] = float32(inverseSoftplus(dt))
+		}
+		return true
+	default:
+		return false
+	}
+}
+
+func inverseSoftplus(x float64) float64 {
+	return x + math.Log(-math.Expm1(-x))
 }
 
 func shouldDecayWeight(shape []int) bool {

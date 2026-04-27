@@ -291,7 +291,35 @@ float mlx_ir_trainer_evaluate_named(int64_t trainer, const mlx_tensor_input* inp
     }
     auto tensor_map = to_tensor_map(inputs, n_inputs);
     return t->evaluate_named(tensor_map);
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_evaluate_named", e);
+    return std::nanf("");
   } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_evaluate_named unknown exception" << std::endl;
+    return std::nanf("");
+  }
+}
+
+float mlx_ir_trainer_compute_mean_square_grads_named(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char* output_name) {
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return std::nanf("");
+    }
+    auto* t = get_ir_trainer(trainer);
+    if (!t || !inputs || n_inputs <= 0 || !output_name || output_name[0] == '\0') {
+      return std::nanf("");
+    }
+    auto tensor_map = to_tensor_map(inputs, n_inputs);
+    return t->compute_mean_square_grads_named(tensor_map, output_name);
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_compute_mean_square_grads_named", e);
+    return std::nanf("");
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_compute_mean_square_grads_named unknown exception" << std::endl;
     return std::nanf("");
   }
 }
@@ -463,6 +491,31 @@ int mlx_ir_trainer_read_weight(int64_t trainer, int weight_idx, float* out, int 
     std::memcpy(out, flat.data<float>(), static_cast<size_t>(n) * sizeof(float));
     return 0;
   } catch (...) {
+    return -1;
+  }
+}
+
+int mlx_ir_trainer_read_grad(int64_t trainer, int weight_idx, float* out, int size) {
+  if (!out || size < 0) {
+    return -1;
+  }
+  try {
+    auto* t = get_ir_trainer(trainer);
+    if (!t) {
+      return -1;
+    }
+    auto g = mx::astype(t->read_grad(weight_idx), mx::float32);
+    if (g.size() != static_cast<size_t>(size)) {
+      return -1;
+    }
+    mx::eval(g);
+    std::memcpy(out, g.data<float>(), static_cast<size_t>(size) * sizeof(float));
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_read_grad", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_read_grad unknown exception" << std::endl;
     return -1;
   }
 }

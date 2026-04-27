@@ -80,8 +80,8 @@ func (p *Program) AddOp(opType int, inputs, outputs []string, floatParams []floa
 	if p == nil || p.handle == 0 {
 		return fmt.Errorf("invalid GPU program handle; create the program with gpu.NewProgram before declaring ops")
 	}
-	if len(inputs) > 4 || len(outputs) > 2 || len(floatParams) > 4 || len(intParams) > 8 {
-		return fmt.Errorf("IR op params exceed bridge limits; keep inputs<=4 outputs<=2 float_params<=4 int_params<=8")
+	if len(inputs) > 5 || len(outputs) > 2 || len(floatParams) > 4 || len(intParams) > 8 {
+		return fmt.Errorf("IR op params exceed bridge limits; keep inputs<=5 outputs<=2 float_params<=4 int_params<=8")
 	}
 	if err := mlxAddOp(p.handle, opType, inputs, outputs, floatParams, intParams); err != nil {
 		return err
@@ -164,6 +164,16 @@ func TrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) {
 		return 0, fmt.Errorf("invalid trainer handle; create the trainer successfully before running evaluation")
 	}
 	return mlxTrainerEvaluate(t, inputs)
+}
+
+func TrainerComputeMeanSquareGrads(t TrainerHandle, inputs []TensorInput, outputName string) (float32, error) {
+	if t == 0 {
+		return 0, fmt.Errorf("invalid trainer handle; create the trainer successfully before computing gradients")
+	}
+	if outputName == "" {
+		return 0, fmt.Errorf("output name is required; pass a declared program output such as \"x_hidden\"")
+	}
+	return mlxTrainerComputeMeanSquareGrads(t, inputs, outputName)
 }
 
 func TrainerEvaluatePerToken(t TrainerHandle, inputs []TensorInput) ([]float32, error) {
@@ -249,6 +259,22 @@ func TrainerReadWeight(t TrainerHandle, weightIdx int, out []float32) error {
 	}
 	if mlxTrainerReadWeight(t, weightIdx, out) != 0 {
 		return fmt.Errorf("mlx_ir_trainer_read_weight failed")
+	}
+	return nil
+}
+
+func TrainerReadGrad(t TrainerHandle, weightIdx int, out []float32) error {
+	if t == 0 {
+		return fmt.Errorf("invalid trainer handle; create the trainer before reading gradients")
+	}
+	if weightIdx < 0 {
+		return fmt.Errorf("invalid weight index %d; pass a non-negative index returned by TrainerNumWeights", weightIdx)
+	}
+	if len(out) == 0 {
+		return fmt.Errorf("output buffer is empty; allocate a float32 slice sized by TrainerWeightSize before reading gradients")
+	}
+	if mlxTrainerReadGrad(t, weightIdx, out) != 0 {
+		return fmt.Errorf("mlx_ir_trainer_read_grad failed")
 	}
 	return nil
 }

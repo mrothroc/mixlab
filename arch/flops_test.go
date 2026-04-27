@@ -67,6 +67,18 @@ func TestEstimateFLOPsGQAIsCheaperThanMHA(t *testing.T) {
 	}
 }
 
+func TestEstimateFLOPsSlidingWindowIsCheaperThanFullAttention(t *testing.T) {
+	full := flopsTestConfig([]BlockSpec{{Type: "plain", Heads: 2}})
+	windowed := flopsTestConfig([]BlockSpec{{Type: "plain", Heads: 2, WindowSize: 2}})
+
+	fullEstimate := EstimateFLOPs(full)
+	windowedEstimate := EstimateFLOPs(windowed)
+
+	if windowedEstimate.ForwardFLOPs >= fullEstimate.ForwardFLOPs {
+		t.Fatalf("windowed ForwardFLOPs=%d, want less than full ForwardFLOPs=%d", windowedEstimate.ForwardFLOPs, fullEstimate.ForwardFLOPs)
+	}
+}
+
 func flopsTestConfig(blocks []BlockSpec) *ArchConfig {
 	return &ArchConfig{
 		Name:      "flops-test",

@@ -423,8 +423,16 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           throw std::runtime_error("OP_CAUSAL_MASK missing T");
         }
         int T = op.int_params[0];
+        int window_size = (op.n_int_params >= 2) ? op.int_params[1] : 0;
         auto scores = get(op, 0);
         auto mask2d = mx::triu(mx::ones({T, T}, mx::bool_), 1);
+        if (window_size > 0 && window_size < T) {
+          auto pos = mx::astype(mx::arange(T), mx::int32);
+          auto query_pos = mx::expand_dims(pos, 1);
+          auto key_pos = mx::expand_dims(pos, 0);
+          auto too_old = key_pos < (query_pos - mx::array(window_size - 1, mx::int32));
+          mask2d = mx::logical_or(mask2d, too_old);
+        }
         auto mask = mx::expand_dims(mx::expand_dims(mask2d, 0), 0);
         auto masked = mx::where(mask, mx::full_like(scores, -1e9f), scores);
         set_out(op, 0, masked);
@@ -681,6 +689,48 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mx::reshape(out, {B * T, D}));
         break;
       }
+      case OP_GATED_DELTA_SCAN: {
+        if (op.n_int_params < 5) {
+          throw std::runtime_error("OP_GATED_DELTA_SCAN requires B,T,H,Dk,Dv");
+        }
+        int B = op.int_params[0];
+        int T = op.int_params[1];
+        int H = op.int_params[2];
+        int Dk = op.int_params[3];
+        int Dv = op.int_params[4];
+        auto q = mx::reshape(get(op, 0), {B, T, H, Dk});
+        auto k = mx::reshape(get(op, 1), {B, T, H, Dk});
+        auto v = mx::reshape(get(op, 2), {B, T, H, Dv});
+        auto beta = mx::reshape(get(op, 3), {B, T, H});
+        auto gate = mx::reshape(get(op, 4), {B, T, H});
+
+        auto state = mx::zeros({B, H, Dk, Dv}, mx::float32);
+        auto out = mx::zeros({B, T, H, Dv}, mx::float32);
+        for (int t = 0; t < T; ++t) {
+          auto qt = mx::reshape(mx::slice(q, {0, t, 0, 0}, {B, t + 1, H, Dk}), {B, H, Dk});
+          auto kt = mx::reshape(mx::slice(k, {0, t, 0, 0}, {B, t + 1, H, Dk}), {B, H, Dk});
+          auto vt = mx::reshape(mx::slice(v, {0, t, 0, 0}, {B, t + 1, H, Dv}), {B, H, Dv});
+          auto betat = mx::reshape(mx::slice(beta, {0, t, 0}, {B, t + 1, H}), {B, H, 1});
+          auto gatet = mx::reshape(mx::slice(gate, {0, t, 0}, {B, t + 1, H}), {B, H, 1, 1});
+
+          state = gatet * state;
+          auto pred = mx::reshape(
+              mx::matmul(mx::reshape(kt, {B, H, 1, Dk}), state),
+              {B, H, Dv});
+          auto err = vt - pred;
+          auto err_scaled = err * betat;
+          auto update = mx::reshape(kt, {B, H, Dk, 1}) * mx::reshape(err_scaled, {B, H, 1, Dv});
+          state = state + update;
+
+          auto ot = mx::reshape(
+              mx::matmul(mx::reshape(qt, {B, H, 1, Dk}), state),
+              {B, H, Dv});
+          out = mx::slice_update(out, mx::reshape(ot, {B, 1, H, Dv}),
+                                 mx::Shape{0, t, 0, 0}, mx::Shape{B, t + 1, H, Dv});
+        }
+        set_out(op, 0, mx::reshape(out, {B * T * H, Dv}));
+        break;
+      }
       case OP_GATHER_POSITIONS: {
         if (op.n_int_params < 3) {
           throw std::runtime_error("OP_GATHER_POSITIONS requires B,K,D");
@@ -927,10 +977,31 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mx::exp(get(op, 0)));
         break;
       }
+      case OP_SOFTPLUS: {
+        auto x = get(op, 0);
+        set_out(op, 0, mx::logaddexp(x, mx::zeros_like(x)));
+        break;
+      }
       case OP_OUTER: {
-        // Batched outer product: a [B, Da], b [B, Db] -> out [B, Da, Db]
+        // Outer product supports both:
+        // - vectors: a [Da], b [Db] -> out [Da, Db]
+        // - batched matrices: a [B, Da], b [B, Db] -> out [B, Da, Db]
         auto a = get(op, 0);
         auto b = get(op, 1);
+        if (a.ndim() == 1 && b.ndim() == 1) {
+          int Da = a.shape(0);
+          int Db = b.shape(0);
+          auto a_exp = mx::reshape(a, {Da, 1});
+          auto b_exp = mx::reshape(b, {1, Db});
+          set_out(op, 0, a_exp * b_exp);
+          break;
+        }
+        if (a.ndim() != 2 || b.ndim() != 2) {
+          throw std::runtime_error("OP_OUTER requires rank-1 or rank-2 inputs");
+        }
+        if (a.shape(0) != b.shape(0)) {
+          throw std::runtime_error("OP_OUTER batched inputs must share batch dimension");
+        }
         int B_dim = a.shape(0);
         int Da = a.shape(1);
         int Db = b.shape(1);

@@ -367,6 +367,26 @@ func mlxTrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) 
 	return loss, nil
 }
 
+func mlxTrainerComputeMeanSquareGrads(t TrainerHandle, inputs []TensorInput, outputName string) (float32, error) {
+	cInputs, cleanup, err := marshalTensorInputs(inputs)
+	if err != nil {
+		return 0, err
+	}
+	defer cleanup()
+	cOutputName := C.CString(outputName)
+	defer C.free(unsafe.Pointer(cOutputName))
+	loss := float32(C.mlx_ir_trainer_compute_mean_square_grads_named(
+		C.int64_t(t),
+		(*C.mlx_tensor_input)(unsafe.Pointer(&cInputs[0])),
+		C.int(len(cInputs)),
+		cOutputName,
+	))
+	if math.IsNaN(float64(loss)) {
+		return 0, fmt.Errorf("mlx_ir_trainer_compute_mean_square_grads_named failed")
+	}
+	return loss, nil
+}
+
 func mlxTrainerEvaluatePerToken(t TrainerHandle, inputs []TensorInput) ([]float32, error) {
 	cInputs, cleanup, err := marshalTensorInputs(inputs)
 	if err != nil {
@@ -454,6 +474,15 @@ func mlxTrainerWeightSize(t TrainerHandle, weightIdx int) int {
 
 func mlxTrainerReadWeight(t TrainerHandle, weightIdx int, out []float32) int {
 	return int(C.mlx_ir_trainer_read_weight(
+		C.int64_t(t),
+		C.int(weightIdx),
+		(*C.float)(unsafe.Pointer(&out[0])),
+		C.int(len(out)),
+	))
+}
+
+func mlxTrainerReadGrad(t TrainerHandle, weightIdx int, out []float32) int {
+	return int(C.mlx_ir_trainer_read_grad(
 		C.int64_t(t),
 		C.int(weightIdx),
 		(*C.float)(unsafe.Pointer(&out[0])),

@@ -94,24 +94,29 @@ type CustomOpSpec = OpSpec
 
 // BlockSpec describes a single model block.
 type BlockSpec struct {
-	Type          string       `json:"type"`
-	Name          string       `json:"name,omitempty"` // custom block name (required for type=custom)
-	WeightGroup   string       `json:"weight_group,omitempty"`
-	Heads         int          `json:"heads"`
-	KVHeads       int          `json:"kv_heads,omitempty"`
-	KVSource      int          `json:"kv_source,omitempty"`      // -1 or 0 = compute own KV; positive = reuse KV from block N (1-indexed)
-	RopeDims      int          `json:"rope_dims,omitempty"`      // RoPE rotation dims per head; 0 or head_dim = full RoPE
-	QKGain        float64      `json:"qk_gain,omitempty"`        // per-head learnable QK scaling; 0 disables
-	XSA           bool         `json:"xsa,omitempty"`            // enable V-orthogonal projection after attention
-	SkipAttention bool         `json:"skip_attention,omitempty"` // plain: bypass attention while preserving weight layout.
-	InnerDim      int          `json:"inner_dim,omitempty"`      // Mamba inner dimension; defaults to model_dim.
-	NumLatents    int          `json:"num_latents,omitempty"`    // Perceiver/bottleneck latent count.
-	SourceStream  string       `json:"source_stream,omitempty"`  // cross_attention: stream providing K/V.
-	Decay         float64      `json:"decay,omitempty"`          // RetNet: initial decay rate in (0,1); defaults to 0.95.
-	Activation    string       `json:"activation,omitempty"`     // mlp: "silu" (default), "gelu", "relu", "leaky_relu_sq".
-	LeakySlope    float64      `json:"leaky_slope,omitempty"`    // mlp leaky_relu_sq negative slope; defaults to 0.5.
-	Weights       []WeightSpec `json:"weights,omitempty"`        // custom block weight declarations
-	Ops           []OpSpec     `json:"ops,omitempty"`            // custom block operation sequence
+	Type           string       `json:"type"`
+	Name           string       `json:"name,omitempty"` // custom block name (required for type=custom)
+	WeightGroup    string       `json:"weight_group,omitempty"`
+	Heads          int          `json:"heads"`
+	KVHeads        int          `json:"kv_heads,omitempty"`
+	KVSource       int          `json:"kv_source,omitempty"`        // -1 or 0 = compute own KV; positive = reuse KV from block N (1-indexed)
+	RopeDims       int          `json:"rope_dims,omitempty"`        // RoPE rotation dims per head; 0 or head_dim = full RoPE
+	QKGain         float64      `json:"qk_gain,omitempty"`          // per-head learnable QK scaling; 0 disables
+	XSA            bool         `json:"xsa,omitempty"`              // enable V-orthogonal projection after attention
+	WindowSize     int          `json:"window_size,omitempty"`      // plain: sliding causal attention width; 0 = full causal attention
+	SkipAttention  bool         `json:"skip_attention,omitempty"`   // plain: bypass attention while preserving weight layout.
+	SparseAttnGate bool         `json:"sparse_attn_gate,omitempty"` // plain: narrow per-head output gate over the first gate_window head channels.
+	InnerDim       int          `json:"inner_dim,omitempty"`        // Mamba inner dimension; defaults to model_dim.
+	DK             int          `json:"d_k,omitempty"`              // gated_deltanet: key/query dim per head.
+	DV             int          `json:"d_v,omitempty"`              // gated_deltanet: value dim per head; defaults to 2*d_k.
+	KVShare        *bool        `json:"kv_share,omitempty"`         // gated_deltanet: share the K/V projection when true (default).
+	NumLatents     int          `json:"num_latents,omitempty"`      // Perceiver/bottleneck latent count.
+	SourceStream   string       `json:"source_stream,omitempty"`    // cross_attention: stream providing K/V.
+	Decay          float64      `json:"decay,omitempty"`            // RetNet: initial decay rate in (0,1); defaults to 0.95.
+	Activation     string       `json:"activation,omitempty"`       // mlp: "silu" (default), "gelu", "relu", "leaky_relu_sq".
+	LeakySlope     float64      `json:"leaky_slope,omitempty"`      // mlp leaky_relu_sq negative slope; defaults to 0.5.
+	Weights        []WeightSpec `json:"weights,omitempty"`          // custom block weight declarations
+	Ops            []OpSpec     `json:"ops,omitempty"`              // custom block operation sequence
 }
 
 // TrainingPhase defines one contiguous training phase with a fixed LR.
@@ -604,7 +609,7 @@ func validateWeightGroups(cfg *ArchConfig, source string) error {
 
 func weightGroupHeadCount(spec BlockSpec) (int, bool) {
 	switch blockTypeKey(spec) {
-	case "plain", "retnet", "perceiver", "bottleneck", "cross_attention":
+	case "plain", "retnet", "perceiver", "bottleneck", "cross_attention", "gated_deltanet":
 		return spec.Heads, true
 	case "custom":
 		if spec.Heads <= 0 {
@@ -647,7 +652,7 @@ func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, c
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	switch b.Type {
-	case "plain", "swiglu", "mlp", "mamba", "mamba3", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
+	case "plain", "swiglu", "mlp", "mamba", "mamba3", "gated_deltanet", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
 		// valid
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)
@@ -662,6 +667,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	if b.Type == "plain" && b.QKGain < 0 {
 		return fmt.Errorf("config %q %s[%d] type=plain has invalid qk_gain=%g (must be >= 0)", source, groupName, idx, b.QKGain)
 	}
+	if b.Type == "plain" && b.WindowSize < 0 {
+		return fmt.Errorf("config %q %s[%d] type=plain has invalid window_size=%d (must be >= 0)", source, groupName, idx, b.WindowSize)
+	}
 	if b.Type == "plain" && b.KVHeads != 0 {
 		if b.KVHeads < 0 {
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid kv_heads=%d (must be > 0 when set)", source, groupName, idx, b.KVHeads)
@@ -672,6 +680,24 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	}
 	if b.Type == "retnet" && b.Heads <= 0 {
 		return fmt.Errorf("config %q %s[%d] type=retnet requires heads > 0", source, groupName, idx)
+	}
+	if b.Type == "gated_deltanet" {
+		if b.Heads <= 0 {
+			return fmt.Errorf("config %q %s[%d] type=gated_deltanet requires heads > 0", source, groupName, idx)
+		}
+		if b.DK <= 0 {
+			return fmt.Errorf("config %q %s[%d] type=gated_deltanet requires d_k > 0", source, groupName, idx)
+		}
+		dv := b.DV
+		if dv <= 0 {
+			dv = 2 * b.DK
+		}
+		if dv <= 0 {
+			return fmt.Errorf("config %q %s[%d] type=gated_deltanet has invalid d_v=%d", source, groupName, idx, b.DV)
+		}
+		if effectiveKVShare(b) && dv < b.DK {
+			return fmt.Errorf("config %q %s[%d] type=gated_deltanet with kv_share=true requires d_v >= d_k (got d_v=%d d_k=%d)", source, groupName, idx, dv, b.DK)
+		}
 	}
 	if (b.Type == "perceiver" || b.Type == "bottleneck") && b.Heads <= 0 {
 		return fmt.Errorf("config %q %s[%d] type=%s requires heads > 0", source, groupName, idx, b.Type)

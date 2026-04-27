@@ -530,7 +530,7 @@ func emitPerceiverIR(prog *Program, x string, wi, H, L, D, T, B, idx int) (int, 
 		prog.Transpose(ksRot, []int{0, 1, 3, 2}, kst)
 		prog.MatMul(qsRot, kst, scores)
 		prog.ScalarMul(scores, scale, scaled)
-		prog.CausalMask(scaled, L, masked)
+		prog.CausalMask(scaled, L, 0, masked)
 		prog.Softmax(masked, -1, attn)
 
 		prog.MatMul(attn, vsh, ctx)
@@ -718,7 +718,7 @@ func emitRetNetIR(prog *Program, x string, wi, H, D, T, B, idx int) (int, error)
 	prog.Reshape(decaySig, []int{1, H, 1, 1}, decay4)
 	prog.Mul(decay4, delta4, decayScaled)
 	prog.ScalarMul(decayScaled, -1.0, decayNeg)
-	prog.CausalMask(decayNeg, T, decayMasked)
+	prog.CausalMask(decayNeg, T, 0, decayMasked)
 	prog.Exp(decayMasked, decayWeights)
 
 	prog.Exp(scaled, expScores)

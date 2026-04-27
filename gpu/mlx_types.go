@@ -45,6 +45,8 @@ const (
 	OpCrossEntropyPerToken = 56
 	OpMatrixScan           = 57
 	OpScanTV               = 58
+	OpSoftplus             = 59
+	OpGatedDeltaScan       = 60
 )
 
 const (

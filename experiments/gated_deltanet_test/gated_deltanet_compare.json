@@ -1,0 +1,24 @@
+{
+  "name": "gated_deltanet_compare",
+  "model_dim": 320,
+  "vocab_size": 1024,
+  "seq_len": 64,
+  "blocks": [
+    {"type": "gated_deltanet", "heads": 4, "d_k": 60, "d_v": 120, "weight_group": "gdn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "gated_deltanet", "heads": 4, "d_k": 60, "d_v": 120, "weight_group": "gdn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"},
+    {"type": "gated_deltanet", "heads": 4, "d_k": 60, "d_v": 120, "weight_group": "gdn_c"},
+    {"type": "swiglu", "weight_group": "ffn_c"},
+    {"type": "gated_deltanet", "heads": 4, "d_k": 60, "d_v": 120, "weight_group": "gdn_d"},
+    {"type": "swiglu", "weight_group": "ffn_d"}
+  ],
+  "training": {
+    "steps": 200,
+    "lr": 6e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 512
+  }
+}

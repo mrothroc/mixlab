@@ -24,8 +24,8 @@ func TestPrepareScript(t *testing.T) {
 	// Find prepare.py relative to the test file.
 	scriptPath := filepath.Join("scripts", "prepare.py")
 	if _, err := os.Stat(scriptPath); err != nil {
-		// Try from project root.
-		scriptPath = filepath.Join("cmd", "mixlab", "scripts", "prepare.py")
+		// Package tests run from ./train, so walk to the repo-root script path.
+		scriptPath = filepath.Join("..", "scripts", "prepare.py")
 		if _, err := os.Stat(scriptPath); err != nil {
 			t.Fatalf("cannot find prepare.py: %v", err)
 		}

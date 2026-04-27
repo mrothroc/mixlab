@@ -22,24 +22,31 @@ import (
 //	w[wi+5/6] = FF layer 1
 //	w[wi+6/7] = FF layer 2
 func emitPlainAttentionIR(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool) (int, error) { //nolint:unparam // x and B are fixed at IR build time by design
-	return emitPlainAttentionIRWithDropout(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, 0)
+	return emitPlainAttentionIRWithWindow(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, 0)
 }
 
-func emitPlainAttentionIRWithDropout(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
-	return emitPlainAttentionIRWithOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, false, 0, 0, false)
+func emitPlainAttentionIRWithWindow(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, windowSize int) (int, error) {
+	return emitPlainAttentionIRWithDropout(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, 0, windowSize)
 }
 
-func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa bool) (int, error) {
-	return emitPlainAttentionIRWithKVOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, skipAttention, qkGain, ropeDims, xsa, 0, nil, -1)
+func emitPlainAttentionIRWithDropout(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, windowSize int) (int, error) {
+	return emitPlainAttentionIRWithOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, false, 0, 0, false, false, windowSize)
 }
 
-func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa bool, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
+func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int) (int, error) {
+	return emitPlainAttentionIRWithKVOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, skipAttention, qkGain, ropeDims, xsa, sparseAttnGate, windowSize, 0, nil, -1)
+}
+
+func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
 	}
 	if qkGain < 0 {
 		return wi, fmt.Errorf("invalid qk_gain=%g", qkGain)
+	}
+	if windowSize < 0 {
+		return wi, fmt.Errorf("invalid window_size=%d", windowSize)
 	}
 	kvH, err := normalizePlainKVHeads(H, kvH)
 	if err != nil {
@@ -73,6 +80,13 @@ func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T
 	attn := prefix + "_attn"
 	ctx := prefix + "_ctx"
 	ctxXSA := prefix + "_ctx_xsa"
+	gateIn := prefix + "_gate_in"
+	gateWT := prefix + "_gate_wt"
+	gateLogits := prefix + "_gate_logits"
+	gateAct := prefix + "_gate_act"
+	gate4BTH := prefix + "_gate4_bth"
+	gate4 := prefix + "_gate4"
+	ctxGated := prefix + "_ctx_gated"
 	ctxT := prefix + "_ctx_t"
 	flat := prefix + "_flat"
 	proj := prefix + "_proj"
@@ -86,6 +100,9 @@ func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T
 		}
 		if qkGain > 0 {
 			wi++ // per-head QK gain
+		}
+		if sparseAttnGate {
+			wi++ // narrow per-head attention output gate
 		}
 		if blockScales {
 			wi++ // attention residual scale
@@ -163,7 +180,7 @@ func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T
 		}
 
 		// Causal mask + softmax
-		prog.CausalMask(scaled, T, masked)
+		prog.CausalMask(scaled, T, windowSize, masked)
 		prog.Softmax(masked, -1, attn)
 
 		// Attention output: attn @ V, then transpose back
@@ -171,6 +188,18 @@ func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T
 		if xsa {
 			prog.XSAProject(ctx, vh, ctxXSA)
 			ctx = ctxXSA
+		}
+		if sparseAttnGate {
+			gateDim := plainSparseAttnGateWidth(D)
+			prog.Slice(x, 0, gateDim, 1, 1, gateIn)
+			prog.Transpose(weightName(wi), []int{1, 0}, gateWT)
+			wi++
+			prog.MatMul(gateIn, gateWT, gateLogits)
+			prog.Sigmoid(gateLogits, gateAct)
+			prog.Reshape(gateAct, []int{B, T, H, 1}, gate4BTH)
+			prog.Transpose(gate4BTH, []int{0, 2, 1, 3}, gate4)
+			prog.Mul(ctx, gate4, ctxGated)
+			ctx = ctxGated
 		}
 		prog.Transpose(ctx, []int{0, 2, 1, 3}, ctxT)
 		prog.Reshape(ctxT, []int{B * T, D}, flat)
@@ -213,6 +242,16 @@ func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T
 	prog.Add(x, ff2, x)
 
 	return wi, nil
+}
+
+func plainSparseAttnGateWidth(dim int) int {
+	if dim <= 0 {
+		return 1
+	}
+	if dim < 12 {
+		return dim
+	}
+	return 12
 }
 
 func emitTokenShiftIR(prog *Program, x, mu, output string, B, T, D int, prefix string) {
@@ -494,7 +533,7 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 		prog.Mul(scaled, gain, gained)
 		scaled = gained
 	}
-	prog.CausalMask(scaled, T, masked)
+	prog.CausalMask(scaled, T, 0, masked)
 	prog.Softmax(masked, -1, attn)
 	prog.MatMul(attn, vh, ctx)
 	prog.Transpose(ctx, []int{0, 2, 1, 3}, ctxT)

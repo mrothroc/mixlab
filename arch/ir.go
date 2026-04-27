@@ -44,6 +44,8 @@ const (
 	OpCrossEntropyPerToken = 56 // OP_CROSS_ENTROPY_PER_TOKEN
 	OpMatrixScan           = 57 // OP_MATRIX_SCAN
 	OpScanTV               = 58 // OP_SCAN_TV
+	OpSoftplus             = 59 // OP_SOFTPLUS
+	OpGatedDeltaScan       = 60 // OP_GATED_DELTA_SCAN
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -170,8 +172,9 @@ func (p *Program) Transpose(a string, axes []int, output string) {
 }
 
 // CausalMask applies a causal attention mask.
-func (p *Program) CausalMask(scores string, T int, output string) {
-	p.AddOp(OpCausalMask, []string{scores}, []string{output}, nil, []int{T})
+// windowSize <= 0 preserves the full causal lower triangle.
+func (p *Program) CausalMask(scores string, T, windowSize int, output string) {
+	p.AddOp(OpCausalMask, []string{scores}, []string{output}, nil, []int{T, windowSize})
 }
 
 // CrossEntropy emits a cross-entropy loss computation.
@@ -239,6 +242,24 @@ func (p *Program) ScanTV(x, gate, out string, B, T, D int) {
 	p.AddOp(OpScanTV, []string{x, gate}, []string{out}, nil, []int{B, T, D})
 }
 
+// GatedDeltaScan emits the full gated delta-rule recurrence over a sequence.
+// Inputs:
+//
+//	q: [B,T,H,Dk] already L2-normalized and scaled
+//	k: [B,T,H,Dk] already L2-normalized
+//	v: [B,T,H,Dv]
+//	beta: [B,T,H]
+//	gate: [B,T,H] decay in (0, 1]
+//
+// Output:
+//
+//	out: [B*T*H,Dv]
+//
+// IntParams layout: [B, T, H, Dk, Dv].
+func (p *Program) GatedDeltaScan(q, k, v, beta, gate, out string, B, T, H, Dk, Dv int) {
+	p.AddOp(OpGatedDeltaScan, []string{q, k, v, beta, gate}, []string{out}, nil, []int{B, T, H, Dk, Dv})
+}
+
 // GatherPositions selects K entries from the position axis of a [B,T,D] tensor.
 // IntParams layout: [B, K, D].
 func (p *Program) GatherPositions(input, positions, output string, B, K, D int) {
@@ -254,6 +275,11 @@ func (p *Program) ScatterPositions(input, updates, positions, output string, B, 
 // Exp emits element-wise exponential: output = exp(a).
 func (p *Program) Exp(a, output string) {
 	p.AddOp(OpExp, []string{a}, []string{output}, nil, nil)
+}
+
+// Softplus emits element-wise softplus: output = log(1 + exp(a)).
+func (p *Program) Softplus(a, output string) {
+	p.AddOp(OpSoftplus, []string{a}, []string{output}, nil, nil)
 }
 
 // ReLU emits element-wise rectified linear unit: output = max(a, 0).
