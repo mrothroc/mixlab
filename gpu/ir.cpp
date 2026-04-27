@@ -571,6 +571,20 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mx::full(make_shape(op.int_params, op.n_int_params), op.float_params[0], mx::float32));
         break;
       }
+      case OP_RANDOM_NORMAL: {
+        if (op.n_int_params <= 0 || op.n_float_params < 2) {
+          throw std::runtime_error("OP_RANDOM_NORMAL requires shape and (mean, stddev)");
+        }
+        // Fresh i.i.d. Gaussian per call. Wrapped in stop_gradient so the
+        // autograd engine treats the sample as a constant input; there is no
+        // useful derivative w.r.t. the sampling distribution at the IR level.
+        set_out(op, 0, mx::stop_gradient(mx::random::normal(
+                           make_shape(op.int_params, op.n_int_params),
+                           mx::float32,
+                           op.float_params[0],
+                           op.float_params[1])));
+        break;
+      }
       case OP_ASTYPE: {
         set_out(op, 0, mx::astype(get(op, 0), mx::float32));
         break;

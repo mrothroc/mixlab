@@ -46,6 +46,7 @@ const (
 	OpScanTV               = 58 // OP_SCAN_TV
 	OpSoftplus             = 59 // OP_SOFTPLUS
 	OpGatedDeltaScan       = 60 // OP_GATED_DELTA_SCAN
+	OpRandomNormal         = 65 // OP_RANDOM_NORMAL
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -326,6 +327,16 @@ func (p *Program) MeanAxis(a string, axis int, output string) {
 // Full emits a full tensor with the given shape and scalar value.
 func (p *Program) Full(shape []int, value float32, output string) {
 	p.AddOp(OpFull, nil, []string{output}, []float32{value}, shape)
+}
+
+// RandomNormal emits a fresh i.i.d. Gaussian tensor with the given shape,
+// mean, and standard deviation. The tensor is sampled per forward pass using
+// the MLX backend's random source, so successive forward calls see different
+// values (this is the property V7n-B "random gaussian solo" relies on). The
+// output is wrapped in stop_gradient, so autograd treats it as a constant.
+// Caller is responsible for any reparameterization-trick gradient routing.
+func (p *Program) RandomNormal(shape []int, mean, stddev float32, output string) {
+	p.AddOp(OpRandomNormal, nil, []string{output}, []float32{mean, stddev}, shape)
 }
 
 // Outer emits an outer product between flattened inputs.

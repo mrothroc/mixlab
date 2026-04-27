@@ -65,6 +65,7 @@ enum OpType {
   OP_SCAN_TV = 58,  // time-varying gated scan
   OP_SOFTPLUS = 59,
   OP_GATED_DELTA_SCAN = 60,
+  OP_RANDOM_NORMAL = 65,
 };
 
 struct IRop {
