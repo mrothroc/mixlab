@@ -299,10 +299,38 @@ func emitCustomBlockIR(
 		if err != nil {
 			return wi, fmt.Errorf("custom block %q op[%d] params: %w", spec.Name, i, err)
 		}
+		if code == OpSlice {
+			intParams, err = sliceIntParams(op.Params)
+			if err != nil {
+				return wi, fmt.Errorf("custom block %q op[%d] slice params: %w", spec.Name, i, err)
+			}
+		}
 		prog.AddOp(code, inputs, outputs, floatParams, intParams)
 	}
 
 	return wi, nil
+}
+
+// sliceIntParams returns slice op int params in the order [start, end, step, axis]
+// that the C++ OP_SLICE handler expects, regardless of JSON key order.
+func sliceIntParams(p map[string]interface{}) ([]int, error) {
+	if p == nil {
+		return nil, fmt.Errorf("slice op requires start, end, step, axis params")
+	}
+	keys := []string{"start", "end", "step", "axis"}
+	out := make([]int, 0, 4)
+	for _, k := range keys {
+		v, ok := p[k]
+		if !ok {
+			return nil, fmt.Errorf("slice op missing %q param", k)
+		}
+		n, err := valueToInt(v)
+		if err != nil {
+			return nil, fmt.Errorf("%s param: %w", k, err)
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 // --- param conversion helpers ---

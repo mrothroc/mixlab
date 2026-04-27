@@ -141,3 +141,94 @@ func TestCustomBlockScanTV(t *testing.T) {
 		t.Fatalf("scan_tv int params = %v, want [2 64 128]", op.IntParams)
 	}
 }
+
+func TestCustomBlockSliceParamOrder(t *testing.T) {
+	// Regression test for the bug fixed in arch/custom.go: the JSON-side custom
+	// block builder was appending int params in order [axis, start, end, step],
+	// but the C++ OP_SLICE handler expects [start, end, step, axis]. This test
+	// asserts the int params land in the C++-expected order regardless of the
+	// JSON key order used by the user.
+	cases := []struct {
+		name string
+		json string
+	}{
+		{
+			name: "natural order",
+			json: `{
+				"type": "custom",
+				"name": "slice_block",
+				"ops": [{
+					"op": "slice",
+					"inputs": ["x"],
+					"output": "y",
+					"params": {"start": 0, "end": 12, "step": 1, "axis": 1}
+				}]
+			}`,
+		},
+		{
+			name: "reversed order",
+			json: `{
+				"type": "custom",
+				"name": "slice_block",
+				"ops": [{
+					"op": "slice",
+					"inputs": ["x"],
+					"output": "y",
+					"params": {"axis": 1, "step": 1, "end": 12, "start": 0}
+				}]
+			}`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var spec BlockSpec
+			if err := json.Unmarshal([]byte(tc.json), &spec); err != nil {
+				t.Fatalf("json.Unmarshal: %v", err)
+			}
+			prog := NewProgram(0)
+			if _, err := emitCustomBlockIR(prog, spec, "stream", 0, 128, 64, 2, 1024, 0); err != nil {
+				t.Fatalf("emitCustomBlockIR: %v", err)
+			}
+			if len(prog.Ops) != 1 {
+				t.Fatalf("expected 1 op, got %d", len(prog.Ops))
+			}
+			op := prog.Ops[0]
+			if op.Code != OpSlice {
+				t.Fatalf("expected OpSlice (%d), got %d", OpSlice, op.Code)
+			}
+			want := []int{0, 12, 1, 1} // start=0, end=12, step=1, axis=1
+			if len(op.IntParams) != 4 {
+				t.Fatalf("slice int params = %v, want %v (length 4)", op.IntParams, want)
+			}
+			for i, w := range want {
+				if op.IntParams[i] != w {
+					t.Fatalf("slice int param[%d] = %d, want %d (full %v)", i, op.IntParams[i], w, op.IntParams)
+				}
+			}
+		})
+	}
+}
+
+func TestCustomBlockSliceMissingParam(t *testing.T) {
+	// All four slice params are required; missing one should error rather than
+	// silently produce a malformed op.
+	var spec BlockSpec
+	if err := json.Unmarshal([]byte(`{
+		"type": "custom",
+		"name": "slice_block",
+		"ops": [{
+			"op": "slice",
+			"inputs": ["x"],
+			"output": "y",
+			"params": {"start": 0, "end": 12, "axis": 1}
+		}]
+	}`), &spec); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	prog := NewProgram(0)
+	_, err := emitCustomBlockIR(prog, spec, "stream", 0, 128, 64, 2, 1024, 0)
+	if err == nil {
+		t.Fatal("expected error for missing step param")
+	}
+}

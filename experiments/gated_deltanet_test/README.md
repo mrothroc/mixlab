@@ -70,7 +70,7 @@ JSON config:
 
 `d_v` defaults to `2 * d_k` for the "Wider" variant. `kv_share=true` ties K
 and V into a single wide projection where K is sliced from the first `d_k`
-channels of each V head — matching resouer's `K_KVShare_Wider` from PR #1791.
+channels of each V head — the "K_KVShare_Wider" variant.
 
 ## Reproducing the parity tests
 
