@@ -1,0 +1,54 @@
+{
+  "name": "S04_384d8_full_ngram_seed1337",
+
+  // The "wide + ngram-offload" variant. Idea borrowed from #1834 NgramRes
+  // (mixed n-gram into logits with α=0.3 to free the main model from local
+  // syntax) — without head-level mixture available yet, we approximate by
+  // pushing trigram_dim to model_dim and weighting it strongly via the
+  // learned bigram/trigram scale.
+  //
+  // Compared to config 01: same depth-recurrent attention stack, but wider
+  // (model_dim 384 vs 320), shallower (8 blocks vs 10), and full-dim
+  // bigram+trigram embeddings to maximize the local-context offload before
+  // the main attention sees the residual.
+  //
+  // Tests whether the n-gram path absorbs enough local context that the
+  // attention layers can be fewer/wider without quality loss.
+  "model_dim": 384,
+  "vocab_size": 8192,
+  "seq_len": 1024,
+  "parallel_residual": true,
+  "logit_softcap": 30.0,
+  "bigram_vocab_size": 4096,
+  "bigram_dim": 384,
+  "trigram_vocab_size": 4096,
+  "trigram_dim": 384,
+  "blocks": [
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"}
+  ],
+  "training": {
+    "steps": 10000,
+    "lr": 1e-3,
+    "grad_clip": 1.0,
+    "weight_decay": 0.04,
+    "seed": 1337,
+    "batch_tokens": 4096,
+    "optimizer": "muon",
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+    "newton_schulz_variant": "polar_express",
+    "min_lr_fraction": 0.10,
+    "qat": "int6",
+    "qat_start": 7000,
+    "swa_start": 7000,
+    "swa_decay": 0.997,
+    "swa_interval": 50
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "name": "B_384d8_old_ngram",
+
+  // Factorial cell B: 384d × 8 blocks (= v4 config 04 width/depth) with
+  // small bigram (3072 vocab, 80 dim) and NO trigram (= v4 config 01 ngram).
+  // Note: weight-sharing pattern matches v4 config 04 (2 unique groups
+  // applied 4× each) to control for the third axis Maverick flagged.
+  // If B wins ≈ config 04: width/depth (or sharing pattern) is doing it.
+  // If B loses to config 04: full n-grams are what matters.
+  "model_dim": 384,
+  "vocab_size": 8192,
+  "seq_len": 1024,
+  "parallel_residual": true,
+  "logit_softcap": 30.0,
+  "bigram_vocab_size": 3072,
+  "bigram_dim": 80,
+  "blocks": [
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"}
+  ],
+  "training": {
+    "steps": 10000, "lr": 1e-3, "grad_clip": 1.0, "weight_decay": 0.04,
+    "seed": 42, "batch_tokens": 4096,
+    "optimizer": "muon", "muon_momentum": 0.95, "muon_backend_steps": 5,
+    "newton_schulz_variant": "polar_express", "min_lr_fraction": 0.10,
+    "qat": "int6", "qat_start": 7000,
+    "swa_start": 7000, "swa_decay": 0.997, "swa_interval": 50
+  }
+}

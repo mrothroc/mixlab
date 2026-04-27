@@ -1,0 +1,46 @@
+{
+  "name": "S01_320d10_old_ngram_seed1337",
+
+  // Updated baseline: leader attention stack with v0.12.0 features.
+  // Adds Polar Express NS + MIN_LR floor + trigram embeddings to the v3 attn
+  // baseline. Direct apples-to-apples upgrade of v3 config 01.
+  "model_dim": 320,
+  "vocab_size": 8192,
+  "seq_len": 1024,
+  "parallel_residual": true,
+  "logit_softcap": 30.0,
+  "bigram_vocab_size": 3072,
+  "bigram_dim": 80,
+  "trigram_vocab_size": 3072,
+  "trigram_dim": 80,
+  "blocks": [
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_c"},
+    {"type": "swiglu", "weight_group": "ffn_c"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_a"},
+    {"type": "swiglu", "weight_group": "ffn_a"},
+    {"type": "plain", "heads": 4, "qk_gain": 5.25, "weight_group": "attn_b"},
+    {"type": "swiglu", "weight_group": "ffn_b"}
+  ],
+  "training": {
+    "steps": 10000,
+    "lr": 1e-3,
+    "grad_clip": 1.0,
+    "weight_decay": 0.04,
+    "seed": 1337,
+    "batch_tokens": 4096,
+    "optimizer": "muon",
+    "muon_momentum": 0.95,
+    "muon_backend_steps": 5,
+    "newton_schulz_variant": "polar_express",
+    "min_lr_fraction": 0.10,
+    "qat": "int6",
+    "qat_start": 7000,
+    "swa_start": 7000,
+    "swa_decay": 0.997,
+    "swa_interval": 50
+  }
+}
