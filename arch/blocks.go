@@ -448,7 +448,7 @@ func emitMLPIR(prog *Program, x string, wi, idx int, activation string, leakySlo
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, qkGain float64) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, qkGain float64, sparseAttnGate bool) (string, int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return "", wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -485,6 +485,13 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 	masked := scores + "_masked"
 	attn := prefix + "_attn"
 	ctx := prefix + "_ctx"
+	gateIn := prefix + "_gate_in"
+	gateWT := prefix + "_gate_wt"
+	gateLogits := prefix + "_gate_logits"
+	gateAct := prefix + "_gate_act"
+	gate4BTH := prefix + "_gate4_bth"
+	gate4 := prefix + "_gate4"
+	ctxGated := prefix + "_ctx_gated"
 	ctxT := prefix + "_ctx_t"
 	flat := prefix + "_flat"
 	proj := prefix + "_proj"
@@ -536,6 +543,18 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 	prog.CausalMask(scaled, T, 0, masked)
 	prog.Softmax(masked, -1, attn)
 	prog.MatMul(attn, vh, ctx)
+	if sparseAttnGate {
+		gateDim := plainSparseAttnGateWidth(D)
+		prog.Slice(x, 0, gateDim, 1, 1, gateIn)
+		prog.Transpose(weightName(wi), []int{1, 0}, gateWT)
+		wi++
+		prog.MatMul(gateIn, gateWT, gateLogits)
+		prog.Sigmoid(gateLogits, gateAct)
+		prog.Reshape(gateAct, []int{B, T, H, 1}, gate4BTH)
+		prog.Transpose(gate4BTH, []int{0, 2, 1, 3}, gate4)
+		prog.Mul(ctx, gate4, ctxGated)
+		ctx = ctxGated
+	}
 	prog.Transpose(ctx, []int{0, 2, 1, 3}, ctxT)
 	prog.Reshape(ctxT, []int{B * T, D}, flat)
 

@@ -323,6 +323,43 @@ func TestEmitPlainAttentionIR_SparseAttnGateAppliesBeforeOutputProjection(t *tes
 	}
 }
 
+func TestBuildIRProgramWithParallelResidual_SparseAttnGateSlicesBeforeMatMul(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "plain", Heads: 4, SparseAttnGate: true},
+		{Type: "swiglu"},
+	}
+	prog, err := BuildIRProgramWithBigramRecurrenceAndParallel(320, 8192, 1024, 1, DefaultFFNMultiplier, false, false, false, false, true, 0, 0, 0, blocks, nil)
+	if err != nil {
+		t.Fatalf("BuildIRProgramWithBigramRecurrenceAndParallel: %v", err)
+	}
+
+	gateSliceIdx := -1
+	gateTransposeIdx := -1
+	gateMatMulIdx := -1
+	for i, op := range prog.Ops {
+		switch op.Code {
+		case OpSlice:
+			if len(op.Inputs) == 1 && op.Inputs[0] == "x" && reflect.DeepEqual(op.IntParams, []int{0, 12, 1, 1}) {
+				gateSliceIdx = i
+			}
+		case OpTranspose:
+			if len(op.Inputs) == 1 && op.Inputs[0] == "w7" && reflect.DeepEqual(op.IntParams, []int{1, 0}) {
+				gateTransposeIdx = i
+			}
+		case OpMatMul:
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_parallel_attn_0_gate_in" && op.Inputs[1] == "x_parallel_attn_0_gate_wt" {
+				gateMatMulIdx = i
+			}
+		}
+	}
+	if gateSliceIdx == -1 || gateTransposeIdx == -1 || gateMatMulIdx == -1 {
+		t.Fatalf("missing parallel sparse gate ops: slice=%d transpose=%d matmul=%d", gateSliceIdx, gateTransposeIdx, gateMatMulIdx)
+	}
+	if gateSliceIdx >= gateMatMulIdx || gateTransposeIdx >= gateMatMulIdx {
+		t.Fatalf("unexpected parallel sparse gate op order slice=%d transpose=%d matmul=%d", gateSliceIdx, gateTransposeIdx, gateMatMulIdx)
+	}
+}
+
 func TestEmitMLPIR_LeakyReLUSquared(t *testing.T) {
 	p := NewProgram(3)
 	wi, err := emitBlockIR(p, BlockSpec{Type: "mlp", Activation: "leaky_relu_sq", LeakySlope: 0.25}, "x", 0, 64, 32, 1, 256, 0, nil, DefaultFFNMultiplier, false)
