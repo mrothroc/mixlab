@@ -954,10 +954,9 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           if (t < 0 || t >= T) {
             throw std::runtime_error("OP_SCATTER_POSITIONS position out of range");
           }
-          auto update = mx::slice(updates, {0, k, 0}, {B, k + 1, D});
-          out = mx::slice_update(out, update, mx::Shape{0, t, 0}, mx::Shape{B, t + 1, D});
         }
-        set_out(op, 0, out);
+        auto scatter_idx = mx::broadcast_to(mx::reshape(positions, {1, K, 1}), {B, K, D});
+        set_out(op, 0, mx::put_along_axis(out, scatter_idx, updates, 1));
         break;
       }
       case OP_GRADIENT_MAGNITUDES: {
