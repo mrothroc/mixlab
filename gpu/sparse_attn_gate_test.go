@@ -194,6 +194,100 @@ func TestSparseAttnGateParallelResidualTrainStep(t *testing.T) {
 	}
 }
 
+func TestParallelResidualRopeDimsTrainStep(t *testing.T) {
+	testParallelResidualPlainFeatureTrainStep(t, ir.BlockSpec{Type: "plain", Heads: 4, RopeDims: 16}, "parallel_rope_dims")
+}
+
+func TestParallelResidualWindowSizeTrainStep(t *testing.T) {
+	testParallelResidualPlainFeatureTrainStep(t, ir.BlockSpec{Type: "plain", Heads: 4, WindowSize: 32}, "parallel_window_size")
+}
+
+func TestParallelResidualXSATrainStep(t *testing.T) {
+	testParallelResidualPlainFeatureTrainStep(t, ir.BlockSpec{Type: "plain", Heads: 4, XSA: true}, "parallel_xsa")
+}
+
+func testParallelResidualPlainFeatureTrainStep(t *testing.T, plain ir.BlockSpec, name string) {
+	t.Helper()
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+
+	blocks := make([]ir.BlockSpec, 0, 8)
+	for i := 0; i < 4; i++ {
+		blocks = append(blocks, plain, ir.BlockSpec{Type: "swiglu"})
+	}
+	cfg := &ir.ArchConfig{
+		Name:             name,
+		ModelDim:         320,
+		VocabSize:        8192,
+		SeqLen:           1024,
+		ParallelResidual: true,
+		Blocks:           blocks,
+		Training: ir.TrainingSpec{
+			Steps:       1,
+			LR:          1e-3,
+			Seed:        42,
+			BatchTokens: 1024,
+			GradClip:    1.0,
+			WeightDecay: 0.04,
+		},
+	}
+
+	prog, err := ir.BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	gpuProg, err := LowerIRProgram(prog)
+	if err != nil {
+		t.Fatalf("LowerIRProgram: %v", err)
+	}
+	defer gpuProg.Destroy()
+
+	metas, err := collectWeightShapesForConfig(cfg)
+	if err != nil {
+		t.Fatalf("collectWeightShapesForConfig: %v", err)
+	}
+	handles, err := initTrainerWeights(metas)
+	if err != nil {
+		t.Fatalf("initTrainerWeights: %v", err)
+	}
+	defer FreeHandles(handles)
+
+	trainer, err := CreateTrainer(gpuProg, handles, TrainerOptimizerSpec{
+		Groups: []OptimizerGroup{{
+			Kind:        OptimizerAdamW,
+			LR:          0.001,
+			Beta1:       0.9,
+			Beta2:       0.95,
+			Epsilon:     1e-8,
+			WeightDecay: 0.04,
+		}},
+		Weights:       uniformWeightOptimizers(len(metas)),
+		DefaultBaseLR: 0.001,
+	})
+	if err != nil {
+		t.Fatalf("CreateTrainer: %v", err)
+	}
+	defer TrainerDestroy(trainer)
+
+	tokens := make([]int32, cfg.SeqLen)
+	targets := make([]int32, cfg.SeqLen)
+	for i := 0; i < cfg.SeqLen; i++ {
+		tokens[i] = int32(i % 128)
+		targets[i] = int32((i + 1) % 128)
+	}
+	loss, err := TrainerStep(trainer, []TensorInput{
+		{Name: "tokens", DType: TensorInt32, Shape: []int{1, cfg.SeqLen}, Data: tokens},
+		{Name: "targets", DType: TensorInt32, Shape: []int{cfg.SeqLen}, Data: targets},
+	})
+	if err != nil {
+		t.Fatalf("TrainerStep: %v", err)
+	}
+	if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
+		t.Fatalf("non-finite loss: %g", loss)
+	}
+}
+
 func uniformWeightOptimizers(n int) []WeightOptimizer {
 	out := make([]WeightOptimizer, n)
 	for i := range out {

@@ -448,13 +448,16 @@ func emitMLPIR(prog *Program, x string, wi, idx int, activation string, leakySlo
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, qkGain float64, sparseAttnGate bool) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int) (string, int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return "", wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
 	}
 	if qkGain < 0 {
 		return "", wi, fmt.Errorf("invalid qk_gain=%g", qkGain)
+	}
+	if windowSize < 0 {
+		return "", wi, fmt.Errorf("invalid window_size=%d", windowSize)
 	}
 	kvH, err := normalizePlainKVHeads(H, kvH)
 	if err != nil {
@@ -485,6 +488,7 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 	masked := scores + "_masked"
 	attn := prefix + "_attn"
 	ctx := prefix + "_ctx"
+	ctxXSA := prefix + "_ctx_xsa"
 	gateIn := prefix + "_gate_in"
 	gateWT := prefix + "_gate_wt"
 	gateLogits := prefix + "_gate_logits"
@@ -530,7 +534,7 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 		prog.Reshape(vhRep, []int{B, H, T, headDim}, vh)
 	}
 
-	prog.RoPE(qh, kh, qhRot, khRot, T, headDim, 0, 10000.0)
+	prog.RoPE(qh, kh, qhRot, khRot, T, headDim, ropeDims, 10000.0)
 	prog.Transpose(khRot, []int{0, 1, 3, 2}, kt)
 	prog.MatMul(qhRot, kt, scores)
 	prog.ScalarMul(scores, scale, scaled)
@@ -540,9 +544,13 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 		prog.Mul(scaled, gain, gained)
 		scaled = gained
 	}
-	prog.CausalMask(scaled, T, 0, masked)
+	prog.CausalMask(scaled, T, windowSize, masked)
 	prog.Softmax(masked, -1, attn)
 	prog.MatMul(attn, vh, ctx)
+	if xsa {
+		prog.XSAProject(ctx, vh, ctxXSA)
+		ctx = ctxXSA
+	}
 	if sparseAttnGate {
 		gateDim := plainSparseAttnGateWidth(D)
 		prog.Slice(x, 0, gateDim, 1, 1, gateIn)

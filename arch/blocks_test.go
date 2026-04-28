@@ -360,6 +360,94 @@ func TestBuildIRProgramWithParallelResidual_SparseAttnGateSlicesBeforeMatMul(t *
 	}
 }
 
+func TestBuildIRProgramWithParallelResidual_RopeDimsAppliesRope(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "plain", Heads: 4, RopeDims: 16},
+		{Type: "swiglu"},
+	}
+	prog, err := BuildIRProgramWithBigramRecurrenceAndParallel(128, 1024, 64, 2, DefaultFFNMultiplier, false, false, false, false, true, 0, 0, 0, blocks, nil)
+	if err != nil {
+		t.Fatalf("BuildIRProgramWithBigramRecurrenceAndParallel: %v", err)
+	}
+	for _, op := range prog.Ops {
+		if op.Code == OpRoPE {
+			if len(op.IntParams) != 3 || op.IntParams[0] != 64 || op.IntParams[1] != 32 || op.IntParams[2] != 16 {
+				t.Fatalf("RoPE int params = %v, want [64 32 16]", op.IntParams)
+			}
+			return
+		}
+	}
+	t.Fatal("missing RoPE op")
+}
+
+func TestBuildIRProgramWithParallelResidual_WindowSizeIsEncodedInCausalMask(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "plain", Heads: 4, WindowSize: 4},
+		{Type: "swiglu"},
+	}
+	prog, err := BuildIRProgramWithBigramRecurrenceAndParallel(128, 1024, 8, 2, DefaultFFNMultiplier, false, false, false, false, true, 0, 0, 0, blocks, nil)
+	if err != nil {
+		t.Fatalf("BuildIRProgramWithBigramRecurrenceAndParallel: %v", err)
+	}
+	for _, op := range prog.Ops {
+		if op.Code != OpCausalMask {
+			continue
+		}
+		if got, want := op.IntParams, []int{8, 4}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("CausalMask int params = %v, want %v", got, want)
+		}
+		return
+	}
+	t.Fatal("missing CausalMask op")
+}
+
+func TestBuildIRProgramWithParallelResidual_XSAProjectsBeforeOutputProjection(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "plain", Heads: 4, XSA: true},
+		{Type: "swiglu"},
+	}
+	prog, err := BuildIRProgramWithBigramRecurrenceAndParallel(128, 1024, 64, 2, DefaultFFNMultiplier, false, false, false, false, true, 0, 0, 0, blocks, nil)
+	if err != nil {
+		t.Fatalf("BuildIRProgramWithBigramRecurrenceAndParallel: %v", err)
+	}
+
+	ctxMatMulIdx := -1
+	xsaIdx := -1
+	ctxTransposeIdx := -1
+	for i, op := range prog.Ops {
+		switch op.Code {
+		case OpMatMul:
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_parallel_attn_0_attn" && op.Inputs[1] == "x_parallel_attn_0_vh" && len(op.Outputs) == 1 && op.Outputs[0] == "x_parallel_attn_0_ctx" {
+				ctxMatMulIdx = i
+			}
+		case OpXSAProject:
+			xsaIdx = i
+			if len(op.Inputs) != 2 || op.Inputs[0] != "x_parallel_attn_0_ctx" || op.Inputs[1] != "x_parallel_attn_0_vh" {
+				t.Fatalf("bad XSA inputs: %v", op.Inputs)
+			}
+			if len(op.Outputs) != 1 || op.Outputs[0] != "x_parallel_attn_0_ctx_xsa" {
+				t.Fatalf("bad XSA outputs: %v", op.Outputs)
+			}
+		case OpTranspose:
+			if len(op.Inputs) == 1 && op.Inputs[0] == "x_parallel_attn_0_ctx_xsa" && reflect.DeepEqual(op.IntParams, []int{0, 2, 1, 3}) {
+				ctxTransposeIdx = i
+			}
+		}
+	}
+	if ctxMatMulIdx == -1 {
+		t.Fatal("missing attention context matmul")
+	}
+	if xsaIdx == -1 {
+		t.Fatal("missing XSAProject op")
+	}
+	if ctxTransposeIdx == -1 {
+		t.Fatal("missing transpose from XSA output")
+	}
+	if ctxMatMulIdx >= xsaIdx || xsaIdx >= ctxTransposeIdx {
+		t.Fatalf("unexpected XSA order ctx_matmul=%d xsa=%d transpose=%d", ctxMatMulIdx, xsaIdx, ctxTransposeIdx)
+	}
+}
+
 func TestEmitMLPIR_LeakyReLUSquared(t *testing.T) {
 	p := NewProgram(3)
 	wi, err := emitBlockIR(p, BlockSpec{Type: "mlp", Activation: "leaky_relu_sq", LeakySlope: 0.25}, "x", 0, 64, 32, 1, 256, 0, nil, DefaultFFNMultiplier, false)
