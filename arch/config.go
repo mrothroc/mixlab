@@ -110,6 +110,7 @@ type BlockSpec struct {
 	DK             int          `json:"d_k,omitempty"`              // gated_deltanet: key/query dim per head.
 	DV             int          `json:"d_v,omitempty"`              // gated_deltanet: value dim per head; defaults to 2*d_k.
 	KVShare        *bool        `json:"kv_share,omitempty"`         // gated_deltanet: share the K/V projection when true (default).
+	ScanChunkSize  *int         `json:"scan_chunk_size,omitempty"`  // gated_deltanet: chunk size for chunked delta scan; 0 keeps the naive scan.
 	NumLatents     int          `json:"num_latents,omitempty"`      // Perceiver/bottleneck latent count.
 	SourceStream   string       `json:"source_stream,omitempty"`    // cross_attention: stream providing K/V.
 	Decay          float64      `json:"decay,omitempty"`            // RetNet: initial decay rate in (0,1); defaults to 0.95.
@@ -697,6 +698,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if effectiveKVShare(b) && dv < b.DK {
 			return fmt.Errorf("config %q %s[%d] type=gated_deltanet with kv_share=true requires d_v >= d_k (got d_v=%d d_k=%d)", source, groupName, idx, dv, b.DK)
+		}
+		if b.ScanChunkSize != nil && *b.ScanChunkSize < 0 {
+			return fmt.Errorf("config %q %s[%d] type=gated_deltanet has invalid scan_chunk_size=%d (must be >= 0)", source, groupName, idx, *b.ScanChunkSize)
 		}
 	}
 	if (b.Type == "perceiver" || b.Type == "bottleneck") && b.Heads <= 0 {

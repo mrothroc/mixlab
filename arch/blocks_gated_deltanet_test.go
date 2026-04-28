@@ -78,6 +78,19 @@ func TestEmitGatedDeltaNetIR_UsesGatedDeltaScan(t *testing.T) {
 	if n := countOps(p, OpGatedDeltaScan); n != 1 {
 		t.Fatalf("gated delta scan ops=%d, want 1", n)
 	}
+	var scanOp *Op
+	for i := range p.Ops {
+		if p.Ops[i].Code == OpGatedDeltaScan {
+			scanOp = &p.Ops[i]
+			break
+		}
+	}
+	if scanOp == nil {
+		t.Fatal("missing gated delta scan op")
+	}
+	if got := scanOp.IntParams[len(scanOp.IntParams)-1]; got != 64 {
+		t.Fatalf("scan chunk size=%d, want 64", got)
+	}
 	if n := countOps(p, OpRMSNorm); n < 4 {
 		t.Fatalf("rmsnorm ops=%d, want at least 4", n)
 	}
@@ -87,6 +100,24 @@ func TestEmitGatedDeltaNetIR_UsesGatedDeltaScan(t *testing.T) {
 	if n := countOps(p, OpSiLU); n < 4 {
 		t.Fatalf("silu ops=%d, want at least 4", n)
 	}
+}
+
+func TestEmitGatedDeltaNetIR_AllowsNaiveFallback(t *testing.T) {
+	chunkSize := 0
+	p := NewProgram(13)
+	_, err := emitBlockIR(p, BlockSpec{Type: "gated_deltanet", Heads: 4, DK: 8, ScanChunkSize: &chunkSize}, "x", 0, 64, 16, 2, 256, 0, nil, DefaultFFNMultiplier, false)
+	if err != nil {
+		t.Fatalf("emitBlockIR: %v", err)
+	}
+	for _, op := range p.Ops {
+		if op.Code == OpGatedDeltaScan {
+			if got := op.IntParams[len(op.IntParams)-1]; got != 0 {
+				t.Fatalf("scan chunk size=%d, want 0", got)
+			}
+			return
+		}
+	}
+	t.Fatal("missing gated delta scan op")
 }
 
 func TestParameterCountsFromConfig_GatedDeltaNetFormula(t *testing.T) {

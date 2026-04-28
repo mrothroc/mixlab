@@ -62,6 +62,159 @@ mx::array running_variance_raw(const mx::array& x_flat, int B, int T, int D, flo
   return out;
 }
 
+mx::array gated_delta_scan_naive(
+    const mx::array& q,
+    const mx::array& k,
+    const mx::array& v,
+    const mx::array& beta,
+    const mx::array& gate,
+    int B,
+    int T,
+    int H,
+    int Dk,
+    int Dv) {
+  auto state = mx::zeros({B, H, Dk, Dv}, mx::float32);
+  auto out = mx::zeros({B, T, H, Dv}, mx::float32);
+  for (int t = 0; t < T; ++t) {
+    auto qt = mx::reshape(mx::slice(q, {0, t, 0, 0}, {B, t + 1, H, Dk}), {B, H, Dk});
+    auto kt = mx::reshape(mx::slice(k, {0, t, 0, 0}, {B, t + 1, H, Dk}), {B, H, Dk});
+    auto vt = mx::reshape(mx::slice(v, {0, t, 0, 0}, {B, t + 1, H, Dv}), {B, H, Dv});
+    auto betat = mx::reshape(mx::slice(beta, {0, t, 0}, {B, t + 1, H}), {B, H, 1});
+    auto gatet = mx::reshape(mx::slice(gate, {0, t, 0}, {B, t + 1, H}), {B, H, 1, 1});
+
+    state = gatet * state;
+    auto pred = mx::reshape(
+        mx::matmul(mx::reshape(kt, {B, H, 1, Dk}), state),
+        {B, H, Dv});
+    auto err = vt - pred;
+    auto err_scaled = err * betat;
+    auto update = mx::reshape(kt, {B, H, Dk, 1}) * mx::reshape(err_scaled, {B, H, 1, Dv});
+    state = state + update;
+
+    auto ot = mx::reshape(
+        mx::matmul(mx::reshape(qt, {B, H, 1, Dk}), state),
+        {B, H, Dv});
+    out = mx::slice_update(out, mx::reshape(ot, {B, 1, H, Dv}),
+                           mx::Shape{0, t, 0, 0}, mx::Shape{B, t + 1, H, Dv});
+  }
+  return mx::reshape(out, {B * T * H, Dv});
+}
+
+mx::array gated_delta_scan_chunked(
+    const mx::array& q_in,
+    const mx::array& k_in,
+    const mx::array& v_in,
+    const mx::array& beta_in,
+    const mx::array& gate_in,
+    int B,
+    int T,
+    int H,
+    int Dk,
+    int Dv,
+    int chunk_size) {
+  if (chunk_size <= 1) {
+    return gated_delta_scan_naive(q_in, k_in, v_in, beta_in, gate_in, B, T, H, Dk, Dv);
+  }
+
+  const int pad_len = (chunk_size - (T % chunk_size)) % chunk_size;
+  const int T_pad = T + pad_len;
+  const int n_chunks = T_pad / chunk_size;
+
+  auto q = mx::transpose(q_in, {0, 2, 1, 3});
+  auto k = mx::transpose(k_in, {0, 2, 1, 3});
+  auto v = mx::transpose(v_in, {0, 2, 1, 3});
+  auto beta = mx::transpose(beta_in, {0, 2, 1});
+  auto gate = mx::transpose(gate_in, {0, 2, 1});
+
+  if (pad_len > 0) {
+    auto q_pad = mx::zeros({B, H, pad_len, Dk}, mx::float32);
+    auto k_pad = mx::zeros({B, H, pad_len, Dk}, mx::float32);
+    auto v_pad = mx::zeros({B, H, pad_len, Dv}, mx::float32);
+    auto beta_pad = mx::zeros({B, H, pad_len}, mx::float32);
+    auto gate_pad = mx::ones({B, H, pad_len}, mx::float32);
+    q = mx::concatenate({q, q_pad}, 2);
+    k = mx::concatenate({k, k_pad}, 2);
+    v = mx::concatenate({v, v_pad}, 2);
+    beta = mx::concatenate({beta, beta_pad}, 2);
+    gate = mx::concatenate({gate, gate_pad}, 2);
+  }
+
+  q = mx::reshape(q, {B, H, n_chunks, chunk_size, Dk});
+  k = mx::reshape(k, {B, H, n_chunks, chunk_size, Dk});
+  v = mx::reshape(v, {B, H, n_chunks, chunk_size, Dv});
+  beta = mx::reshape(beta, {B, H, n_chunks, chunk_size});
+  gate = mx::reshape(gate, {B, H, n_chunks, chunk_size});
+
+  auto v_beta = v * mx::expand_dims(beta, -1);
+  auto k_beta = k * mx::expand_dims(beta, -1);
+  auto log_decay = mx::cumsum(mx::log(gate), 3);
+  auto decay_exp = mx::exp(log_decay);
+
+  auto time = mx::astype(mx::arange(chunk_size), mx::int32);
+  auto row_idx = mx::expand_dims(time, 1);
+  auto col_idx = mx::expand_dims(time, 0);
+  auto strict_lower = row_idx > col_idx;
+  auto lower_inclusive = row_idx >= col_idx;
+  auto eye = mx::astype(row_idx == col_idx, mx::float32);
+
+  auto decay_i = mx::expand_dims(log_decay, 4);
+  auto decay_j = mx::expand_dims(log_decay, 3);
+  auto decay_delta = mx::exp(decay_i - decay_j);
+  auto strict_lower_f = mx::astype(mx::expand_dims(mx::expand_dims(mx::expand_dims(strict_lower, 0), 0), 0), mx::float32);
+  auto lower_inclusive_f = mx::astype(mx::expand_dims(mx::expand_dims(mx::expand_dims(lower_inclusive, 0), 0), 0), mx::float32);
+  auto eye_f = mx::reshape(eye, {1, 1, 1, chunk_size, chunk_size});
+
+  auto raw_attn = -mx::matmul(k_beta, mx::transpose(k, {0, 1, 2, 4, 3})) * decay_delta * strict_lower_f;
+  for (int i = 1; i < chunk_size; ++i) {
+    auto row = mx::slice(raw_attn, {0, 0, 0, i, 0}, {B, H, n_chunks, i + 1, i});
+    row = mx::reshape(row, {B, H, n_chunks, i});
+    auto prefix = mx::slice(raw_attn, {0, 0, 0, 0, 0}, {B, H, n_chunks, i, i});
+    auto correction = mx::sum(mx::reshape(row, {B, H, n_chunks, i, 1}) * prefix, 3);
+    auto updated = row + correction;
+    raw_attn = mx::slice_update(
+        raw_attn,
+        mx::reshape(updated, {B, H, n_chunks, 1, i}),
+        mx::Shape{0, 0, 0, i, 0},
+        mx::Shape{B, H, n_chunks, i + 1, i});
+  }
+  auto solve_attn = raw_attn + eye_f;
+  auto k_cumsum = mx::matmul(solve_attn, v_beta);
+  auto k_cumdecay = mx::matmul(solve_attn, k_beta * mx::expand_dims(decay_exp, -1));
+
+  auto causal_attn = mx::matmul(q, mx::transpose(k, {0, 1, 2, 4, 3})) * decay_delta * lower_inclusive_f;
+  auto state = mx::zeros({B, H, Dk, Dv}, mx::float32);
+  auto out = mx::zeros({B, H, n_chunks, chunk_size, Dv}, mx::float32);
+  for (int chunk = 0; chunk < n_chunks; ++chunk) {
+    auto q_i = mx::reshape(mx::slice(q, {0, 0, chunk, 0, 0}, {B, H, chunk + 1, chunk_size, Dk}), {B, H, chunk_size, Dk});
+    auto k_i = mx::reshape(mx::slice(k, {0, 0, chunk, 0, 0}, {B, H, chunk + 1, chunk_size, Dk}), {B, H, chunk_size, Dk});
+    auto v_i = mx::reshape(mx::slice(k_cumsum, {0, 0, chunk, 0, 0}, {B, H, chunk + 1, chunk_size, Dv}), {B, H, chunk_size, Dv});
+    auto k_decay_i = mx::reshape(mx::slice(k_cumdecay, {0, 0, chunk, 0, 0}, {B, H, chunk + 1, chunk_size, Dk}), {B, H, chunk_size, Dk});
+    auto decay_i_chunk = mx::reshape(mx::slice(log_decay, {0, 0, chunk, 0}, {B, H, chunk + 1, chunk_size}), {B, H, chunk_size});
+    auto attn_i = mx::reshape(mx::slice(causal_attn, {0, 0, chunk, 0, 0}, {B, H, chunk + 1, chunk_size, chunk_size}), {B, H, chunk_size, chunk_size});
+
+    auto v_prime = mx::matmul(k_decay_i, state);
+    auto v_new = v_i - v_prime;
+    auto o_inter = mx::matmul(q_i * mx::expand_dims(mx::exp(decay_i_chunk), -1), state);
+    auto o_chunk = o_inter + mx::matmul(attn_i, v_new);
+    out = mx::slice_update(out, mx::reshape(o_chunk, {B, H, 1, chunk_size, Dv}),
+                           mx::Shape{0, 0, chunk, 0, 0}, mx::Shape{B, H, chunk + 1, chunk_size, Dv});
+
+    auto decay_last = mx::reshape(mx::slice(decay_i_chunk, {0, 0, chunk_size - 1}, {B, H, chunk_size}), {B, H});
+    auto carry = mx::exp(mx::expand_dims(decay_last, -1) - decay_i_chunk);
+    auto state_update = mx::matmul(
+        mx::transpose(k_i * mx::expand_dims(carry, -1), {0, 1, 3, 2}),
+        v_new);
+    state = state * mx::reshape(mx::exp(decay_last), {B, H, 1, 1}) + state_update;
+  }
+
+  auto out_seq = mx::reshape(out, {B, H, T_pad, Dv});
+  if (pad_len > 0) {
+    out_seq = mx::slice(out_seq, {0, 0, 0, 0}, {B, H, T, Dv});
+  }
+  out_seq = mx::transpose(out_seq, {0, 2, 1, 3});
+  return mx::reshape(out_seq, {B * T * H, Dv});
+}
+
 mx::array tensor_desc_to_array(const mlx_ir::TensorDesc& desc) {
   mx::Shape shape;
   shape.reserve(desc.shape.size());
@@ -717,32 +870,12 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         auto v = mx::reshape(get(op, 2), {B, T, H, Dv});
         auto beta = mx::reshape(get(op, 3), {B, T, H});
         auto gate = mx::reshape(get(op, 4), {B, T, H});
-
-        auto state = mx::zeros({B, H, Dk, Dv}, mx::float32);
-        auto out = mx::zeros({B, T, H, Dv}, mx::float32);
-        for (int t = 0; t < T; ++t) {
-          auto qt = mx::reshape(mx::slice(q, {0, t, 0, 0}, {B, t + 1, H, Dk}), {B, H, Dk});
-          auto kt = mx::reshape(mx::slice(k, {0, t, 0, 0}, {B, t + 1, H, Dk}), {B, H, Dk});
-          auto vt = mx::reshape(mx::slice(v, {0, t, 0, 0}, {B, t + 1, H, Dv}), {B, H, Dv});
-          auto betat = mx::reshape(mx::slice(beta, {0, t, 0}, {B, t + 1, H}), {B, H, 1});
-          auto gatet = mx::reshape(mx::slice(gate, {0, t, 0}, {B, t + 1, H}), {B, H, 1, 1});
-
-          state = gatet * state;
-          auto pred = mx::reshape(
-              mx::matmul(mx::reshape(kt, {B, H, 1, Dk}), state),
-              {B, H, Dv});
-          auto err = vt - pred;
-          auto err_scaled = err * betat;
-          auto update = mx::reshape(kt, {B, H, Dk, 1}) * mx::reshape(err_scaled, {B, H, 1, Dv});
-          state = state + update;
-
-          auto ot = mx::reshape(
-              mx::matmul(mx::reshape(qt, {B, H, 1, Dk}), state),
-              {B, H, Dv});
-          out = mx::slice_update(out, mx::reshape(ot, {B, 1, H, Dv}),
-                                 mx::Shape{0, t, 0, 0}, mx::Shape{B, t + 1, H, Dv});
+        int chunk_size = (op.n_int_params >= 6) ? op.int_params[5] : 0;
+        if (chunk_size <= 0) {
+          set_out(op, 0, gated_delta_scan_naive(q, k, v, beta, gate, B, T, H, Dk, Dv));
+        } else {
+          set_out(op, 0, gated_delta_scan_chunked(q, k, v, beta, gate, B, T, H, Dk, Dv, chunk_size));
         }
-        set_out(op, 0, mx::reshape(out, {B * T * H, Dv}));
         break;
       }
       case OP_GATHER_POSITIONS: {

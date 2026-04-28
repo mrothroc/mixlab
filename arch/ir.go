@@ -256,9 +256,10 @@ func (p *Program) ScanTV(x, gate, out string, B, T, D int) {
 //
 //	out: [B*T*H,Dv]
 //
-// IntParams layout: [B, T, H, Dk, Dv].
-func (p *Program) GatedDeltaScan(q, k, v, beta, gate, out string, B, T, H, Dk, Dv int) {
-	p.AddOp(OpGatedDeltaScan, []string{q, k, v, beta, gate}, []string{out}, nil, []int{B, T, H, Dk, Dv})
+// IntParams layout: [B, T, H, Dk, Dv, chunkSize].
+// chunkSize <= 0 keeps the legacy naive recurrence for parity/debugging.
+func (p *Program) GatedDeltaScan(q, k, v, beta, gate, out string, B, T, H, Dk, Dv, chunkSize int) {
+	p.AddOp(OpGatedDeltaScan, []string{q, k, v, beta, gate}, []string{out}, nil, []int{B, T, H, Dk, Dv, chunkSize})
 }
 
 // GatherPositions selects K entries from the position axis of a [B,T,D] tensor.

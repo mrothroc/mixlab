@@ -7,6 +7,13 @@ import (
 
 const gatedDeltaNetConvSize = 4
 
+func effectiveGatedDeltaNetScanChunkSize(spec BlockSpec) int {
+	if spec.ScanChunkSize == nil {
+		return 64
+	}
+	return *spec.ScanChunkSize
+}
+
 func effectiveGatedDeltaNetDV(spec BlockSpec) int {
 	if spec.DV > 0 {
 		return spec.DV
@@ -91,6 +98,9 @@ func emitGatedDeltaNetIR(prog *Program, spec BlockSpec, x string, wi, _, T, B, i
 	}
 	if effectiveKVShare(spec) && dv < dk {
 		return wi, fmt.Errorf("gated_deltanet with kv_share=true requires d_v >= d_k")
+	}
+	if spec.ScanChunkSize != nil && *spec.ScanChunkSize < 0 {
+		return wi, fmt.Errorf("gated_deltanet requires scan_chunk_size >= 0")
 	}
 
 	keyDim := heads * dk
@@ -198,7 +208,7 @@ func emitGatedDeltaNetIR(prog *Program, spec BlockSpec, x string, wi, _, T, B, i
 	wi++
 	prog.Sigmoid(betaRaw, betaHead)
 
-	prog.GatedDeltaScan(qScaled4, k4, v4, betaHead, gateHead, yFlat, B, T, heads, dk, dv)
+	prog.GatedDeltaScan(qScaled4, k4, v4, betaHead, gateHead, yFlat, B, T, heads, dk, dv, effectiveGatedDeltaNetScanChunkSize(spec))
 	prog.RMSNorm(yFlat, weightName(wi), yNorm, 1e-5)
 	wi++
 
