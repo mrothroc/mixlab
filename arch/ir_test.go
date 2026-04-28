@@ -305,6 +305,24 @@ func TestSub(t *testing.T) {
 	}
 }
 
+func TestStopGradient(t *testing.T) {
+	p := NewProgram(0)
+	p.StopGradient("a", "b")
+	if len(p.Ops) != 1 {
+		t.Fatalf("expected 1 op, got %d", len(p.Ops))
+	}
+	op := p.Ops[0]
+	if op.Code != OpStopGradient {
+		t.Fatalf("expected OpStopGradient (%d), got %d", OpStopGradient, op.Code)
+	}
+	if len(op.Inputs) != 1 || op.Inputs[0] != "a" {
+		t.Fatalf("bad inputs: %v", op.Inputs)
+	}
+	if len(op.Outputs) != 1 || op.Outputs[0] != "b" {
+		t.Fatalf("bad outputs: %v", op.Outputs)
+	}
+}
+
 func TestGELU(t *testing.T) {
 	p := NewProgram(0)
 	p.GELU("a", "b")

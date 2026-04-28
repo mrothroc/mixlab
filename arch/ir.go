@@ -46,6 +46,7 @@ const (
 	OpScanTV               = 58 // OP_SCAN_TV
 	OpSoftplus             = 59 // OP_SOFTPLUS
 	OpGatedDeltaScan       = 60 // OP_GATED_DELTA_SCAN
+	OpStopGradient         = 61 // OP_STOP_GRADIENT
 	OpRandomNormal         = 65 // OP_RANDOM_NORMAL
 
 	TensorInt32   = 0
@@ -338,6 +339,11 @@ func (p *Program) Full(shape []int, value float32, output string) {
 // Caller is responsible for any reparameterization-trick gradient routing.
 func (p *Program) RandomNormal(shape []int, mean, stddev float32, output string) {
 	p.AddOp(OpRandomNormal, nil, []string{output}, []float32{mean, stddev}, shape)
+}
+
+// StopGradient emits an identity op whose reverse-mode gradient is zero.
+func (p *Program) StopGradient(input, output string) {
+	p.AddOp(OpStopGradient, []string{input}, []string{output}, nil, nil)
 }
 
 // Outer emits an outer product between flattened inputs.

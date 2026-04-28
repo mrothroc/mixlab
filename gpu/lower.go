@@ -50,6 +50,7 @@ var irToGPUOp = map[int]int{
 	ir.OpScanTV:               OpScanTV,
 	ir.OpSoftplus:             OpSoftplus,
 	ir.OpGatedDeltaScan:       OpGatedDeltaScan,
+	ir.OpStopGradient:         OpStopGradient,
 	ir.OpRandomNormal:         OpRandomNormal,
 }
 

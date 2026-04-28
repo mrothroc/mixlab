@@ -47,6 +47,7 @@ const (
 	OpScanTV               = 58
 	OpSoftplus             = 59
 	OpGatedDeltaScan       = 60
+	OpStopGradient         = 61
 	OpRandomNormal         = 65
 )
 

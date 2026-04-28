@@ -765,6 +765,10 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
                            op.float_params[1])));
         break;
       }
+      case OP_STOP_GRADIENT: {
+        set_out(op, 0, mx::stop_gradient(get(op, 0)));
+        break;
+      }
       case OP_ASTYPE: {
         set_out(op, 0, mx::astype(get(op, 0), mx::float32));
         break;

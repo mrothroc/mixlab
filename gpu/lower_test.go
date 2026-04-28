@@ -52,6 +52,7 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"MatrixScan", ir.OpMatrixScan, OpMatrixScan},
 		{"ScanTV", ir.OpScanTV, OpScanTV},
 		{"Softplus", ir.OpSoftplus, OpSoftplus},
+		{"StopGradient", ir.OpStopGradient, OpStopGradient},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
