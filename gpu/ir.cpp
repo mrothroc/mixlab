@@ -1,4 +1,5 @@
 #include "ir.h"
+#include "gated_delta_cuda_primitive.h"
 
 #include <mlx/random.h>
 
@@ -150,8 +151,30 @@ mx::array gated_delta_scan_chunked(
     int Dk,
     int Dv,
     int chunk_size) {
-  if (chunk_size <= 1 || should_fallback_gated_delta_scan_chunked_to_naive()) {
+  if (chunk_size <= 1) {
     return gated_delta_scan_naive(q_in, k_in, v_in, beta_in, gate_in, B, T, H, Dk, Dv);
+  }
+  if (should_fallback_gated_delta_scan_chunked_to_naive()) {
+    return mlx_ir::gated_delta_scan_cuda_primitive(
+        q_in,
+        k_in,
+        v_in,
+        beta_in,
+        gate_in,
+        B,
+        T,
+        H,
+        Dk,
+        Dv,
+        chunk_size,
+        [B, T, H, Dk, Dv](
+            const mx::array& q,
+            const mx::array& k,
+            const mx::array& v,
+            const mx::array& beta,
+            const mx::array& gate) {
+          return gated_delta_scan_naive(q, k, v, beta, gate, B, T, H, Dk, Dv);
+        });
   }
 
   const int pad_len = (chunk_size - (T % chunk_size)) % chunk_size;
