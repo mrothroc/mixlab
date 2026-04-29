@@ -193,15 +193,19 @@ mx::array gated_delta_scan_chunked(
   auto eye_f = mx::reshape(eye, {1, 1, 1, chunk_size, chunk_size});
 
   auto raw_attn = as_float32(-mx::matmul(k_beta, mx::transpose(k, {0, 1, 2, 4, 3})) * decay_delta * strict_lower_f);
-  // inv(I - L) = prod_m (I + L^(2^m)) for strictly lower-triangular L.
-  // This keeps the within-chunk solve on matmuls only, which MLX can run on
-  // Metal/CUDA without the per-row slice/update loop.
-  auto solve_attn = as_float32(eye_f + raw_attn);
-  auto raw_power = raw_attn;
-  for (int width = 2; width < chunk_size; width <<= 1) {
-    raw_power = as_float32(mx::matmul(raw_power, raw_power));
-    solve_attn = as_float32(mx::matmul(solve_attn, eye_f + raw_power));
+  for (int i = 1; i < chunk_size; ++i) {
+    auto row = mx::slice(raw_attn, {0, 0, 0, i, 0}, {B, H, n_chunks, i + 1, i});
+    row = mx::reshape(row, {B, H, n_chunks, i});
+    auto prefix = mx::slice(raw_attn, {0, 0, 0, 0, 0}, {B, H, n_chunks, i, i});
+    auto correction = as_float32(mx::sum(mx::reshape(row, {B, H, n_chunks, i, 1}) * prefix, 3));
+    auto updated = as_float32(row + correction);
+    raw_attn = mx::slice_update(
+        raw_attn,
+        mx::reshape(updated, {B, H, n_chunks, 1, i}),
+        mx::Shape{0, 0, 0, i, 0},
+        mx::Shape{B, H, n_chunks, i + 1, i});
   }
+  auto solve_attn = as_float32(raw_attn + eye_f);
   auto k_cumsum = as_float32(mx::matmul(solve_attn, v_beta));
   auto k_cumdecay = as_float32(mx::matmul(solve_attn, k_beta * mx::expand_dims(decay_exp, -1)));
 
