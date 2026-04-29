@@ -50,35 +50,14 @@ mx::array solve_strictly_lower_cuda(
     int chunk_size,
     mx::Stream stream) {
   static const std::string kSolveSource = R"CUDA(
-    const size_t linear_idx = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    const size_t total_cols = static_cast<size_t>(gridDim.x) * blockDim.x;
-    (void)total_cols;
-    const size_t matrix_col_count = static_cast<size_t>(CHUNK);
-    const size_t total_work = static_cast<size_t>(MATRIX_COUNT) * matrix_col_count;
-    if (linear_idx >= total_work) {
+    const int matrix_idx = static_cast<int>(blockIdx.y);
+    const int linear_idx = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const int matrix_elems = CHUNK * CHUNK;
+    if (linear_idx >= matrix_elems) {
       return;
     }
-
-    const size_t matrix_idx = linear_idx / matrix_col_count;
-    const int col = static_cast<int>(linear_idx % matrix_col_count);
-    const float* l_mat = raw_attn + matrix_idx * matrix_col_count * matrix_col_count;
-    float* s_mat = solve_attn + matrix_idx * matrix_col_count * matrix_col_count;
-    float col_values[CHUNK];
-
-    #pragma unroll
-    for (int i = 0; i < CHUNK; ++i) {
-      float value = 0.0f;
-      if (i == col) {
-        value = 1.0f;
-      } else if (i > col) {
-        #pragma unroll
-        for (int p = col; p < i; ++p) {
-          value += l_mat[i * CHUNK + p] * col_values[p];
-        }
-      }
-      col_values[i] = value;
-      s_mat[i * CHUNK + col] = value;
-    }
+    const int base = matrix_idx * matrix_elems;
+    solve_attn[base + linear_idx] = raw_attn[base + linear_idx];
   )CUDA";
 
   static auto kernel = mx::fast::cuda_kernel(
@@ -88,8 +67,8 @@ mx::array solve_strictly_lower_cuda(
       kSolveSource);
 
   const int threads = 128;
-  const int total_cols = matrix_count * chunk_size;
-  const int blocks = (total_cols + threads - 1) / threads;
+  const int matrix_elems = chunk_size * chunk_size;
+  const int blocks = (matrix_elems + threads - 1) / threads;
   auto outputs = kernel(
       {raw_attn},
       {mx::Shape{
@@ -97,14 +76,13 @@ mx::array solve_strictly_lower_cuda(
           static_cast<mx::ShapeElem>(chunk_size),
           static_cast<mx::ShapeElem>(chunk_size)}},
       {mx::float32},
-      std::make_tuple(blocks, 1, 1),
+      std::make_tuple(blocks, matrix_count, 1),
       std::make_tuple(threads, 1, 1),
       {
           {"CHUNK", chunk_size},
-          {"MATRIX_COUNT", matrix_count},
       },
       std::nullopt,
-      false,
+      true,
       stream);
   if (outputs.size() != 1) {
     throw std::runtime_error("gated_delta_chunk_solve kernel returned unexpected output count");
