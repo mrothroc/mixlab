@@ -2,14 +2,225 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <iostream>
+#include <limits>
 #include <numeric>
+#include <string>
 #include <stdexcept>
 
 namespace mx = mlx::core;
 
 namespace mlx_ir {
 namespace {
+
+struct StepDebugConfig {
+  bool enabled = false;
+  int start = 0;
+  int end = 0;
+  int top_k = 4;
+};
+
+struct ArrayDebugStats {
+  mx::array l2 = mx::array(0.0f, mx::float32);
+  mx::array max_abs = mx::array(0.0f, mx::float32);
+  mx::array mean_abs = mx::array(0.0f, mx::float32);
+  mx::array nan_count = mx::array(0.0f, mx::float32);
+  mx::array inf_count = mx::array(0.0f, mx::float32);
+  mx::array nonfinite_count = mx::array(0.0f, mx::float32);
+};
+
+int getenv_int(const char* name, int fallback) {
+  const char* raw = std::getenv(name);
+  if (!raw || raw[0] == '\0') {
+    return fallback;
+  }
+  char* end = nullptr;
+  long parsed = std::strtol(raw, &end, 10);
+  if (end == raw || (end && *end != '\0')) {
+    return fallback;
+  }
+  if (parsed < std::numeric_limits<int>::min()) {
+    return std::numeric_limits<int>::min();
+  }
+  if (parsed > std::numeric_limits<int>::max()) {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(parsed);
+}
+
+StepDebugConfig step_debug_config() {
+  static const StepDebugConfig cfg = []() {
+    StepDebugConfig out;
+    const int start = getenv_int("MIXLAB_MLX_DEBUG_STEP_START", -1);
+    const int end = getenv_int("MIXLAB_MLX_DEBUG_STEP_END", -1);
+    if (start >= 0 && end >= start) {
+      out.enabled = true;
+      out.start = start;
+      out.end = end;
+      out.top_k = std::max(1, getenv_int("MIXLAB_MLX_DEBUG_TOPK", 4));
+    }
+    return out;
+  }();
+  return cfg;
+}
+
+bool should_log_step_debug(int step) {
+  const auto cfg = step_debug_config();
+  return cfg.enabled && step >= cfg.start && step <= cfg.end;
+}
+
+ArrayDebugStats build_array_debug_stats(const mx::array& src) {
+  auto x = mx::astype(src, mx::float32);
+  auto abs_x = mx::abs(x);
+  auto nan_mask = mx::astype(mx::isnan(x), mx::float32);
+  auto inf_mask = mx::astype(mx::isinf(x), mx::float32);
+  auto nonfinite_mask = mx::astype(mx::logical_not(mx::isfinite(x)), mx::float32);
+  return ArrayDebugStats{
+      mx::sqrt(mx::sum(mx::square(x))),
+      mx::max(abs_x),
+      mx::mean(abs_x),
+      mx::sum(nan_mask),
+      mx::sum(inf_mask),
+      mx::sum(nonfinite_mask),
+  };
+}
+
+void append_array_debug_stats(std::vector<mx::array>& eval_arrays, const ArrayDebugStats& stats) {
+  eval_arrays.push_back(stats.l2);
+  eval_arrays.push_back(stats.max_abs);
+  eval_arrays.push_back(stats.mean_abs);
+  eval_arrays.push_back(stats.nan_count);
+  eval_arrays.push_back(stats.inf_count);
+  eval_arrays.push_back(stats.nonfinite_count);
+}
+
+struct WeightDebugSummary {
+  int idx = -1;
+  float l2 = 0.0f;
+  float max_abs = 0.0f;
+  float mean_abs = 0.0f;
+  float nan_count = 0.0f;
+  float inf_count = 0.0f;
+  float nonfinite_count = 0.0f;
+};
+
+WeightDebugSummary materialize_weight_debug_summary(int idx, const ArrayDebugStats& stats) {
+  return WeightDebugSummary{
+      idx,
+      stats.l2.item<float>(),
+      stats.max_abs.item<float>(),
+      stats.mean_abs.item<float>(),
+      stats.nan_count.item<float>(),
+      stats.inf_count.item<float>(),
+      stats.nonfinite_count.item<float>(),
+  };
+}
+
+void log_submit_step_debug(
+    const IRTrainer& trainer,
+    int step_index,
+    const std::vector<mx::array>& grads) {
+  if (!should_log_step_debug(step_index)) {
+    return;
+  }
+
+  std::vector<ArrayDebugStats> grad_stats;
+  grad_stats.reserve(grads.size());
+  std::vector<ArrayDebugStats> adam_v_stats;
+  adam_v_stats.reserve(trainer.adam_v.size());
+  std::vector<mx::array> eval_arrays;
+  eval_arrays.reserve((grads.size() + trainer.adam_v.size()) * 6);
+
+  for (const auto& grad : grads) {
+    grad_stats.push_back(build_array_debug_stats(grad));
+    append_array_debug_stats(eval_arrays, grad_stats.back());
+  }
+  for (size_t i = 0; i < trainer.adam_v.size(); ++i) {
+    if (trainer.has_adam_state[i] == 0) {
+      continue;
+    }
+    adam_v_stats.push_back(build_array_debug_stats(trainer.adam_v[i]));
+    append_array_debug_stats(eval_arrays, adam_v_stats.back());
+  }
+
+  mx::eval(eval_arrays);
+
+  std::vector<WeightDebugSummary> grad_summaries;
+  grad_summaries.reserve(grad_stats.size());
+  float total_grad_l2_sq = 0.0f;
+  float total_grad_nonfinite = 0.0f;
+  int grad_bad_weights = 0;
+  for (size_t i = 0; i < grad_stats.size(); ++i) {
+    auto summary = materialize_weight_debug_summary(static_cast<int>(i), grad_stats[i]);
+    total_grad_l2_sq += summary.l2 * summary.l2;
+    total_grad_nonfinite += summary.nonfinite_count;
+    if (summary.nonfinite_count > 0.0f) {
+      grad_bad_weights++;
+    }
+    grad_summaries.push_back(summary);
+  }
+
+  std::vector<WeightDebugSummary> adam_v_summaries;
+  adam_v_summaries.reserve(adam_v_stats.size());
+  float total_adam_v_nonfinite = 0.0f;
+  int adam_v_bad_weights = 0;
+  for (size_t i = 0; i < adam_v_stats.size(); ++i) {
+    auto summary = materialize_weight_debug_summary(static_cast<int>(i), adam_v_stats[i]);
+    total_adam_v_nonfinite += summary.nonfinite_count;
+    if (summary.nonfinite_count > 0.0f) {
+      adam_v_bad_weights++;
+    }
+    adam_v_summaries.push_back(summary);
+  }
+
+  const auto cfg = step_debug_config();
+  const auto rank_by_max_abs = [](const WeightDebugSummary& a, const WeightDebugSummary& b) {
+    if (a.nonfinite_count != b.nonfinite_count) {
+      return a.nonfinite_count > b.nonfinite_count;
+    }
+    return a.max_abs > b.max_abs;
+  };
+  std::sort(grad_summaries.begin(), grad_summaries.end(), rank_by_max_abs);
+  std::sort(adam_v_summaries.begin(), adam_v_summaries.end(), rank_by_max_abs);
+
+  std::cerr << "[mlx_ir_debug] step=" << step_index
+            << " grad_total_l2=" << std::sqrt(total_grad_l2_sq)
+            << " grad_nonfinite=" << total_grad_nonfinite
+            << " grad_bad_weights=" << grad_bad_weights
+            << " adam_v_nonfinite=" << total_adam_v_nonfinite
+            << " adam_v_bad_weights=" << adam_v_bad_weights
+            << std::endl;
+
+  const int grad_limit = std::min<int>(cfg.top_k, static_cast<int>(grad_summaries.size()));
+  for (int i = 0; i < grad_limit; ++i) {
+    const auto& s = grad_summaries[static_cast<size_t>(i)];
+    std::cerr << "[mlx_ir_debug] step=" << step_index
+              << " grad[" << s.idx << "]"
+              << " l2=" << s.l2
+              << " max_abs=" << s.max_abs
+              << " mean_abs=" << s.mean_abs
+              << " nan=" << s.nan_count
+              << " inf=" << s.inf_count
+              << " nonfinite=" << s.nonfinite_count
+              << std::endl;
+  }
+
+  const int adam_v_limit = std::min<int>(cfg.top_k, static_cast<int>(adam_v_summaries.size()));
+  for (int i = 0; i < adam_v_limit; ++i) {
+    const auto& s = adam_v_summaries[static_cast<size_t>(i)];
+    std::cerr << "[mlx_ir_debug] step=" << step_index
+              << " adam_v[" << s.idx << "]"
+              << " l2=" << s.l2
+              << " max_abs=" << s.max_abs
+              << " mean_abs=" << s.mean_abs
+              << " nan=" << s.nan_count
+              << " inf=" << s.inf_count
+              << " nonfinite=" << s.nonfinite_count
+              << std::endl;
+  }
+}
 
 struct LoraOptimizerState {
   mx::array adam_m = mx::array(0.0f, mx::float32);
@@ -307,12 +518,20 @@ float finalize_pending_step(
   if (!trainer.has_pending_step_) {
     throw std::runtime_error("no pending step to collect");
   }
-  float loss = trainer.pending_loss_.item<float>();
+  float loss = 0.0f;
+  try {
+    loss = trainer.pending_loss_.item<float>();
+  } catch (const std::exception& e) {
+    throw std::runtime_error(
+        "pending step " + std::to_string(trainer.pending_step_index_) +
+        " failed while materializing loss: " + e.what());
+  }
   if (outputs != nullptr) {
     *outputs = std::move(trainer.pending_outputs_);
   }
   trainer.pending_outputs_.clear();
   trainer.has_pending_step_ = false;
+  trainer.pending_step_index_ = 0;
   return loss;
 }
 
@@ -429,8 +648,10 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     throw std::runtime_error("previous step loss must be collected before submitting another step");
   }
   if (has_pending_step_) {
+    const int finalized_step_index = pending_step_index_;
     ready_loss_ = finalize_pending_step(*this, &ready_outputs_);
     has_ready_step_ = true;
+    ready_step_index_ = finalized_step_index;
   }
   step_count++;
 
@@ -449,8 +670,10 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   auto out = fn(weights);
   auto loss = out.first;
   auto grads = std::move(out.second);
+  auto preclip_grads = grads;
   clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
+  log_submit_step_debug(*this, step_count, preclip_grads);
 
   std::vector<mx::array> eval_arrays;
   eval_arrays.reserve(1 + outputs.size() + weights.size() + adam_m.size() * 2 + muon_momentum.size());
@@ -463,6 +686,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   pending_loss_ = loss;
   pending_outputs_ = std::move(outputs);
   has_pending_step_ = true;
+  pending_step_index_ = step_count;
 }
 
 float IRTrainer::collect_loss() {
@@ -470,6 +694,7 @@ float IRTrainer::collect_loss() {
     last_outputs = std::move(ready_outputs_);
     ready_outputs_.clear();
     has_ready_step_ = false;
+    ready_step_index_ = 0;
     return ready_loss_;
   }
   last_outputs.clear();
@@ -482,11 +707,13 @@ void IRTrainer::flush() {
     pending_outputs_.clear();
     pending_loss_.item<float>();
     has_pending_step_ = false;
+    pending_step_index_ = 0;
   } else if (has_ready_step_) {
     last_outputs = std::move(ready_outputs_);
     ready_outputs_.clear();
   }
   has_ready_step_ = false;
+  ready_step_index_ = 0;
 }
 
 float IRTrainer::evaluate(const mx::array& tokens, const mx::array& targets) {

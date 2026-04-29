@@ -66,9 +66,11 @@ struct IRTrainer {
   bool has_pending_step_ = false;
   mlx::core::array pending_loss_;
   std::unordered_map<std::string, mlx::core::array> pending_outputs_;
+  int pending_step_index_ = 0;
   bool has_ready_step_ = false;
   float ready_loss_ = 0.0f;
   std::unordered_map<std::string, mlx::core::array> ready_outputs_;
+  int ready_step_index_ = 0;
 
   float max_grad_norm = 0.0f;
   float lr_scale = 1.0f;
