@@ -38,6 +38,11 @@ mx::array stable_exp_nonpos(const mx::array& x) {
   return mx::exp(clamp_float32(x, kGatedDeltaExpClampMin, kGatedDeltaExpClampMax));
 }
 
+bool use_experimental_gated_delta_cuda_kernel() {
+  const char* override = std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL");
+  return override != nullptr && std::string(override) == "1";
+}
+
 #ifdef __linux__
 mx::array solve_strictly_lower_cuda(
     const mx::array& raw_attn,
@@ -134,6 +139,11 @@ class GatedDeltaScanCUDAPrimitive : public mx::Primitive {
 
   void eval_gpu(const std::vector<mx::array>& inputs, std::vector<mx::array>& outputs) override {
 #ifdef __linux__
+    if (!use_experimental_gated_delta_cuda_kernel()) {
+      outputs = fallback_(std::vector<mx::array>(inputs.begin(), inputs.end()));
+      return;
+    }
+
     if (inputs.size() != 5) {
       throw std::runtime_error("GatedDeltaScanCUDAPrimitive expects 5 inputs");
     }
