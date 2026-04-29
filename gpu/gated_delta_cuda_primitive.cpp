@@ -91,7 +91,7 @@ mx::array solve_strictly_lower_cuda(
 }
 #endif
 
-class GatedDeltaScanCUDAPrimitive : public mx::Primitive {
+class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
  public:
   GatedDeltaScanCUDAPrimitive(
       mx::Stream stream,
@@ -102,7 +102,7 @@ class GatedDeltaScanCUDAPrimitive : public mx::Primitive {
       int Dk,
       int Dv,
       int chunk_size)
-      : mx::Primitive(stream),
+      : mx::UnaryPrimitive(stream),
         fallback_(std::move(fallback)),
         B_(B),
         T_(T),
@@ -111,14 +111,22 @@ class GatedDeltaScanCUDAPrimitive : public mx::Primitive {
         Dv_(Dv),
         chunk_size_(chunk_size) {}
 
-  void eval_cpu(const std::vector<mx::array>& inputs, std::vector<mx::array>& outputs) override {
-    outputs = fallback_(std::vector<mx::array>(inputs.begin(), inputs.end()));
+  void eval_cpu(const std::vector<mx::array>& inputs, mx::array& out) override {
+    auto outputs = fallback_(std::vector<mx::array>(inputs.begin(), inputs.end()));
+    if (outputs.size() != 1) {
+      throw std::runtime_error("GatedDeltaScanCUDAPrimitive fallback returned unexpected output count");
+    }
+    out = outputs[0];
   }
 
-  void eval_gpu(const std::vector<mx::array>& inputs, std::vector<mx::array>& outputs) override {
+  void eval_gpu(const std::vector<mx::array>& inputs, mx::array& out) override {
 #ifdef __linux__
     if (!use_experimental_gated_delta_cuda_kernel()) {
-      outputs = fallback_(std::vector<mx::array>(inputs.begin(), inputs.end()));
+      auto outputs = fallback_(std::vector<mx::array>(inputs.begin(), inputs.end()));
+      if (outputs.size() != 1) {
+        throw std::runtime_error("GatedDeltaScanCUDAPrimitive fallback returned unexpected output count");
+      }
+      out = outputs[0];
       return;
     }
 
@@ -195,7 +203,7 @@ class GatedDeltaScanCUDAPrimitive : public mx::Primitive {
     auto causal_attn = as_float32(
         mx::matmul(q, mx::transpose(k, {0, 1, 2, 4, 3})) * decay_delta * lower_inclusive_f);
     auto state = mx::zeros({B_, H_, Dk_, Dv_}, mx::float32);
-    auto out = mx::zeros({B_, H_, n_chunks, chunk_size_, Dv_}, mx::float32);
+    auto out_buf = mx::zeros({B_, H_, n_chunks, chunk_size_, Dv_}, mx::float32);
     for (int chunk = 0; chunk < n_chunks; ++chunk) {
       auto q_i = mx::reshape(
           mx::slice(q, {0, 0, chunk, 0, 0}, {B_, H_, chunk + 1, chunk_size_, Dk_}),
@@ -224,8 +232,8 @@ class GatedDeltaScanCUDAPrimitive : public mx::Primitive {
       auto decay_chunk_exp = stable_exp_nonpos(decay_i_chunk);
       auto o_inter = as_float32(mx::matmul(q_i * mx::expand_dims(decay_chunk_exp, -1), state));
       auto o_chunk = as_float32(o_inter + mx::matmul(attn_i, v_new));
-      out = mx::slice_update(
-          out,
+      out_buf = mx::slice_update(
+          out_buf,
           mx::reshape(o_chunk, {B_, H_, 1, chunk_size_, Dv_}),
           mx::Shape{0, 0, chunk, 0, 0},
           mx::Shape{B_, H_, chunk + 1, chunk_size_, Dv_});
@@ -241,14 +249,19 @@ class GatedDeltaScanCUDAPrimitive : public mx::Primitive {
           state * mx::reshape(stable_exp_nonpos(decay_last), {B_, H_, 1, 1}) + state_update);
     }
 
-    auto out_seq = mx::reshape(out, {B_, H_, T_pad, Dv_});
+    auto out_seq = mx::reshape(out_buf, {B_, H_, T_pad, Dv_});
     if (pad_len > 0) {
       out_seq = mx::slice(out_seq, {0, 0, 0, 0}, {B_, H_, T_, Dv_});
     }
     out_seq = mx::transpose(out_seq, {0, 2, 1, 3});
-    outputs = {mx::reshape(out_seq, {B_ * T_ * H_, Dv_})};
+    out = mx::reshape(out_seq, {B_ * T_ * H_, Dv_});
+    mx::eval(out);
 #else
-    outputs = fallback_(std::vector<mx::array>(inputs.begin(), inputs.end()));
+    auto outputs = fallback_(std::vector<mx::array>(inputs.begin(), inputs.end()));
+    if (outputs.size() != 1) {
+      throw std::runtime_error("GatedDeltaScanCUDAPrimitive fallback returned unexpected output count");
+    }
+    out = outputs[0];
 #endif
   }
 
