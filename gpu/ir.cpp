@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <unordered_map>
@@ -58,6 +59,25 @@ mx::array clamp_float32(const mx::array& x, float lo, float hi) {
 
 mx::array stable_exp_nonpos(const mx::array& x) {
   return mx::exp(clamp_float32(x, kGatedDeltaExpClampMin, kGatedDeltaExpClampMax));
+}
+
+bool use_chunked_gated_delta_scan_cuda_fast_path() {
+  const char* override = std::getenv("MIXLAB_GATED_DELTA_ALLOW_CUDA_CHUNKED");
+  if (override != nullptr && std::string(override) == "1") {
+    return true;
+  }
+  return false;
+}
+
+bool should_fallback_gated_delta_scan_chunked_to_naive() {
+  const auto& device = mx::default_device();
+  if (device.type != mx::Device::gpu) {
+    return false;
+  }
+  // The Neumann-product forward is fast, but its backward path is unstable on
+  // mlx-cuda for training workloads. Metal remains stable, so only fall back
+  // when the active GPU backend is actually CUDA.
+  return mlx::core::cu::is_available() && !use_chunked_gated_delta_scan_cuda_fast_path();
 }
 
 mx::array running_variance_raw(const mx::array& x_flat, int B, int T, int D, float alpha) {
@@ -130,7 +150,7 @@ mx::array gated_delta_scan_chunked(
     int Dk,
     int Dv,
     int chunk_size) {
-  if (chunk_size <= 1) {
+  if (chunk_size <= 1 || should_fallback_gated_delta_scan_chunked_to_naive()) {
     return gated_delta_scan_naive(q_in, k_in, v_in, beta_in, gate_in, B, T, H, Dk, Dv);
   }
 
