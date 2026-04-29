@@ -194,6 +194,7 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
         chunk_size_,
         stream());
     solve_attn = mx::reshape(solve_attn, {B_, H_, n_chunks, chunk_size_, chunk_size_});
+    mx::eval(solve_attn);
 
     auto k_cumsum = as_float32(mx::matmul(solve_attn, v_beta));
     auto k_cumdecay = as_float32(mx::matmul(
