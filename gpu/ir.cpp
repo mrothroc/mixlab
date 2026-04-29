@@ -164,6 +164,9 @@ mx::array gated_delta_scan_chunked(
   // "effectively zero" decay for values below float32 significance.
   gate = mx::maximum(gate, mx::array(kGatedDeltaGateFloor, mx::float32));
 
+  // These reshapes only split the strided time axis of the [B,H,T,*] views
+  // above into [n_chunks, chunk_size]; they should stay metadata-only unless a
+  // caller changes the axis order before entering this kernel.
   q = mx::reshape(q, {B, H, n_chunks, chunk_size, Dk});
   k = mx::reshape(k, {B, H, n_chunks, chunk_size, Dk});
   v = mx::reshape(v, {B, H, n_chunks, chunk_size, Dv});
@@ -206,6 +209,9 @@ mx::array gated_delta_scan_chunked(
   auto state = mx::zeros({B, H, Dk, Dv}, mx::float32);
   auto out = mx::zeros({B, H, n_chunks, chunk_size, Dv}, mx::float32);
   for (int chunk = 0; chunk < n_chunks; ++chunk) {
+    // Each slice keeps a singleton chunk axis, and the reshapes below only
+    // squeeze that axis away. This remains a view as long as the chunk packing
+    // above keeps [n_chunks, chunk_size] contiguous in logical time order.
     auto q_i = mx::reshape(mx::slice(q, {0, 0, chunk, 0, 0}, {B, H, chunk + 1, chunk_size, Dk}), {B, H, chunk_size, Dk});
     auto k_i = mx::reshape(mx::slice(k, {0, 0, chunk, 0, 0}, {B, H, chunk + 1, chunk_size, Dk}), {B, H, chunk_size, Dk});
     auto v_i = mx::reshape(mx::slice(k_cumsum, {0, 0, chunk, 0, 0}, {B, H, chunk + 1, chunk_size, Dv}), {B, H, chunk_size, Dv});
@@ -230,6 +236,8 @@ mx::array gated_delta_scan_chunked(
     mx::eval(state);
   }
 
+  // This merges adjacent [n_chunks, chunk_size] axes back into time, so it is
+  // likewise expected to remain metadata-only.
   auto out_seq = mx::reshape(out, {B, H, T_pad, Dv});
   if (pad_len > 0) {
     out_seq = mx::slice(out_seq, {0, 0, 0, 0}, {B, H, T, Dv});
