@@ -199,16 +199,8 @@ mx::array gated_delta_scan_chunked(
   auto solve_attn = as_float32(eye_f + raw_attn);
   auto raw_power = raw_attn;
   for (int width = 2; width < chunk_size; width <<= 1) {
-    // CUDA graph capture has been fragile here with chained batched matmuls
-    // over the same logical view stack. Materialize each Neumann factor before
-    // feeding it into the next multiply so CUDA sees concrete buffers instead
-    // of a deep alias-heavy matmul tree.
     raw_power = as_float32(mx::matmul(raw_power, raw_power));
-    mx::eval(raw_power);
-    auto solve_factor = as_float32(eye_f + raw_power);
-    mx::eval(solve_factor);
-    solve_attn = as_float32(mx::matmul(solve_attn, solve_factor));
-    mx::eval(solve_attn);
+    solve_attn = as_float32(mx::matmul(solve_attn, eye_f + raw_power));
   }
   auto k_cumsum = as_float32(mx::matmul(solve_attn, v_beta));
   auto k_cumdecay = as_float32(mx::matmul(solve_attn, k_beta * mx::expand_dims(decay_exp, -1)));
