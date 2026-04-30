@@ -25,7 +25,7 @@ These fields live at the root of the config object.
 | `tie_embeddings` | boolean | No | `false` | Shares token embedding and output head weights. |
 | `block_scales` | boolean | No | `false` | Adds learned per-channel scales to `plain` attention and MLP residual branches, plus the MLP branch in `swiglu`. |
 | `resid_mix` | boolean | No | `false` | Adds learned mixing of the current state and original input on `plain` blocks. |
-| `parallel_residual` | boolean | No | `false` | Requires `(plain, swiglu)` pairs and emits attention and MLP branches from the same pre-norm input. Cannot be combined with `unet`. |
+| `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Cannot be combined with `unet`. |
 | `unet` | boolean | No | `false` | Splits the `blocks` list into encoder/decoder halves with learned skip connections. |
 | `blocks` | array | Yes | None | Ordered block list. Must contain at least one block. |
 | `recurrence` | integer array | No | Disabled | Weight-sharing map for `blocks`; length must equal `blocks`, references must point to the same or earlier block with the same type. |
@@ -70,6 +70,7 @@ Optional fields:
 - `rope_dims` — partial RoPE: apply rotary embeddings to only the first `rope_dims` dimensions per head, leaving the rest position-invariant. Must be even and `<= head_dim`. Omit or set to `0` for full RoPE.
 - `xsa` — eXplicit Subspace Attention: after computing `y = softmax(QK^T)V`, projects `y` orthogonal to `V` at each position. Forces attention to contribute information that V doesn't already provide. Zero additional parameters. Compatible with GQA.
 - `kv_source` — reuse K/V projections from an earlier block (1-indexed). Saves 2 weight matrices per shared block. Source must be an earlier `plain` block with matching `heads` and `kv_heads`. Not supported with `parallel_residual`.
+- `parallel_residual` — when `true`, fuses this block with the immediately following `swiglu` block into a parallel residual pair. See [`parallel_residual`](#parallel_residual) for the full description.
 
 Example:
 
@@ -630,9 +631,11 @@ Effect:
 
 ### `parallel_residual`
 
-Fuses consecutive `(plain, swiglu)` pairs so the SwiGLU branch uses the same pre-attention RMSNorm input as the plain block.
+Fuses a `(plain or gated_deltanet, swiglu)` pair into a parallel residual: both branches read the same pre-norm input and their outputs sum into the residual together (instead of the SwiGLU branch reading the post-attention residual).
 
-Example:
+Two forms are supported:
+
+**Top-level (uniform).** Apply to every block pair:
 
 ```json
 {
@@ -646,10 +649,32 @@ Example:
 }
 ```
 
+When the top-level flag is `true`, every consecutive pair must be `(plain or gated_deltanet, swiglu)`.
+
+**Per-block (scoped).** Set `parallel_residual: true` on individual pair-start blocks; the top-level flag stays `false` (default). Pairs not marked stay sequential. This lets you mix paired and unpaired layers in the same model — e.g., the leaderboard pattern where only late attention layers use parallel residual:
+
+```json
+{
+  "blocks": [
+    {"type": "gated_deltanet", "heads": 4, "d_k": 64},
+    {"type": "swiglu"},
+    {"type": "gated_deltanet", "heads": 4, "d_k": 64},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4, "parallel_residual": true},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4, "parallel_residual": true},
+    {"type": "swiglu"}
+  ]
+}
+```
+
 Effect:
 
-- `blocks` must be complete `(plain, swiglu)` pairs.
-- Each pair omits the separate `swiglu` RMSNorm scale weight.
+- A pair start must be `plain` or `gated_deltanet`; the next block must be `swiglu`.
+- Each paired SwiGLU drops its `ffn_norm_scale` weight (the pair shares the start block's RMSNorm).
+- `kv_source` is not supported on a paired `plain` block.
+- Cannot be combined with `unet`.
+- **Weight sharing:** when using `recurrence` (or `weight_group`) to share weights between blocks, paired and unpaired SwiGLUs cannot share weights with each other — they have different shapes (paired blocks lack `ffn_norm_scale`). Use distinct group names for paired vs. unpaired roles.
 
 ### `tie_embeddings`
 
