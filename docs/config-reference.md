@@ -210,6 +210,38 @@ Example:
 {"type": "rwkv"}
 ```
 
+### `gated_deltanet`
+
+Linear-time gated DeltaNet block (Yang et al., 2025): pre-norm RMS, multi-head Q/K/V projections with optional shared K/V, short 1-D conv on Q/K/V, sigmoid output gate, and a chunked delta-rule recurrence with per-channel gating. The recurrent state is matrix-valued (`d_k × d_v` per head) and updated via a chunked associative scan; on CUDA the inner triangular solve uses a custom precompiled kernel (`gpu/cuda_kernels/gated_delta_chunk_solve.cu`).
+
+Required fields:
+
+- `type: "gated_deltanet"`
+- `heads` — number of GLA heads.
+- `d_k` — key/query dim per head. Total key dim is `heads * d_k`.
+
+Optional fields:
+
+- `d_v` — value dim per head. Defaults to `2 * d_k`. Total value dim is `heads * d_v`.
+- `kv_share` — when `true` (default), the K and V projections share a single `[D, heads*d_v]` weight (V projection is reused for K, with `d_v >= d_k` required). When `false`, K and V get separate projections of width `heads*d_k` and `heads*d_v` respectively. The shared form is the recipe used by Yang et al. and saves one projection matrix per block.
+- `scan_chunk_size` — chunk size for the chunked delta scan. `0` (default) uses the naive per-step scan (slower but simpler; useful for debugging). Positive values enable the chunked scan with the custom CUDA kernel (when on the CUDA backend); typical chunk sizes are 16-64. Must be `>= 0`.
+- `parallel_residual` — when `true`, fuses this block with the immediately following `swiglu` block into a parallel residual pair. See [`parallel_residual`](#parallel_residual).
+
+Example:
+
+```json
+{"type": "gated_deltanet", "heads": 4, "d_k": 64, "d_v": 128, "kv_share": true, "scan_chunk_size": 64}
+```
+
+GLA-pair stacked with parallel residual:
+
+```json
+{"blocks": [
+  {"type": "gated_deltanet", "heads": 4, "d_k": 64, "parallel_residual": true},
+  {"type": "swiglu"}
+]}
+```
+
 ### `perceiver`
 
 Latent bottleneck block: cross-attend input into learned latents, self-attend latents, then broadcast back to the sequence.
