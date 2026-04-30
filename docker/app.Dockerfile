@@ -11,6 +11,9 @@ ARG BASE_IMAGE
 FROM ${BASE_IMAGE} AS builder
 
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libfmt-dev \
+    && rm -rf /var/lib/apt/lists/*
 COPY go.mod ./
 COPY . .
 RUN go mod download
