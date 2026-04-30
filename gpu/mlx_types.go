@@ -115,6 +115,7 @@ type OptimizerGroup struct {
 	BackendSteps        int
 	NewtonSchulzVariant NewtonSchulzVariant
 	Nesterov            bool
+	RowNormalize        bool
 }
 
 type WeightOptimizer struct {

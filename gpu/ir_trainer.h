@@ -40,6 +40,7 @@ struct OptimizerGroupConfig {
   int backend_steps = 5;
   NewtonSchulzVariant newton_schulz_variant = NewtonSchulzVariant::Fixed;
   bool nesterov = true;
+  bool row_normalize = false;
 };
 
 struct WeightOptimizerSpec {

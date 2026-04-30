@@ -77,6 +77,7 @@ std::vector<mlx_ir::OptimizerGroupConfig> read_optimizer_groups(
         optimizer_groups[i].backend_steps,
         newton_schulz_variant,
         optimizer_groups[i].nesterov != 0,
+        optimizer_groups[i].row_normalize != 0,
     });
   }
   return groups;

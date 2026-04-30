@@ -102,3 +102,34 @@ func TestBuildTrainerOptimizerSpec_AdamWForMatrix(t *testing.T) {
 		t.Fatalf("matrix group LR = %v, want 4", matrixGroup.LR)
 	}
 }
+
+func TestBuildTrainerOptimizerSpec_MuonEqRForMatrix(t *testing.T) {
+	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
+		Weights: []OptimizerWeightMetadata{
+			{Name: "embed", Shape: []int{10, 4}},
+			{Name: "wq", Shape: []int{4, 4}},
+		},
+		Embed:  OptimizerSettings{Name: "adamw", LR: 1},
+		Head:   OptimizerSettings{Name: "adamw", LR: 2},
+		Scalar: OptimizerSettings{Name: "adamw", LR: 3},
+		Matrix: OptimizerSettings{
+			Name:         "muon_eq_r",
+			LR:           4,
+			Beta1:        0.9,
+			Beta2:        0.95,
+			Epsilon:      1e-8,
+			BackendSteps: 5,
+			RowNormalize: true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainerOptimizerSpec error = %v", err)
+	}
+	matrixGroup := spec.Groups[spec.Weights[1].GroupIndex]
+	if matrixGroup.Kind != OptimizerMuon {
+		t.Fatalf("matrix group Kind = %d, want Muon (%d)", matrixGroup.Kind, OptimizerMuon)
+	}
+	if !matrixGroup.RowNormalize {
+		t.Fatalf("matrix group RowNormalize=false, want true")
+	}
+}

@@ -262,9 +262,13 @@ func mlxCreateTrainer(programHandle int64, weightHandles []int64, spec TrainerOp
 			backend_steps:         C.int(group.BackendSteps),
 			newton_schulz_variant: C.int(group.NewtonSchulzVariant),
 			nesterov:              0,
+			row_normalize:         0,
 		}
 		if group.Nesterov {
 			cGroups[i].nesterov = 1
+		}
+		if group.RowNormalize {
+			cGroups[i].row_normalize = 1
 		}
 	}
 	h := C.mlx_ir_create_trainer_v2(

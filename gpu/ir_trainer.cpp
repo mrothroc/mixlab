@@ -298,6 +298,12 @@ static mx::array zeropower_via_newtonschulz5(
   return mx::astype(x, grad.dtype());
 }
 
+static mx::array row_l2_normalize(const mx::array& x, float eps = 1e-7f) {
+  auto x_f32 = mx::astype(x, mx::float32);
+  auto norm = mx::sqrt(mx::sum(mx::square(x_f32), 1, true));
+  return mx::astype(x_f32 / (norm + mx::array(eps, mx::float32)), x.dtype());
+}
+
 void clip_gradients(std::vector<mx::array>& grads, float max_grad_norm) {
   if (max_grad_norm <= 0.0f) {
     return;
@@ -383,6 +389,9 @@ void apply_optimizer_update(
       const auto cols = static_cast<float>(w.shape(1));
       const float aspect = std::sqrt(std::max(1.0f, rows / cols));
       update = update * mx::array(aspect, mx::float32);
+      if (group.row_normalize) {
+        update = row_l2_normalize(update);
+      }
       if (group.weight_decay > 0.0f && decay) {
         w = w - (effective_lr * group.weight_decay) * w;
       }
@@ -623,6 +632,9 @@ void IRTrainer::apply_optimizer_updates(const std::vector<mx::array>& grads) {
         const auto cols = static_cast<float>(w.shape(1));
         const float aspect = std::sqrt(std::max(1.0f, rows / cols));
         update = update * mx::array(aspect, mx::float32);
+        if (group.row_normalize) {
+          update = row_l2_normalize(update);
+        }
         if (group.weight_decay > 0.0f && spec.decay) {
           w = w - (effective_lr * group.weight_decay) * w;
         }

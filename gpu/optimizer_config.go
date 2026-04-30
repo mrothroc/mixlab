@@ -21,6 +21,7 @@ type OptimizerSettings struct {
 	BackendSteps        int
 	NewtonSchulzVariant string
 	Nesterov            bool
+	RowNormalize        bool
 }
 
 type TrainerOptimizerConfig struct {
@@ -117,6 +118,7 @@ func optimizerGroup(settings OptimizerSettings) (OptimizerGroup, error) {
 		BackendSteps:        settings.BackendSteps,
 		NewtonSchulzVariant: parseNewtonSchulzVariant(settings.NewtonSchulzVariant),
 		Nesterov:            settings.Nesterov,
+		RowNormalize:        settings.RowNormalize,
 	}, nil
 }
 
@@ -124,7 +126,7 @@ func optimizerKind(name string) (OptimizerKind, error) {
 	switch strings.ToLower(name) {
 	case "adamw":
 		return OptimizerAdamW, nil
-	case "muon":
+	case "muon", "muon_eq_r":
 		return OptimizerMuon, nil
 	default:
 		return 0, fmt.Errorf("unsupported optimizer %q", name)

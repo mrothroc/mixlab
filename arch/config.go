@@ -160,7 +160,7 @@ type TrainingSpec struct {
 	// (You Jiacheng, arXiv:2505.16932).
 	NewtonSchulzVariant string  `json:"newton_schulz_variant,omitempty"`
 	MuonNesterov        *bool   `json:"muon_nesterov,omitempty"`
-	Optimizer           string  `json:"optimizer,omitempty"` // "muon" (default) or "adamw" for matrix weights
+	Optimizer           string  `json:"optimizer,omitempty"` // "muon" (default), "muon_eq_r", or "adamw" for matrix weights
 	QAT                 string  `json:"qat,omitempty"`       // "none" (default), "int8", or "int6"
 	QATStart            int     `json:"qat_start,omitempty"`
 	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
@@ -432,6 +432,7 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.Training.MuonBackendSteps <= 0 {
 		cfg.Training.MuonBackendSteps = d.MuonBackendSteps
 	}
+	cfg.Training.Optimizer = strings.ToLower(strings.TrimSpace(cfg.Training.Optimizer))
 	if cfg.Training.EmbedWeightDecay == 0 {
 		cfg.Training.EmbedWeightDecay = cfg.Training.WeightDecay
 	}
@@ -458,6 +459,11 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Training.MuonMomentum < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.muon_momentum=%g (must be >= 0)", source, cfg.Training.MuonMomentum)
+	}
+	switch cfg.Training.Optimizer {
+	case "", "adamw", "muon", "muon_eq_r":
+	default:
+		return nil, fmt.Errorf("config %q has invalid training.optimizer=%q (must be \"adamw\", \"muon\", or \"muon_eq_r\")", source, cfg.Training.Optimizer)
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Training.NewtonSchulzVariant)) {
 	case "", "fixed":

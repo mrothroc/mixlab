@@ -355,6 +355,35 @@ func TestOptimizerFieldParsing(t *testing.T) {
 	if cfg3.Training.Optimizer != "muon" {
 		t.Errorf("muon optimizer = %q, want muon", cfg3.Training.Optimizer)
 	}
+
+	// Explicit MuonEq-R normalizes to canonical spelling
+	cfg4, err := ParseArchConfig([]byte(`{
+		"model_dim": 128, "vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 10, "lr": 1e-3, "batch_tokens": 128, "seed": 1, "optimizer": " Muon_Eq_R "}
+	}`), "muon_eq_r")
+	if err != nil {
+		t.Fatalf("parse muon_eq_r: %v", err)
+	}
+	if cfg4.Training.Optimizer != "muon_eq_r" {
+		t.Errorf("muon_eq_r optimizer = %q, want muon_eq_r", cfg4.Training.Optimizer)
+	}
+	roundTrip, err := json.Marshal(cfg4)
+	if err != nil {
+		t.Fatalf("marshal muon_eq_r: %v", err)
+	}
+	if !strings.Contains(string(roundTrip), `"optimizer":"muon_eq_r"`) {
+		t.Fatalf("round-trip JSON missing optimizer=muon_eq_r: %s", roundTrip)
+	}
+
+	_, err = ParseArchConfig([]byte(`{
+		"model_dim": 128, "vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 10, "lr": 1e-3, "batch_tokens": 128, "seed": 1, "optimizer": "sgd"}
+	}`), "bad_optimizer")
+	if err == nil {
+		t.Fatal("expected invalid optimizer error")
+	}
 }
 
 func TestTrainingPhasesParsingAndTotalSteps(t *testing.T) {

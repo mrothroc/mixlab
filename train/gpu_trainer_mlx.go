@@ -420,6 +420,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 	if cfg.Training.MuonNesterov != nil {
 		muonNesterov = *cfg.Training.MuonNesterov
 	}
+	matrixOptimizerName := matrixOptimizer(cfg)
 	wmeta := make([]gpu.OptimizerWeightMetadata, len(shapes))
 	for i, s := range shapes {
 		wmeta[i] = gpu.OptimizerWeightMetadata{
@@ -455,7 +456,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 			WeightDecay: cfg.Training.ScalarWeightDecay,
 		},
 		Matrix: gpu.OptimizerSettings{
-			Name:                matrixOptimizer(cfg),
+			Name:                matrixOptimizerName,
 			LR:                  cfg.Training.MatrixLR,
 			Beta1:               cfg.Training.MuonMomentum,
 			Beta2:               cfg.Training.Beta2,
@@ -464,6 +465,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 			BackendSteps:        cfg.Training.MuonBackendSteps,
 			NewtonSchulzVariant: cfg.Training.NewtonSchulzVariant,
 			Nesterov:            muonNesterov,
+			RowNormalize:        matrixOptimizerName == "muon_eq_r",
 		},
 		MaxGradNorm:   cfg.Training.GradClip,
 		DefaultBaseLR: float32(cfg.Training.LR),
@@ -471,8 +473,12 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 }
 
 func matrixOptimizer(cfg *ArchConfig) string {
-	if cfg.Training.Optimizer == "adamw" {
+	switch cfg.Training.Optimizer {
+	case "adamw":
 		return "adamw"
+	case "muon_eq_r":
+		return "muon_eq_r"
+	default:
+		return "muon"
 	}
-	return "muon"
 }

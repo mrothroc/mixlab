@@ -64,6 +64,7 @@ typedef struct {
     int backend_steps;
     int newton_schulz_variant; // 0=fixed, 1=polar_express
     int nesterov;
+    int row_normalize;
 } mlx_ir_optimizer_group;
 
 typedef struct {

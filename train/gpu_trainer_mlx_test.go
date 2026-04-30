@@ -5,6 +5,8 @@ package train
 import (
 	"reflect"
 	"testing"
+
+	"github.com/mrothroc/mixlab/gpu"
 )
 
 func TestMLXGPUTrainerMakeInputs_ExtendedTargets(t *testing.T) {
@@ -83,5 +85,45 @@ func TestMLXGPUTrainerPrepareTargets_InvalidExtendedShape(t *testing.T) {
 
 	if _, _, err := trainer.prepareTargets(2, 8, 16); err == nil {
 		t.Fatal("prepareTargets succeeded, want error")
+	}
+}
+
+func TestBuildTrainerOptimizerSpec_MuonEqR(t *testing.T) {
+	cfg := &ArchConfig{
+		Name:      "muon_eq_r_optimizer",
+		ModelDim:  16,
+		VocabSize: 32,
+		SeqLen:    4,
+		Blocks: []BlockSpec{
+			{Type: "plain", Heads: 2},
+		},
+		Training: DefaultTrainingSpec(),
+	}
+	cfg.Training.Optimizer = "muon_eq_r"
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	spec, err := buildTrainerOptimizerSpec(cfg, shapes)
+	if err != nil {
+		t.Fatalf("buildTrainerOptimizerSpec: %v", err)
+	}
+
+	matrixGroup := -1
+	for i, shape := range shapes {
+		if len(shape.Shape) == 2 && shape.Name != "embed" && shape.Name != "head" {
+			matrixGroup = spec.Weights[i].GroupIndex
+			break
+		}
+	}
+	if matrixGroup < 0 {
+		t.Fatal("no matrix weight group found")
+	}
+	group := spec.Groups[matrixGroup]
+	if group.Kind != gpu.OptimizerMuon {
+		t.Fatalf("matrix group kind=%d want Muon", group.Kind)
+	}
+	if !group.RowNormalize {
+		t.Fatal("matrix group RowNormalize=false, want true")
 	}
 }
