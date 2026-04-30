@@ -1,5 +1,9 @@
 #include "gated_delta_cuda_primitive.h"
 
+#ifdef __linux__
+#include "gated_delta_kernels_ptx.h"
+#endif
+
 #include <mlx/fast.h>
 #include <mlx/ops.h>
 #include <mlx/primitives.h>
@@ -52,46 +56,37 @@ mx::array solve_strictly_lower_cuda(
     mx::Stream stream) {
   std::cerr << "[gated_delta_cuda] solve_strictly_lower_cuda enter matrix_count="
             << matrix_count << " chunk_size=" << chunk_size << std::endl;
-  static const std::string kSolveSource = R"CUDA(
-    const int matrix_idx = static_cast<int>(blockIdx.y);
-    const int linear_idx = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
-    const int matrix_elems = CHUNK * CHUNK;
-    if (linear_idx >= matrix_elems) {
-      return;
-    }
-    const int base = matrix_idx * matrix_elems;
-    solve_attn[base + linear_idx] = raw_attn[base + linear_idx];
-  )CUDA";
-
-  std::cerr << "[gated_delta_cuda] before cuda_kernel factory" << std::endl;
-  static auto kernel = mx::fast::cuda_kernel(
-      "gated_delta_chunk_solve",
-      {"raw_attn"},
-      {"solve_attn"},
-      kSolveSource);
-  std::cerr << "[gated_delta_cuda] cuda_kernel factory returned" << std::endl;
+  if (kGatedDeltaKernelsPtxLen == 0) {
+    throw std::runtime_error("gated_delta PTX header is empty; run gpu/generate_gated_delta_ptx_header.sh during build");
+  }
+  const std::string ptx(
+      reinterpret_cast<const char*>(kGatedDeltaKernelsPtx),
+      static_cast<size_t>(kGatedDeltaKernelsPtxLen));
 
   const int threads = 128;
   const int matrix_elems = chunk_size * chunk_size;
   const int blocks = (matrix_elems + threads - 1) / threads;
-  std::cerr << "[gated_delta_cuda] before kernel callable blocks=" << blocks
+  std::cerr << "[gated_delta_cuda] before precompiled kernel call blocks=" << blocks
             << " threads=" << threads << std::endl;
-  auto outputs = kernel(
+  auto outputs = mx::fast::precompiled_cuda_kernel(
+      "gated_delta_chunk_passthrough",
+      ptx,
       {raw_attn},
-      {mx::Shape{
+      {
+        mx::Shape{
           static_cast<mx::ShapeElem>(matrix_count),
           static_cast<mx::ShapeElem>(chunk_size),
-          static_cast<mx::ShapeElem>(chunk_size)}},
+          static_cast<mx::ShapeElem>(chunk_size)}
+      },
       {mx::float32},
+      {chunk_size},
       std::make_tuple(blocks, matrix_count, 1),
       std::make_tuple(threads, 1, 1),
-      {
-          {"CHUNK", chunk_size},
-      },
+      0,
       std::nullopt,
-      true,
+      false,
       stream);
-  std::cerr << "[gated_delta_cuda] kernel callable returned outputs="
+  std::cerr << "[gated_delta_cuda] precompiled kernel returned outputs="
             << outputs.size() << std::endl;
   if (outputs.size() != 1) {
     throw std::runtime_error("gated_delta_chunk_solve kernel returned unexpected output count");
