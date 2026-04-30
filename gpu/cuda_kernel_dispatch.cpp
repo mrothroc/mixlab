@@ -19,7 +19,7 @@ std::string lookup_precompiled_kernel_blob(const std::string& kernel_name) {
   for (unsigned int i = 0; i < cuda_kernels::kEmbeddedCudaKernelImageCount; ++i) {
     const auto& candidate = cuda_kernels::kEmbeddedCudaKernelImages[i];
     if (kernel_name == candidate.kernel_name) {
-      std::cerr << "[cuda_kernel_dispatch] loading kernel name=" << kernel_name
+      std::cout << "[cuda_kernel_dispatch] loading kernel name=" << kernel_name
                 << " fatbin_size=" << candidate.blob_len << std::endl;
       return std::string(
           reinterpret_cast<const char*>(candidate.blob),
@@ -44,7 +44,7 @@ std::vector<mx::array> launch_precompiled_cuda_kernel(
     int shared_memory,
     bool ensure_row_contiguous) {
 #ifdef __linux__
-  std::cerr << "[gated_delta_cuda] before cuda_kernel factory" << std::endl;
+  std::cout << "[gated_delta_cuda] before cuda_kernel factory" << std::endl;
   auto outputs = mx::fast::precompiled_cuda_kernel(
       kernel_name,
       lookup_precompiled_kernel_blob(kernel_name),
@@ -58,7 +58,7 @@ std::vector<mx::array> launch_precompiled_cuda_kernel(
       std::nullopt,
       ensure_row_contiguous,
       stream);
-  std::cerr << "[gated_delta_cuda] cuda_kernel factory returned" << std::endl;
+  std::cout << "[gated_delta_cuda] cuda_kernel factory returned" << std::endl;
   return outputs;
 #else
   (void)kernel_name;

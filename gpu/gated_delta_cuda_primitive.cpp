@@ -20,6 +20,10 @@ namespace mx = mlx::core;
 namespace mlx_ir {
 namespace {
 
+struct ForceUnbufferedStdout {
+  ForceUnbufferedStdout() { std::cout.setf(std::ios::unitbuf); }
+} _force_unbuffered_stdout;
+
 struct ForceUnbufferedStderr {
   ForceUnbufferedStderr() { std::cerr.setf(std::ios::unitbuf); }
 } _force_unbuffered_stderr;
@@ -53,12 +57,12 @@ mx::array solve_strictly_lower_cuda(
     int chunk_size,
     mx::Stream stream) {
 #ifdef __linux__
-  std::cerr << "[gated_delta_cuda] solve_strictly_lower_cuda enter matrix_count="
+  std::cout << "[gated_delta_cuda] solve_strictly_lower_cuda enter matrix_count="
             << matrix_count << " chunk_size=" << chunk_size << std::endl;
   const int threads = 128;
   const int blocks = (chunk_size + threads - 1) / threads;
   try {
-    std::cerr << "[gated_delta_cuda] before precompiled_cuda_kernel" << std::endl;
+    std::cout << "[gated_delta_cuda] before precompiled_cuda_kernel" << std::endl;
     auto outputs = launch_precompiled_cuda_kernel(
         "gated_delta_chunk_solve",
         {raw_attn},
@@ -71,14 +75,14 @@ mx::array solve_strictly_lower_cuda(
         std::make_tuple(blocks, matrix_count, 1),
         std::make_tuple(threads, 1, 1),
         stream);
-    std::cerr << "[gated_delta_cuda] precompiled_cuda_kernel returned, outputs="
+    std::cout << "[gated_delta_cuda] precompiled_cuda_kernel returned, outputs="
               << outputs.size() << std::endl;
     if (outputs.size() != 1) {
       throw std::runtime_error("gated_delta_chunk_solve returned unexpected output count");
     }
     return outputs[0];
   } catch (const std::exception& e) {
-    std::cerr << "[gated_delta_cuda] EXCEPTION: " << e.what() << std::endl;
+    std::cout << "[gated_delta_cuda] EXCEPTION: " << e.what() << std::endl;
     throw;
   }
 #else
@@ -118,7 +122,7 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
   }
 
   void eval_gpu(const std::vector<mx::array>& inputs, mx::array& out) override {
-    std::cerr << "[gated_delta_cuda] eval_gpu ENTERED env="
+    std::cout << "[gated_delta_cuda] eval_gpu ENTERED env="
               << (std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
                       ? std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
                       : "(unset)")
@@ -185,7 +189,7 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
 
     auto raw_attn = as_float32(
         -mx::matmul(k_beta, mx::transpose(k, {0, 1, 2, 4, 3})) * decay_delta * strict_lower_f);
-    std::cerr << "[gated_delta_cuda] before solve_strictly_lower_cuda" << std::endl;
+    std::cout << "[gated_delta_cuda] before solve_strictly_lower_cuda" << std::endl;
     auto solve_attn = solve_strictly_lower_cuda(
         mx::contiguous(mx::reshape(raw_attn, {matrix_count, chunk_size_, chunk_size_})),
         matrix_count,
