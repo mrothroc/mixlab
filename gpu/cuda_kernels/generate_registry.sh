@@ -16,7 +16,6 @@ namespace mlx_ir::cuda_kernels {
 
 struct EmbeddedKernelImage {
   const char* kernel_name;
-  int sm;
   const unsigned char* blob;
   unsigned int blob_len;
 };
@@ -59,28 +58,28 @@ for kernel_rel in "${KERNEL_PATHS[@]}"; do
     exit 1
   fi
   kernel_name="$(basename "${kernel_src}" .cu)"
+  fatbin_out="${BUILD_DIR}/${kernel_name}.fatbin"
+  nvcc_args=(-fatbin -std=c++17)
   for arch in "${ARCHES[@]}"; do
-    ptx_out="${BUILD_DIR}/${kernel_name}_sm${arch}.ptx"
-    nvcc -ptx -std=c++17 -gencode "arch=compute_${arch},code=compute_${arch}" "${kernel_src}" -o "${ptx_out}"
-    python3 - "${JSON_FILE}" "${kernel_name}" "${arch}" "${ptx_out}" <<'PY'
+    nvcc_args+=(-gencode "arch=compute_${arch},code=sm_${arch}")
+  done
+  nvcc "${nvcc_args[@]}" "${kernel_src}" -o "${fatbin_out}"
+  python3 - "${JSON_FILE}" "${kernel_name}" "${fatbin_out}" <<'PY'
 import json
 import pathlib
 import sys
 
 json_path = pathlib.Path(sys.argv[1])
 kernel_name = sys.argv[2]
-arch = int(sys.argv[3])
-ptx_path = pathlib.Path(sys.argv[4])
+fatbin_path = pathlib.Path(sys.argv[3])
 
 data = json.loads(json_path.read_text())
 data.append({
     "kernel_name": kernel_name,
-    "sm": arch,
-    "bytes": list(ptx_path.read_bytes()),
+    "bytes": list(fatbin_path.read_bytes()),
 })
 json_path.write_text(json.dumps(data))
 PY
-  done
 done
 
 python3 - "${JSON_FILE}" "${HEADER_FILE}" <<'PY'
@@ -104,7 +103,6 @@ lines = [
     "",
     "struct EmbeddedKernelImage {",
     "  const char* kernel_name;",
-    "  int sm;",
     "  const unsigned char* blob;",
     "  unsigned int blob_len;",
     "};",
@@ -113,7 +111,7 @@ lines = [
 
 registry_names = []
 for entry in entries:
-    arr_name = f'kPtx_{ident(entry["kernel_name"])}_sm{entry["sm"]}'
+    arr_name = f'kFatbin_{ident(entry["kernel_name"])}'
     registry_names.append((arr_name, entry))
     lines.append(f"static const unsigned char {arr_name}[] = {{")
     blob = entry["bytes"]
@@ -126,7 +124,7 @@ for entry in entries:
 lines.append("static constexpr EmbeddedKernelImage kEmbeddedCudaKernelImages[] = {")
 for arr_name, entry in registry_names:
     lines.append(
-        f'  {{"{entry["kernel_name"]}", {entry["sm"]}, {arr_name}, {len(entry["bytes"])}}},')
+        f'  {{"{entry["kernel_name"]}", {arr_name}, {len(entry["bytes"])}}},')
 lines.append("};")
 lines.append(f"static constexpr unsigned int kEmbeddedCudaKernelImageCount = {len(registry_names)};")
 lines.append("")

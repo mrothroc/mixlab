@@ -1,9 +1,7 @@
 #include "cuda_kernel_dispatch.h"
 
 #include "cuda_kernels/registry_generated.h"
-#include <mlx/device.h>
 
-#include <optional>
 #include <stdexcept>
 #include <string>
 
@@ -13,65 +11,19 @@ namespace mlx_ir {
 namespace {
 
 #ifdef __linux__
-int current_cuda_sm() {
-  const auto& device = mx::default_device();
-  if (device.type != mx::Device::gpu) {
-    throw std::runtime_error("default device is not a GPU");
-  }
-
-  const auto& info = mx::device_info(device);
-  const auto major_it = info.find("compute_capability_major");
-  const auto minor_it = info.find("compute_capability_minor");
-  if (major_it == info.end() || minor_it == info.end()) {
-    throw std::runtime_error("MLX device_info missing CUDA compute capability");
-  }
-
-  const auto* major = std::get_if<size_t>(&major_it->second);
-  const auto* minor = std::get_if<size_t>(&minor_it->second);
-  if (major == nullptr || minor == nullptr) {
-    throw std::runtime_error("MLX device_info returned non-integer CUDA compute capability");
-  }
-  return static_cast<int>((*major) * 10 + (*minor));
-}
-
 std::string lookup_precompiled_kernel_blob(const std::string& kernel_name) {
   if (cuda_kernels::kEmbeddedCudaKernelImageCount == 0) {
     throw std::runtime_error("no embedded CUDA kernels were built");
   }
-  const int current_sm = current_cuda_sm();
-  const cuda_kernels::EmbeddedKernelImage* best = nullptr;
-  int smallest_supported_sm = -1;
   for (unsigned int i = 0; i < cuda_kernels::kEmbeddedCudaKernelImageCount; ++i) {
     const auto& candidate = cuda_kernels::kEmbeddedCudaKernelImages[i];
-    if (kernel_name != candidate.kernel_name) {
-      continue;
-    }
-    if (smallest_supported_sm < 0 || candidate.sm < smallest_supported_sm) {
-      smallest_supported_sm = candidate.sm;
-    }
-    if (candidate.sm == current_sm) {
-      best = &candidate;
-      break;
-    }
-    if (candidate.sm <= current_sm &&
-        (best == nullptr || candidate.sm > best->sm)) {
-      best = &candidate;
-    } else if (best == nullptr) {
-      best = &candidate;
+    if (kernel_name == candidate.kernel_name) {
+      return std::string(
+          reinterpret_cast<const char*>(candidate.blob),
+          static_cast<size_t>(candidate.blob_len));
     }
   }
-  if (best == nullptr) {
-    throw std::runtime_error("embedded CUDA kernel not found: " + kernel_name);
-  }
-  if (best->sm > current_sm) {
-    throw std::runtime_error(
-        "no compatible embedded CUDA kernel image for " + kernel_name +
-        " on sm_" + std::to_string(current_sm) +
-        "; smallest supported architecture is sm_" + std::to_string(smallest_supported_sm));
-  }
-  return std::string(
-      reinterpret_cast<const char*>(best->blob),
-      static_cast<size_t>(best->blob_len));
+  throw std::runtime_error("embedded CUDA kernel not found: " + kernel_name);
 }
 #endif
 

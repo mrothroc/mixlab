@@ -5,7 +5,6 @@ namespace mlx_ir::cuda_kernels {
 
 struct EmbeddedKernelImage {
   const char* kernel_name;
-  int sm;
   const unsigned char* blob;
   unsigned int blob_len;
 };
