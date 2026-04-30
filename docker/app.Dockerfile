@@ -15,7 +15,7 @@ COPY go.mod ./
 COPY . .
 RUN go mod download
 
-RUN bash gpu/generate_gated_delta_ptx_header.sh
+RUN bash gpu/cuda_kernels/generate_registry.sh
 
 RUN CGO_ENABLED=1 go build -tags mlx -o /mixlab ./cmd/mixlab \
     && echo "Build OK: $(file /mixlab)"

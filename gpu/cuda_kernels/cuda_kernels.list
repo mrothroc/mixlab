@@ -1,0 +1,2 @@
+# Relative paths from repository root.
+gpu/cuda_kernels/gated_delta_chunk_solve.cu
