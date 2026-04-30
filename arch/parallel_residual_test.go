@@ -11,6 +11,10 @@ func parallelResidualBlocks() []BlockSpec {
 	}
 }
 
+func boolPtr(v bool) *bool {
+	return &v
+}
+
 func TestCountWeightsWithParallelResidual_SavesSwigluNormPerPair(t *testing.T) {
 	blocks := parallelResidualBlocks()
 	seq, err := CountWeights(DefaultFFNMultiplier, false, false, false, false, blocks)
@@ -71,6 +75,75 @@ func TestBuildIRProgramWithParallelResidual_BackwardCompatFalse(t *testing.T) {
 	}
 	if withFalse.NumWeights != base.NumWeights || len(withFalse.Ops) != len(base.Ops) {
 		t.Fatalf("parallel=false changed program: weights %d/%d ops %d/%d", withFalse.NumWeights, base.NumWeights, len(withFalse.Ops), len(base.Ops))
+	}
+}
+
+func TestBuildIRProgramWithParallelResidual_BlockScopedPlainPair(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "gated_deltanet", Heads: 4, DK: 8},
+		{Type: "swiglu"},
+		{Type: "plain", Heads: 4, ParallelResidual: boolPtr(true)},
+		{Type: "swiglu"},
+	}
+	prog, err := BuildIRProgramWithBigramRecurrenceAndParallel(64, 256, 32, 1, DefaultFFNMultiplier, false, false, false, false, false, 0, 0, 0, blocks, nil)
+	if err != nil {
+		t.Fatalf("BuildIRProgramWithBigramRecurrenceAndParallel: %v", err)
+	}
+	if prog.NumWeights != 30 {
+		t.Fatalf("NumWeights=%d want 30", prog.NumWeights)
+	}
+
+	metas, err := CollectWeightShapesWithBigramRecurrenceAndParallel(64, 256, 32, DefaultFFNMultiplier, false, false, false, false, false, 0, 0, blocks, nil)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesWithBigramRecurrenceAndParallel: %v", err)
+	}
+	if metas[16].Name != "ffn_norm_scale" {
+		t.Fatalf("unpaired swiglu first weight=%q want ffn_norm_scale", metas[16].Name)
+	}
+	if metas[27].Name != "w_gate" {
+		t.Fatalf("paired swiglu first weight=%q want w_gate", metas[27].Name)
+	}
+}
+
+func TestBuildIRProgramWithParallelResidual_GatedDeltaNetPair(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "gated_deltanet", Heads: 4, DK: 8, ParallelResidual: boolPtr(true)},
+		{Type: "swiglu"},
+	}
+	prog, err := BuildIRProgramWithBigramRecurrenceAndParallel(64, 256, 32, 1, DefaultFFNMultiplier, false, false, false, false, false, 0, 0, 0, blocks, nil)
+	if err != nil {
+		t.Fatalf("BuildIRProgramWithBigramRecurrenceAndParallel: %v", err)
+	}
+	if prog.NumWeights != 19 {
+		t.Fatalf("NumWeights=%d want 19", prog.NumWeights)
+	}
+	if got := countOps(prog, OpGatedDeltaScan); got != 1 {
+		t.Fatalf("GatedDeltaScan ops=%d want 1", got)
+	}
+	sharedNorm := weightInputForOutput(t, prog, OpRMSNorm, "x_parallel_0_x_norm")
+	if sharedNorm != "w3" {
+		t.Fatalf("shared norm weight=%q want w3", sharedNorm)
+	}
+
+	metas, err := CollectWeightShapesWithBigramRecurrenceAndParallel(64, 256, 32, DefaultFFNMultiplier, false, false, false, false, false, 0, 0, blocks, nil)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesWithBigramRecurrenceAndParallel: %v", err)
+	}
+	if len(metas) != 19 {
+		t.Fatalf("len(metas)=%d want 19", len(metas))
+	}
+	if metas[16].Name != "w_gate" {
+		t.Fatalf("parallel swiglu first weight=%q want w_gate", metas[16].Name)
+	}
+}
+
+func TestBuildIRProgramWithParallelResidual_GlobalAllowsGatedDeltaNetPair(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "gated_deltanet", Heads: 4, DK: 8},
+		{Type: "swiglu"},
+	}
+	if _, err := BuildIRProgramWithBigramRecurrenceAndParallel(64, 256, 32, 1, DefaultFFNMultiplier, false, false, false, false, true, 0, 0, 0, blocks, nil); err != nil {
+		t.Fatalf("BuildIRProgramWithBigramRecurrenceAndParallel: %v", err)
 	}
 }
 
@@ -150,6 +223,19 @@ func TestCollectWeightShapesWithParallelResidual_ComposesWithRecurrence(t *testi
 	}
 }
 
+func TestCollectWeightShapesWithParallelResidual_RejectsMismatchedSharedSwigluRole(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "plain", Heads: 4, ParallelResidual: boolPtr(true)},
+		{Type: "swiglu", WeightGroup: "ff"},
+		{Type: "plain", Heads: 4},
+		{Type: "swiglu", WeightGroup: "ff"},
+	}
+	_, err := CollectWeightShapesWithBigramRecurrenceAndParallel(64, 256, 32, DefaultFFNMultiplier, false, false, false, false, false, 0, 0, blocks, nil)
+	if err == nil {
+		t.Fatal("expected mismatched shared swiglu role error")
+	}
+}
+
 func TestParallelResidualInternalHelpers_ErrorPaths(t *testing.T) {
 	if _, err := countBlockRangeWeightsWithRecurrenceAndParallel(parallelResidualBlocks(), []int{0, 1, 2, 3}, 1, 3, false, false, true); err == nil {
 		t.Fatal("expected unaligned range error")
@@ -158,7 +244,7 @@ func TestParallelResidualInternalHelpers_ErrorPaths(t *testing.T) {
 	if _, err := countStreamWeightsWithRecurrenceAndParallel(bad, nil, false, false, true); err == nil {
 		t.Fatal("expected invalid stream error")
 	}
-	if _, err := parallelBlockWeightCount(BlockSpec{Type: "bogus"}, 0, false, false); err == nil {
+	if _, err := parallelBlockWeightCount(BlockSpec{Type: "bogus"}, false, false, false); err == nil {
 		t.Fatal("expected invalid block type error")
 	}
 }

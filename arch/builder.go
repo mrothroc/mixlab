@@ -270,16 +270,18 @@ func CountWeightsWithBigramRecurrenceAndParallel(
 	total := fixedWeightCount(tieEmbeddings)
 	total += bigramWeightCount(modelDim, bigramVocabSize, bigramDim)
 
-	if parallelResidual {
-		if err := validateParallelResidualBlocks(blocks); err != nil {
-			return 0, err
-		}
-		if unet {
-			return 0, fmt.Errorf("parallel_residual is not supported with unet")
-		}
+	plan, err := newParallelResidualPlan(blocks, parallelResidual)
+	if err != nil {
+		return 0, err
+	}
+	if plan.any && unet {
+		return 0, fmt.Errorf("parallel_residual is not supported with unet")
 	}
 	refs, err := normalizeWeightRefs(blocks, recurrence)
 	if err != nil {
+		return 0, fmt.Errorf("blocks: %w", err)
+	}
+	if err := validateParallelResidualRefs(plan, refs); err != nil {
 		return 0, fmt.Errorf("blocks: %w", err)
 	}
 	if unet {
@@ -627,13 +629,12 @@ func buildIRProgramWithDropoutAndNgrams(
 	if trigramDim < 0 {
 		return nil, fmt.Errorf("invalid trigram_dim=%d", trigramDim)
 	}
-	if parallelResidual {
-		if err := validateParallelResidualBlocks(blocks); err != nil {
-			return nil, err
-		}
-		if unet {
-			return nil, fmt.Errorf("parallel_residual is not supported with unet")
-		}
+	plan, err := newParallelResidualPlan(blocks, parallelResidual)
+	if err != nil {
+		return nil, err
+	}
+	if plan.any && unet {
+		return nil, fmt.Errorf("parallel_residual is not supported with unet")
 	}
 
 	nWeights, err := countWeightsWithNgramsRecurrenceAndParallel(D, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
@@ -671,6 +672,9 @@ func buildIRProgramWithDropoutAndNgrams(
 	// Sequential blocks process "x" directly.
 	refs, err := normalizeWeightRefs(blocks, recurrence)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateParallelResidualRefs(plan, refs); err != nil {
 		return nil, err
 	}
 	weightStarts := make([]int, len(blocks))

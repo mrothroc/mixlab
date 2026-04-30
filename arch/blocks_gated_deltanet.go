@@ -84,29 +84,51 @@ func gatedDeltaNetWeightShapes(spec BlockSpec, D, _, _, _ int) ([]WeightMeta, er
 }
 
 func emitGatedDeltaNetIR(prog *Program, spec BlockSpec, x string, wi, _, T, B, idx int) (int, error) {
+	prefix := tmpName(x+"_gated_deltanet", idx)
+	xNorm := prefix + "_x_norm"
+	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
+	wi++
+
+	out, wi, err := emitGatedDeltaNetDeltaIR(prog, spec, xNorm, wi, T, B, prefix)
+	if err != nil {
+		return wi, err
+	}
+	prog.Add(x, out, x)
+	return wi, nil
+}
+
+func emitGatedDeltaNetParallelStateIR(prog *Program, spec BlockSpec, x, xNorm string, wi, T, B int, prefix string) (string, int, error) {
+	out, wi, err := emitGatedDeltaNetDeltaIR(prog, spec, xNorm, wi, T, B, prefix)
+	if err != nil {
+		return "", wi, err
+	}
+	state := prefix + "_state"
+	prog.Add(x, out, state)
+	return state, wi, nil
+}
+
+func emitGatedDeltaNetDeltaIR(prog *Program, spec BlockSpec, xNorm string, wi, T, B int, prefix string) (string, int, error) {
 	heads := spec.Heads
 	if heads <= 0 {
-		return wi, fmt.Errorf("gated_deltanet requires heads > 0")
+		return "", wi, fmt.Errorf("gated_deltanet requires heads > 0")
 	}
 	dk := spec.DK
 	if dk <= 0 {
-		return wi, fmt.Errorf("gated_deltanet requires d_k > 0")
+		return "", wi, fmt.Errorf("gated_deltanet requires d_k > 0")
 	}
 	dv := effectiveGatedDeltaNetDV(spec)
 	if dv <= 0 {
-		return wi, fmt.Errorf("gated_deltanet requires d_v > 0")
+		return "", wi, fmt.Errorf("gated_deltanet requires d_v > 0")
 	}
 	if effectiveKVShare(spec) && dv < dk {
-		return wi, fmt.Errorf("gated_deltanet with kv_share=true requires d_v >= d_k")
+		return "", wi, fmt.Errorf("gated_deltanet with kv_share=true requires d_v >= d_k")
 	}
 	if spec.ScanChunkSize != nil && *spec.ScanChunkSize < 0 {
-		return wi, fmt.Errorf("gated_deltanet requires scan_chunk_size >= 0")
+		return "", wi, fmt.Errorf("gated_deltanet requires scan_chunk_size >= 0")
 	}
 
 	keyDim := heads * dk
 	valDim := heads * dv
-	prefix := tmpName(x+"_gated_deltanet", idx)
-	xNorm := prefix + "_x_norm"
 	qProj := prefix + "_q_proj"
 	qSeq := prefix + "_q_seq"
 	kProj := prefix + "_k_proj"
@@ -145,9 +167,6 @@ func emitGatedDeltaNetIR(prog *Program, spec BlockSpec, x string, wi, _, T, B, i
 	yGated := prefix + "_y_gated"
 	yMerged := prefix + "_y_merged"
 	out := prefix + "_out"
-
-	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
-	wi++
 
 	prog.MatMul(xNorm, weightName(wi), qProj)
 	wi++
@@ -222,9 +241,8 @@ func emitGatedDeltaNetIR(prog *Program, spec BlockSpec, x string, wi, _, T, B, i
 
 	prog.MatMul(yMerged, weightName(wi), out)
 	wi++
-	prog.Add(x, out, x)
 
-	return wi, nil
+	return out, wi, nil
 }
 
 func emitGatedDeltaNetShortConv1D(prog *Program, seq3D, weight string, B, T, C int, prefix, out string) {

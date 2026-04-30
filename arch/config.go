@@ -94,30 +94,31 @@ type CustomOpSpec = OpSpec
 
 // BlockSpec describes a single model block.
 type BlockSpec struct {
-	Type           string       `json:"type"`
-	Name           string       `json:"name,omitempty"` // custom block name (required for type=custom)
-	WeightGroup    string       `json:"weight_group,omitempty"`
-	Heads          int          `json:"heads"`
-	KVHeads        int          `json:"kv_heads,omitempty"`
-	KVSource       int          `json:"kv_source,omitempty"`        // -1 or 0 = compute own KV; positive = reuse KV from block N (1-indexed)
-	RopeDims       int          `json:"rope_dims,omitempty"`        // RoPE rotation dims per head; 0 or head_dim = full RoPE
-	QKGain         float64      `json:"qk_gain,omitempty"`          // per-head learnable QK scaling; 0 disables
-	XSA            bool         `json:"xsa,omitempty"`              // enable V-orthogonal projection after attention
-	WindowSize     int          `json:"window_size,omitempty"`      // plain: sliding causal attention width; 0 = full causal attention
-	SkipAttention  bool         `json:"skip_attention,omitempty"`   // plain: bypass attention while preserving weight layout.
-	SparseAttnGate bool         `json:"sparse_attn_gate,omitempty"` // plain: narrow per-head output gate over the first gate_window head channels.
-	InnerDim       int          `json:"inner_dim,omitempty"`        // Mamba inner dimension; defaults to model_dim.
-	DK             int          `json:"d_k,omitempty"`              // gated_deltanet: key/query dim per head.
-	DV             int          `json:"d_v,omitempty"`              // gated_deltanet: value dim per head; defaults to 2*d_k.
-	KVShare        *bool        `json:"kv_share,omitempty"`         // gated_deltanet: share the K/V projection when true (default).
-	ScanChunkSize  *int         `json:"scan_chunk_size,omitempty"`  // gated_deltanet: chunk size for chunked delta scan; 0 keeps the naive scan.
-	NumLatents     int          `json:"num_latents,omitempty"`      // Perceiver/bottleneck latent count.
-	SourceStream   string       `json:"source_stream,omitempty"`    // cross_attention: stream providing K/V.
-	Decay          float64      `json:"decay,omitempty"`            // RetNet: initial decay rate in (0,1); defaults to 0.95.
-	Activation     string       `json:"activation,omitempty"`       // mlp: "silu" (default), "gelu", "relu", "leaky_relu_sq".
-	LeakySlope     float64      `json:"leaky_slope,omitempty"`      // mlp leaky_relu_sq negative slope; defaults to 0.5.
-	Weights        []WeightSpec `json:"weights,omitempty"`          // custom block weight declarations
-	Ops            []OpSpec     `json:"ops,omitempty"`              // custom block operation sequence
+	Type             string       `json:"type"`
+	Name             string       `json:"name,omitempty"` // custom block name (required for type=custom)
+	WeightGroup      string       `json:"weight_group,omitempty"`
+	ParallelResidual *bool        `json:"parallel_residual,omitempty"` // enable/disable parallel residual for this block pair start
+	Heads            int          `json:"heads"`
+	KVHeads          int          `json:"kv_heads,omitempty"`
+	KVSource         int          `json:"kv_source,omitempty"`        // -1 or 0 = compute own KV; positive = reuse KV from block N (1-indexed)
+	RopeDims         int          `json:"rope_dims,omitempty"`        // RoPE rotation dims per head; 0 or head_dim = full RoPE
+	QKGain           float64      `json:"qk_gain,omitempty"`          // per-head learnable QK scaling; 0 disables
+	XSA              bool         `json:"xsa,omitempty"`              // enable V-orthogonal projection after attention
+	WindowSize       int          `json:"window_size,omitempty"`      // plain: sliding causal attention width; 0 = full causal attention
+	SkipAttention    bool         `json:"skip_attention,omitempty"`   // plain: bypass attention while preserving weight layout.
+	SparseAttnGate   bool         `json:"sparse_attn_gate,omitempty"` // plain: narrow per-head output gate over the first gate_window head channels.
+	InnerDim         int          `json:"inner_dim,omitempty"`        // Mamba inner dimension; defaults to model_dim.
+	DK               int          `json:"d_k,omitempty"`              // gated_deltanet: key/query dim per head.
+	DV               int          `json:"d_v,omitempty"`              // gated_deltanet: value dim per head; defaults to 2*d_k.
+	KVShare          *bool        `json:"kv_share,omitempty"`         // gated_deltanet: share the K/V projection when true (default).
+	ScanChunkSize    *int         `json:"scan_chunk_size,omitempty"`  // gated_deltanet: chunk size for chunked delta scan; 0 keeps the naive scan.
+	NumLatents       int          `json:"num_latents,omitempty"`      // Perceiver/bottleneck latent count.
+	SourceStream     string       `json:"source_stream,omitempty"`    // cross_attention: stream providing K/V.
+	Decay            float64      `json:"decay,omitempty"`            // RetNet: initial decay rate in (0,1); defaults to 0.95.
+	Activation       string       `json:"activation,omitempty"`       // mlp: "silu" (default), "gelu", "relu", "leaky_relu_sq".
+	LeakySlope       float64      `json:"leaky_slope,omitempty"`      // mlp leaky_relu_sq negative slope; defaults to 0.5.
+	Weights          []WeightSpec `json:"weights,omitempty"`          // custom block weight declarations
+	Ops              []OpSpec     `json:"ops,omitempty"`              // custom block operation sequence
 }
 
 // TrainingPhase defines one contiguous training phase with a fixed LR.
@@ -528,22 +529,19 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 }
 
 func validateParallelResidual(cfg *ArchConfig, source string) error {
-	if !cfg.ParallelResidual {
-		return nil
+	plan, err := newParallelResidualPlan(cfg.Blocks, cfg.ParallelResidual)
+	if err != nil {
+		return fmt.Errorf("config %q %w", source, err)
 	}
-	if len(cfg.Blocks)%2 != 0 {
-		return fmt.Errorf("config %q parallel_residual requires an even number of blocks", source)
-	}
-	for i := 0; i < len(cfg.Blocks); i += 2 {
-		if cfg.Blocks[i].Type != "plain" {
-			return fmt.Errorf("config %q parallel_residual requires blocks[%d].type=plain (got %q)", source, i, cfg.Blocks[i].Type)
-		}
-		if cfg.Blocks[i+1].Type != "swiglu" {
-			return fmt.Errorf("config %q parallel_residual requires blocks[%d].type=swiglu (got %q)", source, i+1, cfg.Blocks[i+1].Type)
-		}
-	}
-	if cfg.UNet {
+	if plan.any && cfg.UNet {
 		return fmt.Errorf("config %q cannot enable parallel_residual with unet", source)
+	}
+	refs, err := normalizeWeightRefs(cfg.Blocks, cfg.Recurrence)
+	if err != nil {
+		return fmt.Errorf("config %q blocks: %w", source, err)
+	}
+	if err := validateParallelResidualRefs(plan, refs); err != nil {
+		return fmt.Errorf("config %q %w", source, err)
 	}
 	return nil
 }

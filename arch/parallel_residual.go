@@ -2,40 +2,130 @@ package arch
 
 import "fmt"
 
-func validateParallelResidualBlocks(specs []BlockSpec) error {
-	if len(specs)%2 != 0 {
-		return fmt.Errorf("parallel_residual requires an even number of blocks")
+type parallelResidualPlan struct {
+	starts  []bool
+	seconds []bool
+	any     bool
+}
+
+func newParallelResidualPlan(specs []BlockSpec, global bool) (parallelResidualPlan, error) {
+	plan := parallelResidualPlan{
+		starts:  make([]bool, len(specs)),
+		seconds: make([]bool, len(specs)),
 	}
-	for i := 0; i < len(specs); i += 2 {
-		if blockTypeKey(specs[i]) != "plain" {
-			return fmt.Errorf("parallel_residual requires blocks[%d].type=plain (got %q)", i, specs[i].Type)
+	if global {
+		if len(specs)%2 != 0 {
+			return plan, fmt.Errorf("parallel_residual requires an even number of blocks")
 		}
-		if specs[i].KVSource > 0 {
-			return fmt.Errorf("parallel_residual does not support blocks[%d].kv_source=%d", i, specs[i].KVSource)
+		for i := 0; i < len(specs); i += 2 {
+			if specs[i+1].ParallelResidual != nil && *specs[i+1].ParallelResidual {
+				return plan, fmt.Errorf("parallel_residual for block pair [%d,%d] must be set on blocks[%d]", i, i+1, i)
+			}
+			enabled := true
+			if specs[i].ParallelResidual != nil {
+				enabled = *specs[i].ParallelResidual
+			}
+			if !enabled {
+				continue
+			}
+			if err := validateParallelResidualPair(specs, i); err != nil {
+				return plan, err
+			}
+			plan.markPair(i)
 		}
-		if blockTypeKey(specs[i+1]) != "swiglu" {
-			return fmt.Errorf("parallel_residual requires blocks[%d].type=swiglu (got %q)", i+1, specs[i+1].Type)
+		return plan, nil
+	}
+
+	for i := range specs {
+		if specs[i].ParallelResidual == nil || !*specs[i].ParallelResidual {
+			continue
+		}
+		if plan.seconds[i] {
+			return plan, fmt.Errorf("parallel_residual block %d overlaps pair starting at block %d", i, i-1)
+		}
+		if err := validateParallelResidualPair(specs, i); err != nil {
+			return plan, err
+		}
+		if i+1 < len(specs) && specs[i+1].ParallelResidual != nil && *specs[i+1].ParallelResidual {
+			return plan, fmt.Errorf("parallel_residual block %d overlaps pair starting at block %d", i+1, i)
+		}
+		plan.markPair(i)
+	}
+	return plan, nil
+}
+
+func (p *parallelResidualPlan) markPair(start int) {
+	p.starts[start] = true
+	p.seconds[start+1] = true
+	p.any = true
+}
+
+func (p parallelResidualPlan) startsAt(i int) bool {
+	return i >= 0 && i < len(p.starts) && p.starts[i]
+}
+
+func (p parallelResidualPlan) secondAt(i int) bool {
+	return i >= 0 && i < len(p.seconds) && p.seconds[i]
+}
+
+func (p parallelResidualPlan) anyInRange(start, end int) bool {
+	for i := start; i < end && i < len(p.starts); i++ {
+		if p.startsAt(i) || p.secondAt(i) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateParallelResidualPair(specs []BlockSpec, start int) error {
+	if start+1 >= len(specs) {
+		return fmt.Errorf("parallel_residual requires blocks[%d] to be followed by swiglu", start)
+	}
+	firstType := blockTypeKey(specs[start])
+	if firstType != "plain" && firstType != "gated_deltanet" {
+		return fmt.Errorf("parallel_residual requires blocks[%d].type=plain or gated_deltanet (got %q)", start, specs[start].Type)
+	}
+	if firstType == "plain" && specs[start].KVSource > 0 {
+		return fmt.Errorf("parallel_residual does not support blocks[%d].kv_source=%d", start, specs[start].KVSource)
+	}
+	if blockTypeKey(specs[start+1]) != "swiglu" {
+		return fmt.Errorf("parallel_residual requires blocks[%d].type=swiglu (got %q)", start+1, specs[start+1].Type)
+	}
+	return nil
+}
+
+func validateParallelResidualRefs(plan parallelResidualPlan, refs []int) error {
+	for i, ref := range refs {
+		if ref == i {
+			continue
+		}
+		if plan.secondAt(i) != plan.secondAt(ref) {
+			return fmt.Errorf("parallel_residual block[%d] cannot share weights with block[%d] because their swiglu norm layout differs", i, ref)
 		}
 	}
 	return nil
 }
 
-func parallelBlockWeightCount(spec BlockSpec, blockIdx int, blockScales, residMix bool) (int, error) {
+func parallelBlockWeightCount(spec BlockSpec, pairedSecond bool, blockScales, residMix bool) (int, error) {
 	n, err := BlockWeightCount(spec, blockScales, residMix)
 	if err != nil {
 		return 0, err
 	}
-	if blockIdx%2 == 1 && blockTypeKey(spec) == "swiglu" {
+	if pairedSecond && blockTypeKey(spec) == "swiglu" {
 		n--
 	}
 	return n, nil
 }
 
 func countStreamWeightsWithRefsAndParallel(specs []BlockSpec, refs []int, blockScales, residMix, parallelResidual bool) (int, error) {
-	if !parallelResidual {
+	plan, err := newParallelResidualPlan(specs, parallelResidual)
+	if err != nil {
+		return 0, err
+	}
+	if !plan.any {
 		return countStreamWeightsWithRefs(specs, refs, blockScales, residMix)
 	}
-	if err := validateParallelResidualBlocks(specs); err != nil {
+	if err := validateParallelResidualRefs(plan, refs); err != nil {
 		return 0, err
 	}
 	total := 0
@@ -43,7 +133,7 @@ func countStreamWeightsWithRefsAndParallel(specs []BlockSpec, refs []int, blockS
 		if refs[i] != i {
 			continue
 		}
-		n, err := parallelBlockWeightCount(spec, i, blockScales, residMix)
+		n, err := parallelBlockWeightCount(spec, plan.secondAt(i), blockScales, residMix)
 		if err != nil {
 			return 0, err
 		}
@@ -61,18 +151,25 @@ func countStreamWeightsWithRecurrenceAndParallel(specs []BlockSpec, recurrence [
 }
 
 func countBlockRangeWeightsWithRefsAndParallel(specs []BlockSpec, refs []int, start, end int, blockScales, residMix, parallelResidual bool) (int, error) {
-	if !parallelResidual {
+	plan, err := newParallelResidualPlan(specs, parallelResidual)
+	if err != nil {
+		return 0, err
+	}
+	if !plan.anyInRange(start, end) {
 		return countBlockRangeWeightsWithRefs(specs, refs, start, end, blockScales, residMix)
 	}
-	if start%2 != 0 || end%2 != 0 {
-		return 0, fmt.Errorf("parallel_residual block range [%d,%d) must align with block pairs", start, end)
+	if plan.secondAt(start) || plan.startsAt(end-1) {
+		return 0, fmt.Errorf("parallel_residual block range [%d,%d) must not split a block pair", start, end)
+	}
+	if err := validateParallelResidualRefs(plan, refs); err != nil {
+		return 0, err
 	}
 	total := 0
 	for i := start; i < end; i++ {
 		if refs[i] != i {
 			continue
 		}
-		n, err := parallelBlockWeightCount(specs[i], i, blockScales, residMix)
+		n, err := parallelBlockWeightCount(specs[i], plan.secondAt(i), blockScales, residMix)
 		if err != nil {
 			return 0, err
 		}
@@ -82,24 +179,28 @@ func countBlockRangeWeightsWithRefsAndParallel(specs []BlockSpec, refs []int, st
 }
 
 func countBlockRangeWeightsWithRecurrenceAndParallel(specs []BlockSpec, rec []int, start, end int, blockScales, residMix, parallelResidual bool) (int, error) {
-	return countBlockRangeWeightsWithRefsAndParallel(specs, rec, start, end, blockScales, residMix, parallelResidual)
+	refs, err := normalizeWeightRefs(specs, rec)
+	if err != nil {
+		return 0, err
+	}
+	return countBlockRangeWeightsWithRefsAndParallel(specs, refs, start, end, blockScales, residMix, parallelResidual)
 }
 
 func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
-	plainSpec := specs[blockIdx]
+	firstSpec := specs[blockIdx]
 	swigluSpec := specs[blockIdx+1]
 
-	plainWI := wi
-	plainOriginal := refs[blockIdx] == blockIdx
-	if !plainOriginal {
-		plainWI = weightStarts[refs[blockIdx]]
-		if plainWI < 0 {
+	firstWI := wi
+	firstOriginal := refs[blockIdx] == blockIdx
+	if !firstOriginal {
+		firstWI = weightStarts[refs[blockIdx]]
+		if firstWI < 0 {
 			return wi, fmt.Errorf("weight sharing for block[%d] references block without emitted weights", blockIdx)
 		}
 	}
-	if plainOriginal {
-		weightStarts[blockIdx] = plainWI
-		n, err := parallelBlockWeightCount(plainSpec, blockIdx, blockScales, residMix)
+	if firstOriginal {
+		weightStarts[blockIdx] = firstWI
+		n, err := parallelBlockWeightCount(firstSpec, false, blockScales, residMix)
 		if err != nil {
 			return wi, err
 		}
@@ -116,55 +217,77 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 	}
 	if swigluOriginal {
 		weightStarts[blockIdx+1] = swigluWI
-		n, err := parallelBlockWeightCount(swigluSpec, blockIdx+1, blockScales, residMix)
+		n, err := parallelBlockWeightCount(swigluSpec, true, blockScales, residMix)
 		if err != nil {
 			return wi, err
 		}
 		wi += n
 	}
 
-	bodyWI := plainWI
-	if needsResidMix(plainSpec, residMix) {
+	bodyWI := firstWI
+	if needsResidMix(firstSpec, residMix) {
 		bodyWI = applyResidMixIR(prog, stream, original, bodyWI, D, *opIdx)
 	}
 	xNorm := tmpName(stream+"_parallel", *opIdx) + "_x_norm"
 	prog.RMSNorm(stream, weightName(bodyWI), xNorm, 1e-5)
 	bodyWI++
 
-	heads := plainSpec.Heads
-	if heads <= 0 {
-		heads = 4
-	}
-	plainState, _, err := emitPlainAttentionParallelDeltaIRWithDropout(prog, stream, xNorm, bodyWI, heads, plainSpec.KVHeads, D, T, B, *opIdx, mlpMult, blockScales, dropout, plainSpec.QKGain, plainSpec.RopeDims, plainSpec.XSA, plainSpec.SparseAttnGate, plainSpec.WindowSize)
-	if err != nil {
-		return wi, err
+	var firstState string
+	switch blockTypeKey(firstSpec) {
+	case "plain":
+		heads := firstSpec.Heads
+		if heads <= 0 {
+			heads = 4
+		}
+		var err error
+		firstState, _, err = emitPlainAttentionParallelDeltaIRWithDropout(prog, stream, xNorm, bodyWI, heads, firstSpec.KVHeads, D, T, B, *opIdx, mlpMult, blockScales, dropout, firstSpec.QKGain, firstSpec.RopeDims, firstSpec.XSA, firstSpec.SparseAttnGate, firstSpec.WindowSize)
+		if err != nil {
+			return wi, err
+		}
+	case "gated_deltanet":
+		prefix := tmpName(stream+"_parallel_gated_deltanet", *opIdx)
+		var err error
+		firstState, _, err = emitGatedDeltaNetParallelStateIR(prog, firstSpec, stream, xNorm, bodyWI, T, B, prefix)
+		if err != nil {
+			return wi, err
+		}
+	default:
+		return wi, fmt.Errorf("parallel_residual requires blocks[%d].type=plain or gated_deltanet (got %q)", blockIdx, firstSpec.Type)
 	}
 	mlpDelta, _ := emitSwiGLUParallelDeltaIRWithDropout(prog, xNorm, swigluWI, *opIdx, mlpMult, blockScales, dropout)
-	prog.Add(plainState, mlpDelta, stream)
+	prog.Add(firstState, mlpDelta, stream)
 	*opIdx += 2
 	return wi, nil
 }
 
 func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32) (int, error) {
-	if parallelResidual {
-		if start%2 != 0 || end%2 != 0 {
-			return wi, fmt.Errorf("parallel_residual block range [%d,%d) must align with block pairs", start, end)
+	plan, err := newParallelResidualPlan(specs, parallelResidual)
+	if err != nil {
+		return wi, err
+	}
+	if plan.anyInRange(start, end) {
+		if plan.secondAt(start) || plan.startsAt(end-1) {
+			return wi, fmt.Errorf("parallel_residual block range [%d,%d) must not split a block pair", start, end)
 		}
-		for i := start; i < end; i += 2 {
-			var err error
+		if err := validateParallelResidualRefs(plan, refs); err != nil {
+			return wi, err
+		}
+	}
+	for i := start; i < end; {
+		var err error
+		if plan.startsAt(i) {
 			wi, err = emitParallelBlockPairWithRecurrenceDropout(prog, specs, refs, weightStarts, i, stream, original, wi, D, T, B, opIdx, mlpMult, blockScales, residMix, dropout)
 			if err != nil {
 				return wi, err
 			}
+			i += 2
+			continue
 		}
-		return wi, nil
-	}
-	for i := start; i < end; i++ {
-		var err error
 		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, refs, weightStarts, kvCache, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout)
 		if err != nil {
 			return wi, err
 		}
+		i++
 		(*opIdx)++
 	}
 	return wi, nil

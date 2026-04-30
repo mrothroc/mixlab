@@ -269,14 +269,14 @@ func streamWeightShapesWithRefs(specs []BlockSpec, refs []int, D, T, B, V int, m
 	return all, nil
 }
 
-func parallelBlockWeightShapes(spec BlockSpec, blockIdx, D, T, B, V int, mlpMult float64, blockScales, residMix bool) ([]WeightMeta, error) {
+func parallelBlockWeightShapes(spec BlockSpec, pairedSecond bool, D, T, B, V int, mlpMult float64, blockScales, residMix bool) ([]WeightMeta, error) {
 	metas, err := blockWeightShapes(spec, D, T, B, V, mlpMult, blockScales, residMix)
 	if err != nil {
 		return nil, err
 	}
-	if blockIdx%2 == 1 && blockTypeKey(spec) == "swiglu" {
+	if pairedSecond && blockTypeKey(spec) == "swiglu" {
 		if len(metas) == 0 || metas[0].Name != "ffn_norm_scale" {
-			return nil, fmt.Errorf("parallel_residual swiglu block %d has unexpected weight layout", blockIdx)
+			return nil, fmt.Errorf("parallel_residual swiglu block has unexpected weight layout")
 		}
 		metas = metas[1:]
 	}
@@ -284,10 +284,14 @@ func parallelBlockWeightShapes(spec BlockSpec, blockIdx, D, T, B, V int, mlpMult
 }
 
 func streamWeightShapesWithRefsAndParallel(specs []BlockSpec, refs []int, D, T, B, V int, mlpMult float64, blockScales, residMix, parallelResidual bool) ([]WeightMeta, error) {
-	if !parallelResidual {
+	plan, err := newParallelResidualPlan(specs, parallelResidual)
+	if err != nil {
+		return nil, err
+	}
+	if !plan.any {
 		return streamWeightShapesWithRefs(specs, refs, D, T, B, V, mlpMult, blockScales, residMix)
 	}
-	if err := validateParallelResidualBlocks(specs); err != nil {
+	if err := validateParallelResidualRefs(plan, refs); err != nil {
 		return nil, err
 	}
 	var all []WeightMeta
@@ -295,7 +299,7 @@ func streamWeightShapesWithRefsAndParallel(specs []BlockSpec, refs []int, D, T, 
 		if refs[i] != i {
 			continue
 		}
-		metas, err := parallelBlockWeightShapes(spec, i, D, T, B, V, mlpMult, blockScales, residMix)
+		metas, err := parallelBlockWeightShapes(spec, plan.secondAt(i), D, T, B, V, mlpMult, blockScales, residMix)
 		if err != nil {
 			return nil, err
 		}
@@ -498,13 +502,15 @@ func collectWeightShapesWithRefs(
 	shapes = append(shapes, bigramWeightShapes(D, bigramVocabSize, bigramDim)...)
 	shapes = append(shapes, trigramWeightShapes(D, trigramVocabSize, trigramDim)...)
 
-	if parallelResidual {
-		if err := validateParallelResidualBlocks(blocks); err != nil {
-			return nil, err
-		}
-		if unet {
-			return nil, fmt.Errorf("parallel_residual is not supported with unet")
-		}
+	plan, err := newParallelResidualPlan(blocks, parallelResidual)
+	if err != nil {
+		return nil, err
+	}
+	if plan.any && unet {
+		return nil, fmt.Errorf("parallel_residual is not supported with unet")
+	}
+	if err := validateParallelResidualRefs(plan, refs); err != nil {
+		return nil, err
 	}
 	if unet {
 		numEncoder, numSkip := unetLayout(len(blocks))

@@ -73,6 +73,64 @@ func TestGatedDeltaNetChunkedTrainStable(t *testing.T) {
 	}
 }
 
+func TestGatedDeltaNetParallelResidualTrainStable(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "gdn_parallel_residual_stability",
+		"model_dim": 64,
+		"vocab_size": 128,
+		"seq_len": 16,
+		"blocks": [
+			{"type": "gated_deltanet", "heads": 4, "d_k": 8, "scan_chunk_size": 16, "parallel_residual": true},
+			{"type": "swiglu"}
+		],
+		"training": {"steps": 1, "lr": 5e-4, "seed": 17, "batch_tokens": 32, "grad_clip": 1.0, "weight_decay": 0.01}
+	}`), "gdn_parallel_residual_stability")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+
+	trainerIface, err := initGPUTrainer(prog, cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("initGPUTrainer: %v", err)
+	}
+	trainer, ok := trainerIface.(*mlxGPUTrainer)
+	if !ok {
+		t.Fatalf("trainer type=%T, want *mlxGPUTrainer", trainerIface)
+	}
+	defer trainer.CloseTrainer()
+
+	batchSize := cfg.Training.BatchTokens / cfg.SeqLen
+	x, y := generateSyntheticBatch(rand.New(rand.NewSource(cfg.Training.Seed)), cfg.Training.BatchTokens, cfg.VocabSize)
+
+	const steps = 10
+	var firstLoss, lastLoss float32
+	for step := 0; step < steps; step++ {
+		loss, err := trainer.TrainStepGPU(x, y, batchSize, cfg.SeqLen, float32(cfg.Training.LR))
+		if err != nil {
+			t.Fatalf("TrainStepGPU step %d: %v", step, err)
+		}
+		if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) || loss <= 0 || loss > 100 {
+			t.Fatalf("step %d loss=%g, want finite bounded positive", step, loss)
+		}
+		if step == 0 {
+			firstLoss = loss
+		}
+		lastLoss = loss
+	}
+	if lastLoss > firstLoss*1.1 {
+		t.Fatalf("loss diverged: first=%g last=%g", firstLoss, lastLoss)
+	}
+}
+
 func maxFiniteAbs(vals []float32) float64 {
 	maxAbs := 0.0
 	for _, v := range vals {
