@@ -7,7 +7,6 @@
 
 #include <atomic>
 #include <functional>
-#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <ios>
@@ -211,25 +210,6 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
         chunk_size_,
         stream());
     solve_attn = mx::reshape(solve_attn, {B_, H_, n_chunks, chunk_size_, chunk_size_});
-    std::cout << "[gated_delta_cuda] before eval(solve_attn)" << std::endl;
-    mx::eval(solve_attn);
-    std::cout << "[gated_delta_cuda] after eval(solve_attn)" << std::endl;
-#ifdef __linux__
-    {
-      constexpr int kSampleCount = 8;
-      std::vector<float> sample(kSampleCount, 0.0f);
-      auto sample_flat = mx::reshape(
-          solve_attn,
-          {static_cast<mx::ShapeElem>(matrix_count * chunk_size_ * chunk_size_)});
-      mx::eval(sample_flat);
-      std::memcpy(sample.data(), sample_flat.data<float>(), kSampleCount * sizeof(float));
-      std::cout << "[gated_delta_cuda] solve_attn[0..7] =";
-      for (float value : sample) {
-        std::cout << " " << value;
-      }
-      std::cout << std::endl;
-    }
-#endif
 
     auto k_cumsum = as_float32(mx::matmul(solve_attn, v_beta));
     auto k_cumdecay = as_float32(mx::matmul(
@@ -291,9 +271,6 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
     }
     out_seq = mx::transpose(out_seq, {0, 2, 1, 3});
     out = mx::reshape(out_seq, {B_ * T_ * H_, Dv_});
-    std::cout << "[gated_delta_cuda] before eval(out)" << std::endl;
-    mx::eval(out);
-    std::cout << "[gated_delta_cuda] after eval(out)" << std::endl;
     std::cout << "[gated_delta_cuda] eval_gpu RETURNING out.shape=[";
     for (size_t i = 0; i < out.shape().size(); ++i) {
       std::cout << out.shape()[i];
