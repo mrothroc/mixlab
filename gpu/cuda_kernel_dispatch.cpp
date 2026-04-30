@@ -1,10 +1,7 @@
 #include "cuda_kernel_dispatch.h"
 
 #include "cuda_kernels/registry_generated.h"
-
-#ifdef __linux__
-#include <cuda_runtime_api.h>
-#endif
+#include <mlx/device.h>
 
 #include <optional>
 #include <stdexcept>
@@ -17,17 +14,24 @@ namespace {
 
 #ifdef __linux__
 int current_cuda_sm() {
-  int device = 0;
-  auto err = cudaGetDevice(&device);
-  if (err != cudaSuccess) {
-    throw std::runtime_error(std::string("cudaGetDevice failed: ") + cudaGetErrorString(err));
+  const auto& device = mx::default_device();
+  if (device.type != mx::Device::gpu) {
+    throw std::runtime_error("default device is not a GPU");
   }
-  cudaDeviceProp prop{};
-  err = cudaGetDeviceProperties(&prop, device);
-  if (err != cudaSuccess) {
-    throw std::runtime_error(std::string("cudaGetDeviceProperties failed: ") + cudaGetErrorString(err));
+
+  const auto& info = mx::device_info(device);
+  const auto major_it = info.find("compute_capability_major");
+  const auto minor_it = info.find("compute_capability_minor");
+  if (major_it == info.end() || minor_it == info.end()) {
+    throw std::runtime_error("MLX device_info missing CUDA compute capability");
   }
-  return prop.major * 10 + prop.minor;
+
+  const auto* major = std::get_if<size_t>(&major_it->second);
+  const auto* minor = std::get_if<size_t>(&minor_it->second);
+  if (major == nullptr || minor == nullptr) {
+    throw std::runtime_error("MLX device_info returned non-integer CUDA compute capability");
+  }
+  return static_cast<int>((*major) * 10 + (*minor));
 }
 
 std::string lookup_precompiled_kernel_blob(const std::string& kernel_name) {
