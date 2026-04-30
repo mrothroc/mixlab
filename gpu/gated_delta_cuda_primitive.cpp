@@ -33,6 +33,11 @@ bool use_experimental_gated_delta_cuda_kernel() {
   return override != nullptr && std::string(override) == "1";
 }
 
+bool log_gated_delta_cuda_debug() {
+  const char* override = std::getenv("MIXLAB_GATED_DELTA_CUDA_DEBUG");
+  return override != nullptr && std::string(override) == "1";
+}
+
 class SolveStrictlyLowerCUDAPrimitive : public mx::UnaryPrimitive {
  public:
   SolveStrictlyLowerCUDAPrimitive(
@@ -48,23 +53,28 @@ class SolveStrictlyLowerCUDAPrimitive : public mx::UnaryPrimitive {
   }
 
   void eval_gpu(const std::vector<mx::array>& inputs, mx::array& out) override {
-    const int call_n = ++g_eval_gpu_calls;
-    std::cout << "[gated_delta_cuda] eval_gpu CALL #" << call_n << " env="
-              << (std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
-                      ? std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
-                      : "(unset)")
-              << std::endl;
+    const bool debug = log_gated_delta_cuda_debug();
+    if (debug) {
+      const int call_n = ++g_eval_gpu_calls;
+      std::cout << "[gated_delta_cuda] eval_gpu CALL #" << call_n << " env="
+                << (std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
+                        ? std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
+                        : "(unset)")
+                << std::endl;
+    }
     if (inputs.size() != 1) {
       throw std::runtime_error("SolveStrictlyLowerCUDAPrimitive expects 1 input");
     }
-    std::cout << "[gated_delta_cuda] input[0].shape=[";
-    for (size_t i = 0; i < inputs[0].shape().size(); ++i) {
-      std::cout << inputs[0].shape()[i];
-      if (i + 1 < inputs[0].shape().size()) {
-        std::cout << ",";
+    if (debug) {
+      std::cout << "[gated_delta_cuda] input[0].shape=[";
+      for (size_t i = 0; i < inputs[0].shape().size(); ++i) {
+        std::cout << inputs[0].shape()[i];
+        if (i + 1 < inputs[0].shape().size()) {
+          std::cout << ",";
+        }
       }
+      std::cout << "] dtype=" << inputs[0].dtype() << std::endl;
     }
-    std::cout << "] dtype=" << inputs[0].dtype() << std::endl;
     if (!use_experimental_gated_delta_cuda_kernel()) {
       throw std::runtime_error(
           "SolveStrictlyLowerCUDAPrimitive requires MIXLAB_GATED_DELTA_USE_CUDA_KERNEL=1");
@@ -73,11 +83,17 @@ class SolveStrictlyLowerCUDAPrimitive : public mx::UnaryPrimitive {
       throw std::runtime_error("SolveStrictlyLowerCUDAPrimitive requires float32 tensors");
     }
 
-    std::cout << "[gated_delta_cuda] solve_strictly_lower_cuda enter matrix_count="
-              << matrix_count_ << " chunk_size=" << chunk_size_ << std::endl;
-    const int threads = 128;
+    if (debug) {
+      std::cout << "[gated_delta_cuda] solve_strictly_lower_cuda enter matrix_count="
+                << matrix_count_ << " chunk_size=" << chunk_size_ << std::endl;
+    }
+    const int threads = chunk_size_ < 128 ? chunk_size_ : 128;
     const int blocks = (chunk_size_ + threads - 1) / threads;
-    std::cout << "[gated_delta_cuda] before precompiled_cuda_kernel" << std::endl;
+    if (debug) {
+      std::cout << "[gated_delta_cuda] before precompiled_cuda_kernel grid=("
+                << blocks << "," << matrix_count_ << ",1) block=("
+                << threads << ",1,1)" << std::endl;
+    }
     launch_precompiled_cuda_kernel_into(
         "gated_delta_chunk_solve",
         {inputs[0]},
@@ -86,14 +102,16 @@ class SolveStrictlyLowerCUDAPrimitive : public mx::UnaryPrimitive {
         std::make_tuple(blocks, matrix_count_, 1),
         std::make_tuple(threads, 1, 1),
         stream());
-    std::cout << "[gated_delta_cuda] eval_gpu RETURNING out.shape=[";
-    for (size_t i = 0; i < out.shape().size(); ++i) {
-      std::cout << out.shape()[i];
-      if (i + 1 < out.shape().size()) {
-        std::cout << ",";
+    if (debug) {
+      std::cout << "[gated_delta_cuda] eval_gpu RETURNING out.shape=[";
+      for (size_t i = 0; i < out.shape().size(); ++i) {
+        std::cout << out.shape()[i];
+        if (i + 1 < out.shape().size()) {
+          std::cout << ",";
+        }
       }
+      std::cout << "] dtype=" << out.dtype() << std::endl;
     }
-    std::cout << "] dtype=" << out.dtype() << std::endl;
   }
 
   std::vector<mx::array> vjp(
@@ -101,7 +119,10 @@ class SolveStrictlyLowerCUDAPrimitive : public mx::UnaryPrimitive {
       const std::vector<mx::array>& cotangents,
       const std::vector<int>& argnums,
       const std::vector<mx::array>& outputs) override {
-    std::cout << "[gated_delta_cuda] vjp ENTER" << std::endl;
+    const bool debug = log_gated_delta_cuda_debug();
+    if (debug) {
+      std::cout << "[gated_delta_cuda] vjp ENTER" << std::endl;
+    }
     if (cotangents.size() != 1 || outputs.size() != 1) {
       throw std::runtime_error("SolveStrictlyLowerCUDAPrimitive vjp expects one cotangent and one output");
     }
@@ -117,7 +138,9 @@ class SolveStrictlyLowerCUDAPrimitive : public mx::UnaryPrimitive {
       }
       grads.push_back(grad);
     }
-    std::cout << "[gated_delta_cuda] vjp RETURN" << std::endl;
+    if (debug) {
+      std::cout << "[gated_delta_cuda] vjp RETURN" << std::endl;
+    }
     return grads;
   }
 

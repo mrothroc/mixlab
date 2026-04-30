@@ -2,36 +2,26 @@ extern "C" __global__ void gated_delta_chunk_solve(
     const float* raw_attn,
     float* solve_attn,
     int chunk_size) {
-  if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
-    printf("[kernel] enter chunk_size=%d grid=(%d,%d,%d) block=(%d,%d,%d)\n",
-           chunk_size,
-           gridDim.x,
-           gridDim.y,
-           gridDim.z,
-           blockDim.x,
-           blockDim.y,
-           blockDim.z);
-  }
   const int matrix_idx = static_cast<int>(blockIdx.y);
-  if (threadIdx.x != 0 || blockIdx.x != 0) {
+  const int col = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+  if (col >= chunk_size) {
     return;
   }
 
   const int matrix_elems = chunk_size * chunk_size;
   const int base = matrix_idx * matrix_elems;
 
-  for (int col = 0; col < chunk_size; ++col) {
-    for (int row = 0; row < chunk_size; ++row) {
-      float acc = 0.0f;
-      if (row == col) {
-        acc = 1.0f;
-      } else if (row > col) {
-        const int row_offset = base + row * chunk_size;
-        for (int j = col; j < row; ++j) {
-          acc += raw_attn[row_offset + j] * solve_attn[base + j * chunk_size + col];
-        }
-      }
-      solve_attn[base + row * chunk_size + col] = acc;
+  for (int row = 0; row < col; ++row) {
+    solve_attn[base + row * chunk_size + col] = 0.0f;
+  }
+  solve_attn[base + col * chunk_size + col] = 1.0f;
+
+  for (int row = col + 1; row < chunk_size; ++row) {
+    float acc = 0.0f;
+    const int row_offset = base + row * chunk_size;
+    for (int j = col; j < row; ++j) {
+      acc += raw_attn[row_offset + j] * solve_attn[base + j * chunk_size + col];
     }
+    solve_attn[base + row * chunk_size + col] = acc;
   }
 }
