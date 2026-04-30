@@ -7,7 +7,9 @@
 .DS_Store
 **/.DS_Store
 
-data/
+data/fineweb_sp1024/
+data/fineweb_sp8192/
+data/example/
 benchmarks/data/
 benchmarks/results/
 experiments/
