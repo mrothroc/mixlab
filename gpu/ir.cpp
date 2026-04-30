@@ -480,17 +480,13 @@ void report_gated_delta_timing_summary(const char* phase, int index) {
     totals = g_gated_delta_timing;
     g_gated_delta_timing = GatedDeltaTimingTotals{};
   }
-  if (totals.calls == 0) {
-    return;
-  }
-
   const double total_ms =
       totals.raw_attn_ms +
       totals.solve_ms +
       totals.post_solve_ms +
       totals.causal_attn_ms +
       totals.chunk_loop_ms;
-  std::cerr << "[gated_delta_timing] " << (phase ? phase : "phase")
+  std::cout << "[gated_delta_timing] " << (phase ? phase : "phase")
             << "=" << index
             << " calls=" << totals.calls
             << " chunks=" << totals.chunks
