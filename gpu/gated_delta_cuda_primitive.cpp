@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <optional>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -49,6 +50,8 @@ mx::array solve_strictly_lower_cuda(
     int matrix_count,
     int chunk_size,
     mx::Stream stream) {
+  std::cerr << "[gated_delta_cuda] solve_strictly_lower_cuda enter matrix_count="
+            << matrix_count << " chunk_size=" << chunk_size << std::endl;
   static const std::string kSolveSource = R"CUDA(
     const int matrix_idx = static_cast<int>(blockIdx.y);
     const int linear_idx = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -60,15 +63,19 @@ mx::array solve_strictly_lower_cuda(
     solve_attn[base + linear_idx] = raw_attn[base + linear_idx];
   )CUDA";
 
+  std::cerr << "[gated_delta_cuda] before cuda_kernel factory" << std::endl;
   static auto kernel = mx::fast::cuda_kernel(
       "gated_delta_chunk_solve",
       {"raw_attn"},
       {"solve_attn"},
       kSolveSource);
+  std::cerr << "[gated_delta_cuda] cuda_kernel factory returned" << std::endl;
 
   const int threads = 128;
   const int matrix_elems = chunk_size * chunk_size;
   const int blocks = (matrix_elems + threads - 1) / threads;
+  std::cerr << "[gated_delta_cuda] before kernel callable blocks=" << blocks
+            << " threads=" << threads << std::endl;
   auto outputs = kernel(
       {raw_attn},
       {mx::Shape{
@@ -84,9 +91,12 @@ mx::array solve_strictly_lower_cuda(
       std::nullopt,
       true,
       stream);
+  std::cerr << "[gated_delta_cuda] kernel callable returned outputs="
+            << outputs.size() << std::endl;
   if (outputs.size() != 1) {
     throw std::runtime_error("gated_delta_chunk_solve kernel returned unexpected output count");
   }
+  std::cerr << "[gated_delta_cuda] returning kernel output" << std::endl;
   return outputs[0];
 }
 #endif
@@ -188,13 +198,17 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
 
     auto raw_attn = as_float32(
         -mx::matmul(k_beta, mx::transpose(k, {0, 1, 2, 4, 3})) * decay_delta * strict_lower_f);
+    std::cerr << "[gated_delta_cuda] before solve_strictly_lower_cuda" << std::endl;
     auto solve_attn = solve_strictly_lower_cuda(
         mx::reshape(raw_attn, {matrix_count, chunk_size_, chunk_size_}),
         matrix_count,
         chunk_size_,
         stream());
+    std::cerr << "[gated_delta_cuda] solve_strictly_lower_cuda returned" << std::endl;
     solve_attn = mx::reshape(solve_attn, {B_, H_, n_chunks, chunk_size_, chunk_size_});
+    std::cerr << "[gated_delta_cuda] before eval(solve_attn)" << std::endl;
     mx::eval(solve_attn);
+    std::cerr << "[gated_delta_cuda] eval(solve_attn) returned" << std::endl;
 
     auto k_cumsum = as_float32(mx::matmul(solve_attn, v_beta));
     auto k_cumdecay = as_float32(mx::matmul(
@@ -256,7 +270,9 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
     }
     out_seq = mx::transpose(out_seq, {0, 2, 1, 3});
     out = mx::reshape(out_seq, {B_ * T_ * H_, Dv_});
+    std::cerr << "[gated_delta_cuda] before eval(out)" << std::endl;
     mx::eval(out);
+    std::cerr << "[gated_delta_cuda] eval(out) returned" << std::endl;
 #else
     auto outputs = fallback_(std::vector<mx::array>(inputs.begin(), inputs.end()));
     if (outputs.size() != 1) {
