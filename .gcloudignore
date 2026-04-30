@@ -1,9 +1,15 @@
-.git
-.gitignore
+.git/
+.claude/
+.idea/
+.projectdb/
+.venv/
+.weft/
 .DS_Store
 **/.DS_Store
 
 data/
+benchmarks/data/
 benchmarks/results/
 experiments/
+scripts/__pycache__/
 train.test
