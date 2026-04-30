@@ -11,7 +11,6 @@
 #include <mlx/backend/cuda/utils.h>
 #endif
 
-#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -138,8 +137,8 @@ void launch_precompiled_cuda_kernel_into(
 
   const auto [tx, ty, tz] = threadgroup;
   const auto [gx, gy, gz] = grid;
-  dim3 block(std::min(tx, gx), std::min(ty, gy), std::min(tz, gz));
-  dim3 grid_dim((gx + tx - 1) / tx, (gy + ty - 1) / ty, (gz + tz - 1) / tz);
+  dim3 block(tx, ty, tz);
+  dim3 grid_dim(gx, gy, gz);
 
   for (const auto& in : inputs) {
     encoder.set_input_array(in);
