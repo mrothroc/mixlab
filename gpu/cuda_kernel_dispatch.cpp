@@ -59,6 +59,7 @@ std::vector<mx::array> launch_precompiled_cuda_kernel(
       ensure_row_contiguous,
       stream);
   std::cout << "[gated_delta_cuda] cuda_kernel factory returned" << std::endl;
+  std::cout << "[gated_delta_cuda] returning kernel output before eval" << std::endl;
   return outputs;
 #else
   (void)kernel_name;

@@ -2,6 +2,16 @@ extern "C" __global__ void gated_delta_chunk_solve(
     const float* raw_attn,
     float* solve_attn,
     int chunk_size) {
+  if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) {
+    printf("[kernel] enter chunk_size=%d grid=(%d,%d,%d) block=(%d,%d,%d)\n",
+           chunk_size,
+           gridDim.x,
+           gridDim.y,
+           gridDim.z,
+           blockDim.x,
+           blockDim.y,
+           blockDim.z);
+  }
   const int matrix_idx = static_cast<int>(blockIdx.y);
   const int col = static_cast<int>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (col >= chunk_size) {
