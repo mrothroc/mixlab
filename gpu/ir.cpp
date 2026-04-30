@@ -119,24 +119,6 @@ bool use_chunked_gated_delta_scan_cuda_fast_path() {
   return false;
 }
 
-bool use_experimental_gated_delta_cuda_kernel() {
-  const char* override = std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL");
-  return override != nullptr && std::string(override) == "1";
-}
-
-bool should_fallback_gated_delta_scan_chunked_to_naive() {
-  const auto& device = mx::default_device();
-  if (device.type != mx::Device::gpu) {
-    return false;
-  }
-  // The Neumann-product forward is fast, but its backward path is unstable on
-  // mlx-cuda for training workloads. Metal remains stable, so only fall back
-  // when the active GPU backend is actually CUDA.
-  return mlx::core::cu::is_available() &&
-      !use_chunked_gated_delta_scan_cuda_fast_path() &&
-      !use_experimental_gated_delta_cuda_kernel();
-}
-
 mx::array running_variance_raw(const mx::array& x_flat, int B, int T, int D, float alpha) {
   auto x = mx::reshape(x_flat, {B, T, D});
   auto out = mx::zeros({B, T, D}, mx::float32);
@@ -208,9 +190,6 @@ mx::array gated_delta_scan_chunked(
     int Dv,
     int chunk_size) {
   if (chunk_size <= 1) {
-    return gated_delta_scan_naive(q_in, k_in, v_in, beta_in, gate_in, B, T, H, Dk, Dv);
-  }
-  if (should_fallback_gated_delta_scan_chunked_to_naive()) {
     return gated_delta_scan_naive(q_in, k_in, v_in, beta_in, gate_in, B, T, H, Dk, Dv);
   }
 
@@ -288,7 +267,7 @@ mx::array gated_delta_scan_chunked(
 
   section_start = GatedDeltaTimingClock::now();
   auto solve_attn = [&]() -> mx::array {
-    if (mlx::core::cu::is_available() && use_experimental_gated_delta_cuda_kernel()) {
+    if (mlx::core::cu::is_available()) {
       const int matrix_count = B * H * n_chunks;
       auto solve = mlx_ir::solve_strictly_lower_cuda_primitive(
           mx::contiguous(mx::reshape(raw_attn, {matrix_count, chunk_size, chunk_size})),

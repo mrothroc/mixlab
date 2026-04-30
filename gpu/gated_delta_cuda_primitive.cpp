@@ -28,11 +28,6 @@ struct ForceUnbufferedStderr {
   ForceUnbufferedStderr() { std::cerr.setf(std::ios::unitbuf); }
 } _force_unbuffered_stderr;
 
-bool use_experimental_gated_delta_cuda_kernel() {
-  const char* override = std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL");
-  return override != nullptr && std::string(override) == "1";
-}
-
 bool log_gated_delta_cuda_debug() {
   const char* override = std::getenv("MIXLAB_GATED_DELTA_CUDA_DEBUG");
   return override != nullptr && std::string(override) == "1";
@@ -56,11 +51,7 @@ class SolveStrictlyLowerCUDAPrimitive : public mx::UnaryPrimitive {
     const bool debug = log_gated_delta_cuda_debug();
     if (debug) {
       const int call_n = ++g_eval_gpu_calls;
-      std::cout << "[gated_delta_cuda] eval_gpu CALL #" << call_n << " env="
-                << (std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
-                        ? std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
-                        : "(unset)")
-                << std::endl;
+      std::cout << "[gated_delta_cuda] eval_gpu CALL #" << call_n << std::endl;
     }
     if (inputs.size() != 1) {
       throw std::runtime_error("SolveStrictlyLowerCUDAPrimitive expects 1 input");
@@ -74,10 +65,6 @@ class SolveStrictlyLowerCUDAPrimitive : public mx::UnaryPrimitive {
         }
       }
       std::cout << "] dtype=" << inputs[0].dtype() << std::endl;
-    }
-    if (!use_experimental_gated_delta_cuda_kernel()) {
-      throw std::runtime_error(
-          "SolveStrictlyLowerCUDAPrimitive requires MIXLAB_GATED_DELTA_USE_CUDA_KERNEL=1");
     }
     if (inputs[0].dtype() != mx::float32 || out.dtype() != mx::float32) {
       throw std::runtime_error("SolveStrictlyLowerCUDAPrimitive requires float32 tensors");
