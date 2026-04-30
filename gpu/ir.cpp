@@ -70,6 +70,11 @@ bool use_chunked_gated_delta_scan_cuda_fast_path() {
   return false;
 }
 
+bool use_experimental_gated_delta_cuda_kernel() {
+  const char* override = std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL");
+  return override != nullptr && std::string(override) == "1";
+}
+
 bool should_fallback_gated_delta_scan_chunked_to_naive() {
   const auto& device = mx::default_device();
   if (device.type != mx::Device::gpu) {
@@ -78,7 +83,9 @@ bool should_fallback_gated_delta_scan_chunked_to_naive() {
   // The Neumann-product forward is fast, but its backward path is unstable on
   // mlx-cuda for training workloads. Metal remains stable, so only fall back
   // when the active GPU backend is actually CUDA.
-  return mlx::core::cu::is_available() && !use_chunked_gated_delta_scan_cuda_fast_path();
+  return mlx::core::cu::is_available() &&
+      !use_chunked_gated_delta_scan_cuda_fast_path() &&
+      !use_experimental_gated_delta_cuda_kernel();
 }
 
 mx::array running_variance_raw(const mx::array& x_flat, int B, int T, int D, float alpha) {
@@ -155,26 +162,7 @@ mx::array gated_delta_scan_chunked(
     return gated_delta_scan_naive(q_in, k_in, v_in, beta_in, gate_in, B, T, H, Dk, Dv);
   }
   if (should_fallback_gated_delta_scan_chunked_to_naive()) {
-    return mlx_ir::gated_delta_scan_cuda_primitive(
-        q_in,
-        k_in,
-        v_in,
-        beta_in,
-        gate_in,
-        B,
-        T,
-        H,
-        Dk,
-        Dv,
-        chunk_size,
-        [B, T, H, Dk, Dv](
-            const mx::array& q,
-            const mx::array& k,
-            const mx::array& v,
-            const mx::array& beta,
-            const mx::array& gate) {
-          return gated_delta_scan_naive(q, k, v, beta, gate, B, T, H, Dk, Dv);
-        });
+    return gated_delta_scan_naive(q_in, k_in, v_in, beta_in, gate_in, B, T, H, Dk, Dv);
   }
 
   const int pad_len = (chunk_size - (T % chunk_size)) % chunk_size;
@@ -236,19 +224,31 @@ mx::array gated_delta_scan_chunked(
   auto eye_f = mx::reshape(eye, {1, 1, 1, chunk_size, chunk_size});
 
   auto raw_attn = as_float32(-mx::matmul(k_beta, mx::transpose(k, {0, 1, 2, 4, 3})) * decay_delta * strict_lower_f);
-  // inv(I - L) = prod_m (I + L^(2^m)) for strictly lower-triangular L.
-  // This keeps the within-chunk solve on matmuls only, which MLX can run on
-  // Metal/CUDA without the per-row slice/update loop.
-  auto solve_attn = as_float32(eye_f + raw_attn);
-  auto raw_power = raw_attn;
-  for (int width = 2; width < chunk_size; width <<= 1) {
-    raw_power = as_float32(mx::matmul(raw_power, raw_power));
-    // CUDA matmul does not preserve exact triangular sparsity, and the tiny
-    // upper-triangle roundoff it introduces compounds across Neumann powers.
-    raw_power = as_float32(mx::tril(raw_power, -1));
-    auto solve_factor = as_float32(eye_f + raw_power);
-    solve_attn = as_float32(mx::matmul(solve_attn, solve_factor));
-  }
+  auto solve_attn = [&]() -> mx::array {
+    if (mlx::core::cu::is_available() && use_experimental_gated_delta_cuda_kernel()) {
+      const int matrix_count = B * H * n_chunks;
+      auto solve = mlx_ir::solve_strictly_lower_cuda_primitive(
+          mx::contiguous(mx::reshape(raw_attn, {matrix_count, chunk_size, chunk_size})),
+          matrix_count,
+          chunk_size);
+      return mx::reshape(solve, {B, H, n_chunks, chunk_size, chunk_size});
+    } else {
+      // inv(I - L) = prod_m (I + L^(2^m)) for strictly lower-triangular L.
+      // This keeps the within-chunk solve on matmuls only, which MLX can run on
+      // Metal without the per-row slice/update loop.
+      auto solve = as_float32(eye_f + raw_attn);
+      auto raw_power = raw_attn;
+      for (int width = 2; width < chunk_size; width <<= 1) {
+        raw_power = as_float32(mx::matmul(raw_power, raw_power));
+        // CUDA matmul does not preserve exact triangular sparsity, and the tiny
+        // upper-triangle roundoff it introduces compounds across Neumann powers.
+        raw_power = as_float32(mx::tril(raw_power, -1));
+        auto solve_factor = as_float32(eye_f + raw_power);
+        solve = as_float32(mx::matmul(solve, solve_factor));
+      }
+      return solve;
+    }
+  }();
   auto k_cumsum = as_float32(mx::matmul(solve_attn, v_beta));
   auto k_cumdecay = as_float32(mx::matmul(solve_attn, k_beta * mx::expand_dims(decay_exp, -1)));
 

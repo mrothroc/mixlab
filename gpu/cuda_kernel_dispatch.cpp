@@ -4,9 +4,18 @@
 
 #include <mlx/stream.h>
 
+#ifdef __linux__
+#include <mlx/backend/cuda/allocator.h>
+#include <mlx/backend/cuda/device.h>
+#include <mlx/backend/cuda/jit_module.h>
+#include <mlx/backend/cuda/utils.h>
+#endif
+
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <variant>
 
 namespace mx = mlx::core;
 
@@ -77,6 +86,91 @@ std::vector<mx::array> launch_precompiled_cuda_kernel(
   (void)stream;
   (void)shared_memory;
   (void)ensure_row_contiguous;
+  throw std::runtime_error("precompiled CUDA kernels are unavailable on this platform");
+#endif
+}
+
+void launch_precompiled_cuda_kernel_into(
+    const std::string& kernel_name,
+    const std::vector<mx::array>& inputs,
+    const std::vector<mx::array*>& outputs,
+    const std::vector<mx::fast::ScalarArg>& scalars,
+    std::tuple<int, int, int> grid,
+    std::tuple<int, int, int> threadgroup,
+    mx::Stream stream,
+    int shared_memory) {
+#ifdef __linux__
+  auto& encoder = mx::cu::get_command_encoder(stream);
+  for (auto* out : outputs) {
+    if (out == nullptr) {
+      throw std::runtime_error("null output passed to precompiled CUDA kernel");
+    }
+    out->set_data(mx::cu::malloc_async(out->nbytes(), encoder));
+  }
+
+  mx::cu::JitModule& mod = mx::cu::get_jit_module(
+      stream.device,
+      kernel_name,
+      [&]() {
+        return std::make_tuple(
+            true,
+            lookup_precompiled_kernel_blob(kernel_name),
+            std::vector<std::string>{kernel_name});
+      },
+      false);
+
+  mx::cu::KernelArgs args;
+  for (const auto& in : inputs) {
+    args.append(in);
+  }
+  for (auto* out : outputs) {
+    args.append(*out);
+  }
+  for (const auto& scalar : scalars) {
+    if (std::holds_alternative<bool>(scalar)) {
+      args.append(std::get<bool>(scalar));
+    } else if (std::holds_alternative<int>(scalar)) {
+      args.append(std::get<int>(scalar));
+    } else if (std::holds_alternative<float>(scalar)) {
+      args.append(std::get<float>(scalar));
+    }
+  }
+
+  const auto [tx, ty, tz] = threadgroup;
+  const auto [gx, gy, gz] = grid;
+  dim3 block(std::min(tx, gx), std::min(ty, gy), std::min(tz, gz));
+  dim3 grid_dim((gx + tx - 1) / tx, (gy + ty - 1) / ty, (gz + tz - 1) / tz);
+
+  for (const auto& in : inputs) {
+    encoder.set_input_array(in);
+  }
+  for (const auto* out : outputs) {
+    encoder.set_output_array(*out);
+  }
+  auto kernel = mod.get_kernel(kernel_name, [shared_memory](CUfunction kernel) {
+    if (shared_memory > 0 && shared_memory > 48000) {
+      cuFuncSetAttribute(
+          kernel,
+          CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+          shared_memory);
+    }
+  });
+  encoder.add_kernel_node_raw(
+      kernel,
+      grid_dim,
+      block,
+      {},
+      static_cast<uint32_t>(shared_memory),
+      args.args());
+#else
+  (void)kernel_name;
+  (void)inputs;
+  (void)outputs;
+  (void)scalars;
+  (void)grid;
+  (void)threadgroup;
+  (void)stream;
+  (void)shared_memory;
   throw std::runtime_error("precompiled CUDA kernels are unavailable on this platform");
 #endif
 }
