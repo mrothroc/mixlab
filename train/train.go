@@ -250,6 +250,10 @@ type GPUTrainer interface {
 	CloseTrainer()
 }
 
+type gpuProgramSwitcher interface {
+	SetProgramGPU(*arch.Program) error
+}
+
 // TrainOptions holds optional parameters for runTrain.
 type TrainOptions struct {
 	SafetensorsPath string // If set, export weights after training
@@ -351,6 +355,22 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return TrainResult{}, fmt.Errorf("build IR program: %w", err)
 	}
 	fmt.Printf("  [%s] IR program: %d ops, %d weights\n", name, len(prog.Ops), prog.NumWeights)
+	initialProg := prog
+	var recurrencePostProg *arch.Program
+	recurrenceActivationStep := cfg.Training.EffectiveRecurrenceActivationStep()
+	if recurrenceActivationStep > 0 && len(cfg.Recurrence) > 0 {
+		preProg, err := arch.BuildPreActivationIRProgramFromConfig(cfg)
+		if err != nil {
+			return TrainResult{}, fmt.Errorf("build recurrence pre-activation IR program: %w", err)
+		}
+		if preProg.NumWeights != prog.NumWeights {
+			return TrainResult{}, fmt.Errorf("recurrence pre-activation weight count mismatch: pre=%d post=%d", preProg.NumWeights, prog.NumWeights)
+		}
+		initialProg = preProg
+		recurrencePostProg = prog
+		fmt.Printf("  [%s] recurrence activates at step %d: pre-activation IR program: %d ops, %d weights\n",
+			name, recurrenceActivationStep, len(preProg.Ops), preProg.NumWeights)
+	}
 
 	var shapes []WeightShape
 	if opts.SafetensorsPath != "" || opts.CheckpointEvery > 0 {
@@ -377,7 +397,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 
 	// Initialize GPU trainer
-	trainer, err := initGPUTrainer(prog, cfg, loadedWeights, opts.OptimizerOverride)
+	trainer, err := initGPUTrainer(initialProg, cfg, loadedWeights, opts.OptimizerOverride)
 	if err != nil {
 		return TrainResult{}, fmt.Errorf("init GPU trainer: %w", err)
 	}
@@ -588,6 +608,17 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					if nextMode != "none" {
 						fmt.Printf("  [%s] QAT enabled at step %d\n", name, nextStep)
 					}
+				}
+				if recurrencePostProg != nil && nextStep >= recurrenceActivationStep {
+					switcher, ok := trainer.(gpuProgramSwitcher)
+					if !ok {
+						return TrainResult{}, fmt.Errorf("trainer does not support recurrence activation program switching")
+					}
+					if err := switcher.SetProgramGPU(recurrencePostProg); err != nil {
+						return TrainResult{}, fmt.Errorf("activate recurrence at step %d: %w", nextStep, err)
+					}
+					recurrencePostProg = nil
+					fmt.Printf("  [%s] recurrence activated at step %d\n", name, nextStep)
 				}
 				submitStart := time.Now()
 				if err := trainer.SubmitStepGPU(nextBatch.x, nextBatch.y, batchSize, seqLen, sched.At(nextStep)); err != nil {

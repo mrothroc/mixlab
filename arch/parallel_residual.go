@@ -292,3 +292,51 @@ func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 	}
 	return wi, nil
 }
+
+func emitSequentialOrderWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, order []int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32) (int, error) {
+	plan, err := newParallelResidualPlan(specs, parallelResidual)
+	if err != nil {
+		return wi, err
+	}
+	if plan.any {
+		if err := validateParallelResidualRefs(plan, refs); err != nil {
+			return wi, err
+		}
+	}
+	seen := make(map[int]bool, len(order))
+	for pos := 0; pos < len(order); {
+		i := order[pos]
+		if i < 0 || i >= len(specs) {
+			return wi, fmt.Errorf("recurrence activation execution order index %d out of range [0,%d)", i, len(specs))
+		}
+		if seen[i] {
+			return wi, fmt.Errorf("recurrence activation execution order repeats block %d", i)
+		}
+		seen[i] = true
+		if plan.secondAt(i) {
+			return wi, fmt.Errorf("recurrence activation execution order cannot start at parallel_residual follower block %d", i)
+		}
+		if plan.startsAt(i) {
+			if pos+1 >= len(order) || order[pos+1] != i+1 {
+				return wi, fmt.Errorf("recurrence activation execution order must keep parallel_residual pair [%d,%d] together", i, i+1)
+			}
+			if seen[i+1] {
+				return wi, fmt.Errorf("recurrence activation execution order repeats block %d", i+1)
+			}
+			seen[i+1] = true
+			wi, err = emitParallelBlockPairWithRecurrenceDropout(prog, specs, refs, weightStarts, i, stream, original, wi, D, T, B, opIdx, mlpMult, blockScales, residMix, dropout)
+			if err != nil {
+				return wi, err
+			}
+			pos += 2
+			continue
+		}
+		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, refs, weightStarts, kvCache, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout)
+		if err != nil {
+			return wi, err
+		}
+		pos++
+		(*opIdx)++
+	}
+	return wi, nil
+}

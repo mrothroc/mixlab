@@ -279,6 +279,28 @@ func (t *mlxGPUTrainer) SetWeightGPU(name string, data []float32) error {
 	return fmt.Errorf("unknown weight %q", name)
 }
 
+func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
+	if irProg == nil {
+		return fmt.Errorf("nil IR program")
+	}
+	if irProg.NumWeights != len(t.shapes) {
+		return fmt.Errorf("program weight count mismatch: program=%d expected=%d", irProg.NumWeights, len(t.shapes))
+	}
+	gpuProg, err := lowerIRToGPU(irProg)
+	if err != nil {
+		return fmt.Errorf("lower IR to GPU: %w", err)
+	}
+	if err := gpu.TrainerSetProgram(t.handle, gpuProg); err != nil {
+		gpuProg.Destroy()
+		return err
+	}
+	if t.prog != nil {
+		t.prog.Destroy()
+	}
+	t.prog = gpuProg
+	return nil
+}
+
 // EvaluateGPU runs a forward pass without gradients and returns the loss.
 func (t *mlxGPUTrainer) EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (float32, error) {
 	if err := t.FlushGPU(); err != nil {

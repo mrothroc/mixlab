@@ -92,6 +92,35 @@ func normalizeWeightRefs(specs []BlockSpec, recurrence []int) ([]int, error) {
 	return refs, nil
 }
 
+func uniqueRecurrenceExecutionOrder(specs []BlockSpec, recurrence []int) ([]int, error) {
+	if recurrence == nil {
+		return nil, nil
+	}
+	rec, err := normalizeRecurrence(specs, recurrence)
+	if err != nil {
+		return nil, err
+	}
+	roots := make([]int, len(specs))
+	for i := range specs {
+		ref := rec[i]
+		if ref != i {
+			ref = roots[ref]
+		}
+		roots[i] = ref
+	}
+
+	seen := make(map[int]bool, len(roots))
+	order := make([]int, 0, len(roots))
+	for _, ref := range roots {
+		if seen[ref] {
+			continue
+		}
+		seen[ref] = true
+		order = append(order, ref)
+	}
+	return order, nil
+}
+
 func identityWeightRefs(specs []BlockSpec) []int {
 	refs := make([]int, len(specs))
 	for i := range specs {
@@ -593,6 +622,28 @@ func buildIRProgramWithDropoutAndNgrams(
 	blocks []BlockSpec,
 	recurrence []int,
 ) (*Program, error) {
+	return buildIRProgramWithDropoutNgramsAndOrder(
+		modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix,
+		unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
+		logitSoftcap, dropout, blocks, recurrence, nil,
+	)
+}
+
+func buildIRProgramWithDropoutNgramsAndOrder(
+	modelDim, vocabSize, seqLen, batchSize int,
+	mlpMult float64,
+	tieEmbeddings bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	logitSoftcap float32,
+	dropout float32,
+	blocks []BlockSpec,
+	recurrence []int,
+	executionOrder []int,
+) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
 	}
@@ -635,6 +686,9 @@ func buildIRProgramWithDropoutAndNgrams(
 	}
 	if plan.any && unet {
 		return nil, fmt.Errorf("parallel_residual is not supported with unet")
+	}
+	if len(executionOrder) > 0 && unet {
+		return nil, fmt.Errorf("recurrence activation schedule is not supported with unet")
 	}
 
 	nWeights, err := countWeightsWithNgramsRecurrenceAndParallel(D, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
@@ -682,7 +736,8 @@ func buildIRProgramWithDropoutAndNgrams(
 		weightStarts[i] = -1
 	}
 	kvCache := make(map[int]BlockKVOutputs, len(blocks))
-	if unet {
+	switch {
+	case unet:
 		numEncoder, numSkip := unetLayout(len(blocks))
 		for i := range blocks[:numEncoder] {
 			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
@@ -718,7 +773,12 @@ func buildIRProgramWithDropoutAndNgrams(
 			}
 			opIdx++
 		}
-	} else {
+	case len(executionOrder) > 0:
+		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout)
+		if err != nil {
+			return nil, err
+		}
+	default:
 		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout)
 		if err != nil {
 			return nil, err

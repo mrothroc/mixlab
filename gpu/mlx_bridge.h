@@ -136,6 +136,7 @@ int64_t mlx_ir_create_trainer_v2(
     int n_optimizer_groups,
     float max_grad_norm,
     float default_base_lr);
+int mlx_ir_trainer_set_program(int64_t trainer, int64_t program);
 float mlx_ir_trainer_step(int64_t trainer, const int* tokens, const int* targets, int B, int T);
 float mlx_ir_trainer_step_named(
     int64_t trainer,

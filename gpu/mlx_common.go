@@ -110,6 +110,19 @@ func CreateTrainer(program *Program, weightHandles []int64, spec TrainerOptimize
 	return mlxCreateTrainer(program.handle, weightHandles, spec)
 }
 
+func TrainerSetProgram(t TrainerHandle, program *Program) error {
+	if t == 0 {
+		return fmt.Errorf("invalid trainer handle; create the trainer successfully before switching programs")
+	}
+	if program == nil || program.handle == 0 {
+		return fmt.Errorf("invalid GPU program; create and populate a gpu.Program before switching programs")
+	}
+	if mlxTrainerSetProgram(t, program.handle) != 0 {
+		return fmt.Errorf("mlx_ir_trainer_set_program failed")
+	}
+	return nil
+}
+
 func createLegacyAdamTrainer(
 	program *Program,
 	weightHandles []int64,

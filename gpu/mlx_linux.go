@@ -310,6 +310,10 @@ func mlxCreateLegacyAdamTrainer(
 	return TrainerHandle(h), nil
 }
 
+func mlxTrainerSetProgram(t TrainerHandle, programHandle int64) int {
+	return int(C.mlx_ir_trainer_set_program(C.int64_t(t), C.int64_t(programHandle)))
+}
+
 func mlxTrainerStep(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	cInputs, cleanup, err := marshalTensorInputs(inputs)
 	if err != nil {

@@ -90,6 +90,7 @@ struct IRTrainer {
   float compute_mean_square_grads_named(const TensorMap& inputs, const std::string& output_name);
   mlx::core::array read_output(const std::string& output_name) const;
   mlx::core::array read_grad(int weight_idx) const;
+  void set_program(const IRProgram& new_program);
   void apply_optimizer_updates(const std::vector<mlx::core::array>& grads);
 };
 

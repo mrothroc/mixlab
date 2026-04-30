@@ -57,6 +57,10 @@ func CreateTrainer(program *Program, weightHandles []int64, spec TrainerOptimize
 	return 0, errNotBuilt
 }
 
+func TrainerSetProgram(t TrainerHandle, program *Program) error {
+	return errNotBuilt
+}
+
 func TrainerStep(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return 0, errNotBuilt
 }

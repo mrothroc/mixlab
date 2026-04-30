@@ -224,6 +224,30 @@ float mlx_ir_trainer_step_named(int64_t trainer, const mlx_tensor_input* inputs,
   }
 }
 
+int mlx_ir_trainer_set_program(int64_t trainer, int64_t program) {
+  if (trainer <= 0 || program <= 0) {
+    return -1;
+  }
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return -1;
+    }
+    auto* t = get_ir_trainer(trainer);
+    auto* prog = get_ir_program(program);
+    if (!t || !prog) {
+      return -1;
+    }
+    t->set_program(*prog);
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_set_program", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_set_program unknown exception" << std::endl;
+    return -1;
+  }
+}
+
 void mlx_ir_trainer_submit_step(int64_t trainer, const mlx_tensor_input* inputs, int n_inputs) {
   if (!inputs || n_inputs <= 0) {
     return;

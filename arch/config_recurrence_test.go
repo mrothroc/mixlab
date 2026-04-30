@@ -47,6 +47,76 @@ func TestParseArchConfig_ValidRecurrence(t *testing.T) {
 	}
 }
 
+func TestParseArchConfig_RecurrenceActivationSchedule(t *testing.T) {
+	t.Run("frac", func(t *testing.T) {
+		cfg := recurrenceTestConfig([]int{0, 1, 0, 1})
+		cfg.Training = TrainingSpec{Steps: 4550, RecurrenceActivationFrac: 0.35}
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		got, err := ParseArchConfig(data, "recurrence_activation_frac")
+		if err != nil {
+			t.Fatalf("ParseArchConfig: %v", err)
+		}
+		if got.Training.RecurrenceActivationFrac != 0.35 {
+			t.Fatalf("recurrence_activation_frac=%g want 0.35", got.Training.RecurrenceActivationFrac)
+		}
+		if step := got.Training.EffectiveRecurrenceActivationStep(); step != 1592 {
+			t.Fatalf("activation step=%d want 1592", step)
+		}
+		out, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("round-trip marshal: %v", err)
+		}
+		if !strings.Contains(string(out), "recurrence_activation_frac") {
+			t.Fatalf("round-trip JSON missing recurrence_activation_frac: %s", out)
+		}
+	})
+
+	t.Run("step", func(t *testing.T) {
+		cfg := recurrenceTestConfig([]int{0, 1, 0, 1})
+		cfg.Training = TrainingSpec{Steps: 4550, RecurrenceActivationStep: 1592}
+		data, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		got, err := ParseArchConfig(data, "recurrence_activation_step")
+		if err != nil {
+			t.Fatalf("ParseArchConfig: %v", err)
+		}
+		if got.Training.RecurrenceActivationStep != 1592 {
+			t.Fatalf("recurrence_activation_step=%d want 1592", got.Training.RecurrenceActivationStep)
+		}
+		if step := got.Training.EffectiveRecurrenceActivationStep(); step != 1592 {
+			t.Fatalf("activation step=%d want 1592", step)
+		}
+		out, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("round-trip marshal: %v", err)
+		}
+		if !strings.Contains(string(out), "recurrence_activation_step") {
+			t.Fatalf("round-trip JSON missing recurrence_activation_step: %s", out)
+		}
+	})
+}
+
+func TestParseArchConfig_RejectsConflictingRecurrenceActivationSchedule(t *testing.T) {
+	cfg := recurrenceTestConfig([]int{0, 1, 0, 1})
+	cfg.Training = TrainingSpec{
+		Steps:                    4550,
+		RecurrenceActivationFrac: 0.35,
+		RecurrenceActivationStep: 1592,
+	}
+	err := parseRecurrenceConfig(t, cfg)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "cannot set both training.recurrence_activation_frac and training.recurrence_activation_step") {
+		t.Fatalf("error %q does not mention conflicting recurrence activation fields", err)
+	}
+}
+
 func TestParseArchConfig_RejectsBadRecurrence(t *testing.T) {
 	tests := []struct {
 		name       string

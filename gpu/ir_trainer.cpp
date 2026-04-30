@@ -943,6 +943,20 @@ mx::array IRTrainer::read_grad(int weight_idx) const {
   return last_grads[static_cast<size_t>(weight_idx)];
 }
 
+void IRTrainer::set_program(const IRProgram& new_program) {
+  if (new_program.n_weights != static_cast<int>(weights.size())) {
+    throw std::runtime_error(
+        "new IR program weight count " + std::to_string(new_program.n_weights) +
+        " does not match trainer weights " + std::to_string(weights.size()));
+  }
+  if (has_pending_step_ || has_ready_step_) {
+    throw std::runtime_error("cannot switch IR program while a submitted step is pending");
+  }
+  program = new_program;
+  last_outputs.clear();
+  last_grads.clear();
+}
+
 std::unique_ptr<IRTrainer> create_ir_trainer(
     const IRProgram& program,
     const std::vector<mx::array>& initial_weights,
