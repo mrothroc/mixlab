@@ -6,6 +6,9 @@
 #include <mlx/transforms.h>
 
 #include <functional>
+#include <cstdlib>
+#include <iostream>
+#include <ios>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -16,6 +19,10 @@ namespace mx = mlx::core;
 
 namespace mlx_ir {
 namespace {
+
+struct ForceUnbufferedStderr {
+  ForceUnbufferedStderr() { std::cerr.setf(std::ios::unitbuf); }
+} _force_unbuffered_stderr;
 
 constexpr float kGatedDeltaGateFloor = 1e-30f;
 constexpr float kGatedDeltaExpClampMin = -80.0f;
@@ -46,24 +53,34 @@ mx::array solve_strictly_lower_cuda(
     int chunk_size,
     mx::Stream stream) {
 #ifdef __linux__
+  std::cerr << "[gated_delta_cuda] solve_strictly_lower_cuda enter matrix_count="
+            << matrix_count << " chunk_size=" << chunk_size << std::endl;
   const int threads = 128;
   const int blocks = (chunk_size + threads - 1) / threads;
-  auto outputs = launch_precompiled_cuda_kernel(
-      "gated_delta_chunk_solve",
-      {raw_attn},
-      {mx::Shape{
-          static_cast<mx::ShapeElem>(matrix_count),
-          static_cast<mx::ShapeElem>(chunk_size),
-          static_cast<mx::ShapeElem>(chunk_size)}},
-      {mx::float32},
-      {chunk_size},
-      std::make_tuple(blocks, matrix_count, 1),
-      std::make_tuple(threads, 1, 1),
-      stream);
-  if (outputs.size() != 1) {
-    throw std::runtime_error("gated_delta_chunk_solve returned unexpected output count");
+  try {
+    std::cerr << "[gated_delta_cuda] before precompiled_cuda_kernel" << std::endl;
+    auto outputs = launch_precompiled_cuda_kernel(
+        "gated_delta_chunk_solve",
+        {raw_attn},
+        {mx::Shape{
+            static_cast<mx::ShapeElem>(matrix_count),
+            static_cast<mx::ShapeElem>(chunk_size),
+            static_cast<mx::ShapeElem>(chunk_size)}},
+        {mx::float32},
+        {chunk_size},
+        std::make_tuple(blocks, matrix_count, 1),
+        std::make_tuple(threads, 1, 1),
+        stream);
+    std::cerr << "[gated_delta_cuda] precompiled_cuda_kernel returned, outputs="
+              << outputs.size() << std::endl;
+    if (outputs.size() != 1) {
+      throw std::runtime_error("gated_delta_chunk_solve returned unexpected output count");
+    }
+    return outputs[0];
+  } catch (const std::exception& e) {
+    std::cerr << "[gated_delta_cuda] EXCEPTION: " << e.what() << std::endl;
+    throw;
   }
-  return outputs[0];
 #else
   (void)matrix_count;
   (void)chunk_size;
@@ -101,6 +118,11 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
   }
 
   void eval_gpu(const std::vector<mx::array>& inputs, mx::array& out) override {
+    std::cerr << "[gated_delta_cuda] eval_gpu ENTERED env="
+              << (std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
+                      ? std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
+                      : "(unset)")
+              << std::endl;
     if (!use_experimental_gated_delta_cuda_kernel()) {
       eval_cpu(inputs, out);
       return;
@@ -163,6 +185,7 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
 
     auto raw_attn = as_float32(
         -mx::matmul(k_beta, mx::transpose(k, {0, 1, 2, 4, 3})) * decay_delta * strict_lower_f);
+    std::cerr << "[gated_delta_cuda] before solve_strictly_lower_cuda" << std::endl;
     auto solve_attn = solve_strictly_lower_cuda(
         mx::contiguous(mx::reshape(raw_attn, {matrix_count, chunk_size_, chunk_size_})),
         matrix_count,
