@@ -6,6 +6,7 @@
 #include <mlx/transforms.h>
 
 #include <functional>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 #include <ios>
@@ -199,6 +200,22 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
     std::cout << "[gated_delta_cuda] before eval(solve_attn)" << std::endl;
     mx::eval(solve_attn);
     std::cout << "[gated_delta_cuda] after eval(solve_attn)" << std::endl;
+#ifdef __linux__
+    {
+      constexpr int kSampleCount = 8;
+      std::vector<float> sample(kSampleCount, 0.0f);
+      auto sample_flat = mx::reshape(
+          solve_attn,
+          {static_cast<mx::ShapeElem>(matrix_count * chunk_size_ * chunk_size_)});
+      mx::eval(sample_flat);
+      std::memcpy(sample.data(), sample_flat.data<float>(), kSampleCount * sizeof(float));
+      std::cout << "[gated_delta_cuda] solve_attn[0..7] =";
+      for (float value : sample) {
+        std::cout << " " << value;
+      }
+      std::cout << std::endl;
+    }
+#endif
 
     auto k_cumsum = as_float32(mx::matmul(solve_attn, v_beta));
     auto k_cumdecay = as_float32(mx::matmul(

@@ -2,6 +2,8 @@
 
 #include "cuda_kernels/registry_generated.h"
 
+#include <mlx/stream.h>
+
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -59,6 +61,9 @@ std::vector<mx::array> launch_precompiled_cuda_kernel(
       ensure_row_contiguous,
       stream);
   std::cout << "[gated_delta_cuda] cuda_kernel factory returned" << std::endl;
+  std::cout << "[gated_delta_cuda] before synchronize(stream)" << std::endl;
+  mx::synchronize(stream);
+  std::cout << "[gated_delta_cuda] after synchronize(stream)" << std::endl;
   std::cout << "[gated_delta_cuda] returning kernel output before eval" << std::endl;
   return outputs;
 #else
