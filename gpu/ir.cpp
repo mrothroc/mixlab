@@ -4,9 +4,12 @@
 #include <mlx/random.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
@@ -18,6 +21,52 @@ namespace {
 constexpr float kGatedDeltaGateFloor = 1e-30f;
 constexpr float kGatedDeltaExpClampMin = -80.0f;
 constexpr float kGatedDeltaExpClampMax = 0.0f;
+
+using GatedDeltaTimingClock = std::chrono::steady_clock;
+
+struct GatedDeltaTimingTotals {
+  long long calls = 0;
+  long long chunks = 0;
+  double raw_attn_ms = 0.0;
+  double solve_ms = 0.0;
+  double post_solve_ms = 0.0;
+  double causal_attn_ms = 0.0;
+  double chunk_loop_ms = 0.0;
+};
+
+std::mutex g_gated_delta_timing_mu;
+GatedDeltaTimingTotals g_gated_delta_timing;
+
+bool gated_delta_timing_enabled() {
+  const char* raw = std::getenv("MIXLAB_GATED_DELTA_TIMING");
+  return raw != nullptr && raw[0] != '\0' && raw[0] != '0';
+}
+
+double elapsed_ms(
+    GatedDeltaTimingClock::time_point start,
+    GatedDeltaTimingClock::time_point end) {
+  return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+void record_gated_delta_timing(
+    int n_chunks,
+    double raw_attn_ms,
+    double solve_ms,
+    double post_solve_ms,
+    double causal_attn_ms,
+    double chunk_loop_ms) {
+  if (!gated_delta_timing_enabled()) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_gated_delta_timing_mu);
+  g_gated_delta_timing.calls++;
+  g_gated_delta_timing.chunks += n_chunks;
+  g_gated_delta_timing.raw_attn_ms += raw_attn_ms;
+  g_gated_delta_timing.solve_ms += solve_ms;
+  g_gated_delta_timing.post_solve_ms += post_solve_ms;
+  g_gated_delta_timing.causal_attn_ms += causal_attn_ms;
+  g_gated_delta_timing.chunk_loop_ms += chunk_loop_ms;
+}
 
 mx::Shape make_shape(const int* vals, int n) {
   mx::Shape s;
@@ -223,7 +272,21 @@ mx::array gated_delta_scan_chunked(
   auto lower_inclusive_f = mx::astype(mx::expand_dims(mx::expand_dims(mx::expand_dims(lower_inclusive, 0), 0), 0), mx::float32);
   auto eye_f = mx::reshape(eye, {1, 1, 1, chunk_size, chunk_size});
 
+  const bool timing = gated_delta_timing_enabled();
+  double raw_attn_ms = 0.0;
+  double solve_ms = 0.0;
+  double post_solve_ms = 0.0;
+  double causal_attn_ms = 0.0;
+  double chunk_loop_ms = 0.0;
+
+  auto section_start = GatedDeltaTimingClock::now();
   auto raw_attn = as_float32(-mx::matmul(k_beta, mx::transpose(k, {0, 1, 2, 4, 3})) * decay_delta * strict_lower_f);
+  if (timing) {
+    mx::eval(raw_attn);
+    raw_attn_ms = elapsed_ms(section_start, GatedDeltaTimingClock::now());
+  }
+
+  section_start = GatedDeltaTimingClock::now();
   auto solve_attn = [&]() -> mx::array {
     if (mlx::core::cu::is_available() && use_experimental_gated_delta_cuda_kernel()) {
       const int matrix_count = B * H * n_chunks;
@@ -249,10 +312,27 @@ mx::array gated_delta_scan_chunked(
       return solve;
     }
   }();
+  if (timing) {
+    mx::eval(solve_attn);
+    solve_ms = elapsed_ms(section_start, GatedDeltaTimingClock::now());
+  }
+
+  section_start = GatedDeltaTimingClock::now();
   auto k_cumsum = as_float32(mx::matmul(solve_attn, v_beta));
   auto k_cumdecay = as_float32(mx::matmul(solve_attn, k_beta * mx::expand_dims(decay_exp, -1)));
+  if (timing) {
+    mx::eval(k_cumsum, k_cumdecay);
+    post_solve_ms = elapsed_ms(section_start, GatedDeltaTimingClock::now());
+  }
 
+  section_start = GatedDeltaTimingClock::now();
   auto causal_attn = as_float32(mx::matmul(q, mx::transpose(k, {0, 1, 2, 4, 3})) * decay_delta * lower_inclusive_f);
+  if (timing) {
+    mx::eval(causal_attn);
+    causal_attn_ms = elapsed_ms(section_start, GatedDeltaTimingClock::now());
+  }
+
+  section_start = GatedDeltaTimingClock::now();
   auto state = mx::zeros({B, H, Dk, Dv}, mx::float32);
   auto out = mx::zeros({B, H, n_chunks, chunk_size, Dv}, mx::float32);
   for (int chunk = 0; chunk < n_chunks; ++chunk) {
@@ -281,6 +361,17 @@ mx::array gated_delta_scan_chunked(
         v_new));
     state = as_float32(state * mx::reshape(stable_exp_nonpos(decay_last), {B, H, 1, 1}) + state_update);
     mx::eval(state);
+  }
+  if (timing) {
+    mx::eval(out);
+    chunk_loop_ms = elapsed_ms(section_start, GatedDeltaTimingClock::now());
+    record_gated_delta_timing(
+        n_chunks,
+        raw_attn_ms,
+        solve_ms,
+        post_solve_ms,
+        causal_attn_ms,
+        chunk_loop_ms);
   }
 
   // This merges adjacent [n_chunks, chunk_size] axes back into time, so it is
@@ -398,6 +489,40 @@ std::string inferred_output_name(const mlx_ir::IRProgram& program, const std::st
 } // namespace
 
 namespace mlx_ir {
+
+void report_gated_delta_timing_summary(const char* phase, int index) {
+  if (!gated_delta_timing_enabled()) {
+    return;
+  }
+
+  GatedDeltaTimingTotals totals;
+  {
+    std::lock_guard<std::mutex> lock(g_gated_delta_timing_mu);
+    totals = g_gated_delta_timing;
+    g_gated_delta_timing = GatedDeltaTimingTotals{};
+  }
+  if (totals.calls == 0) {
+    return;
+  }
+
+  const double total_ms =
+      totals.raw_attn_ms +
+      totals.solve_ms +
+      totals.post_solve_ms +
+      totals.causal_attn_ms +
+      totals.chunk_loop_ms;
+  std::cerr << "[gated_delta_timing] " << (phase ? phase : "phase")
+            << "=" << index
+            << " calls=" << totals.calls
+            << " chunks=" << totals.chunks
+            << " raw_attn_ms=" << totals.raw_attn_ms
+            << " solve_ms=" << totals.solve_ms
+            << " post_solve_ms=" << totals.post_solve_ms
+            << " causal_attn_ms=" << totals.causal_attn_ms
+            << " chunk_loop_ms=" << totals.chunk_loop_ms
+            << " total_ms=" << total_ms
+            << std::endl;
+}
 
 mx::array ir_interpret(
     const IRProgram& program,

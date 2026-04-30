@@ -129,6 +129,8 @@ std::unordered_map<std::string, mlx::core::array> ir_interpret_outputs(
     const std::vector<std::string>& output_names,
     bool training);
 
+void report_gated_delta_timing_summary(const char* phase, int index);
+
 mlx::core::array ir_interpret(
     const IRProgram& program,
     const std::vector<mlx::core::array>& weights,

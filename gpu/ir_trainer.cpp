@@ -566,6 +566,7 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   eval_arrays.push_back(loss);
   collect_state_for_eval(*this, eval_arrays, false);
   mx::eval(eval_arrays);
+  report_gated_delta_timing_summary("step", step_count);
   return loss.item<float>();
 }
 
@@ -683,6 +684,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   }
   collect_state_for_eval(*this, eval_arrays, false);
   mx::eval(eval_arrays);
+  report_gated_delta_timing_summary("step", step_count);
   pending_loss_ = loss;
   pending_outputs_ = std::move(outputs);
   has_pending_step_ = true;
@@ -723,6 +725,7 @@ float IRTrainer::evaluate(const mx::array& tokens, const mx::array& targets) {
   }
   auto loss = ir_interpret(program, weights, tokens, targets);
   mx::eval(loss);
+  report_gated_delta_timing_summary("eval", step_count);
   return loss.item<float>();
 }
 
@@ -735,6 +738,7 @@ float IRTrainer::evaluate_named(const TensorMap& inputs) {
   last_outputs = ir_interpret_outputs(program, weights, inputs, output_names);
   auto loss = last_outputs.at("loss");
   mx::eval(loss);
+  report_gated_delta_timing_summary("eval", step_count);
   return loss.item<float>();
 }
 
