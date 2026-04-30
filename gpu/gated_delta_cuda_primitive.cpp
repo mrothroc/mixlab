@@ -5,6 +5,7 @@
 #include <mlx/primitives.h>
 #include <mlx/transforms.h>
 
+#include <atomic>
 #include <functional>
 #include <cstring>
 #include <cstdlib>
@@ -20,6 +21,8 @@ namespace mx = mlx::core;
 
 namespace mlx_ir {
 namespace {
+
+std::atomic<int> g_eval_gpu_calls{0};
 
 struct ForceUnbufferedStdout {
   ForceUnbufferedStdout() { std::cout.setf(std::ios::unitbuf); }
@@ -123,11 +126,22 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
   }
 
   void eval_gpu(const std::vector<mx::array>& inputs, mx::array& out) override {
-    std::cout << "[gated_delta_cuda] eval_gpu ENTERED env="
+    const int call_n = ++g_eval_gpu_calls;
+    std::cout << "[gated_delta_cuda] eval_gpu CALL #" << call_n << " env="
               << (std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
                       ? std::getenv("MIXLAB_GATED_DELTA_USE_CUDA_KERNEL")
                       : "(unset)")
               << std::endl;
+    if (!inputs.empty()) {
+      std::cout << "[gated_delta_cuda] input[0].shape=[";
+      for (size_t i = 0; i < inputs[0].shape().size(); ++i) {
+        std::cout << inputs[0].shape()[i];
+        if (i + 1 < inputs[0].shape().size()) {
+          std::cout << ",";
+        }
+      }
+      std::cout << "] dtype=" << inputs[0].dtype() << std::endl;
+    }
     if (!use_experimental_gated_delta_cuda_kernel()) {
       eval_cpu(inputs, out);
       return;
@@ -280,6 +294,14 @@ class GatedDeltaScanCUDAPrimitive : public mx::UnaryPrimitive {
     std::cout << "[gated_delta_cuda] before eval(out)" << std::endl;
     mx::eval(out);
     std::cout << "[gated_delta_cuda] after eval(out)" << std::endl;
+    std::cout << "[gated_delta_cuda] eval_gpu RETURNING out.shape=[";
+    for (size_t i = 0; i < out.shape().size(); ++i) {
+      std::cout << out.shape()[i];
+      if (i + 1 < out.shape().size()) {
+        std::cout << ",";
+      }
+    }
+    std::cout << "] dtype=" << out.dtype() << std::endl;
   }
 
   std::vector<mx::array> vjp(
