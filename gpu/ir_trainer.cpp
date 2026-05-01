@@ -333,6 +333,25 @@ static mx::array normuon_normalize(
   return mx::astype(normalized, x.dtype());
 }
 
+mx::array apply_weight_decay(
+    const mx::array& w,
+    const mx::array& g,
+    const OptimizerGroupConfig& group,
+    bool decay,
+    int step_count,
+    float effective_lr) {
+  if (!decay || group.weight_decay <= 0.0f) {
+    return w;
+  }
+  auto decay_term = w;
+  const int training_step = std::max(0, step_count - 1);
+  if (group.cautious_weight_decay && training_step >= group.cautious_weight_decay_activation_step) {
+    auto mask = mx::astype(mx::greater(w * g, mx::array(0.0f, mx::float32)), w.dtype());
+    decay_term = decay_term * mask;
+  }
+  return w - (effective_lr * group.weight_decay) * decay_term;
+}
+
 void clip_gradients(std::vector<mx::array>& grads, float max_grad_norm) {
   if (max_grad_norm <= 0.0f) {
     return;
@@ -407,9 +426,7 @@ void apply_optimizer_update(
       auto mhat = state.adam_m / b1t;
       auto vhat = state.adam_v / b2t;
 
-      if (group.weight_decay > 0.0f && decay) {
-        w = w - (effective_lr * group.weight_decay) * w;
-      }
+      w = apply_weight_decay(w, g, group, decay, step_count, effective_lr);
       w = w - effective_lr * mhat / (mx::sqrt(vhat) + group.eps);
       break;
     }
@@ -440,9 +457,7 @@ void apply_optimizer_update(
           update = normuon_normalize(update, state.muon_second_moment, group.beta2);
           break;
       }
-      if (group.weight_decay > 0.0f && decay) {
-        w = w - (effective_lr * group.weight_decay) * w;
-      }
+      w = apply_weight_decay(w, g, group, decay, step_count, effective_lr);
       w = w - effective_lr * update;
       break;
     }
@@ -692,9 +707,7 @@ void IRTrainer::apply_optimizer_updates(const std::vector<mx::array>& grads) {
         auto mhat = adam_m[i] / b1t;
         auto vhat = adam_v[i] / b2t;
 
-        if (group.weight_decay > 0.0f && spec.decay) {
-          w = w - (effective_lr * group.weight_decay) * w;
-        }
+        w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
         w = w - effective_lr * mhat / (mx::sqrt(vhat) + group.eps);
         break;
       }
@@ -725,9 +738,7 @@ void IRTrainer::apply_optimizer_updates(const std::vector<mx::array>& grads) {
             update = normuon_normalize(update, muon_second_moment[i], group.beta2);
             break;
         }
-        if (group.weight_decay > 0.0f && spec.decay) {
-          w = w - (effective_lr * group.weight_decay) * w;
-        }
+        w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
         w = w - effective_lr * update;
         break;
       }
@@ -736,9 +747,7 @@ void IRTrainer::apply_optimizer_updates(const std::vector<mx::array>& grads) {
           throw std::runtime_error("SGD state missing for weight");
         }
         sgd_momentum[i] = group.beta1 * sgd_momentum[i] + g;
-        if (group.weight_decay > 0.0f && spec.decay) {
-          w = w - (effective_lr * group.weight_decay) * w;
-        }
+        w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
         w = w - effective_lr * sgd_momentum[i];
         break;
       }

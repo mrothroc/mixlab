@@ -115,17 +115,19 @@ const (
 )
 
 type OptimizerGroup struct {
-	Kind                OptimizerKind
-	LR                  float32
-	Beta1               float32
-	Beta2               float32
-	Epsilon             float32
-	WeightDecay         float32
-	BackendSteps        int
-	NewtonSchulzVariant NewtonSchulzVariant
-	Nesterov            bool
-	MuonNormalization   MuonNormalization
-	RowNormalize        bool
+	Kind                              OptimizerKind
+	LR                                float32
+	Beta1                             float32
+	Beta2                             float32
+	Epsilon                           float32
+	WeightDecay                       float32
+	CautiousWeightDecay               bool
+	CautiousWeightDecayActivationStep int
+	BackendSteps                      int
+	NewtonSchulzVariant               NewtonSchulzVariant
+	Nesterov                          bool
+	MuonNormalization                 MuonNormalization
+	RowNormalize                      bool
 }
 
 type WeightOptimizer struct {

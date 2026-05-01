@@ -49,7 +49,7 @@ func TestBuildTrainerOptimizerSpec(t *testing.T) {
 		Embed:         OptimizerSettings{Name: "adamw", LR: 1, Beta1: 0.1, Beta2: 0.2, Epsilon: 0.3, WeightDecay: 0.4},
 		Head:          OptimizerSettings{Name: "adamw", LR: 2, Beta1: 0.5, Beta2: 0.6, Epsilon: 0.7, WeightDecay: 0.8},
 		Scalar:        OptimizerSettings{Name: "adamw", LR: 3, Beta1: 0.9, Beta2: 0.91, Epsilon: 0.92, WeightDecay: 0.93},
-		Matrix:        OptimizerSettings{Name: "muon", LR: 4, Beta1: 0.94, Beta2: 0.95, Epsilon: 0.96, WeightDecay: 0.97, BackendSteps: 5, NewtonSchulzVariant: "polar_express", Nesterov: true},
+		Matrix:        OptimizerSettings{Name: "muon", LR: 4, Beta1: 0.94, Beta2: 0.95, Epsilon: 0.96, WeightDecay: 0.97, CautiousWeightDecay: true, CautiousWeightDecayActivationStep: 17, BackendSteps: 5, NewtonSchulzVariant: "polar_express", Nesterov: true},
 		MaxGradNorm:   1.25,
 		DefaultBaseLR: 0.01,
 	})
@@ -67,6 +67,9 @@ func TestBuildTrainerOptimizerSpec(t *testing.T) {
 	}
 	if spec.Groups[3].Kind != OptimizerMuon || !spec.Groups[3].Nesterov || spec.Groups[3].BackendSteps != 5 || spec.Groups[3].NewtonSchulzVariant != NewtonSchulzPolarExpress {
 		t.Fatalf("matrix group = %+v", spec.Groups[3])
+	}
+	if !spec.Groups[3].CautiousWeightDecay || spec.Groups[3].CautiousWeightDecayActivationStep != 17 {
+		t.Fatalf("matrix group cautious weight decay = enabled %v step %d, want enabled step 17", spec.Groups[3].CautiousWeightDecay, spec.Groups[3].CautiousWeightDecayActivationStep)
 	}
 	if spec.Weights[2].GroupIndex != 2 || spec.Weights[2].Decay {
 		t.Fatalf("scalar weight spec = %+v, want group=2 decay=false", spec.Weights[2])

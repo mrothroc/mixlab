@@ -61,6 +61,8 @@ typedef struct {
     float beta2;
     float eps;
     float weight_decay;
+    int cautious_weight_decay;
+    int cautious_weight_decay_activation_step;
     int backend_steps;
     int newton_schulz_variant; // 0=fixed, 1=polar_express
     int nesterov;

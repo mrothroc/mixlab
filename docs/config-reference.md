@@ -523,6 +523,8 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` initialization. Ignored when `weight_init` is `"xavier_uniform"`. |
 | `grad_clip` | number | No | `0` | Max grad norm. `0` means no clipping. Must be `>= 0`. |
 | `weight_decay` | number | No | `0.01` | Global fallback weight decay. Must be `>= 0`. |
+| `cautious_weight_decay` | boolean | No | `false` | When true, applies weight decay only to elements where parameter and gradient signs agree. This is an optimizer modifier for AdamW, Muon, MuonEq-R, NorMuon, and SGD paths, not a separate optimizer kind. |
+| `cautious_weight_decay_activation_frac` | number | No | `0` | Fraction of training before cautious weight decay activates. Before activation, standard weight decay is used. `0` means active from step 0 when `cautious_weight_decay=true`; must be in `[0,1]`. |
 | `beta1` | number | No | `0.9` | AdamW beta1. Also seeds Muon momentum when `muon_momentum` is omitted. |
 | `beta2` | number | No | `0.95` | AdamW and Muon beta2. |
 | `epsilon` | number | No | `1e-8` | AdamW / Muon epsilon. |

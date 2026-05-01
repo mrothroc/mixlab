@@ -186,3 +186,36 @@ func TestBuildTrainerOptimizerSpec_NorMuon(t *testing.T) {
 		t.Fatalf("matrix group MuonNormalization=%d want NorMuon", group.MuonNormalization)
 	}
 }
+
+func TestBuildTrainerOptimizerSpec_CautiousWeightDecay(t *testing.T) {
+	cfg := &ArchConfig{
+		Name:      "cautious_weight_decay_optimizer",
+		ModelDim:  16,
+		VocabSize: 32,
+		SeqLen:    4,
+		Blocks: []BlockSpec{
+			{Type: "plain", Heads: 2},
+		},
+		Training: DefaultTrainingSpec(),
+	}
+	cfg.Training.Steps = 20
+	cfg.Training.CautiousWeightDecay = true
+	cfg.Training.CautiousWeightDecayActivationFrac = 0.25
+
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	spec, err := buildTrainerOptimizerSpec(cfg, shapes)
+	if err != nil {
+		t.Fatalf("buildTrainerOptimizerSpec: %v", err)
+	}
+	for i, group := range spec.Groups {
+		if !group.CautiousWeightDecay {
+			t.Fatalf("group %d CautiousWeightDecay=false, want true", i)
+		}
+		if group.CautiousWeightDecayActivationStep != 5 {
+			t.Fatalf("group %d activation step=%d want 5", i, group.CautiousWeightDecayActivationStep)
+		}
+	}
+}

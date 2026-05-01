@@ -132,32 +132,34 @@ type TrainingPhase struct {
 
 // TrainingSpec holds training hyperparameters.
 type TrainingSpec struct {
-	Steps                    int             `json:"steps"`
-	LR                       float64         `json:"lr"`
-	Phases                   []TrainingPhase `json:"phases,omitempty"`
-	WarmdownSteps            int             `json:"warmdown_steps,omitempty"`
-	TargetValLoss            float64         `json:"target_val_loss,omitempty"`
-	RecurrenceActivationFrac float64         `json:"recurrence_activation_frac,omitempty"`
-	RecurrenceActivationStep int             `json:"recurrence_activation_step,omitempty"`
-	TTTSteps                 int             `json:"ttt_steps,omitempty"`
-	TTTMode                  string          `json:"ttt_mode,omitempty"`
-	TTTLR                    float64         `json:"ttt_lr,omitempty"`
-	TTTRank                  int             `json:"ttt_rank,omitempty"`
-	HardwareTFLOPs           float64         `json:"hardware_tflops,omitempty"` // peak hardware TFLOPS (e.g., 400 for M1 Max, 312 for A100)
-	GradClip                 float32         `json:"grad_clip"`
-	WeightDecay              float32         `json:"weight_decay"`
-	Beta1                    float32         `json:"beta1"`
-	Beta2                    float32         `json:"beta2"`
-	Epsilon                  float32         `json:"epsilon"`
-	Seed                     int64           `json:"seed"`
-	BatchTokens              int             `json:"batch_tokens"`
-	ShuffleChunkTokens       int             `json:"shuffle_chunk_tokens,omitempty"`
-	EmbedLR                  float32         `json:"embed_lr,omitempty"`
-	MatrixLR                 float32         `json:"matrix_lr,omitempty"`
-	ScalarLR                 float32         `json:"scalar_lr,omitempty"`
-	HeadLR                   float32         `json:"head_lr,omitempty"`
-	MuonMomentum             float32         `json:"muon_momentum,omitempty"`
-	MuonBackendSteps         int             `json:"muon_backend_steps,omitempty"`
+	Steps                             int             `json:"steps"`
+	LR                                float64         `json:"lr"`
+	Phases                            []TrainingPhase `json:"phases,omitempty"`
+	WarmdownSteps                     int             `json:"warmdown_steps,omitempty"`
+	TargetValLoss                     float64         `json:"target_val_loss,omitempty"`
+	RecurrenceActivationFrac          float64         `json:"recurrence_activation_frac,omitempty"`
+	RecurrenceActivationStep          int             `json:"recurrence_activation_step,omitempty"`
+	TTTSteps                          int             `json:"ttt_steps,omitempty"`
+	TTTMode                           string          `json:"ttt_mode,omitempty"`
+	TTTLR                             float64         `json:"ttt_lr,omitempty"`
+	TTTRank                           int             `json:"ttt_rank,omitempty"`
+	HardwareTFLOPs                    float64         `json:"hardware_tflops,omitempty"` // peak hardware TFLOPS (e.g., 400 for M1 Max, 312 for A100)
+	GradClip                          float32         `json:"grad_clip"`
+	WeightDecay                       float32         `json:"weight_decay"`
+	CautiousWeightDecay               bool            `json:"cautious_weight_decay,omitempty"`
+	CautiousWeightDecayActivationFrac float64         `json:"cautious_weight_decay_activation_frac,omitempty"`
+	Beta1                             float32         `json:"beta1"`
+	Beta2                             float32         `json:"beta2"`
+	Epsilon                           float32         `json:"epsilon"`
+	Seed                              int64           `json:"seed"`
+	BatchTokens                       int             `json:"batch_tokens"`
+	ShuffleChunkTokens                int             `json:"shuffle_chunk_tokens,omitempty"`
+	EmbedLR                           float32         `json:"embed_lr,omitempty"`
+	MatrixLR                          float32         `json:"matrix_lr,omitempty"`
+	ScalarLR                          float32         `json:"scalar_lr,omitempty"`
+	HeadLR                            float32         `json:"head_lr,omitempty"`
+	MuonMomentum                      float32         `json:"muon_momentum,omitempty"`
+	MuonBackendSteps                  int             `json:"muon_backend_steps,omitempty"`
 	// NewtonSchulzVariant controls Muon's Newton-Schulz coefficient choice.
 	// "" or "fixed" = canonical (3.4445, -4.7750, 2.0315) per iteration.
 	// "polar_express" = per-iteration Chebyshev minimax-optimal tuples
@@ -244,23 +246,6 @@ func (t TrainingSpec) TotalSteps() int {
 		total += phase.Steps
 	}
 	return total
-}
-
-// EffectiveRecurrenceActivationStep returns the first step that should use the
-// full recurrence execution path. A return value <= 0 preserves current behavior
-// and activates recurrence from step 0.
-func (t TrainingSpec) EffectiveRecurrenceActivationStep() int {
-	if t.RecurrenceActivationStep > 0 {
-		return t.RecurrenceActivationStep
-	}
-	if t.RecurrenceActivationFrac <= 0 {
-		return 0
-	}
-	total := t.TotalSteps()
-	if total <= 0 {
-		return 0
-	}
-	return int(t.RecurrenceActivationFrac * float64(total))
 }
 
 // DefaultTrainingSpec returns sensible training defaults.
@@ -603,6 +588,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Training.RecurrenceActivationFrac > 0 && cfg.Training.RecurrenceActivationStep > 0 {
 		return nil, fmt.Errorf("config %q cannot set both training.recurrence_activation_frac and training.recurrence_activation_step", source)
+	}
+	if err := validateCautiousWeightDecay(cfg, source); err != nil {
+		return nil, err
 	}
 	for i, phase := range cfg.Training.Phases {
 		if phase.Steps <= 0 {

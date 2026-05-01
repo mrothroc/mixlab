@@ -12,16 +12,18 @@ type OptimizerWeightMetadata struct {
 }
 
 type OptimizerSettings struct {
-	Name                string
-	LR                  float32
-	Beta1               float32
-	Beta2               float32
-	Epsilon             float32
-	WeightDecay         float32
-	BackendSteps        int
-	NewtonSchulzVariant string
-	Nesterov            bool
-	MuonNormalization   MuonNormalization
+	Name                              string
+	LR                                float32
+	Beta1                             float32
+	Beta2                             float32
+	Epsilon                           float32
+	WeightDecay                       float32
+	CautiousWeightDecay               bool
+	CautiousWeightDecayActivationStep int
+	BackendSteps                      int
+	NewtonSchulzVariant               string
+	Nesterov                          bool
+	MuonNormalization                 MuonNormalization
 	// RowNormalize is retained for direct TrainerOptimizerSpec callers.
 	// Config-driven code should prefer MuonNormalization.
 	RowNormalize bool
@@ -125,17 +127,19 @@ func optimizerGroup(settings OptimizerSettings) (OptimizerGroup, error) {
 		}
 	}
 	return OptimizerGroup{
-		Kind:                kind,
-		LR:                  settings.LR,
-		Beta1:               settings.Beta1,
-		Beta2:               settings.Beta2,
-		Epsilon:             settings.Epsilon,
-		WeightDecay:         settings.WeightDecay,
-		BackendSteps:        settings.BackendSteps,
-		NewtonSchulzVariant: parseNewtonSchulzVariant(settings.NewtonSchulzVariant),
-		Nesterov:            settings.Nesterov,
-		MuonNormalization:   muonNormalization,
-		RowNormalize:        settings.RowNormalize,
+		Kind:                              kind,
+		LR:                                settings.LR,
+		Beta1:                             settings.Beta1,
+		Beta2:                             settings.Beta2,
+		Epsilon:                           settings.Epsilon,
+		WeightDecay:                       settings.WeightDecay,
+		CautiousWeightDecay:               settings.CautiousWeightDecay,
+		CautiousWeightDecayActivationStep: settings.CautiousWeightDecayActivationStep,
+		BackendSteps:                      settings.BackendSteps,
+		NewtonSchulzVariant:               parseNewtonSchulzVariant(settings.NewtonSchulzVariant),
+		Nesterov:                          settings.Nesterov,
+		MuonNormalization:                 muonNormalization,
+		RowNormalize:                      settings.RowNormalize,
 	}, nil
 }
 

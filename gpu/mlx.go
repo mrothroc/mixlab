@@ -259,20 +259,25 @@ func mlxCreateTrainer(programHandle int64, weightHandles []int64, spec TrainerOp
 			return 0, fmt.Errorf("optimizer group %d has unsupported kind %d", i, group.Kind)
 		}
 		cGroups[i] = C.mlx_ir_optimizer_group{
-			kind:                  C.int(group.Kind),
-			lr:                    C.float(group.LR),
-			beta1:                 C.float(group.Beta1),
-			beta2:                 C.float(group.Beta2),
-			eps:                   C.float(group.Epsilon),
-			weight_decay:          C.float(group.WeightDecay),
-			backend_steps:         C.int(group.BackendSteps),
-			newton_schulz_variant: C.int(group.NewtonSchulzVariant),
-			nesterov:              0,
-			muon_normalization:    C.int(group.MuonNormalization),
-			row_normalize:         0,
+			kind:                                  C.int(group.Kind),
+			lr:                                    C.float(group.LR),
+			beta1:                                 C.float(group.Beta1),
+			beta2:                                 C.float(group.Beta2),
+			eps:                                   C.float(group.Epsilon),
+			weight_decay:                          C.float(group.WeightDecay),
+			cautious_weight_decay:                 C.int(0),
+			cautious_weight_decay_activation_step: C.int(group.CautiousWeightDecayActivationStep),
+			backend_steps:                         C.int(group.BackendSteps),
+			newton_schulz_variant:                 C.int(group.NewtonSchulzVariant),
+			nesterov:                              0,
+			muon_normalization:                    C.int(group.MuonNormalization),
+			row_normalize:                         0,
 		}
 		if group.Nesterov {
 			cGroups[i].nesterov = 1
+		}
+		if group.CautiousWeightDecay {
+			cGroups[i].cautious_weight_decay = 1
 		}
 		if group.RowNormalize {
 			cGroups[i].row_normalize = 1

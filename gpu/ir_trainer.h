@@ -44,6 +44,8 @@ struct OptimizerGroupConfig {
   float beta2 = 0.95f;
   float eps = 1e-8f;
   float weight_decay = 0.0f;
+  bool cautious_weight_decay = false;
+  int cautious_weight_decay_activation_step = 0;
   int backend_steps = 5;
   NewtonSchulzVariant newton_schulz_variant = NewtonSchulzVariant::Fixed;
   bool nesterov = true;
