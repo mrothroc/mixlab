@@ -9,7 +9,7 @@ import (
 	"github.com/mrothroc/mixlab/data"
 )
 
-func runEvalMode(configPath, trainPattern, safetensorsLoad string) error {
+func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -39,6 +39,18 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad string) error {
 	if err != nil {
 		return fmt.Errorf("load safetensors %q: %w", safetensorsLoad, err)
 	}
+	valPattern := strings.Replace(trainPattern, "train", "val", 1)
+	if cfg.EffectiveEvalSpec().LegalChunkSGDEnabled() {
+		fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
+			cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
+		fmt.Printf("  [%s] loaded %d weights from %s\n", cfg.Name, len(loadedWeights), safetensorsLoad)
+		trainer, err := initLegalChunkSGDTrainer(prog, cfg, loadedWeights)
+		if err != nil {
+			return err
+		}
+		defer trainer.CloseTrainer()
+		return runFullEvalLegalChunkSGDWithTrainer(cfg, valPattern, trainer, lutDir)
+	}
 	trainer, err := initGPUTrainer(prog, cfg, loadedWeights, nil)
 	if err != nil {
 		return fmt.Errorf("init GPU trainer: %w", err)
@@ -53,7 +65,6 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad string) error {
 	batchSize := batchTokens / seqLen
 
 	const defaultValBatchCount = 10
-	valPattern := strings.Replace(trainPattern, "train", "val", 1)
 	valSet, err := data.NewValSet(valPattern, cfg.Training.Seed, defaultValBatchCount, batchTokens, seqLen, effectiveShuffleChunkTokens(cfg))
 	if err != nil {
 		return fmt.Errorf("load val set %q: %w", valPattern, err)

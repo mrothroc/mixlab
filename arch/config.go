@@ -32,6 +32,7 @@ type ArchConfig struct {
 	Recurrence []int       `json:"recurrence,omitempty"`
 
 	Training TrainingSpec `json:"training"`
+	Eval     *EvalSpec    `json:"eval,omitempty"`
 }
 
 // EffectiveBigramDim returns the configured bigram embedding dimension,
@@ -179,6 +180,56 @@ type TrainingSpec struct {
 	SWAStart      int     `json:"swa_start,omitempty"`
 	SWADecay      float32 `json:"swa_decay,omitempty"`
 	SWAInterval   int     `json:"swa_interval,omitempty"`
+}
+
+// EvalSpec holds optional evaluation-only behavior. When omitted, or when
+// ttt_mode is "none", eval runs exactly as the standard single-pass path.
+type EvalSpec struct {
+	TTTMode       string   `json:"ttt_mode,omitempty"`
+	ChunkTokens   int      `json:"chunk_tokens,omitempty"`
+	TTTEpochs     int      `json:"ttt_epochs,omitempty"`
+	TTTLR         float64  `json:"ttt_lr,omitempty"`
+	TTTMomentum   *float64 `json:"ttt_momentum,omitempty"`
+	TTTLRSchedule string   `json:"ttt_lr_schedule,omitempty"`
+}
+
+// DefaultEvalSpec returns the inactive eval defaults.
+func DefaultEvalSpec() EvalSpec {
+	return EvalSpec{TTTMode: "none"}
+}
+
+// DefaultLegalChunkSGDEvalSpec returns the modded-nanogpt style eval-time TTT defaults.
+func DefaultLegalChunkSGDEvalSpec() EvalSpec {
+	momentum := 0.9
+	return EvalSpec{
+		TTTMode:       "legal_chunk_sgd",
+		ChunkTokens:   32768,
+		TTTEpochs:     3,
+		TTTLR:         0.005,
+		TTTMomentum:   &momentum,
+		TTTLRSchedule: "cosine",
+	}
+}
+
+// EffectiveEvalSpec returns an inactive spec when eval is omitted.
+func (c *ArchConfig) EffectiveEvalSpec() EvalSpec {
+	if c == nil || c.Eval == nil {
+		return DefaultEvalSpec()
+	}
+	return *c.Eval
+}
+
+// LegalChunkSGDEnabled reports whether eval-time score-first chunk SGD is active.
+func (e EvalSpec) LegalChunkSGDEnabled() bool {
+	return e.TTTMode == "legal_chunk_sgd"
+}
+
+// EffectiveTTTMomentum returns the eval-time SGD momentum value.
+func (e EvalSpec) EffectiveTTTMomentum() float64 {
+	if e.TTTMomentum == nil {
+		return 0.9
+	}
+	return *e.TTTMomentum
 }
 
 // TotalSteps returns the effective training step count.
@@ -558,8 +609,74 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.Training.TTTRank <= 0 {
 		return nil, fmt.Errorf("config %q has invalid training.ttt_rank=%d (must be > 0)", source, cfg.Training.TTTRank)
 	}
+	if err := validateEvalSpec(cfg, source); err != nil {
+		return nil, err
+	}
 
 	return cfg, nil
+}
+
+func validateEvalSpec(cfg *ArchConfig, source string) error {
+	if cfg.Eval == nil {
+		return nil
+	}
+
+	eval := cfg.Eval
+	eval.TTTMode = strings.ToLower(strings.TrimSpace(eval.TTTMode))
+	if eval.TTTMode == "" {
+		eval.TTTMode = "none"
+	}
+	switch eval.TTTMode {
+	case "none":
+		return nil
+	case "legal_chunk_sgd":
+	default:
+		return fmt.Errorf("config %q has invalid eval.ttt_mode=%q (must be \"none\" or \"legal_chunk_sgd\")", source, eval.TTTMode)
+	}
+
+	d := DefaultLegalChunkSGDEvalSpec()
+	if eval.ChunkTokens == 0 {
+		eval.ChunkTokens = d.ChunkTokens
+	}
+	if eval.TTTEpochs == 0 {
+		eval.TTTEpochs = d.TTTEpochs
+	}
+	if eval.TTTLR == 0 {
+		eval.TTTLR = d.TTTLR
+	}
+	if eval.TTTMomentum == nil {
+		eval.TTTMomentum = d.TTTMomentum
+	}
+	eval.TTTLRSchedule = strings.ToLower(strings.TrimSpace(eval.TTTLRSchedule))
+	if eval.TTTLRSchedule == "" {
+		eval.TTTLRSchedule = d.TTTLRSchedule
+	}
+
+	if eval.ChunkTokens <= 0 {
+		return fmt.Errorf("config %q has invalid eval.chunk_tokens=%d (must be > 0)", source, eval.ChunkTokens)
+	}
+	if eval.ChunkTokens < cfg.Training.BatchTokens {
+		return fmt.Errorf("config %q has eval.chunk_tokens=%d smaller than training.batch_tokens=%d", source, eval.ChunkTokens, cfg.Training.BatchTokens)
+	}
+	if eval.ChunkTokens%cfg.Training.BatchTokens != 0 {
+		return fmt.Errorf("config %q has eval.chunk_tokens=%d not divisible by training.batch_tokens=%d", source, eval.ChunkTokens, cfg.Training.BatchTokens)
+	}
+	if eval.TTTEpochs <= 0 {
+		return fmt.Errorf("config %q has invalid eval.ttt_epochs=%d (must be > 0)", source, eval.TTTEpochs)
+	}
+	if eval.TTTLR <= 0 {
+		return fmt.Errorf("config %q has invalid eval.ttt_lr=%g (must be > 0)", source, eval.TTTLR)
+	}
+	momentum := eval.EffectiveTTTMomentum()
+	if momentum < 0 || momentum >= 1 {
+		return fmt.Errorf("config %q has invalid eval.ttt_momentum=%g (must be in [0,1))", source, momentum)
+	}
+	switch eval.TTTLRSchedule {
+	case "cosine", "constant":
+	default:
+		return fmt.Errorf("config %q has invalid eval.ttt_lr_schedule=%q (must be \"cosine\" or \"constant\")", source, eval.TTTLRSchedule)
+	}
+	return nil
 }
 
 func validateParallelResidual(cfg *ArchConfig, source string) error {

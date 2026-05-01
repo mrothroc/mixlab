@@ -47,7 +47,11 @@ func RunCount(configPath string) error {
 }
 
 func RunEvalMode(configPath, trainPattern, safetensorsLoad string) error {
-	return runEvalMode(configPath, trainPattern, safetensorsLoad)
+	return runEvalMode(configPath, trainPattern, safetensorsLoad, "data")
+}
+
+func RunEvalModeWithLUT(configPath, trainPattern, safetensorsLoad, lutDir string) error {
+	return runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir)
 }
 
 func RunEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut string) error {

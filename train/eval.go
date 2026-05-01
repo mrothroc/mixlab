@@ -72,8 +72,31 @@ func loadBPBLUTs(dir string, vocab int) (*bpbLUT, error) {
 	}, nil
 }
 
+func tokenByteCount(luts *bpbLUT, xTok, yTok []int, rawStart int) (float64, error) {
+	if len(xTok) != len(yTok) {
+		return 0, fmt.Errorf("token batch length mismatch: x=%d y=%d", len(xTok), len(yTok))
+	}
+	totalBytes := 0.0
+	for i := range xTok {
+		prevID := xTok[i]
+		tgtID := yTok[i]
+		if prevID < 0 || prevID >= len(luts.isBoundary) || tgtID < 0 || tgtID >= len(luts.baseBytes) || tgtID >= len(luts.hasLeading) {
+			return 0, fmt.Errorf("token id out of LUT bounds at offset %d: prev=%d tgt=%d", rawStart+i, prevID, tgtID)
+		}
+		tokenBytes := float64(luts.baseBytes[tgtID])
+		if luts.hasLeading[tgtID] && !luts.isBoundary[prevID] {
+			tokenBytes += 1
+		}
+		totalBytes += tokenBytes
+	}
+	return totalBytes, nil
+}
+
 // runFullEval performs full validation BPB evaluation on all validation shards.
 func runFullEval(cfg *ArchConfig, valPattern string, trainer GPUTrainer, lutDir string) error {
+	if cfg.EffectiveEvalSpec().LegalChunkSGDEnabled() {
+		return runFullEvalLegalChunkSGD(cfg, valPattern, trainer, lutDir)
+	}
 	return runFullEvalWithTTT(
 		cfg,
 		valPattern,
@@ -168,18 +191,11 @@ func runFullEvalWithTTT(
 		meanLoss := float64(lossV)
 
 		totalLossNats += meanLoss * float64(chunkTokens)
-		for i := 0; i < chunkTokens; i++ {
-			prevID := xTok[i]
-			tgtID := yTok[i]
-			if prevID < 0 || prevID >= len(luts.isBoundary) || tgtID < 0 || tgtID >= len(luts.baseBytes) || tgtID >= len(luts.hasLeading) {
-				return fmt.Errorf("token id out of LUT bounds at offset %d: prev=%d tgt=%d", rawStart+i, prevID, tgtID)
-			}
-			tokenBytes := float64(luts.baseBytes[tgtID])
-			if luts.hasLeading[tgtID] && !luts.isBoundary[prevID] {
-				tokenBytes += 1
-			}
-			totalBytes += tokenBytes
+		batchBytes, err := tokenByteCount(luts, xTok, yTok, rawStart)
+		if err != nil {
+			return err
 		}
+		totalBytes += batchBytes
 		totalTokens += chunkTokens
 		if tttMode == "full" {
 			for step := 0; step < tttSteps; step++ {

@@ -128,6 +128,8 @@ func optimizerKind(name string) (OptimizerKind, error) {
 		return OptimizerAdamW, nil
 	case "muon", "muon_eq_r":
 		return OptimizerMuon, nil
+	case "sgd":
+		return OptimizerSGD, nil
 	default:
 		return 0, fmt.Errorf("unsupported optimizer %q", name)
 	}

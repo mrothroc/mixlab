@@ -17,6 +17,7 @@ namespace mlx_ir {
 enum class OptimizerKind : uint8_t {
   AdamW = 0,
   Muon = 1,
+  SGD = 2,
 };
 
 enum class QATMode : uint8_t {
@@ -61,6 +62,8 @@ struct IRTrainer {
   std::vector<uint8_t> has_adam_state;
   std::vector<mlx::core::array> muon_momentum;
   std::vector<uint8_t> has_muon_state;
+  std::vector<mlx::core::array> sgd_momentum;
+  std::vector<uint8_t> has_sgd_state;
   int step_count = 0;
   std::unordered_map<std::string, mlx::core::array> last_outputs;
   std::vector<mlx::core::array> last_grads;

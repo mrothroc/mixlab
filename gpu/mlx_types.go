@@ -96,6 +96,7 @@ type OptimizerKind int
 const (
 	OptimizerAdamW OptimizerKind = iota
 	OptimizerMuon
+	OptimizerSGD
 )
 
 type NewtonSchulzVariant int

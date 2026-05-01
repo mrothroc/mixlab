@@ -153,7 +153,7 @@ func main() {
 		if *logprobsOut != "" {
 			must(train.RunEvalLogprobs(*configPath, *trainPattern, *safetensorsLoad, *lutDir, *logprobsOut))
 		} else {
-			must(train.RunEvalMode(*configPath, *trainPattern, *safetensorsLoad))
+			must(train.RunEvalModeWithLUT(*configPath, *trainPattern, *safetensorsLoad, *lutDir))
 		}
 	case "hiddenstats":
 		must(train.RunHiddenstats(*configPath, *trainPattern, *safetensorsLoad, *prepOutput))

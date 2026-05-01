@@ -30,6 +30,7 @@ These fields live at the root of the config object.
 | `blocks` | array | Yes | None | Ordered block list. Must contain at least one block. |
 | `recurrence` | integer array | No | Disabled | Weight-sharing map for `blocks`; length must equal `blocks`, references must point to the same or earlier block with the same type. |
 | `training` | object | No | Defaults applied per field | Training hyperparameters. See [Training section](#training). |
+| `eval` | object | No | Disabled | Optional evaluation-only behavior. See [Eval section](#eval). |
 
 ### Minimal sequential model
 
@@ -588,6 +589,38 @@ Example:
     "swa_start": 10000,
     "swa_decay": 0.999,
     "swa_interval": 10
+  }
+}
+```
+
+## Eval
+
+The optional `eval` object controls evaluation-only adaptation. When omitted,
+or when `ttt_mode` is omitted or `"none"`, evaluation runs as the standard
+single pass.
+
+| Field | Type | Required | Default | Notes |
+|------|------|----------|---------|-------|
+| `ttt_mode` | string | No | `"none"` | Eval-time TTT mode. `"none"` disables eval-time adaptation. `"legal_chunk_sgd"` enables score-first chunk SGD. |
+| `chunk_tokens` | integer | No | `32768` when enabled | Number of validation tokens per adaptation chunk. Must be `> 0`, at least `training.batch_tokens`, and divisible by `training.batch_tokens`. |
+| `ttt_epochs` | integer | No | `3` when enabled | SGD epochs over each already-scored chunk. Must be `> 0`. |
+| `ttt_lr` | number | No | `0.005` when enabled | Base SGD learning rate. Must be `> 0`. |
+| `ttt_momentum` | number | No | `0.9` when enabled | SGD momentum. Must be in `[0,1)`. Set `0.0` for plain SGD without momentum. |
+| `ttt_lr_schedule` | string | No | `"cosine"` when enabled | LR schedule across chunks: `"cosine"` uses `0.5 * (1 + cos(pi * i / N)) * ttt_lr`; `"constant"` keeps `ttt_lr`. |
+
+Legal score-first TTT scores each chunk before adapting on it. Adapted weights
+then carry into the next validation chunk, but they stay in memory only and are
+never written back to safetensors.
+
+```json
+{
+  "eval": {
+    "ttt_mode": "legal_chunk_sgd",
+    "chunk_tokens": 32768,
+    "ttt_epochs": 3,
+    "ttt_lr": 0.005,
+    "ttt_momentum": 0.9,
+    "ttt_lr_schedule": "cosine"
   }
 }
 ```

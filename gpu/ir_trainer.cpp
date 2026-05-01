@@ -481,6 +481,11 @@ void collect_state_for_eval(
       eval_arrays.push_back(trainer.muon_momentum[i]);
     }
   }
+  for (size_t i = 0; i < trainer.sgd_momentum.size(); ++i) {
+    if (trainer.has_sgd_state[i] != 0) {
+      eval_arrays.push_back(trainer.sgd_momentum[i]);
+    }
+  }
 }
 
 std::vector<std::string> collect_cached_output_names(const IRProgram& program) {
@@ -571,7 +576,7 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   apply_optimizer_updates(grads);
 
   std::vector<mx::array> eval_arrays;
-  eval_arrays.reserve(1 + weights.size() + adam_m.size() * 2 + muon_momentum.size());
+  eval_arrays.reserve(1 + weights.size() + adam_m.size() * 2 + muon_momentum.size() + sgd_momentum.size());
   eval_arrays.push_back(loss);
   collect_state_for_eval(*this, eval_arrays, false);
   mx::eval(eval_arrays);
@@ -641,6 +646,17 @@ void IRTrainer::apply_optimizer_updates(const std::vector<mx::array>& grads) {
         w = w - effective_lr * update;
         break;
       }
+      case OptimizerKind::SGD: {
+        if (has_sgd_state[i] == 0) {
+          throw std::runtime_error("SGD state missing for weight");
+        }
+        sgd_momentum[i] = group.beta1 * sgd_momentum[i] + g;
+        if (group.weight_decay > 0.0f && spec.decay) {
+          w = w - (effective_lr * group.weight_decay) * w;
+        }
+        w = w - effective_lr * sgd_momentum[i];
+        break;
+      }
       default:
         throw std::runtime_error("unsupported optimizer kind");
     }
@@ -689,7 +705,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   log_submit_step_debug(*this, step_count, preclip_grads);
 
   std::vector<mx::array> eval_arrays;
-  eval_arrays.reserve(1 + outputs.size() + weights.size() + adam_m.size() * 2 + muon_momentum.size());
+  eval_arrays.reserve(1 + outputs.size() + weights.size() + adam_m.size() * 2 + muon_momentum.size() + sgd_momentum.size());
   eval_arrays.push_back(loss);
   for (const auto& [_, output] : outputs) {
     eval_arrays.push_back(output);
@@ -984,6 +1000,8 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
   trainer->has_adam_state.reserve(initial_weights.size());
   trainer->muon_momentum.reserve(initial_weights.size());
   trainer->has_muon_state.reserve(initial_weights.size());
+  trainer->sgd_momentum.reserve(initial_weights.size());
+  trainer->has_sgd_state.reserve(initial_weights.size());
   for (size_t i = 0; i < initial_weights.size(); ++i) {
     const auto& spec = weight_specs[i];
     if (spec.group_index >= groups.size()) {
@@ -997,6 +1015,8 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
         trainer->has_adam_state.push_back(1);
         trainer->muon_momentum.push_back(mx::array(0.0f, mx::float32));
         trainer->has_muon_state.push_back(0);
+        trainer->sgd_momentum.push_back(mx::array(0.0f, mx::float32));
+        trainer->has_sgd_state.push_back(0);
         break;
       case OptimizerKind::Muon:
         if (initial_weights[i].ndim() != 2) {
@@ -1007,6 +1027,17 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
         trainer->has_adam_state.push_back(0);
         trainer->muon_momentum.push_back(mx::zeros_like(initial_weights[i]));
         trainer->has_muon_state.push_back(1);
+        trainer->sgd_momentum.push_back(mx::array(0.0f, mx::float32));
+        trainer->has_sgd_state.push_back(0);
+        break;
+      case OptimizerKind::SGD:
+        trainer->adam_m.push_back(mx::array(0.0f, mx::float32));
+        trainer->adam_v.push_back(mx::array(0.0f, mx::float32));
+        trainer->has_adam_state.push_back(0);
+        trainer->muon_momentum.push_back(mx::array(0.0f, mx::float32));
+        trainer->has_muon_state.push_back(0);
+        trainer->sgd_momentum.push_back(mx::zeros_like(initial_weights[i]));
+        trainer->has_sgd_state.push_back(1);
         break;
       default:
         throw std::runtime_error("unsupported optimizer kind");

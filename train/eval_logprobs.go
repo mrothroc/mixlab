@@ -58,6 +58,9 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, outputPa
 	if cfg.Training.TTTMode == "lora" && cfg.Training.TTTSteps > 0 {
 		return fmt.Errorf("logprob export does not support ttt_mode=lora; per-token export only supports plain eval or score-first full TTT")
 	}
+	if cfg.EffectiveEvalSpec().LegalChunkSGDEnabled() {
+		return fmt.Errorf("logprob export does not support eval.ttt_mode=legal_chunk_sgd")
+	}
 	luts, err := loadBPBLUTs(lutDir, cfg.VocabSize)
 	if err != nil {
 		return fmt.Errorf("load BPB LUTs from %s: %w\n  generate LUTs with: mixlab -mode prepare, or set -lut-dir to the directory containing bytes_per_token.bin, has_leading_space.bin, is_boundary_token.bin", lutDir, err)

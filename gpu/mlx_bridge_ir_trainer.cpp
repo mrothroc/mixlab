@@ -53,6 +53,9 @@ std::vector<mlx_ir::OptimizerGroupConfig> read_optimizer_groups(
       case 1:
         kind = mlx_ir::OptimizerKind::Muon;
         break;
+      case 2:
+        kind = mlx_ir::OptimizerKind::SGD;
+        break;
       default:
         throw std::runtime_error("unsupported optimizer kind");
     }

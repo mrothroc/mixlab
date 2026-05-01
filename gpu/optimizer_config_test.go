@@ -103,6 +103,29 @@ func TestBuildTrainerOptimizerSpec_AdamWForMatrix(t *testing.T) {
 	}
 }
 
+func TestBuildTrainerOptimizerSpec_SGD(t *testing.T) {
+	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
+		Weights: []OptimizerWeightMetadata{
+			{Name: "embed", Shape: []int{10, 4}},
+			{Name: "wq", Shape: []int{4, 4}},
+		},
+		Embed:  OptimizerSettings{Name: "sgd", LR: 0.01, Beta1: 0.9},
+		Head:   OptimizerSettings{Name: "sgd", LR: 0.01, Beta1: 0.9},
+		Scalar: OptimizerSettings{Name: "sgd", LR: 0.01, Beta1: 0.9},
+		Matrix: OptimizerSettings{Name: "sgd", LR: 0.01, Beta1: 0.9},
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainerOptimizerSpec error = %v", err)
+	}
+	if spec.Groups[0].Kind != OptimizerSGD {
+		t.Fatalf("embed group Kind = %d, want SGD (%d)", spec.Groups[0].Kind, OptimizerSGD)
+	}
+	matrixGroup := spec.Groups[spec.Weights[1].GroupIndex]
+	if matrixGroup.Kind != OptimizerSGD || matrixGroup.Beta1 != 0.9 {
+		t.Fatalf("matrix group = %+v, want SGD momentum 0.9", matrixGroup)
+	}
+}
+
 func TestBuildTrainerOptimizerSpec_MuonEqRForMatrix(t *testing.T) {
 	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
 		Weights: []OptimizerWeightMetadata{
