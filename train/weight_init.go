@@ -23,23 +23,7 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 		return nil, fmt.Errorf("nil config")
 	}
 
-	metas, err := ir.CollectWeightShapesWithNgramsRecurrenceAndParallel(
-		cfg.ModelDim,
-		cfg.VocabSize,
-		cfg.SeqLen,
-		cfg.EffectiveMLPMult(),
-		cfg.TieEmbeddings,
-		cfg.BlockScales,
-		cfg.ResidMix,
-		cfg.UNet,
-		cfg.ParallelResidual,
-		cfg.BigramVocabSize,
-		cfg.EffectiveBigramDim(),
-		cfg.TrigramVocabSize,
-		cfg.EffectiveTrigramDim(),
-		cfg.Blocks,
-		cfg.Recurrence,
-	)
+	metas, err := ir.CollectWeightShapesFromConfig(cfg)
 	if err != nil {
 		return nil, err
 	}

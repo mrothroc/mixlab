@@ -64,6 +64,11 @@ func initMLXGPUTrainer(
 	} else {
 		weightData = initWeightData(shapes, cfg.Training.Seed, cfg.Training.WeightInit, cfg.Training.WeightInitStd)
 	}
+	if loadedWeights == nil && cfg.MTPUntieEnabled() && cfg.EffectiveMTPUntieStep() <= 0 {
+		if err := copyWeightDataByName(weightData, shapes, "head", "embed"); err != nil {
+			return nil, fmt.Errorf("initialize untied LM head: %w", err)
+		}
+	}
 
 	// Upload weights to GPU
 	handles := make([]int64, len(weightData))
@@ -143,6 +148,52 @@ func initMLXGPUTrainer(
 		bigramBuf:          make([]int32, batchElems),
 		trigramBuf:         make([]int32, batchElems),
 	}, nil
+}
+
+func weightIndexByName(shapes []WeightShape, name string) (int, error) {
+	for i, shape := range shapes {
+		if shape.Name == name {
+			return i, nil
+		}
+	}
+	return -1, fmt.Errorf("unknown weight %q", name)
+}
+
+func copyWeightDataByName(weights [][]float32, shapes []WeightShape, dstName, srcName string) error {
+	dstIdx, err := weightIndexByName(shapes, dstName)
+	if err != nil {
+		return err
+	}
+	srcIdx, err := weightIndexByName(shapes, srcName)
+	if err != nil {
+		return err
+	}
+	return copyWeightData(weights[dstIdx], shapes[dstIdx].Shape, weights[srcIdx], shapes[srcIdx].Shape, dstName, srcName)
+}
+
+func copyWeightData(dst []float32, dstShape []int, src []float32, srcShape []int, dstName, srcName string) error {
+	if len(src) != len(dst) {
+		return fmt.Errorf("cannot copy weight %q to %q: size mismatch source=%d destination=%d", srcName, dstName, len(src), len(dst))
+	}
+	if len(srcShape) == 2 && len(dstShape) == 2 && srcShape[0] == dstShape[1] && srcShape[1] == dstShape[0] {
+		rows, cols := srcShape[0], srcShape[1]
+		for r := 0; r < rows; r++ {
+			for c := 0; c < cols; c++ {
+				dst[c*rows+r] = src[r*cols+c]
+			}
+		}
+		return nil
+	}
+	if len(srcShape) != len(dstShape) {
+		return fmt.Errorf("cannot copy weight %q to %q: rank mismatch source=%d destination=%d", srcName, dstName, len(srcShape), len(dstShape))
+	}
+	for i := range srcShape {
+		if srcShape[i] != dstShape[i] {
+			return fmt.Errorf("cannot copy weight %q to %q: shape mismatch source=%v destination=%v", srcName, dstName, srcShape, dstShape)
+		}
+	}
+	copy(dst, src)
+	return nil
 }
 
 // makeInputs creates GPU tensor inputs from token arrays, reusing pre-allocated buffers.
@@ -277,6 +328,40 @@ func (t *mlxGPUTrainer) SetWeightGPU(name string, data []float32) error {
 		}
 	}
 	return fmt.Errorf("unknown weight %q", name)
+}
+
+func (t *mlxGPUTrainer) CopyWeightGPU(dstName, srcName string) error {
+	if err := t.FlushGPU(); err != nil {
+		return err
+	}
+	dstIdx, err := weightIndexByName(t.shapes, dstName)
+	if err != nil {
+		return err
+	}
+	srcIdx, err := weightIndexByName(t.shapes, srcName)
+	if err != nil {
+		return err
+	}
+	srcSize, err := gpu.TrainerWeightSize(t.handle, srcIdx)
+	if err != nil {
+		return fmt.Errorf("source weight %q size: %w", srcName, err)
+	}
+	dstSize, err := gpu.TrainerWeightSize(t.handle, dstIdx)
+	if err != nil {
+		return fmt.Errorf("destination weight %q size: %w", dstName, err)
+	}
+	srcData := make([]float32, srcSize)
+	if err := gpu.TrainerReadWeight(t.handle, srcIdx, srcData); err != nil {
+		return fmt.Errorf("read source weight %q: %w", srcName, err)
+	}
+	dstData := make([]float32, dstSize)
+	if err := copyWeightData(dstData, t.shapes[dstIdx].Shape, srcData, t.shapes[srcIdx].Shape, dstName, srcName); err != nil {
+		return err
+	}
+	if err := gpu.TrainerSetWeight(t.handle, dstIdx, dstData); err != nil {
+		return fmt.Errorf("write destination weight %q: %w", dstName, err)
+	}
+	return nil
 }
 
 func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
@@ -435,7 +520,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 	if cfg == nil {
 		return gpu.TrainerOptimizerSpec{}, fmt.Errorf("nil config")
 	}
-	if cfg.TieEmbeddings && cfg.Training.HeadLR != cfg.Training.EmbedLR {
+	if cfg.TieEmbeddings && !cfg.MTPUntieEnabled() && cfg.Training.HeadLR != cfg.Training.EmbedLR {
 		log.Printf("warning: tie_embeddings=true ignores head_lr; using embed_lr for shared embedding/head weight")
 	}
 	muonNesterov := true

@@ -27,6 +27,7 @@ These fields live at the root of the config object.
 | `resid_mix` | boolean | No | `false` | Adds learned mixing of the current state and original input on `plain` blocks. |
 | `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Cannot be combined with `unet`. |
 | `unet` | boolean | No | `false` | Splits the `blocks` list into encoder/decoder halves with learned skip connections. |
+| `mtp` | object | No | Disabled | Enables parameter-free multi-token prediction during training. See [MTP section](#multi-token-prediction-mtp). |
 | `blocks` | array | Yes | None | Ordered block list. Must contain at least one block. |
 | `recurrence` | integer array | No | Disabled | Weight-sharing map for `blocks`; length must equal `blocks`, references must point to the same or earlier block with the same type. |
 | `training` | object | No | Defaults applied per field | Training hyperparameters. See [Training section](#training). |
@@ -51,6 +52,26 @@ These fields live at the root of the config object.
   }
 }
 ```
+
+## Multi-Token Prediction (MTP)
+
+`mtp` adds training-only auxiliary losses for predicting multiple future tokens from the same final hidden state and shared LM head. It does not add per-horizon parameters. Validation, full eval, hidden-stats, and generation use next-token scoring only.
+
+```json
+{
+  "mtp": {
+    "n": 4,
+    "loss_weights": [1.0, 0.5, 0.25, 0.125],
+    "untie_embed_at_frac": 0.667
+  }
+}
+```
+
+| Field | Type | Required | Default | Notes |
+|------|------|----------|---------|-------|
+| `n` | integer | No | `1` | Number of future-token losses. `1` preserves current next-token behavior. Must be `>= 1` and `<= seq_len`. |
+| `loss_weights` | number array | No | `[1, 0.5, 0.25, ...]` | Per-horizon coefficients. Length must equal `n`; values must be non-negative and sum to `> 0`. The emitted loss is a weighted average. |
+| `untie_embed_at_frac` | number | No | `1.0` | Fraction of training at which an initially tied embedding/head pair splits. Values must be in `[0,1]`; `< 1` requires `tie_embeddings: true` and reserves a `head` weight. |
 
 ## Block types
 
@@ -511,7 +532,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `embed_lr` | number | No | `lr` | Learning rate for embedding-class weights. |
 | `matrix_lr` | number | No | `lr` | Learning rate for matrix weights. Used with Muon. |
 | `scalar_lr` | number | No | `lr` | Learning rate for scalar and vector weights. |
-| `head_lr` | number | No | `lr` | Learning rate for the output head. Ignored when `tie_embeddings=true` because the head shares the embedding weight. |
+| `head_lr` | number | No | `lr` | Learning rate for the output head. Ignored when `tie_embeddings=true` unless `mtp.untie_embed_at_frac < 1` reserves and later activates a separate head. |
 | `muon_momentum` | number | No | `beta1` | Muon momentum term for matrix weights. Must be `>= 0`. |
 | `muon_backend_steps` | integer | No | `5` | Muon backend iteration count. Must be `> 0` after defaults. |
 | `muon_nesterov` | boolean | No | `true` | Enables Muon Nesterov mode when set or omitted. |

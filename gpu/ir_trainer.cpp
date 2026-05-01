@@ -541,7 +541,28 @@ void collect_state_for_eval(
   }
 }
 
+bool program_produces_output(const IRProgram& program, const std::string& output_name) {
+  for (const auto& op : program.ops) {
+    for (int i = 0; i < op.n_outputs; ++i) {
+      if (op.outputs[i] == output_name) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+std::string evaluation_loss_name(const IRProgram& program) {
+  return program_produces_output(program, "eval_loss") ? "eval_loss" : "loss";
+}
+
+std::vector<std::string> collect_cached_output_names(const IRProgram& program, const std::string& loss_name);
+
 std::vector<std::string> collect_cached_output_names(const IRProgram& program) {
+  return collect_cached_output_names(program, "loss");
+}
+
+std::vector<std::string> collect_cached_output_names(const IRProgram& program, const std::string& loss_name) {
   bool capture_magnitudes = false;
   bool capture_x_hidden = false;
   bool capture_logits = false;
@@ -563,7 +584,7 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program) {
     }
   }
 
-  std::vector<std::string> output_names{"loss"};
+  std::vector<std::string> output_names{loss_name};
   if (capture_magnitudes) {
     output_names.push_back("magnitudes");
   }
@@ -817,7 +838,7 @@ float IRTrainer::evaluate(const mx::array& tokens, const mx::array& targets) {
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
   }
-  auto loss = ir_interpret(program, weights, tokens, targets);
+  auto loss = ir_interpret(program, weights, tokens, targets, false);
   mx::eval(loss);
   report_gated_delta_timing_summary("eval", step_count);
   return loss.item<float>();
@@ -828,9 +849,10 @@ float IRTrainer::evaluate_named(const TensorMap& inputs) {
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
   }
-  auto output_names = collect_cached_output_names(program);
+  auto loss_name = evaluation_loss_name(program);
+  auto output_names = collect_cached_output_names(program, loss_name);
   last_outputs = ir_interpret_outputs(program, weights, inputs, output_names);
-  auto loss = last_outputs.at("loss");
+  auto loss = last_outputs.at(loss_name);
   mx::eval(loss);
   report_gated_delta_timing_summary("eval", step_count);
   return loss.item<float>();
@@ -883,7 +905,7 @@ std::vector<float> IRTrainer::evaluate_per_token(const TensorMap& inputs) {
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
   }
-  auto output_names = collect_cached_output_names(program);
+  auto output_names = collect_cached_output_names(program, evaluation_loss_name(program));
   output_names.push_back("per_token_nll");
   last_outputs = ir_interpret_outputs(program, weights, inputs, output_names);
   auto nll = mx::astype(last_outputs.at("per_token_nll"), mx::float32);
@@ -938,6 +960,7 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
   }
 
   const float local_lr_scale = default_base_lr > 0.0f ? (lr / default_base_lr) : 1.0f;
+  const auto loss_name = evaluation_loss_name(program);
   for (int local_step = 0; local_step < steps; ++local_step) {
     std::vector<int> argnums;
     argnums.reserve(adapter_indices.size() * 2);
@@ -945,7 +968,7 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
       argnums.push_back(static_cast<int>(i));
     }
     auto fn = mx::value_and_grad(
-        [this, inputs, &adapters, &adapter_indices](const std::vector<mx::array>& params) {
+        [this, inputs, &adapters, &adapter_indices, loss_name](const std::vector<mx::array>& params) {
           auto local_adapters = adapters;
           size_t param_idx = 0;
           for (size_t weight_idx : adapter_indices) {
@@ -953,7 +976,7 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
             local_adapters[weight_idx].b = params[param_idx++];
           }
           auto effective = effective_lora_weights(weights, local_adapters);
-          return ir_interpret(program, effective, inputs, "", true);
+          return ir_interpret(program, effective, inputs, loss_name, true);
         },
         argnums);
 
@@ -1000,10 +1023,10 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
     }
   }
 
-  auto output_names = collect_cached_output_names(program);
+  auto output_names = collect_cached_output_names(program, loss_name);
   auto effective = effective_lora_weights(weights, adapters);
   last_outputs = ir_interpret_outputs(program, effective, inputs, output_names);
-  auto loss = last_outputs.at("loss");
+  auto loss = last_outputs.at(loss_name);
   std::vector<mx::array> eval_arrays;
   eval_arrays.reserve(1 + last_outputs.size());
   eval_arrays.push_back(loss);

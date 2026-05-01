@@ -50,7 +50,7 @@ func NewInferenceSession(configPath, safetensorsLoad string) (*InferenceSession,
 		runtime.UnlockOSThread()
 		return nil, err
 	}
-	prog, err := BuildIRProgramFromConfig(cfg)
+	prog, err := BuildEvalIRProgramFromConfig(cfg)
 	if err != nil {
 		runtime.UnlockOSThread()
 		return nil, fmt.Errorf("build IR program: %w", err)

@@ -11,22 +11,23 @@ import (
 
 // ArchConfig defines a model architecture for mixlab.
 type ArchConfig struct {
-	Name             string  `json:"name"`
-	ModelDim         int     `json:"model_dim"`
-	VocabSize        int     `json:"vocab_size"`
-	SeqLen           int     `json:"seq_len"`
-	MLPMult          float64 `json:"mlp_mult,omitempty"`
-	TieEmbeddings    bool    `json:"tie_embeddings,omitempty"`
-	BlockScales      bool    `json:"block_scales,omitempty"`
-	ResidMix         bool    `json:"resid_mix,omitempty"`
-	ParallelResidual bool    `json:"parallel_residual,omitempty"`
-	UNet             bool    `json:"unet,omitempty"`
-	BigramVocabSize  int     `json:"bigram_vocab_size,omitempty"`
-	BigramDim        int     `json:"bigram_dim,omitempty"`
-	TrigramVocabSize int     `json:"trigram_vocab_size,omitempty"`
-	TrigramDim       int     `json:"trigram_dim,omitempty"`
-	LogitSoftcap     float32 `json:"logit_softcap,omitempty"`
-	Dropout          float32 `json:"dropout,omitempty"`
+	Name             string   `json:"name"`
+	ModelDim         int      `json:"model_dim"`
+	VocabSize        int      `json:"vocab_size"`
+	SeqLen           int      `json:"seq_len"`
+	MLPMult          float64  `json:"mlp_mult,omitempty"`
+	TieEmbeddings    bool     `json:"tie_embeddings,omitempty"`
+	BlockScales      bool     `json:"block_scales,omitempty"`
+	ResidMix         bool     `json:"resid_mix,omitempty"`
+	ParallelResidual bool     `json:"parallel_residual,omitempty"`
+	UNet             bool     `json:"unet,omitempty"`
+	BigramVocabSize  int      `json:"bigram_vocab_size,omitempty"`
+	BigramDim        int      `json:"bigram_dim,omitempty"`
+	TrigramVocabSize int      `json:"trigram_vocab_size,omitempty"`
+	TrigramDim       int      `json:"trigram_dim,omitempty"`
+	LogitSoftcap     float32  `json:"logit_softcap,omitempty"`
+	Dropout          float32  `json:"dropout,omitempty"`
+	MTP              *MTPSpec `json:"mtp,omitempty"`
 
 	Blocks     []BlockSpec `json:"blocks"`
 	Recurrence []int       `json:"recurrence,omitempty"`
@@ -417,6 +418,38 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Dropout < 0 || cfg.Dropout > 1 {
 		return nil, fmt.Errorf("config %q has invalid dropout=%g (must be in [0,1])", source, cfg.Dropout)
+	}
+	if cfg.MTP != nil {
+		if cfg.MTP.nSet && cfg.MTP.N < 1 {
+			return nil, fmt.Errorf("config %q has invalid mtp.n=%d (must be >= 1)", source, cfg.MTP.N)
+		}
+		if cfg.MTP.N <= 0 {
+			cfg.MTP.N = 1
+		}
+		if cfg.MTP.N > cfg.SeqLen {
+			return nil, fmt.Errorf("config %q has invalid mtp.n=%d (must be <= seq_len=%d)", source, cfg.MTP.N, cfg.SeqLen)
+		}
+		if (cfg.MTP.lossWeightsSet || len(cfg.MTP.LossWeights) > 0) && len(cfg.MTP.LossWeights) != cfg.MTP.N {
+			return nil, fmt.Errorf("config %q has invalid mtp.loss_weights length=%d (must equal mtp.n=%d)", source, len(cfg.MTP.LossWeights), cfg.MTP.N)
+		}
+		weights := cfg.MTP.EffectiveLossWeights()
+		var weightSum float32
+		for i, w := range weights {
+			if w < 0 || w != w {
+				return nil, fmt.Errorf("config %q has invalid mtp.loss_weights[%d]=%g (must be finite and >= 0)", source, i, w)
+			}
+			weightSum += w
+		}
+		if weightSum <= 0 {
+			return nil, fmt.Errorf("config %q has invalid mtp.loss_weights (sum must be > 0)", source)
+		}
+		frac := cfg.MTP.EffectiveUntieEmbedAtFrac()
+		if frac < 0 || frac > 1 || frac != frac {
+			return nil, fmt.Errorf("config %q has invalid mtp.untie_embed_at_frac=%g (must be in [0,1])", source, frac)
+		}
+		if frac < 1 && !cfg.TieEmbeddings {
+			return nil, fmt.Errorf("config %q sets mtp.untie_embed_at_frac=%g but tie_embeddings is false", source, frac)
+		}
 	}
 
 	for i, b := range cfg.Blocks {

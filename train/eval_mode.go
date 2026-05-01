@@ -27,7 +27,7 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error
 	if err != nil {
 		return err
 	}
-	prog, err := BuildIRProgramFromConfig(cfg)
+	prog, err := BuildEvalIRProgramFromConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("build IR program: %w", err)
 	}

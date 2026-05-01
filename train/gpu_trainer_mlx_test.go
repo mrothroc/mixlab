@@ -88,6 +88,25 @@ func TestMLXGPUTrainerPrepareTargets_InvalidExtendedShape(t *testing.T) {
 	}
 }
 
+func TestCopyWeightDataTransposesEmbedToHead(t *testing.T) {
+	src := []float32{
+		1, 2,
+		3, 4,
+		5, 6,
+	}
+	dst := make([]float32, len(src))
+	if err := copyWeightData(dst, []int{2, 3}, src, []int{3, 2}, "head", "embed"); err != nil {
+		t.Fatalf("copyWeightData: %v", err)
+	}
+	want := []float32{
+		1, 3, 5,
+		2, 4, 6,
+	}
+	if !reflect.DeepEqual(dst, want) {
+		t.Fatalf("dst = %v, want %v", dst, want)
+	}
+}
+
 func TestBuildTrainerOptimizerSpec_MuonEqR(t *testing.T) {
 	cfg := &ArchConfig{
 		Name:      "muon_eq_r_optimizer",

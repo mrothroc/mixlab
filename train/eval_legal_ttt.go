@@ -18,7 +18,7 @@ func runFullEvalLegalChunkSGD(cfg *ArchConfig, valPattern string, sourceTrainer 
 }
 
 func runFullEvalLegalChunkSGDFromWeights(cfg *ArchConfig, valPattern string, initialWeights [][]float32, lutDir string) error {
-	prog, err := BuildIRProgramFromConfig(cfg)
+	prog, err := BuildEvalIRProgramFromConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("build IR program for legal eval TTT: %w", err)
 	}

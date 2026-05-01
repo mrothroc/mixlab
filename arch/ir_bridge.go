@@ -9,7 +9,39 @@ func BuildIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		return nil, fmt.Errorf("nil config")
 	}
 
-	return buildIRProgramFromConfigWithOrder(cfg, nil)
+	return BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive: true,
+		HeadUntied:       cfg.MTPUntieEnabled(),
+	})
+}
+
+// BuildEvalIRProgramFromConfig constructs a next-token-only program for
+// validation, inference, and generation. MTP auxiliary losses are intentionally
+// excluded because they are training-only signal.
+func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil config")
+	}
+	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
+		RecurrenceActive: true,
+		HeadUntied:       cfg.MTPUntieEnabled(),
+	}, nil)
+}
+
+// TrainingProgramState selects training-time graph schedules that can switch
+// without changing the weight layout.
+type TrainingProgramState struct {
+	RecurrenceActive bool
+	HeadUntied       bool
+}
+
+// BuildTrainingIRProgramFromConfig constructs a training program with MTP
+// auxiliary losses enabled when configured.
+func BuildTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingProgramState) (*Program, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil config")
+	}
+	return buildIRProgramFromConfigWithState(cfg, state, cfg.MTP)
 }
 
 // BuildPreActivationIRProgramFromConfig constructs the recurrence-inactive
@@ -20,17 +52,13 @@ func BuildPreActivationIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
-	order, err := uniqueRecurrenceExecutionOrder(cfg.Blocks, cfg.Recurrence)
-	if err != nil {
-		return nil, err
-	}
-	if len(order) == 0 {
-		return BuildIRProgramFromConfig(cfg)
-	}
-	return buildIRProgramFromConfigWithOrder(cfg, order)
+	return BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive: false,
+		HeadUntied:       cfg.MTPUntieEnabled(),
+	})
 }
 
-func buildIRProgramFromConfigWithOrder(cfg *ArchConfig, executionOrder []int) (*Program, error) {
+func buildIRProgramFromConfigWithState(cfg *ArchConfig, state TrainingProgramState, mtp *MTPSpec) (*Program, error) {
 	batchSize := 1
 	if cfg.Training.BatchTokens > 0 && cfg.SeqLen > 0 {
 		batchSize = cfg.Training.BatchTokens / cfg.SeqLen
@@ -38,6 +66,17 @@ func buildIRProgramFromConfigWithOrder(cfg *ArchConfig, executionOrder []int) (*
 			batchSize = 1
 		}
 	}
+
+	var executionOrder []int
+	if !state.RecurrenceActive {
+		order, err := uniqueRecurrenceExecutionOrder(cfg.Blocks, cfg.Recurrence)
+		if err != nil {
+			return nil, err
+		}
+		executionOrder = order
+	}
+	reserveHead := cfg.ReservesUntiedHeadWeight()
+	useTiedHead := cfg.TieEmbeddings && !state.HeadUntied
 
 	return buildIRProgramWithDropoutNgramsAndOrder(
 		cfg.ModelDim,
@@ -59,6 +98,9 @@ func buildIRProgramFromConfigWithOrder(cfg *ArchConfig, executionOrder []int) (*
 		cfg.Blocks,
 		cfg.Recurrence,
 		executionOrder,
+		mtp,
+		reserveHead,
+		useTiedHead,
 	)
 }
 
@@ -68,10 +110,10 @@ func CountIRWeightsFromConfig(cfg *ArchConfig) (int, error) {
 		return 0, fmt.Errorf("nil config")
 	}
 
-	return countWeightsWithNgramsRecurrenceAndParallel(
+	return countWeightsWithNgramsRecurrenceParallelHeadLayout(
 		cfg.ModelDim,
 		cfg.EffectiveMLPMult(),
-		cfg.TieEmbeddings,
+		cfg.ReservesUntiedHeadWeight(),
 		cfg.BlockScales,
 		cfg.ResidMix,
 		cfg.UNet,

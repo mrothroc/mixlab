@@ -295,8 +295,22 @@ func CountWeightsWithBigramRecurrenceAndParallel(
 	blocks []BlockSpec,
 	recurrence []int,
 ) (int, error) {
+	return countWeightsWithBigramRecurrenceParallelHeadLayout(modelDim, mlpMult, !tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, blocks, recurrence)
+}
+
+func countWeightsWithBigramRecurrenceParallelHeadLayout(
+	modelDim int,
+	mlpMult float64,
+	reserveHead bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	blocks []BlockSpec,
+	recurrence []int,
+) (int, error) {
 	_ = mlpMult
-	total := fixedWeightCount(tieEmbeddings)
+	total := fixedWeightCountWithHead(reserveHead)
 	total += bigramWeightCount(modelDim, bigramVocabSize, bigramDim)
 
 	plan, err := newParallelResidualPlan(blocks, parallelResidual)
@@ -348,7 +362,26 @@ func countWeightsWithNgramsRecurrenceAndParallel(
 	blocks []BlockSpec,
 	recurrence []int,
 ) (int, error) {
-	total, err := CountWeightsWithBigramRecurrenceAndParallel(modelDim, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, blocks, recurrence)
+	total, err := countWeightsWithBigramRecurrenceParallelHeadLayout(modelDim, mlpMult, !tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, blocks, recurrence)
+	if err != nil {
+		return 0, err
+	}
+	return total + trigramWeightCount(modelDim, trigramVocabSize, trigramDim), nil
+}
+
+func countWeightsWithNgramsRecurrenceParallelHeadLayout(
+	modelDim int,
+	mlpMult float64,
+	reserveHead bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	blocks []BlockSpec,
+	recurrence []int,
+) (int, error) {
+	total, err := countWeightsWithBigramRecurrenceParallelHeadLayout(modelDim, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, blocks, recurrence)
 	if err != nil {
 		return 0, err
 	}
@@ -383,18 +416,83 @@ func unetLayout(numBlocks int) (numEncoder, numSkip int) {
 	return numEncoder, numSkip
 }
 
-func fixedWeightCount(tieEmbeddings bool) int {
-	if tieEmbeddings {
+func fixedWeightCountWithHead(reserveHead bool) int {
+	if !reserveHead {
 		return 2 // embed + final_norm
 	}
 	return 3 // embed + head + final_norm
 }
 
-func finalNormWeightIndex(tieEmbeddings bool) int {
-	if tieEmbeddings {
+func finalNormWeightIndexWithHead(reserveHead bool) int {
+	if !reserveHead {
 		return 1
 	}
 	return 2
+}
+
+func emitLanguageModelLossIR(prog *Program, logits, targets string, B, T, V int, mtp *MTPSpec) error {
+	if mtp == nil || mtp.EffectiveN() <= 1 {
+		prog.CrossEntropy(logits, targets, "loss")
+		prog.CrossEntropyPerToken(logits, targets, "per_token_nll")
+		return nil
+	}
+
+	n := mtp.EffectiveN()
+	if n > T {
+		return fmt.Errorf("mtp.n=%d must be <= sequence length %d", n, T)
+	}
+	weights := mtp.EffectiveLossWeights()
+	var weightSum float32
+	for _, w := range weights {
+		weightSum += w
+	}
+	if weightSum <= 0 {
+		return fmt.Errorf("mtp loss weights must sum to > 0")
+	}
+
+	prog.CrossEntropy(logits, targets, "mtp_loss_0")
+	prog.ScalarMul("mtp_loss_0", 1.0, "eval_loss")
+	prog.CrossEntropyPerToken(logits, targets, "per_token_nll")
+
+	var accum string
+	if weights[0] != 0 {
+		accum = "mtp_weighted_0"
+		prog.ScalarMul("mtp_loss_0", weights[0]/weightSum, accum)
+	}
+
+	prog.Reshape(logits, []int{B, T, V}, "mtp_logits_btv")
+	prog.Reshape(targets, []int{B, T}, "mtp_targets_bt")
+	for i := 1; i < n; i++ {
+		validT := T - i
+		logitSlice := fmt.Sprintf("mtp_logits_%d_slice", i)
+		logitFlat := fmt.Sprintf("mtp_logits_%d_flat", i)
+		targetSlice := fmt.Sprintf("mtp_targets_%d_slice", i)
+		targetFlat := fmt.Sprintf("mtp_targets_%d_flat", i)
+		loss := fmt.Sprintf("mtp_loss_%d", i)
+
+		prog.Slice("mtp_logits_btv", 0, validT, 1, 1, logitSlice)
+		prog.Reshape(logitSlice, []int{B * validT, V}, logitFlat)
+		prog.Slice("mtp_targets_bt", i, T, 1, 1, targetSlice)
+		prog.Reshape(targetSlice, []int{B * validT}, targetFlat)
+		prog.CrossEntropy(logitFlat, targetFlat, loss)
+		if weights[i] == 0 {
+			continue
+		}
+		weighted := fmt.Sprintf("mtp_weighted_%d", i)
+		prog.ScalarMul(loss, weights[i]/weightSum, weighted)
+		if accum == "" {
+			accum = weighted
+			continue
+		}
+		next := fmt.Sprintf("mtp_accum_%d", i)
+		prog.Add(accum, weighted, next)
+		accum = next
+	}
+	if accum == "" {
+		return fmt.Errorf("mtp loss weights must include at least one positive coefficient")
+	}
+	prog.ScalarMul(accum, 1.0, "loss")
+	return nil
 }
 
 func needsResidMix(spec BlockSpec, residMix bool) bool {
@@ -625,7 +723,7 @@ func buildIRProgramWithDropoutAndNgrams(
 	return buildIRProgramWithDropoutNgramsAndOrder(
 		modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix,
 		unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
-		logitSoftcap, dropout, blocks, recurrence, nil,
+		logitSoftcap, dropout, blocks, recurrence, nil, nil, !tieEmbeddings, tieEmbeddings,
 	)
 }
 
@@ -643,6 +741,9 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 	blocks []BlockSpec,
 	recurrence []int,
 	executionOrder []int,
+	mtp *MTPSpec,
+	reserveHead bool,
+	useTiedHead bool,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -691,7 +792,14 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		return nil, fmt.Errorf("recurrence activation schedule is not supported with unet")
 	}
 
-	nWeights, err := countWeightsWithNgramsRecurrenceAndParallel(D, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
+	if useTiedHead && !reserveHead && !tieEmbeddings {
+		return nil, fmt.Errorf("tied LM head requires embedding weight layout")
+	}
+	if !useTiedHead && !reserveHead {
+		return nil, fmt.Errorf("untied LM head requires reserved head weight")
+	}
+
+	nWeights, err := countWeightsWithNgramsRecurrenceParallelHeadLayout(D, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
 	if err != nil {
 		return nil, err
 	}
@@ -703,7 +811,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 	// Embedding lookup
 	wi := 0
 	prog.Embed(weightName(wi), "tokens", "x_embed")
-	wi = fixedWeightCount(tieEmbeddings)
+	wi = fixedWeightCountWithHead(reserveHead)
 
 	// Flatten to [B*T, D], leaving room to inject model-level n-gram embeddings.
 	xState := "x"
@@ -786,11 +894,11 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 	}
 
 	// Final normalization
-	prog.RMSNorm("x", weightName(finalNormWeightIndex(tieEmbeddings)), "x_final_norm", 1e-5)
+	prog.RMSNorm("x", weightName(finalNormWeightIndexWithHead(reserveHead)), "x_final_norm", 1e-5)
 	prog.Reshape("x_final_norm", []int{B, T, D}, "x_hidden")
 
 	// Output head projection
-	if tieEmbeddings {
+	if useTiedHead {
 		prog.Transpose(weightName(0), []int{1, 0}, "tied_head")
 		prog.MatMul("x_final_norm", "tied_head", "logits")
 	} else {
@@ -808,10 +916,13 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		prog.ScalarMul(logitsState, 1.0, "logits")
 	}
 
-	// Cross-entropy loss
-	prog.CrossEntropy(logitsState, "targets", "loss")
-	prog.CrossEntropyPerToken(logitsState, "targets", "per_token_nll")
+	if err := emitLanguageModelLossIR(prog, logitsState, "targets", B, T, V, mtp); err != nil {
+		return nil, err
+	}
 	prog.DeclareOutput("loss", TensorFloat32, []int{1})
+	if mtp != nil && mtp.EffectiveN() > 1 {
+		prog.DeclareOutput("eval_loss", TensorFloat32, []int{1})
+	}
 	prog.DeclareOutput("per_token_nll", TensorFloat32, []int{B * T})
 	prog.DeclareOutput("x_hidden", TensorFloat32, []int{B, T, D})
 	prog.DeclareOutput("logits", TensorFloat32, []int{B * T, V})

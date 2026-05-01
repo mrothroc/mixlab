@@ -12,6 +12,7 @@ type EvalSpec = arch.EvalSpec
 type OpSpec = arch.OpSpec
 type Program = arch.Program
 type TrainingPhase = arch.TrainingPhase
+type TrainingProgramState = arch.TrainingProgramState
 type TrainingSpec = arch.TrainingSpec
 type WeightSpec = arch.WeightSpec
 
@@ -23,6 +24,14 @@ var ParseArchConfig = arch.ParseArchConfig
 
 func BuildIRProgramFromConfig(cfg *ArchConfig) (*arch.Program, error) {
 	return arch.BuildIRProgramFromConfig(cfg)
+}
+
+func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*arch.Program, error) {
+	return arch.BuildEvalIRProgramFromConfig(cfg)
+}
+
+func BuildTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingProgramState) (*arch.Program, error) {
+	return arch.BuildTrainingIRProgramFromConfig(cfg, state)
 }
 
 func CountIRWeightsFromConfig(cfg *ArchConfig) (int, error) {

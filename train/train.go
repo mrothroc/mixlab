@@ -254,6 +254,10 @@ type gpuProgramSwitcher interface {
 	SetProgramGPU(*arch.Program) error
 }
 
+type gpuWeightCopier interface {
+	CopyWeightGPU(dstName, srcName string) error
+}
+
 // TrainOptions holds optional parameters for runTrain.
 type TrainOptions struct {
 	SafetensorsPath string // If set, export weights after training
@@ -355,21 +359,31 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return TrainResult{}, fmt.Errorf("build IR program: %w", err)
 	}
 	fmt.Printf("  [%s] IR program: %d ops, %d weights\n", name, len(prog.Ops), prog.NumWeights)
-	initialProg := prog
-	var recurrencePostProg *arch.Program
 	recurrenceActivationStep := cfg.Training.EffectiveRecurrenceActivationStep()
-	if recurrenceActivationStep > 0 && len(cfg.Recurrence) > 0 {
-		preProg, err := arch.BuildPreActivationIRProgramFromConfig(cfg)
+	recurrenceScheduled := recurrenceActivationStep > 0 && len(cfg.Recurrence) > 0
+	recurrenceActive := !recurrenceScheduled
+	mtpUntieScheduled := cfg.MTPUntieEnabled()
+	mtpUntieStep := cfg.EffectiveMTPUntieStep()
+	headUntied := mtpUntieScheduled && mtpUntieStep <= 0
+	initialProg := prog
+	if recurrenceScheduled || (mtpUntieScheduled && !headUntied) {
+		initialProg, err = BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+			RecurrenceActive: recurrenceActive,
+			HeadUntied:       headUntied,
+		})
 		if err != nil {
-			return TrainResult{}, fmt.Errorf("build recurrence pre-activation IR program: %w", err)
+			return TrainResult{}, fmt.Errorf("build initial training IR program: %w", err)
 		}
-		if preProg.NumWeights != prog.NumWeights {
-			return TrainResult{}, fmt.Errorf("recurrence pre-activation weight count mismatch: pre=%d post=%d", preProg.NumWeights, prog.NumWeights)
+		if initialProg.NumWeights != prog.NumWeights {
+			return TrainResult{}, fmt.Errorf("initial training weight count mismatch: initial=%d final=%d", initialProg.NumWeights, prog.NumWeights)
 		}
-		initialProg = preProg
-		recurrencePostProg = prog
+	}
+	if recurrenceScheduled {
 		fmt.Printf("  [%s] recurrence activates at step %d: pre-activation IR program: %d ops, %d weights\n",
-			name, recurrenceActivationStep, len(preProg.Ops), preProg.NumWeights)
+			name, recurrenceActivationStep, len(initialProg.Ops), initialProg.NumWeights)
+	}
+	if mtpUntieScheduled {
+		fmt.Printf("  [%s] LM head unties from embedding at step %d\n", name, mtpUntieStep)
 	}
 
 	var shapes []WeightShape
@@ -609,16 +623,43 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 						fmt.Printf("  [%s] QAT enabled at step %d\n", name, nextStep)
 					}
 				}
-				if recurrencePostProg != nil && nextStep >= recurrenceActivationStep {
+				nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)
+				nextHeadUntied := headUntied || (mtpUntieScheduled && nextStep >= mtpUntieStep)
+				if nextRecurrenceActive != recurrenceActive || nextHeadUntied != headUntied {
 					switcher, ok := trainer.(gpuProgramSwitcher)
 					if !ok {
-						return TrainResult{}, fmt.Errorf("trainer does not support recurrence activation program switching")
+						return TrainResult{}, fmt.Errorf("trainer does not support scheduled program switching")
 					}
-					if err := switcher.SetProgramGPU(recurrencePostProg); err != nil {
-						return TrainResult{}, fmt.Errorf("activate recurrence at step %d: %w", nextStep, err)
+					if nextHeadUntied && !headUntied {
+						copier, ok := trainer.(gpuWeightCopier)
+						if !ok {
+							return TrainResult{}, fmt.Errorf("trainer does not support LM head untie weight copy")
+						}
+						if err := copier.CopyWeightGPU("head", "embed"); err != nil {
+							return TrainResult{}, fmt.Errorf("untie LM head at step %d: %w", nextStep, err)
+						}
 					}
-					recurrencePostProg = nil
-					fmt.Printf("  [%s] recurrence activated at step %d\n", name, nextStep)
+					nextProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+						RecurrenceActive: nextRecurrenceActive,
+						HeadUntied:       nextHeadUntied,
+					})
+					if err != nil {
+						return TrainResult{}, fmt.Errorf("build scheduled IR program at step %d: %w", nextStep, err)
+					}
+					if nextProg.NumWeights != prog.NumWeights {
+						return TrainResult{}, fmt.Errorf("scheduled IR weight count mismatch at step %d: scheduled=%d final=%d", nextStep, nextProg.NumWeights, prog.NumWeights)
+					}
+					if err := switcher.SetProgramGPU(nextProg); err != nil {
+						return TrainResult{}, fmt.Errorf("switch scheduled IR program at step %d: %w", nextStep, err)
+					}
+					if nextRecurrenceActive && !recurrenceActive {
+						fmt.Printf("  [%s] recurrence activated at step %d\n", name, nextStep)
+					}
+					if nextHeadUntied && !headUntied {
+						fmt.Printf("  [%s] LM head untied from embedding at step %d\n", name, nextStep)
+					}
+					recurrenceActive = nextRecurrenceActive
+					headUntied = nextHeadUntied
 				}
 				submitStart := time.Now()
 				if err := trainer.SubmitStepGPU(nextBatch.x, nextBatch.y, batchSize, seqLen, sched.At(nextStep)); err != nil {

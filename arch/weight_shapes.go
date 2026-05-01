@@ -448,10 +448,54 @@ func CollectWeightShapesWithNgramsRecurrenceAndParallel(
 	return collectWeightShapesWithRefs(modelDim, vocabSize, seqLen, mlpMult, tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, refs)
 }
 
+// CollectWeightShapesFromConfig returns ordered weight metadata for the full
+// config, including MTP untie schedules that reserve a future LM head weight.
+func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil config")
+	}
+	refs, err := normalizeWeightRefs(cfg.Blocks, cfg.Recurrence)
+	if err != nil {
+		return nil, fmt.Errorf("blocks: %w", err)
+	}
+	return collectWeightShapesWithRefsHeadLayout(
+		cfg.ModelDim,
+		cfg.VocabSize,
+		cfg.SeqLen,
+		cfg.EffectiveMLPMult(),
+		cfg.ReservesUntiedHeadWeight(),
+		cfg.BlockScales,
+		cfg.ResidMix,
+		cfg.UNet,
+		cfg.ParallelResidual,
+		cfg.BigramVocabSize,
+		cfg.EffectiveBigramDim(),
+		cfg.TrigramVocabSize,
+		cfg.EffectiveTrigramDim(),
+		cfg.Blocks,
+		refs,
+	)
+}
+
 func collectWeightShapesWithRefs(
 	modelDim, vocabSize, seqLen int,
 	mlpMult float64,
 	tieEmbeddings bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	blocks []BlockSpec,
+	refs []int,
+) ([]WeightMeta, error) {
+	return collectWeightShapesWithRefsHeadLayout(modelDim, vocabSize, seqLen, mlpMult, !tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, refs)
+}
+
+func collectWeightShapesWithRefsHeadLayout(
+	modelDim, vocabSize, seqLen int,
+	mlpMult float64,
+	reserveHead bool,
 	blockScales, residMix bool,
 	unet bool,
 	parallelResidual bool,
@@ -495,7 +539,7 @@ func collectWeightShapesWithRefs(
 
 	// Fixed weights: embed + optional head + final_norm.
 	shapes = append(shapes, WeightMeta{Name: "embed", Shape: []int{V, D}})
-	if !tieEmbeddings {
+	if reserveHead {
 		shapes = append(shapes, WeightMeta{Name: "head", Shape: []int{D, V}})
 	}
 	shapes = append(shapes, WeightMeta{Name: "final_norm", Shape: []int{D}, IsNormScale: true, InitOne: true})
