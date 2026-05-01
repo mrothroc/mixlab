@@ -15,6 +15,8 @@ func TestClassifyWeightOptimizer(t *testing.T) {
 		{"norm", OptimizerWeightMetadata{Name: "final_norm", Shape: []int{128}, IsNormScale: true}, optimizerClassScalar},
 		{"scalar_name", OptimizerWeightMetadata{Name: "bigram_scale", Shape: []int{1}}, optimizerClassScalar},
 		{"trigram_scale", OptimizerWeightMetadata{Name: "trigram_scale", Shape: []int{1}}, optimizerClassScalar},
+		{"smear_gate", OptimizerWeightMetadata{Name: "smear_gate", Shape: []int{12, 1}}, optimizerClassScalar},
+		{"smear_scale", OptimizerWeightMetadata{Name: "smear_scale", Shape: []int{1}}, optimizerClassScalar},
 		{"vector", OptimizerWeightMetadata{Name: "bias", Shape: []int{128}}, optimizerClassScalar},
 		{"matrix", OptimizerWeightMetadata{Name: "wq", Shape: []int{128, 128}}, optimizerClassMatrix},
 	}
@@ -79,6 +81,38 @@ func TestBuildTrainerOptimizerSpec(t *testing.T) {
 	}
 	if spec.MaxGradNorm != 1.25 || spec.DefaultBaseLR != 0.01 {
 		t.Fatalf("spec lr fields = max_grad_norm=%v default_base_lr=%v", spec.MaxGradNorm, spec.DefaultBaseLR)
+	}
+}
+
+func TestBuildTrainerOptimizerSpec_SmearGateUsesScalarGroup(t *testing.T) {
+	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
+		Weights: []OptimizerWeightMetadata{
+			{Name: "embed", Shape: []int{10, 16}},
+			{Name: "smear_gate", Shape: []int{12, 1}},
+			{Name: "smear_scale", Shape: []int{1}},
+			{Name: "wq", Shape: []int{16, 16}},
+		},
+		Embed:  OptimizerSettings{Name: "adamw", LR: 1},
+		Head:   OptimizerSettings{Name: "adamw", LR: 2},
+		Scalar: OptimizerSettings{Name: "adamw", LR: 3},
+		Matrix: OptimizerSettings{Name: "muon", LR: 4},
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainerOptimizerSpec error = %v", err)
+	}
+	if spec.Weights[1].GroupIndex != spec.Weights[2].GroupIndex {
+		t.Fatalf("smear weights use different groups: gate=%+v scale=%+v", spec.Weights[1], spec.Weights[2])
+	}
+	smearGroup := spec.Groups[spec.Weights[1].GroupIndex]
+	if smearGroup.Kind != OptimizerAdamW || smearGroup.LR != 3 {
+		t.Fatalf("smear group=%+v want scalar AdamW group with LR 3", smearGroup)
+	}
+	if spec.Weights[1].Decay || spec.Weights[2].Decay {
+		t.Fatalf("smear weights should not use weight decay: gate=%+v scale=%+v", spec.Weights[1], spec.Weights[2])
+	}
+	matrixGroup := spec.Groups[spec.Weights[3].GroupIndex]
+	if matrixGroup.Kind != OptimizerMuon {
+		t.Fatalf("matrix group=%+v want Muon", matrixGroup)
 	}
 }
 

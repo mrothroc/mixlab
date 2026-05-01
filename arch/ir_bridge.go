@@ -78,7 +78,7 @@ func buildIRProgramFromConfigWithState(cfg *ArchConfig, state TrainingProgramSta
 	reserveHead := cfg.ReservesUntiedHeadWeight()
 	useTiedHead := cfg.TieEmbeddings && !state.HeadUntied
 
-	return buildIRProgramWithDropoutNgramsAndOrder(
+	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		cfg.ModelDim,
 		cfg.VocabSize,
 		cfg.SeqLen,
@@ -101,6 +101,7 @@ func buildIRProgramFromConfigWithState(cfg *ArchConfig, state TrainingProgramSta
 		mtp,
 		reserveHead,
 		useTiedHead,
+		cfg.smearEmbeddingOptions(),
 	)
 }
 
@@ -110,21 +111,11 @@ func CountIRWeightsFromConfig(cfg *ArchConfig) (int, error) {
 		return 0, fmt.Errorf("nil config")
 	}
 
-	return countWeightsWithNgramsRecurrenceParallelHeadLayout(
-		cfg.ModelDim,
-		cfg.EffectiveMLPMult(),
-		cfg.ReservesUntiedHeadWeight(),
-		cfg.BlockScales,
-		cfg.ResidMix,
-		cfg.UNet,
-		cfg.ParallelResidual,
-		cfg.BigramVocabSize,
-		cfg.EffectiveBigramDim(),
-		cfg.TrigramVocabSize,
-		cfg.EffectiveTrigramDim(),
-		cfg.Blocks,
-		cfg.Recurrence,
-	)
+	metas, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		return 0, err
+	}
+	return len(metas), nil
 }
 
 func convertBlockSpecs(specs []BlockSpec) []BlockSpec {

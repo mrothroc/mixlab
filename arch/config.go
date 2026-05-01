@@ -11,23 +11,27 @@ import (
 
 // ArchConfig defines a model architecture for mixlab.
 type ArchConfig struct {
-	Name             string   `json:"name"`
-	ModelDim         int      `json:"model_dim"`
-	VocabSize        int      `json:"vocab_size"`
-	SeqLen           int      `json:"seq_len"`
-	MLPMult          float64  `json:"mlp_mult,omitempty"`
-	TieEmbeddings    bool     `json:"tie_embeddings,omitempty"`
-	BlockScales      bool     `json:"block_scales,omitempty"`
-	ResidMix         bool     `json:"resid_mix,omitempty"`
-	ParallelResidual bool     `json:"parallel_residual,omitempty"`
-	UNet             bool     `json:"unet,omitempty"`
-	BigramVocabSize  int      `json:"bigram_vocab_size,omitempty"`
-	BigramDim        int      `json:"bigram_dim,omitempty"`
-	TrigramVocabSize int      `json:"trigram_vocab_size,omitempty"`
-	TrigramDim       int      `json:"trigram_dim,omitempty"`
-	LogitSoftcap     float32  `json:"logit_softcap,omitempty"`
-	Dropout          float32  `json:"dropout,omitempty"`
-	MTP              *MTPSpec `json:"mtp,omitempty"`
+	Name             string  `json:"name"`
+	ModelDim         int     `json:"model_dim"`
+	VocabSize        int     `json:"vocab_size"`
+	SeqLen           int     `json:"seq_len"`
+	MLPMult          float64 `json:"mlp_mult,omitempty"`
+	TieEmbeddings    bool    `json:"tie_embeddings,omitempty"`
+	BlockScales      bool    `json:"block_scales,omitempty"`
+	ResidMix         bool    `json:"resid_mix,omitempty"`
+	ParallelResidual bool    `json:"parallel_residual,omitempty"`
+	UNet             bool    `json:"unet,omitempty"`
+	SmearEmbeddings  bool    `json:"smear_embeddings,omitempty"`
+	// SmearEmbeddingsGateShape selects the learned gate used by embedding smearing.
+	// Empty defaults to "pr130" when smear_embeddings is enabled.
+	SmearEmbeddingsGateShape string   `json:"smear_embeddings_gate_shape,omitempty"`
+	BigramVocabSize          int      `json:"bigram_vocab_size,omitempty"`
+	BigramDim                int      `json:"bigram_dim,omitempty"`
+	TrigramVocabSize         int      `json:"trigram_vocab_size,omitempty"`
+	TrigramDim               int      `json:"trigram_dim,omitempty"`
+	LogitSoftcap             float32  `json:"logit_softcap,omitempty"`
+	Dropout                  float32  `json:"dropout,omitempty"`
+	MTP                      *MTPSpec `json:"mtp,omitempty"`
 
 	Blocks     []BlockSpec `json:"blocks"`
 	Recurrence []int       `json:"recurrence,omitempty"`
@@ -400,6 +404,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.MLPMult <= 0 {
 		return nil, fmt.Errorf("config %q has invalid mlp_mult=%g (must be > 0)", source, cfg.MLPMult)
+	}
+	if err := validateSmearEmbeddings(cfg, source); err != nil {
+		return nil, err
 	}
 	if cfg.Dropout < 0 || cfg.Dropout > 1 {
 		return nil, fmt.Errorf("config %q has invalid dropout=%g (must be in [0,1])", source, cfg.Dropout)

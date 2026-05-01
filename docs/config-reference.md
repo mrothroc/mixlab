@@ -20,6 +20,8 @@ These fields live at the root of the config object.
 | `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
 | `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `mlp`, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
+| `smear_embeddings` | boolean | No | `false` | Enables 1-token-lookback smearing on token embeddings before the first block. |
+| `smear_embeddings_gate_shape` | string | No | `"pr130"` when smearing is enabled | Gate variant for `smear_embeddings`: `"pr130"`, `"per_channel"`, or `"per_position_per_channel"`. |
 | `bigram_vocab_size` | integer | No | Disabled | Enables model-level hashed bigram embeddings when `> 1`. `0` disables. `1` is invalid. |
 | `bigram_dim` | integer | No | `model_dim` when bigrams enabled | Bigram embedding dimension. `0` inherits `model_dim`. Ignored when `bigram_vocab_size == 0`. |
 | `tie_embeddings` | boolean | No | `false` | Shares token embedding and output head weights. |
@@ -52,6 +54,27 @@ These fields live at the root of the config object.
   }
 }
 ```
+
+## Smear Token Embeddings
+
+`smear_embeddings` mixes the previous token embedding into the current token embedding before flattening and before optional bigram/trigram residual embeddings. Position `0` is left unchanged, so the BOS/no-previous-token boundary is not trainable and cannot leak a wrapped final token into the first position.
+
+```json
+{
+  "smear_embeddings": true,
+  "smear_embeddings_gate_shape": "pr130"
+}
+```
+
+Gate variants:
+
+| Value | Extra weights | Behavior |
+|------|---------------|----------|
+| `"pr130"` | `smear_gate: [12,1]`, `smear_scale: [1]` | PR #130 parity: for positions `1..T-1`, computes `smear_scale * sigmoid(E[x[t]][:12] @ smear_gate)` and multiplies that scalar gate into `E[x[t-1]]`. Both weights initialize to zero, so the feature starts as an exact no-op. Requires `model_dim >= 12`. |
+| `"per_channel"` | `smear_gate: [D]` | Static per-channel gate for the previous token embedding at positions `1..T-1`. Initializes to zero. |
+| `"per_position_per_channel"` | `smear_gate: [T,D]` | Static per-position/per-channel gate. The row for position `0` is allocated but unused by the emitted graph, preserving the BOS boundary. Initializes to zero. |
+
+The smear gate weights are routed through the scalar/Adam optimizer group, not the matrix/Muon group.
 
 ## Multi-Token Prediction (MTP)
 

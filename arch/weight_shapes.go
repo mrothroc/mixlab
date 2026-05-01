@@ -458,7 +458,7 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if err != nil {
 		return nil, fmt.Errorf("blocks: %w", err)
 	}
-	return collectWeightShapesWithRefsHeadLayout(
+	metas, err := collectWeightShapesWithRefsHeadLayout(
 		cfg.ModelDim,
 		cfg.VocabSize,
 		cfg.SeqLen,
@@ -475,6 +475,22 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 		cfg.Blocks,
 		refs,
 	)
+	if err != nil {
+		return nil, err
+	}
+	smearMetas, err := smearEmbeddingWeightShapes(cfg.ModelDim, cfg.SeqLen, cfg.smearEmbeddingOptions())
+	if err != nil {
+		return nil, err
+	}
+	if len(smearMetas) == 0 {
+		return metas, nil
+	}
+	fixed := fixedWeightCountWithHead(cfg.ReservesUntiedHeadWeight())
+	out := make([]WeightMeta, 0, len(metas)+len(smearMetas))
+	out = append(out, metas[:fixed]...)
+	out = append(out, smearMetas...)
+	out = append(out, metas[fixed:]...)
+	return out, nil
 }
 
 func collectWeightShapesWithRefs(

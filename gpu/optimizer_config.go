@@ -81,7 +81,7 @@ func BuildTrainerOptimizerSpec(cfg TrainerOptimizerConfig) (TrainerOptimizerSpec
 		}
 		weights = append(weights, WeightOptimizer{
 			GroupIndex: groupIdx,
-			Decay:      shouldDecayWeight(weight.Shape),
+			Decay:      shouldDecayOptimizerWeight(weight.Shape, class),
 		})
 	}
 
@@ -179,9 +179,16 @@ func shouldDecayWeight(shape []int) bool {
 	return len(shape) >= 2
 }
 
+func shouldDecayOptimizerWeight(shape []int, class optimizerClass) bool {
+	if class == optimizerClassScalar {
+		return false
+	}
+	return shouldDecayWeight(shape)
+}
+
 func isScalarOptimizerName(name string) bool {
 	switch name {
-	case "bigram_scale", "trigram_scale", "decay", "scan_decay", "w_decay", "mu", "mu2":
+	case "bigram_scale", "trigram_scale", "smear_gate", "smear_scale", "decay", "scan_decay", "w_decay", "mu", "mu2":
 		return true
 	}
 	return strings.HasSuffix(name, "_scale")

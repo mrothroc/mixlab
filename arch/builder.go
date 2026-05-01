@@ -745,6 +745,33 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 	reserveHead bool,
 	useTiedHead bool,
 ) (*Program, error) {
+	return buildIRProgramWithDropoutNgramsOrderAndSmear(
+		modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix,
+		unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
+		logitSoftcap, dropout, blocks, recurrence, executionOrder, mtp, reserveHead, useTiedHead,
+		disabledSmearEmbeddingOptions(),
+	)
+}
+
+func buildIRProgramWithDropoutNgramsOrderAndSmear(
+	modelDim, vocabSize, seqLen, batchSize int,
+	mlpMult float64,
+	tieEmbeddings bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	logitSoftcap float32,
+	dropout float32,
+	blocks []BlockSpec,
+	recurrence []int,
+	executionOrder []int,
+	mtp *MTPSpec,
+	reserveHead bool,
+	useTiedHead bool,
+	smearOpts smearEmbeddingOptions,
+) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
 	}
@@ -803,6 +830,11 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 	if err != nil {
 		return nil, err
 	}
+	smearWeights, err := smearEmbeddingWeightShapes(D, T, smearOpts)
+	if err != nil {
+		return nil, err
+	}
+	nWeights += len(smearWeights)
 
 	prog := NewProgram(nWeights)
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
@@ -812,13 +844,20 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 	wi := 0
 	prog.Embed(weightName(wi), "tokens", "x_embed")
 	wi = fixedWeightCountWithHead(reserveHead)
+	embedState := "x_embed"
+	if smearOpts.Enabled {
+		embedState, wi, err = emitSmearEmbeddingIR(prog, embedState, T, D, wi, smearOpts)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	// Flatten to [B*T, D], leaving room to inject model-level n-gram embeddings.
 	xState := "x"
 	if bigramVocabSize > 0 || trigramVocabSize > 0 {
 		xState = "x_tok"
 	}
-	prog.Reshape("x_embed", []int{B * T, D}, xState)
+	prog.Reshape(embedState, []int{B * T, D}, xState)
 	wi = emitBigramIR(prog, B, T, D, wi, bigramVocabSize, bigramDim)
 	trigramBase := "x_tok"
 	if bigramVocabSize > 0 {
