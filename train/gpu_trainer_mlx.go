@@ -17,6 +17,7 @@ type mlxGPUTrainer struct {
 	handles            []int64 // GPU weight array handles
 	shapes             []WeightShape
 	baseLR             float32
+	evalLossOutputName string
 	bigramVocabSize    int
 	trigramVocabSize   int
 	declaredTargetSize int
@@ -140,6 +141,7 @@ func initMLXGPUTrainer(
 		handles:            handles,
 		shapes:             shapes,
 		baseLR:             optimizerSpec.DefaultBaseLR,
+		evalLossOutputName: preferredEvalLossOutputName(irProg),
 		bigramVocabSize:    cfg.BigramVocabSize,
 		trigramVocabSize:   cfg.TrigramVocabSize,
 		declaredTargetSize: declaredTargetSize,
@@ -383,6 +385,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 		t.prog.Destroy()
 	}
 	t.prog = gpuProg
+	t.evalLossOutputName = preferredEvalLossOutputName(irProg)
 	return nil
 }
 
@@ -395,7 +398,18 @@ func (t *mlxGPUTrainer) EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (fl
 	if err != nil {
 		return 0, err
 	}
-	return gpu.TrainerEvaluate(t.handle, inputs)
+	loss, err := gpu.TrainerEvaluate(t.handle, inputs)
+	if err != nil || t.evalLossOutputName == "" || t.evalLossOutputName == "loss" {
+		return loss, err
+	}
+	out, err := gpu.TrainerReadOutput(t.handle, t.evalLossOutputName, []int{1})
+	if err != nil {
+		return 0, err
+	}
+	if len(out) != 1 {
+		return 0, fmt.Errorf("eval output %q returned %d values, want 1", t.evalLossOutputName, len(out))
+	}
+	return out[0], nil
 }
 
 // EvaluatePerTokenGPU runs a forward pass without gradients and returns per-token NLLs.
@@ -514,6 +528,17 @@ func lowerIRToGPU(prog *ir.Program) (*gpu.Program, error) {
 	}
 
 	return gpuProg, nil
+}
+
+func preferredEvalLossOutputName(prog *ir.Program) string {
+	if prog != nil {
+		for _, out := range prog.Outputs {
+			if out.Name == "eval_loss" {
+				return "eval_loss"
+			}
+		}
+	}
+	return "loss"
 }
 
 func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.TrainerOptimizerSpec, error) {
