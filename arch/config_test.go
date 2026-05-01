@@ -376,6 +376,18 @@ func TestOptimizerFieldParsing(t *testing.T) {
 		t.Fatalf("round-trip JSON missing optimizer=muon_eq_r: %s", roundTrip)
 	}
 
+	cfg5, err := ParseArchConfig([]byte(`{
+		"model_dim": 128, "vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 10, "lr": 1e-3, "batch_tokens": 128, "seed": 1, "optimizer": " NorMuon "}
+	}`), "normuon")
+	if err != nil {
+		t.Fatalf("parse normuon: %v", err)
+	}
+	if cfg5.Training.Optimizer != "normuon" {
+		t.Errorf("normuon optimizer = %q, want normuon", cfg5.Training.Optimizer)
+	}
+
 	_, err = ParseArchConfig([]byte(`{
 		"model_dim": 128, "vocab_size": 1024,
 		"blocks": [{"type": "plain", "heads": 4}],

@@ -70,6 +70,22 @@ std::vector<mlx_ir::OptimizerGroupConfig> read_optimizer_groups(
       default:
         throw std::runtime_error("unsupported newton-schulz variant");
     }
+    mlx_ir::MuonNormalization muon_normalization;
+    switch (optimizer_groups[i].muon_normalization) {
+      case 0:
+        muon_normalization = optimizer_groups[i].row_normalize != 0
+            ? mlx_ir::MuonNormalization::RowL2
+            : mlx_ir::MuonNormalization::None;
+        break;
+      case 1:
+        muon_normalization = mlx_ir::MuonNormalization::RowL2;
+        break;
+      case 2:
+        muon_normalization = mlx_ir::MuonNormalization::NorMuon;
+        break;
+      default:
+        throw std::runtime_error("unsupported Muon normalization");
+    }
     groups.push_back(mlx_ir::OptimizerGroupConfig{
         kind,
         optimizer_groups[i].lr,
@@ -80,7 +96,7 @@ std::vector<mlx_ir::OptimizerGroupConfig> read_optimizer_groups(
         optimizer_groups[i].backend_steps,
         newton_schulz_variant,
         optimizer_groups[i].nesterov != 0,
-        optimizer_groups[i].row_normalize != 0,
+        muon_normalization,
     });
   }
   return groups;
@@ -137,6 +153,8 @@ int64_t mlx_ir_create_trainer(
       5,
       0,
       1,
+      0,
+      0,
   };
   std::vector<mlx_ir_weight_optimizer> specs(static_cast<size_t>(n_weights));
   for (int i = 0; i < n_weights; ++i) {

@@ -228,6 +228,8 @@ struct LoraOptimizerState {
   uint8_t has_adam_state = 0;
   mx::array muon_momentum = mx::array(0.0f, mx::float32);
   uint8_t has_muon_state = 0;
+  mx::array muon_second_moment = mx::array(0.0f, mx::float32);
+  uint8_t has_muon_second_moment_state = 0;
 };
 
 struct LoRAAdapterState {
@@ -304,6 +306,33 @@ static mx::array row_l2_normalize(const mx::array& x, float eps = 1e-7f) {
   return mx::astype(x_f32 / (norm + mx::array(eps, mx::float32)), x.dtype());
 }
 
+static mx::array init_normuon_second_moment(const mx::array& x) {
+  const auto rows = x.shape(0);
+  const auto cols = x.shape(1);
+  if (rows >= cols) {
+    return mx::zeros(mx::Shape{rows, 1}, mx::float32);
+  }
+  return mx::zeros(mx::Shape{1, cols}, mx::float32);
+}
+
+static mx::array normuon_normalize(
+    const mx::array& x,
+    mx::array& second_moment,
+    float beta2,
+    float eps = 1e-10f) {
+  auto x_f32 = mx::astype(x, mx::float32);
+  const int neuron_axis = x.shape(0) >= x.shape(1) ? 1 : 0;
+  auto neuron_mean_sq = mx::mean(mx::square(x_f32), neuron_axis, true);
+  second_moment = beta2 * second_moment + (1.0f - beta2) * neuron_mean_sq;
+
+  auto scale = mx::array(1.0f, mx::float32) / mx::sqrt(mx::maximum(second_moment, mx::array(eps, mx::float32)));
+  auto normalized = x_f32 * scale;
+  auto old_norm = mx::sqrt(mx::sum(mx::square(x_f32)));
+  auto new_norm = mx::sqrt(mx::sum(mx::square(normalized)));
+  normalized = normalized * (old_norm / mx::maximum(new_norm, mx::array(eps, mx::float32)));
+  return mx::astype(normalized, x.dtype());
+}
+
 void clip_gradients(std::vector<mx::array>& grads, float max_grad_norm) {
   if (max_grad_norm <= 0.0f) {
     return;
@@ -329,6 +358,8 @@ void init_lora_optimizer_state(const mx::array& weight, const OptimizerGroupConf
       state.has_adam_state = 1;
       state.muon_momentum = mx::array(0.0f, mx::float32);
       state.has_muon_state = 0;
+      state.muon_second_moment = mx::array(0.0f, mx::float32);
+      state.has_muon_second_moment_state = 0;
       break;
     case OptimizerKind::Muon:
       if (weight.ndim() != 2) {
@@ -339,6 +370,13 @@ void init_lora_optimizer_state(const mx::array& weight, const OptimizerGroupConf
       state.has_adam_state = 0;
       state.muon_momentum = mx::zeros_like(weight);
       state.has_muon_state = 1;
+      if (group.muon_normalization == MuonNormalization::NorMuon) {
+        state.muon_second_moment = init_normuon_second_moment(weight);
+        state.has_muon_second_moment_state = 1;
+      } else {
+        state.muon_second_moment = mx::array(0.0f, mx::float32);
+        state.has_muon_second_moment_state = 0;
+      }
       break;
     default:
       throw std::runtime_error("unsupported optimizer kind");
@@ -389,8 +427,18 @@ void apply_optimizer_update(
       const auto cols = static_cast<float>(w.shape(1));
       const float aspect = std::sqrt(std::max(1.0f, rows / cols));
       update = update * mx::array(aspect, mx::float32);
-      if (group.row_normalize) {
-        update = row_l2_normalize(update);
+      switch (group.muon_normalization) {
+        case MuonNormalization::None:
+          break;
+        case MuonNormalization::RowL2:
+          update = row_l2_normalize(update);
+          break;
+        case MuonNormalization::NorMuon:
+          if (state.has_muon_second_moment_state == 0) {
+            throw std::runtime_error("NorMuon state missing for LoRA adapter");
+          }
+          update = normuon_normalize(update, state.muon_second_moment, group.beta2);
+          break;
       }
       if (group.weight_decay > 0.0f && decay) {
         w = w - (effective_lr * group.weight_decay) * w;
@@ -479,6 +527,11 @@ void collect_state_for_eval(
   for (size_t i = 0; i < trainer.muon_momentum.size(); ++i) {
     if (trainer.has_muon_state[i] != 0) {
       eval_arrays.push_back(trainer.muon_momentum[i]);
+    }
+  }
+  for (size_t i = 0; i < trainer.muon_second_moment.size(); ++i) {
+    if (trainer.has_muon_second_moment_state[i] != 0) {
+      eval_arrays.push_back(trainer.muon_second_moment[i]);
     }
   }
   for (size_t i = 0; i < trainer.sgd_momentum.size(); ++i) {
@@ -576,7 +629,8 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   apply_optimizer_updates(grads);
 
   std::vector<mx::array> eval_arrays;
-  eval_arrays.reserve(1 + weights.size() + adam_m.size() * 2 + muon_momentum.size() + sgd_momentum.size());
+  eval_arrays.reserve(
+      1 + weights.size() + adam_m.size() * 2 + muon_momentum.size() + muon_second_moment.size() + sgd_momentum.size());
   eval_arrays.push_back(loss);
   collect_state_for_eval(*this, eval_arrays, false);
   mx::eval(eval_arrays);
@@ -637,8 +691,18 @@ void IRTrainer::apply_optimizer_updates(const std::vector<mx::array>& grads) {
         const auto cols = static_cast<float>(w.shape(1));
         const float aspect = std::sqrt(std::max(1.0f, rows / cols));
         update = update * mx::array(aspect, mx::float32);
-        if (group.row_normalize) {
-          update = row_l2_normalize(update);
+        switch (group.muon_normalization) {
+          case MuonNormalization::None:
+            break;
+          case MuonNormalization::RowL2:
+            update = row_l2_normalize(update);
+            break;
+          case MuonNormalization::NorMuon:
+            if (has_muon_second_moment_state[i] == 0) {
+              throw std::runtime_error("NorMuon state missing for weight");
+            }
+            update = normuon_normalize(update, muon_second_moment[i], group.beta2);
+            break;
         }
         if (group.weight_decay > 0.0f && spec.decay) {
           w = w - (effective_lr * group.weight_decay) * w;
@@ -705,7 +769,9 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   log_submit_step_debug(*this, step_count, preclip_grads);
 
   std::vector<mx::array> eval_arrays;
-  eval_arrays.reserve(1 + outputs.size() + weights.size() + adam_m.size() * 2 + muon_momentum.size() + sgd_momentum.size());
+  eval_arrays.reserve(
+      1 + outputs.size() + weights.size() + adam_m.size() * 2 +
+      muon_momentum.size() + muon_second_moment.size() + sgd_momentum.size());
   eval_arrays.push_back(loss);
   for (const auto& [_, output] : outputs) {
     eval_arrays.push_back(output);
@@ -909,7 +975,7 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
     }
 
     std::vector<mx::array> eval_arrays;
-    eval_arrays.reserve(adapter_indices.size() * 6);
+    eval_arrays.reserve(adapter_indices.size() * 8);
     for (size_t weight_idx : adapter_indices) {
       const auto& adapter = adapters[weight_idx];
       eval_arrays.push_back(adapter.a);
@@ -923,6 +989,10 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
       if (adapter.a_state.has_muon_state != 0) {
         eval_arrays.push_back(adapter.a_state.muon_momentum);
         eval_arrays.push_back(adapter.b_state.muon_momentum);
+      }
+      if (adapter.a_state.has_muon_second_moment_state != 0) {
+        eval_arrays.push_back(adapter.a_state.muon_second_moment);
+        eval_arrays.push_back(adapter.b_state.muon_second_moment);
       }
     }
     if (!eval_arrays.empty()) {
@@ -1000,6 +1070,8 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
   trainer->has_adam_state.reserve(initial_weights.size());
   trainer->muon_momentum.reserve(initial_weights.size());
   trainer->has_muon_state.reserve(initial_weights.size());
+  trainer->muon_second_moment.reserve(initial_weights.size());
+  trainer->has_muon_second_moment_state.reserve(initial_weights.size());
   trainer->sgd_momentum.reserve(initial_weights.size());
   trainer->has_sgd_state.reserve(initial_weights.size());
   for (size_t i = 0; i < initial_weights.size(); ++i) {
@@ -1015,6 +1087,8 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
         trainer->has_adam_state.push_back(1);
         trainer->muon_momentum.push_back(mx::array(0.0f, mx::float32));
         trainer->has_muon_state.push_back(0);
+        trainer->muon_second_moment.push_back(mx::array(0.0f, mx::float32));
+        trainer->has_muon_second_moment_state.push_back(0);
         trainer->sgd_momentum.push_back(mx::array(0.0f, mx::float32));
         trainer->has_sgd_state.push_back(0);
         break;
@@ -1027,6 +1101,13 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
         trainer->has_adam_state.push_back(0);
         trainer->muon_momentum.push_back(mx::zeros_like(initial_weights[i]));
         trainer->has_muon_state.push_back(1);
+        if (group.muon_normalization == MuonNormalization::NorMuon) {
+          trainer->muon_second_moment.push_back(init_normuon_second_moment(initial_weights[i]));
+          trainer->has_muon_second_moment_state.push_back(1);
+        } else {
+          trainer->muon_second_moment.push_back(mx::array(0.0f, mx::float32));
+          trainer->has_muon_second_moment_state.push_back(0);
+        }
         trainer->sgd_momentum.push_back(mx::array(0.0f, mx::float32));
         trainer->has_sgd_state.push_back(0);
         break;
@@ -1036,6 +1117,8 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
         trainer->has_adam_state.push_back(0);
         trainer->muon_momentum.push_back(mx::array(0.0f, mx::float32));
         trainer->has_muon_state.push_back(0);
+        trainer->muon_second_moment.push_back(mx::array(0.0f, mx::float32));
+        trainer->has_muon_second_moment_state.push_back(0);
         trainer->sgd_momentum.push_back(mx::zeros_like(initial_weights[i]));
         trainer->has_sgd_state.push_back(1);
         break;

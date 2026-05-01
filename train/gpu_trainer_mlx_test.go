@@ -127,3 +127,43 @@ func TestBuildTrainerOptimizerSpec_MuonEqR(t *testing.T) {
 		t.Fatal("matrix group RowNormalize=false, want true")
 	}
 }
+
+func TestBuildTrainerOptimizerSpec_NorMuon(t *testing.T) {
+	cfg := &ArchConfig{
+		Name:      "normuon_optimizer",
+		ModelDim:  16,
+		VocabSize: 32,
+		SeqLen:    4,
+		Blocks: []BlockSpec{
+			{Type: "plain", Heads: 2},
+		},
+		Training: DefaultTrainingSpec(),
+	}
+	cfg.Training.Optimizer = "normuon"
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	spec, err := buildTrainerOptimizerSpec(cfg, shapes)
+	if err != nil {
+		t.Fatalf("buildTrainerOptimizerSpec: %v", err)
+	}
+
+	matrixGroup := -1
+	for i, shape := range shapes {
+		if len(shape.Shape) == 2 && shape.Name != "embed" && shape.Name != "head" {
+			matrixGroup = spec.Weights[i].GroupIndex
+			break
+		}
+	}
+	if matrixGroup < 0 {
+		t.Fatal("no matrix weight group found")
+	}
+	group := spec.Groups[matrixGroup]
+	if group.Kind != gpu.OptimizerMuon {
+		t.Fatalf("matrix group kind=%d want Muon", group.Kind)
+	}
+	if group.MuonNormalization != gpu.MuonNormalizationNorMuon {
+		t.Fatalf("matrix group MuonNormalization=%d want NorMuon", group.MuonNormalization)
+	}
+}

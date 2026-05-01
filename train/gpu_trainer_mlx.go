@@ -487,6 +487,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 			BackendSteps:        cfg.Training.MuonBackendSteps,
 			NewtonSchulzVariant: cfg.Training.NewtonSchulzVariant,
 			Nesterov:            muonNesterov,
+			MuonNormalization:   matrixMuonNormalization(matrixOptimizerName),
 			RowNormalize:        matrixOptimizerName == "muon_eq_r",
 		},
 		MaxGradNorm:   cfg.Training.GradClip,
@@ -500,7 +501,20 @@ func matrixOptimizer(cfg *ArchConfig) string {
 		return "adamw"
 	case "muon_eq_r":
 		return "muon_eq_r"
+	case "normuon":
+		return "normuon"
 	default:
 		return "muon"
+	}
+}
+
+func matrixMuonNormalization(name string) gpu.MuonNormalization {
+	switch name {
+	case "muon_eq_r":
+		return gpu.MuonNormalizationRowL2
+	case "normuon":
+		return gpu.MuonNormalizationNorMuon
+	default:
+		return gpu.MuonNormalizationNone
 	}
 }

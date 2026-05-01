@@ -21,7 +21,10 @@ type OptimizerSettings struct {
 	BackendSteps        int
 	NewtonSchulzVariant string
 	Nesterov            bool
-	RowNormalize        bool
+	MuonNormalization   MuonNormalization
+	// RowNormalize is retained for direct TrainerOptimizerSpec callers.
+	// Config-driven code should prefer MuonNormalization.
+	RowNormalize bool
 }
 
 type TrainerOptimizerConfig struct {
@@ -108,6 +111,19 @@ func optimizerGroup(settings OptimizerSettings) (OptimizerGroup, error) {
 	if err != nil {
 		return OptimizerGroup{}, err
 	}
+	muonNormalization := settings.MuonNormalization
+	if muonNormalization == MuonNormalizationNone {
+		switch strings.ToLower(strings.TrimSpace(settings.Name)) {
+		case "muon_eq_r":
+			muonNormalization = MuonNormalizationRowL2
+		case "normuon":
+			muonNormalization = MuonNormalizationNorMuon
+		default:
+			if settings.RowNormalize {
+				muonNormalization = MuonNormalizationRowL2
+			}
+		}
+	}
 	return OptimizerGroup{
 		Kind:                kind,
 		LR:                  settings.LR,
@@ -118,6 +134,7 @@ func optimizerGroup(settings OptimizerSettings) (OptimizerGroup, error) {
 		BackendSteps:        settings.BackendSteps,
 		NewtonSchulzVariant: parseNewtonSchulzVariant(settings.NewtonSchulzVariant),
 		Nesterov:            settings.Nesterov,
+		MuonNormalization:   muonNormalization,
 		RowNormalize:        settings.RowNormalize,
 	}, nil
 }
@@ -126,7 +143,7 @@ func optimizerKind(name string) (OptimizerKind, error) {
 	switch strings.ToLower(name) {
 	case "adamw":
 		return OptimizerAdamW, nil
-	case "muon", "muon_eq_r":
+	case "muon", "muon_eq_r", "normuon":
 		return OptimizerMuon, nil
 	case "sgd":
 		return OptimizerSGD, nil

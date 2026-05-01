@@ -31,6 +31,12 @@ enum class NewtonSchulzVariant : uint8_t {
   PolarExpress = 1,
 };
 
+enum class MuonNormalization : uint8_t {
+  None = 0,
+  RowL2 = 1,
+  NorMuon = 2,
+};
+
 struct OptimizerGroupConfig {
   OptimizerKind kind = OptimizerKind::AdamW;
   float lr = 0.0f;
@@ -41,7 +47,7 @@ struct OptimizerGroupConfig {
   int backend_steps = 5;
   NewtonSchulzVariant newton_schulz_variant = NewtonSchulzVariant::Fixed;
   bool nesterov = true;
-  bool row_normalize = false;
+  MuonNormalization muon_normalization = MuonNormalization::None;
 };
 
 struct WeightOptimizerSpec {
@@ -62,6 +68,8 @@ struct IRTrainer {
   std::vector<uint8_t> has_adam_state;
   std::vector<mlx::core::array> muon_momentum;
   std::vector<uint8_t> has_muon_state;
+  std::vector<mlx::core::array> muon_second_moment;
+  std::vector<uint8_t> has_muon_second_moment_state;
   std::vector<mlx::core::array> sgd_momentum;
   std::vector<uint8_t> has_sgd_state;
   int step_count = 0;

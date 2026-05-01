@@ -106,6 +106,14 @@ const (
 	NewtonSchulzPolarExpress
 )
 
+type MuonNormalization int
+
+const (
+	MuonNormalizationNone MuonNormalization = iota
+	MuonNormalizationRowL2
+	MuonNormalizationNorMuon
+)
+
 type OptimizerGroup struct {
 	Kind                OptimizerKind
 	LR                  float32
@@ -116,6 +124,7 @@ type OptimizerGroup struct {
 	BackendSteps        int
 	NewtonSchulzVariant NewtonSchulzVariant
 	Nesterov            bool
+	MuonNormalization   MuonNormalization
 	RowNormalize        bool
 }
 
