@@ -30,6 +30,7 @@ These fields live at the root of the config object.
 | `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Cannot be combined with `unet`. |
 | `unet` | boolean | No | `false` | Splits the `blocks` list into encoder/decoder halves with learned skip connections. |
 | `mtp` | object | No | Disabled | Enables parameter-free multi-token prediction during training. See [MTP section](#multi-token-prediction-mtp). |
+| `backout` | object | No | Disabled | Enables final-latent residual subtraction before the final RMSNorm. See [Backout section](#backout). |
 | `blocks` | array | Yes | None | Ordered block list. Must contain at least one block. |
 | `recurrence` | integer array | No | Disabled | Weight-sharing map for `blocks`; length must equal `blocks`, references must point to the same or earlier block with the same type. |
 | `training` | object | No | Defaults applied per field | Training hyperparameters. See [Training section](#training). |
@@ -95,6 +96,26 @@ The smear gate weights are routed through the scalar/Adam optimizer group, not t
 | `n` | integer | No | `1` | Number of future-token losses. `1` preserves current next-token behavior. Must be `>= 1` and `<= seq_len`. |
 | `loss_weights` | number array | No | `[1, 0.5, 0.25, ...]` | Per-horizon coefficients. Length must equal `n`; values must be non-negative and sum to `> 0`. The emitted loss is a weighted average. |
 | `untie_embed_at_frac` | number | No | `1.0` | Fraction of training at which an initially tied embedding/head pair splits. Values must be in `[0,1]`; `< 1` requires `tie_embeddings: true` and reserves a `head` weight. |
+
+## Backout
+
+`backout` captures the residual stream after a configured physical block and subtracts a learned scalar-weighted copy immediately before the final RMSNorm and LM head. When omitted, the emitted IR and weight layout stay unchanged.
+
+```json
+{
+  "backout": {
+    "save_layer": 7,
+    "lambda_init": -1.0
+  }
+}
+```
+
+| Field | Type | Required | Default | Notes |
+|------|------|----------|---------|-------|
+| `save_layer` | integer | Yes | None | Zero-based block index captured after that block finishes. Must be `>= 0` and `< len(blocks)-1`. |
+| `lambda_init` | number | No | `-1.0` | Initial value for learned scalar weight `backout_lambda`. Must be finite. |
+
+`backout_lambda` has shape `[1]`, is initialized from `lambda_init`, and is routed through the scalar optimizer group with no weight decay. `backout` composes with recurrence, parallel residual, tied or untied heads, and MTP. It is not supported with `unet`.
 
 ## Block types
 

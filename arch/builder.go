@@ -750,6 +750,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
 		logitSoftcap, dropout, blocks, recurrence, executionOrder, mtp, reserveHead, useTiedHead,
 		disabledSmearEmbeddingOptions(),
+		nil,
 	)
 }
 
@@ -771,6 +772,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	reserveHead bool,
 	useTiedHead bool,
 	smearOpts smearEmbeddingOptions,
+	backoutSpec *BackoutSpec,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -818,6 +820,10 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	if len(executionOrder) > 0 && unet {
 		return nil, fmt.Errorf("recurrence activation schedule is not supported with unet")
 	}
+	backoutPlan, err := newBackoutBuildPlan(backoutSpec, len(blocks), unet, "IR build")
+	if err != nil {
+		return nil, err
+	}
 
 	if useTiedHead && !reserveHead && !tieEmbeddings {
 		return nil, fmt.Errorf("tied LM head requires embedding weight layout")
@@ -835,6 +841,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		return nil, err
 	}
 	nWeights += len(smearWeights)
+	nWeights += len(backoutWeightShapes(backoutSpec))
 
 	prog := NewProgram(nWeights)
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
@@ -891,6 +898,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			if err != nil {
 				return nil, err
 			}
+			backoutPlan.captureAfterBlock(prog, i, "x")
 			prog.ScalarMul("x", 1.0, fmt.Sprintf("enc_%d", i))
 			opIdx++
 		}
@@ -918,18 +926,26 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			if err != nil {
 				return nil, err
 			}
+			backoutPlan.captureAfterBlock(prog, blockIdx, "x")
 			opIdx++
 		}
 	case len(executionOrder) > 0:
-		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout)
+		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, &backoutPlan)
 		if err != nil {
 			return nil, err
 		}
 	default:
-		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout)
+		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, &backoutPlan)
 		if err != nil {
 			return nil, err
 		}
+	}
+	backoutPlan.setWeightIndex(wi)
+	if backoutPlan.enabled {
+		wi++
+	}
+	if err := backoutPlan.applyBeforeFinalNorm(prog, "x"); err != nil {
+		return nil, err
 	}
 
 	// Final normalization

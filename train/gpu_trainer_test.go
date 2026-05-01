@@ -57,10 +57,16 @@ func TestInitWeightData_InitOneScalars(t *testing.T) {
 func TestInitWeightData_InitValue(t *testing.T) {
 	weights := initWeightData([]WeightShape{
 		{Name: "qk_gain", Shape: []int{4}, InitValue: 5.25},
+		{Name: "backout_lambda", Shape: []int{1}, InitValue: -1.0},
 	}, 123, "", 0)
 	for _, v := range weights[0] {
 		if v != 5.25 {
 			t.Fatalf("qk_gain expected init 5.25, got %v", weights[0])
+		}
+	}
+	for _, v := range weights[1] {
+		if v != -1.0 {
+			t.Fatalf("backout_lambda expected init -1.0, got %v", weights[1])
 		}
 	}
 }

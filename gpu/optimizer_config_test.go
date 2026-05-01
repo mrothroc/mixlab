@@ -17,6 +17,7 @@ func TestClassifyWeightOptimizer(t *testing.T) {
 		{"trigram_scale", OptimizerWeightMetadata{Name: "trigram_scale", Shape: []int{1}}, optimizerClassScalar},
 		{"smear_gate", OptimizerWeightMetadata{Name: "smear_gate", Shape: []int{12, 1}}, optimizerClassScalar},
 		{"smear_scale", OptimizerWeightMetadata{Name: "smear_scale", Shape: []int{1}}, optimizerClassScalar},
+		{"backout_lambda", OptimizerWeightMetadata{Name: "backout_lambda", Shape: []int{1}}, optimizerClassScalar},
 		{"vector", OptimizerWeightMetadata{Name: "bias", Shape: []int{128}}, optimizerClassScalar},
 		{"matrix", OptimizerWeightMetadata{Name: "wq", Shape: []int{128, 128}}, optimizerClassMatrix},
 	}
@@ -81,6 +82,34 @@ func TestBuildTrainerOptimizerSpec(t *testing.T) {
 	}
 	if spec.MaxGradNorm != 1.25 || spec.DefaultBaseLR != 0.01 {
 		t.Fatalf("spec lr fields = max_grad_norm=%v default_base_lr=%v", spec.MaxGradNorm, spec.DefaultBaseLR)
+	}
+}
+
+func TestBuildTrainerOptimizerSpec_BackoutLambdaUsesScalarGroup(t *testing.T) {
+	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
+		Weights: []OptimizerWeightMetadata{
+			{Name: "embed", Shape: []int{10, 16}},
+			{Name: "backout_lambda", Shape: []int{1}},
+			{Name: "wq", Shape: []int{16, 16}},
+		},
+		Embed:  OptimizerSettings{Name: "adamw", LR: 1},
+		Head:   OptimizerSettings{Name: "adamw", LR: 2},
+		Scalar: OptimizerSettings{Name: "adamw", LR: 3},
+		Matrix: OptimizerSettings{Name: "muon", LR: 4},
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainerOptimizerSpec error = %v", err)
+	}
+	backoutSpec := spec.Weights[1]
+	backoutGroup := spec.Groups[backoutSpec.GroupIndex]
+	if backoutGroup.Kind != OptimizerAdamW || backoutGroup.LR != 3 {
+		t.Fatalf("backout group=%+v want scalar AdamW group with LR 3", backoutGroup)
+	}
+	if backoutSpec.Decay {
+		t.Fatalf("backout_lambda should not use weight decay: %+v", backoutSpec)
+	}
+	if spec.Groups[spec.Weights[2].GroupIndex].Kind != OptimizerMuon {
+		t.Fatalf("matrix group=%+v want Muon", spec.Groups[spec.Weights[2].GroupIndex])
 	}
 }
 

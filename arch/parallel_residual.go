@@ -186,7 +186,7 @@ func countBlockRangeWeightsWithRecurrenceAndParallel(specs []BlockSpec, rec []in
 	return countBlockRangeWeightsWithRefsAndParallel(specs, refs, start, end, blockScales, residMix, parallelResidual)
 }
 
-func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
+func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout float32, backout *backoutBuildPlan) (int, error) {
 	firstSpec := specs[blockIdx]
 	swigluSpec := specs[blockIdx+1]
 
@@ -256,11 +256,15 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 	}
 	mlpDelta, _ := emitSwiGLUParallelDeltaIRWithDropout(prog, xNorm, swigluWI, *opIdx, mlpMult, blockScales, dropout)
 	prog.Add(firstState, mlpDelta, stream)
+	if backout != nil {
+		backout.captureAfterBlock(prog, blockIdx, stream)
+		backout.captureAfterBlock(prog, blockIdx+1, stream)
+	}
 	*opIdx += 2
 	return wi, nil
 }
 
-func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32) (int, error) {
+func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32, backout *backoutBuildPlan) (int, error) {
 	plan, err := newParallelResidualPlan(specs, parallelResidual)
 	if err != nil {
 		return wi, err
@@ -276,7 +280,7 @@ func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 	for i := start; i < end; {
 		var err error
 		if plan.startsAt(i) {
-			wi, err = emitParallelBlockPairWithRecurrenceDropout(prog, specs, refs, weightStarts, i, stream, original, wi, D, T, B, opIdx, mlpMult, blockScales, residMix, dropout)
+			wi, err = emitParallelBlockPairWithRecurrenceDropout(prog, specs, refs, weightStarts, i, stream, original, wi, D, T, B, opIdx, mlpMult, blockScales, residMix, dropout, backout)
 			if err != nil {
 				return wi, err
 			}
@@ -287,13 +291,16 @@ func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 		if err != nil {
 			return wi, err
 		}
+		if backout != nil {
+			backout.captureAfterBlock(prog, i, stream)
+		}
 		i++
 		(*opIdx)++
 	}
 	return wi, nil
 }
 
-func emitSequentialOrderWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, order []int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32) (int, error) {
+func emitSequentialOrderWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, order []int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout float32, backout *backoutBuildPlan) (int, error) {
 	plan, err := newParallelResidualPlan(specs, parallelResidual)
 	if err != nil {
 		return wi, err
@@ -324,7 +331,7 @@ func emitSequentialOrderWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 				return wi, fmt.Errorf("recurrence activation execution order repeats block %d", i+1)
 			}
 			seen[i+1] = true
-			wi, err = emitParallelBlockPairWithRecurrenceDropout(prog, specs, refs, weightStarts, i, stream, original, wi, D, T, B, opIdx, mlpMult, blockScales, residMix, dropout)
+			wi, err = emitParallelBlockPairWithRecurrenceDropout(prog, specs, refs, weightStarts, i, stream, original, wi, D, T, B, opIdx, mlpMult, blockScales, residMix, dropout, backout)
 			if err != nil {
 				return wi, err
 			}
@@ -334,6 +341,9 @@ func emitSequentialOrderWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, refs, weightStarts, kvCache, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout)
 		if err != nil {
 			return wi, err
+		}
+		if backout != nil {
+			backout.captureAfterBlock(prog, i, stream)
 		}
 		pos++
 		(*opIdx)++

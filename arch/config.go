@@ -24,14 +24,15 @@ type ArchConfig struct {
 	SmearEmbeddings  bool    `json:"smear_embeddings,omitempty"`
 	// SmearEmbeddingsGateShape selects the learned gate used by embedding smearing.
 	// Empty defaults to "pr130" when smear_embeddings is enabled.
-	SmearEmbeddingsGateShape string   `json:"smear_embeddings_gate_shape,omitempty"`
-	BigramVocabSize          int      `json:"bigram_vocab_size,omitempty"`
-	BigramDim                int      `json:"bigram_dim,omitempty"`
-	TrigramVocabSize         int      `json:"trigram_vocab_size,omitempty"`
-	TrigramDim               int      `json:"trigram_dim,omitempty"`
-	LogitSoftcap             float32  `json:"logit_softcap,omitempty"`
-	Dropout                  float32  `json:"dropout,omitempty"`
-	MTP                      *MTPSpec `json:"mtp,omitempty"`
+	SmearEmbeddingsGateShape string       `json:"smear_embeddings_gate_shape,omitempty"`
+	BigramVocabSize          int          `json:"bigram_vocab_size,omitempty"`
+	BigramDim                int          `json:"bigram_dim,omitempty"`
+	TrigramVocabSize         int          `json:"trigram_vocab_size,omitempty"`
+	TrigramDim               int          `json:"trigram_dim,omitempty"`
+	LogitSoftcap             float32      `json:"logit_softcap,omitempty"`
+	Dropout                  float32      `json:"dropout,omitempty"`
+	MTP                      *MTPSpec     `json:"mtp,omitempty"`
+	Backout                  *BackoutSpec `json:"backout,omitempty"`
 
 	Blocks     []BlockSpec `json:"blocks"`
 	Recurrence []int       `json:"recurrence,omitempty"`
@@ -455,6 +456,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 
 	if len(cfg.Blocks) == 0 {
 		return nil, fmt.Errorf("config %q must define at least one block", source)
+	}
+	if err := validateBackout(cfg, source); err != nil {
+		return nil, err
 	}
 	if err := validateWeightGroups(cfg, source); err != nil {
 		return nil, err

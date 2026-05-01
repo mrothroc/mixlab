@@ -482,14 +482,16 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(smearMetas) == 0 {
+	backoutMetas := backoutWeightShapes(cfg.Backout)
+	if len(smearMetas) == 0 && len(backoutMetas) == 0 {
 		return metas, nil
 	}
 	fixed := fixedWeightCountWithHead(cfg.ReservesUntiedHeadWeight())
-	out := make([]WeightMeta, 0, len(metas)+len(smearMetas))
+	out := make([]WeightMeta, 0, len(metas)+len(smearMetas)+len(backoutMetas))
 	out = append(out, metas[:fixed]...)
 	out = append(out, smearMetas...)
 	out = append(out, metas[fixed:]...)
+	out = append(out, backoutMetas...)
 	return out, nil
 }
 

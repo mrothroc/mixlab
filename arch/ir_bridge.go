@@ -102,6 +102,7 @@ func buildIRProgramFromConfigWithState(cfg *ArchConfig, state TrainingProgramSta
 		reserveHead,
 		useTiedHead,
 		cfg.smearEmbeddingOptions(),
+		cfg.Backout,
 	)
 }
 
