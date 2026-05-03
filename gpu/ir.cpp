@@ -21,6 +21,8 @@ namespace {
 constexpr float kGatedDeltaGateFloor = 1e-30f;
 constexpr float kGatedDeltaExpClampMin = -80.0f;
 constexpr float kGatedDeltaExpClampMax = 0.0f;
+// Safety bound: even when fusing, evaluate every K chunks to cap lazy-graph depth on user-overridden small chunk_size with long T.
+constexpr int EVAL_EVERY_K_CHUNKS = 16;
 
 using GatedDeltaTimingClock = std::chrono::steady_clock;
 
@@ -117,6 +119,11 @@ bool use_chunked_gated_delta_scan_cuda_fast_path() {
     return true;
   }
   return false;
+}
+
+bool fuse_gated_delta_chunk_loop() {
+  const char* override = std::getenv("MIXLAB_GATED_DELTA_FUSE_CHUNK_LOOP");
+  return override != nullptr && std::string(override) == "1";
 }
 
 mx::array running_variance_raw(const mx::array& x_flat, int B, int T, int D, float alpha) {
@@ -314,6 +321,7 @@ mx::array gated_delta_scan_chunked(
   section_start = GatedDeltaTimingClock::now();
   auto state = mx::zeros({B, H, Dk, Dv}, mx::float32);
   auto out = mx::zeros({B, H, n_chunks, chunk_size, Dv}, mx::float32);
+  const bool fuse_chunk_loop = fuse_gated_delta_chunk_loop();
   for (int chunk = 0; chunk < n_chunks; ++chunk) {
     // Each slice keeps a singleton chunk axis, and the reshapes below only
     // squeeze that axis away. This remains a view as long as the chunk packing
@@ -339,7 +347,9 @@ mx::array gated_delta_scan_chunked(
         mx::transpose(k_i * mx::expand_dims(carry, -1), {0, 1, 3, 2}),
         v_new));
     state = as_float32(state * mx::reshape(stable_exp_nonpos(decay_last), {B, H, 1, 1}) + state_update);
-    mx::eval(state);
+    if (!fuse_chunk_loop || (chunk + 1) % EVAL_EVERY_K_CHUNKS == 0) {
+      mx::eval(state);
+    }
   }
   if (timing) {
     mx::eval(out);
