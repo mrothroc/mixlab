@@ -1,5 +1,6 @@
 #include "ir.h"
 #include "gated_delta_cuda_primitive.h"
+#include "gated_delta_metal_primitive.h"
 
 #include <mlx/random.h>
 
@@ -274,33 +275,38 @@ mx::array gated_delta_scan_chunked(
 
   section_start = GatedDeltaTimingClock::now();
   auto solve_attn = [&]() -> mx::array {
+    const int matrix_count = B * H * n_chunks;
+    auto raw_attn_mats = mx::contiguous(mx::reshape(raw_attn, {matrix_count, chunk_size, chunk_size}));
     if (mlx::core::cu::is_available()) {
-      const int matrix_count = B * H * n_chunks;
       auto solve = mlx_ir::solve_strictly_lower_cuda_primitive(
-          mx::contiguous(mx::reshape(raw_attn, {matrix_count, chunk_size, chunk_size})),
+          raw_attn_mats,
+          matrix_count,
+          chunk_size);
+      return mx::reshape(solve, {B, H, n_chunks, chunk_size, chunk_size});
+    }
+    if (mlx_ir::gated_delta_metal_primitive_available()) {
+      auto solve = mlx_ir::solve_strictly_lower_metal_primitive(
+          raw_attn_mats,
           matrix_count,
           chunk_size);
       return mx::reshape(solve, {B, H, n_chunks, chunk_size, chunk_size});
     } else {
-      // inv(I - L) = prod_m (I + L^(2^m)) for strictly lower-triangular L.
-      // This keeps the within-chunk solve on matmuls only, which MLX can run on
-      // Metal without the per-row slice/update loop.
-      auto solve = as_float32(eye_f + raw_attn);
-      auto raw_power = raw_attn;
-      for (int width = 2; width < chunk_size; width <<= 1) {
-        raw_power = as_float32(mx::matmul(raw_power, raw_power));
-        // Batched matmul does not preserve exact triangular sparsity, and the
-        // tiny upper-triangle roundoff compounds across Neumann powers.
-        raw_power = as_float32(mx::tril(raw_power, -1));
-        // Keep the backward graph bounded. Without these barriers, long Metal
-        // GDN training runs can fail later as a misleading collect_loss error.
-        mx::eval(raw_power);
-        auto solve_factor = as_float32(eye_f + raw_power);
-        mx::eval(solve_factor);
-        solve = as_float32(mx::matmul(solve, solve_factor));
-        mx::eval(solve);
+      // CPU fallback: use the older row-wise triangular solve when no custom
+      // GPU primitive is available.
+      auto solve_raw = raw_attn;
+      for (int i = 1; i < chunk_size; ++i) {
+        auto row = mx::slice(solve_raw, {0, 0, 0, i, 0}, {B, H, n_chunks, i + 1, i});
+        row = mx::reshape(row, {B, H, n_chunks, i});
+        auto prefix = mx::slice(solve_raw, {0, 0, 0, 0, 0}, {B, H, n_chunks, i, i});
+        auto correction = as_float32(mx::sum(mx::reshape(row, {B, H, n_chunks, i, 1}) * prefix, 3));
+        auto updated = as_float32(row + correction);
+        solve_raw = mx::slice_update(
+            solve_raw,
+            mx::reshape(updated, {B, H, n_chunks, 1, i}),
+            mx::Shape{0, 0, 0, i, 0},
+            mx::Shape{B, H, n_chunks, i + 1, i});
       }
-      return solve;
+      return as_float32(solve_raw + eye_f);
     }
   }();
   if (timing) {
