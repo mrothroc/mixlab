@@ -365,11 +365,15 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	mtpUntieScheduled := cfg.MTPUntieEnabled()
 	mtpUntieStep := cfg.EffectiveMTPUntieStep()
 	headUntied := mtpUntieScheduled && mtpUntieStep <= 0
+	mtpAuxActivationScheduled := cfg.MTPActivateAuxLossEnabled()
+	mtpAuxActivateStep := cfg.EffectiveMTPActivateStep()
+	mtpAuxActive := !mtpAuxActivationScheduled || mtpAuxActivateStep <= 0
 	initialProg := prog
-	if recurrenceScheduled || (mtpUntieScheduled && !headUntied) {
+	if recurrenceScheduled || (mtpUntieScheduled && !headUntied) || (mtpAuxActivationScheduled && !mtpAuxActive) {
 		initialProg, err = BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
 			RecurrenceActive: recurrenceActive,
 			HeadUntied:       headUntied,
+			MTPAuxInactive:   !mtpAuxActive,
 		})
 		if err != nil {
 			return TrainResult{}, fmt.Errorf("build initial training IR program: %w", err)
@@ -384,6 +388,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 	if mtpUntieScheduled {
 		fmt.Printf("  [%s] LM head unties from embedding at step %d\n", name, mtpUntieStep)
+	}
+	if mtpAuxActivationScheduled {
+		fmt.Printf("  [%s] MTP auxiliary loss activates at step %d\n", name, mtpAuxActivateStep)
 	}
 
 	var shapes []WeightShape
@@ -625,7 +632,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 				nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)
 				nextHeadUntied := headUntied || (mtpUntieScheduled && nextStep >= mtpUntieStep)
-				if nextRecurrenceActive != recurrenceActive || nextHeadUntied != headUntied {
+				nextMTPAuxActive := mtpAuxActive || (mtpAuxActivationScheduled && nextStep >= mtpAuxActivateStep)
+				if nextRecurrenceActive != recurrenceActive || nextHeadUntied != headUntied || nextMTPAuxActive != mtpAuxActive {
 					switcher, ok := trainer.(gpuProgramSwitcher)
 					if !ok {
 						return TrainResult{}, fmt.Errorf("trainer does not support scheduled program switching")
@@ -642,6 +650,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					nextProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
 						RecurrenceActive: nextRecurrenceActive,
 						HeadUntied:       nextHeadUntied,
+						MTPAuxInactive:   !nextMTPAuxActive,
 					})
 					if err != nil {
 						return TrainResult{}, fmt.Errorf("build scheduled IR program at step %d: %w", nextStep, err)
@@ -658,8 +667,12 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					if nextHeadUntied && !headUntied {
 						fmt.Printf("  [%s] LM head untied from embedding at step %d\n", name, nextStep)
 					}
+					if nextMTPAuxActive && !mtpAuxActive {
+						fmt.Printf("  [%s] MTP auxiliary loss activated at step %d\n", name, nextStep)
+					}
 					recurrenceActive = nextRecurrenceActive
 					headUntied = nextHeadUntied
+					mtpAuxActive = nextMTPAuxActive
 				}
 				submitStart := time.Now()
 				if err := trainer.SubmitStepGPU(nextBatch.x, nextBatch.y, batchSize, seqLen, sched.At(nextStep)); err != nil {

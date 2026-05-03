@@ -12,9 +12,11 @@ type MTPSpec struct {
 	N                 int       `json:"n,omitempty"`
 	LossWeights       []float32 `json:"loss_weights,omitempty"`
 	UntieEmbedAtFrac  float64   `json:"untie_embed_at_frac,omitempty"`
+	ActivateAtFrac    float64   `json:"activate_at_frac,omitempty"`
 	nSet              bool
 	lossWeightsSet    bool
 	untieEmbedFracSet bool
+	activateAtFracSet bool
 }
 
 // UnmarshalJSON records whether optional scalar fields were present so
@@ -24,6 +26,7 @@ func (m *MTPSpec) UnmarshalJSON(data []byte) error {
 		N                *int      `json:"n"`
 		LossWeights      []float32 `json:"loss_weights"`
 		UntieEmbedAtFrac *float64  `json:"untie_embed_at_frac"`
+		ActivateAtFrac   *float64  `json:"activate_at_frac"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
@@ -39,6 +42,10 @@ func (m *MTPSpec) UnmarshalJSON(data []byte) error {
 	if raw.UntieEmbedAtFrac != nil {
 		m.UntieEmbedAtFrac = *raw.UntieEmbedAtFrac
 		m.untieEmbedFracSet = true
+	}
+	if raw.ActivateAtFrac != nil {
+		m.ActivateAtFrac = *raw.ActivateAtFrac
+		m.activateAtFracSet = true
 	}
 	return nil
 }
@@ -82,10 +89,25 @@ func (m *MTPSpec) EffectiveUntieEmbedAtFrac() float64 {
 	return m.UntieEmbedAtFrac
 }
 
+// EffectiveActivateAtFrac returns the fraction of training at which auxiliary
+// MTP losses should begin contributing. Omitted means active from step 0.
+func (m *MTPSpec) EffectiveActivateAtFrac() float64 {
+	if m == nil {
+		return 0.0
+	}
+	return m.ActivateAtFrac
+}
+
 // MTPEnabled reports whether training should include auxiliary future-token
 // objectives.
 func (c *ArchConfig) MTPEnabled() bool {
 	return c != nil && c.MTP != nil && c.MTP.EffectiveN() > 1
+}
+
+// MTPActivateAuxLossEnabled reports whether auxiliary MTP losses are delayed
+// by mtp.activate_at_frac.
+func (c *ArchConfig) MTPActivateAuxLossEnabled() bool {
+	return c != nil && c.MTP != nil && c.MTP.EffectiveActivateAtFrac() > 0
 }
 
 // MTPUntieEnabled reports whether training should split an initially tied
@@ -109,6 +131,19 @@ func (c *ArchConfig) EffectiveMTPUntieStep() int {
 		return 0
 	}
 	return int(c.MTP.EffectiveUntieEmbedAtFrac() * float64(total))
+}
+
+// EffectiveMTPActivateStep returns the first step whose training objective
+// includes auxiliary MTP losses.
+func (c *ArchConfig) EffectiveMTPActivateStep() int {
+	if !c.MTPActivateAuxLossEnabled() {
+		return 0
+	}
+	total := c.Training.TotalSteps()
+	if total <= 0 {
+		return 0
+	}
+	return int(c.MTP.EffectiveActivateAtFrac() * float64(total))
 }
 
 // ReservesUntiedHeadWeight reports whether the fixed weight layout needs a

@@ -5,6 +5,8 @@ package train
 import (
 	"math"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mrothroc/mixlab/data"
@@ -144,6 +146,57 @@ func TestMTPValidationLossPrefersEvalLossOutputMLX(t *testing.T) {
 	}
 	if math.Abs(got-float64(trainingLoss)) < 1e-5 {
 		t.Fatalf("val loss unexpectedly matched MTP training loss: val=%.8f loss=%.8f", got, trainingLoss)
+	}
+}
+
+func TestRunTrainMTPActivateAuxLossScheduleSmoke(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "mtp_activate_aux_schedule",
+		"model_dim": 16,
+		"vocab_size": 32,
+		"seq_len": 4,
+		"tie_embeddings": false,
+		"mtp": {
+			"n": 4,
+			"activate_at_frac": 0.5
+		},
+		"blocks": [{"type": "plain", "heads": 2}],
+		"training": {
+			"steps": 100,
+			"lr": 0.001,
+			"seed": 19,
+			"batch_tokens": 8,
+			"grad_clip": 1.0,
+			"weight_decay": 0.0
+		}
+	}`), "mtp_activate_aux_schedule")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+
+	trainDir := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(trainDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	tokens := make([]uint16, 1024)
+	for i := range tokens {
+		tokens[i] = uint16((i % (cfg.VocabSize - 1)) + 1)
+	}
+	writeInferenceShard(t, filepath.Join(trainDir, "train_000.bin"), tokens)
+
+	result, err := runTrain(cfg, filepath.Join(trainDir, "train_*.bin"), TrainOptions{})
+	if err != nil {
+		t.Fatalf("runTrain: %v", err)
+	}
+	if math.IsNaN(result.FirstLoss) || math.IsInf(result.FirstLoss, 0) {
+		t.Fatalf("first loss is not finite: %g", result.FirstLoss)
+	}
+	if math.IsNaN(result.LastLoss) || math.IsInf(result.LastLoss, 0) {
+		t.Fatalf("last loss is not finite: %g", result.LastLoss)
 	}
 }
 

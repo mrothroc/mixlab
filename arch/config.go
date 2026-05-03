@@ -443,6 +443,13 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		if frac < 1 && !cfg.TieEmbeddings {
 			return nil, fmt.Errorf("config %q sets mtp.untie_embed_at_frac=%g but tie_embeddings is false", source, frac)
 		}
+		activateFrac := cfg.MTP.EffectiveActivateAtFrac()
+		if activateFrac < 0 || activateFrac > 1 || activateFrac != activateFrac {
+			return nil, fmt.Errorf("config %q has invalid mtp.activate_at_frac=%g (must be in [0,1])", source, activateFrac)
+		}
+		if activateFrac > 0 && cfg.MTP.EffectiveN() <= 1 {
+			return nil, fmt.Errorf("config %q mtp.activate_at_frac requires n >= 2", source)
+		}
 	}
 
 	for i, b := range cfg.Blocks {

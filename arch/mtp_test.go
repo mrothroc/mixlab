@@ -17,7 +17,8 @@ func TestParseArchConfig_MTP(t *testing.T) {
 		"mtp": {
 			"n": 4,
 			"loss_weights": [1.0, 0.5, 0.25, 0.125],
-			"untie_embed_at_frac": 0.667
+			"untie_embed_at_frac": 0.667,
+			"activate_at_frac": 0.667
 		},
 		"blocks": [{"type": "plain", "heads": 4}],
 		"training": {"steps": 100, "lr": 0.001}
@@ -38,8 +39,17 @@ func TestParseArchConfig_MTP(t *testing.T) {
 	if got.MTP.EffectiveUntieEmbedAtFrac() != 0.667 {
 		t.Fatalf("untie_embed_at_frac = %g, want 0.667", got.MTP.EffectiveUntieEmbedAtFrac())
 	}
+	if got.MTP.EffectiveActivateAtFrac() != 0.667 {
+		t.Fatalf("activate_at_frac = %g, want 0.667", got.MTP.EffectiveActivateAtFrac())
+	}
 	if !got.MTPUntieEnabled() {
 		t.Fatal("MTPUntieEnabled = false, want true")
+	}
+	if !got.MTPActivateAuxLossEnabled() {
+		t.Fatal("MTPActivateAuxLossEnabled = false, want true")
+	}
+	if got.EffectiveMTPActivateStep() != 66 {
+		t.Fatalf("EffectiveMTPActivateStep = %d, want 66", got.EffectiveMTPActivateStep())
 	}
 }
 
@@ -64,6 +74,9 @@ func TestParseArchConfig_MTPValidation(t *testing.T) {
 		{name: "bad_weights_len", mtp: `{"n": 3, "loss_weights": [1, 0.5]}`, want: "loss_weights"},
 		{name: "negative_weight", mtp: `{"n": 2, "loss_weights": [1, -0.5]}`, want: "loss_weights[1]"},
 		{name: "bad_untie_frac", mtp: `{"untie_embed_at_frac": 1.25}`, want: "untie_embed_at_frac"},
+		{name: "negative_activate_frac", mtp: `{"n": 2, "activate_at_frac": -0.1}`, want: "activate_at_frac"},
+		{name: "bad_activate_frac", mtp: `{"n": 2, "activate_at_frac": 1.5}`, want: "activate_at_frac"},
+		{name: "activate_without_aux", mtp: `{"n": 1, "activate_at_frac": 0.667}`, want: "activate_at_frac requires n >= 2"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -78,6 +91,34 @@ func TestParseArchConfig_MTPValidation(t *testing.T) {
 	}
 }
 
+func TestMTPActivateDefaultsAndStep(t *testing.T) {
+	noMTP := testMTPConfig(1)
+	noMTP.MTP = nil
+	if got := noMTP.MTP.EffectiveActivateAtFrac(); got != 0 {
+		t.Fatalf("nil MTP EffectiveActivateAtFrac = %g, want 0", got)
+	}
+	if got := noMTP.EffectiveMTPActivateStep(); got != 0 {
+		t.Fatalf("nil MTP EffectiveMTPActivateStep = %d, want 0", got)
+	}
+
+	omitted := testMTPConfig(4)
+	if got := omitted.MTP.EffectiveActivateAtFrac(); got != 0 {
+		t.Fatalf("omitted activate_at_frac = %g, want 0", got)
+	}
+	if got := omitted.EffectiveMTPActivateStep(); got != 0 {
+		t.Fatalf("omitted EffectiveMTPActivateStep = %d, want 0", got)
+	}
+
+	delayed := testMTPConfig(4)
+	delayed.MTP.ActivateAtFrac = 0.5
+	if got := delayed.MTP.EffectiveActivateAtFrac(); got != 0.5 {
+		t.Fatalf("activate_at_frac = %g, want 0.5", got)
+	}
+	if got := delayed.EffectiveMTPActivateStep(); got != 5 {
+		t.Fatalf("EffectiveMTPActivateStep = %d, want 5", got)
+	}
+}
+
 func testMTPConfig(n int) *ArchConfig {
 	return &ArchConfig{
 		Name:          "mtp_test",
@@ -89,6 +130,38 @@ func testMTPConfig(n int) *ArchConfig {
 		Blocks:        []BlockSpec{{Type: "plain", Heads: 4}},
 		MTP:           &MTPSpec{N: n},
 		Training:      TrainingSpec{Steps: 10, LR: 0.001, BatchTokens: 16},
+	}
+}
+
+func TestBuildTrainingIRProgram_MTPAuxInactiveMatchesN1Loss(t *testing.T) {
+	base := testMTPConfig(4)
+	inactive, err := BuildTrainingIRProgramFromConfig(base, TrainingProgramState{RecurrenceActive: true, MTPAuxInactive: true})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(inactive): %v", err)
+	}
+	active, err := BuildTrainingIRProgramFromConfig(base, TrainingProgramState{RecurrenceActive: true})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(active): %v", err)
+	}
+	var inactiveCE, activeCE int
+	for _, op := range inactive.Ops {
+		if op.Code == OpCrossEntropy {
+			inactiveCE++
+		}
+	}
+	for _, op := range active.Ops {
+		if op.Code == OpCrossEntropy {
+			activeCE++
+		}
+	}
+	if inactiveCE != 1 {
+		t.Fatalf("inactive cross-entropy op count = %d, want 1", inactiveCE)
+	}
+	if activeCE != 4 {
+		t.Fatalf("active cross-entropy op count = %d, want 4", activeCE)
+	}
+	if inactive.NumWeights != active.NumWeights {
+		t.Fatalf("weight counts differ across MTP aux activation: inactive=%d active=%d", inactive.NumWeights, active.NumWeights)
 	}
 }
 

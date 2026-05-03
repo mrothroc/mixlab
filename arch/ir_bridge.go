@@ -12,6 +12,7 @@ func BuildIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	return BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
 		RecurrenceActive: true,
 		HeadUntied:       cfg.MTPUntieEnabled(),
+		MTPAuxInactive:   false,
 	})
 }
 
@@ -33,10 +34,11 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 type TrainingProgramState struct {
 	RecurrenceActive bool
 	HeadUntied       bool
+	MTPAuxInactive   bool
 }
 
 // BuildTrainingIRProgramFromConfig constructs a training program with MTP
-// auxiliary losses enabled when configured.
+// auxiliary losses enabled when configured unless state disables them.
 func BuildTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingProgramState) (*Program, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
@@ -55,6 +57,7 @@ func BuildPreActivationIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	return BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
 		RecurrenceActive: false,
 		HeadUntied:       cfg.MTPUntieEnabled(),
+		MTPAuxInactive:   false,
 	})
 }
 
@@ -77,6 +80,10 @@ func buildIRProgramFromConfigWithState(cfg *ArchConfig, state TrainingProgramSta
 	}
 	reserveHead := cfg.ReservesUntiedHeadWeight()
 	useTiedHead := cfg.TieEmbeddings && !state.HeadUntied
+	activeMTP := mtp
+	if state.MTPAuxInactive {
+		activeMTP = nil
+	}
 
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		cfg.ModelDim,
@@ -98,7 +105,7 @@ func buildIRProgramFromConfigWithState(cfg *ArchConfig, state TrainingProgramSta
 		cfg.Blocks,
 		cfg.Recurrence,
 		executionOrder,
-		mtp,
+		activeMTP,
 		reserveHead,
 		useTiedHead,
 		cfg.smearEmbeddingOptions(),
