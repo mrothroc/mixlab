@@ -60,6 +60,39 @@ func TestBlockWeightShapes_GatedDeltaNetDefaults(t *testing.T) {
 	}
 }
 
+func TestEffectiveGatedDeltaNetScanChunkSize_DefaultByT(t *testing.T) {
+	tests := []struct {
+		T    int
+		want int
+	}{
+		{T: 512, want: 64},
+		{T: 1024, want: 64},
+		{T: 2048, want: 128},
+		{T: 4096, want: 256},
+		{T: 8192, want: 512},
+		{T: 16384, want: 512},
+	}
+	for _, tt := range tests {
+		if got := effectiveGatedDeltaNetScanChunkSize(BlockSpec{}, tt.T); got != tt.want {
+			t.Fatalf("T=%d scan chunk size=%d, want %d", tt.T, got, tt.want)
+		}
+	}
+}
+
+func TestEffectiveGatedDeltaNetScanChunkSize_ExplicitOverrideWins(t *testing.T) {
+	chunkSize := 128
+	if got := effectiveGatedDeltaNetScanChunkSize(BlockSpec{ScanChunkSize: &chunkSize}, 4096); got != 128 {
+		t.Fatalf("scan chunk size=%d, want 128", got)
+	}
+}
+
+func TestEffectiveGatedDeltaNetScanChunkSize_ExplicitZeroPreserved(t *testing.T) {
+	chunkSize := 0
+	if got := effectiveGatedDeltaNetScanChunkSize(BlockSpec{ScanChunkSize: &chunkSize}, 4096); got != 0 {
+		t.Fatalf("scan chunk size=%d, want 0", got)
+	}
+}
+
 func TestEmitGatedDeltaNetIR_UsesGatedDeltaScan(t *testing.T) {
 	p := NewProgram(13)
 	wi, err := emitBlockIR(p, BlockSpec{Type: "gated_deltanet", Heads: 4, DK: 8}, "x", 0, 64, 16, 2, 256, 0, nil, DefaultFFNMultiplier, false)

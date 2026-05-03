@@ -3,15 +3,28 @@ package arch
 import (
 	"fmt"
 	"math"
+	"math/bits"
 )
 
 const gatedDeltaNetConvSize = 4
 
-func effectiveGatedDeltaNetScanChunkSize(spec BlockSpec) int {
-	if spec.ScanChunkSize == nil {
-		return 64
+func effectiveGatedDeltaNetScanChunkSize(spec BlockSpec, T int) int {
+	if spec.ScanChunkSize != nil {
+		return *spec.ScanChunkSize
 	}
-	return *spec.ScanChunkSize
+	// Default targets ~16 chunks per layer; clamp [64, 512] for kernel-tile predictability.
+	target := T / 16
+	if target < 64 {
+		target = 64
+	}
+	if target > 512 {
+		target = 512
+	}
+	return powerOfTwoFloor(target)
+}
+
+func powerOfTwoFloor(x int) int {
+	return 1 << (bits.Len(uint(x)) - 1)
 }
 
 func effectiveGatedDeltaNetDV(spec BlockSpec) int {
@@ -227,7 +240,7 @@ func emitGatedDeltaNetDeltaIR(prog *Program, spec BlockSpec, xNorm string, wi, T
 	wi++
 	prog.Sigmoid(betaRaw, betaHead)
 
-	prog.GatedDeltaScan(qScaled4, k4, v4, betaHead, gateHead, yFlat, B, T, heads, dk, dv, effectiveGatedDeltaNetScanChunkSize(spec))
+	prog.GatedDeltaScan(qScaled4, k4, v4, betaHead, gateHead, yFlat, B, T, heads, dk, dv, effectiveGatedDeltaNetScanChunkSize(spec, T))
 	prog.RMSNorm(yFlat, weightName(wi), yNorm, 1e-5)
 	wi++
 
