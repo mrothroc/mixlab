@@ -60,21 +60,10 @@ func TestBlockWeightShapes_GatedDeltaNetDefaults(t *testing.T) {
 	}
 }
 
-func TestEffectiveGatedDeltaNetScanChunkSize_DefaultByT(t *testing.T) {
-	tests := []struct {
-		T    int
-		want int
-	}{
-		{T: 512, want: 64},
-		{T: 1024, want: 64},
-		{T: 2048, want: 128},
-		{T: 4096, want: 256},
-		{T: 8192, want: 512},
-		{T: 16384, want: 512},
-	}
-	for _, tt := range tests {
-		if got := effectiveGatedDeltaNetScanChunkSize(BlockSpec{}, tt.T); got != tt.want {
-			t.Fatalf("T=%d scan chunk size=%d, want %d", tt.T, got, tt.want)
+func TestEffectiveGatedDeltaNetScanChunkSize_DefaultIsMetalSafe(t *testing.T) {
+	for _, T := range []int{512, 1024, 2048, 4096, 8192, 16384} {
+		if got := effectiveGatedDeltaNetScanChunkSize(BlockSpec{}, T); got != defaultGatedDeltaNetScanChunkSize {
+			t.Fatalf("T=%d scan chunk size=%d, want %d", T, got, defaultGatedDeltaNetScanChunkSize)
 		}
 	}
 }
@@ -133,6 +122,36 @@ func TestEmitGatedDeltaNetIR_UsesGatedDeltaScan(t *testing.T) {
 	if n := countOps(p, OpSiLU); n < 4 {
 		t.Fatalf("silu ops=%d, want at least 4", n)
 	}
+}
+
+func TestBuildIRProgramFromConfig_GatedDeltaNetDefaultChunk4096IsMetalSafe(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "gdn_default_chunk_4096",
+		"model_dim": 128,
+		"vocab_size": 256,
+		"seq_len": 4096,
+		"blocks": [
+			{"type": "gated_deltanet", "heads": 4, "d_k": 16}
+		],
+		"training": {"steps": 1, "lr": 0.001, "batch_tokens": 4096}
+	}`), "gdn_default_chunk_4096")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	for _, op := range prog.Ops {
+		if op.Code != OpGatedDeltaScan {
+			continue
+		}
+		if got := op.IntParams[len(op.IntParams)-1]; got != defaultGatedDeltaNetScanChunkSize {
+			t.Fatalf("default scan chunk size=%d, want %d", got, defaultGatedDeltaNetScanChunkSize)
+		}
+		return
+	}
+	t.Fatal("missing gated delta scan op")
 }
 
 func TestEmitGatedDeltaNetIR_AllowsNaiveFallback(t *testing.T) {

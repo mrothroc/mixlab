@@ -3,28 +3,18 @@ package arch
 import (
 	"fmt"
 	"math"
-	"math/bits"
 )
 
 const gatedDeltaNetConvSize = 4
+const defaultGatedDeltaNetScanChunkSize = 64
 
-func effectiveGatedDeltaNetScanChunkSize(spec BlockSpec, T int) int {
+func effectiveGatedDeltaNetScanChunkSize(spec BlockSpec, _ int) int {
 	if spec.ScanChunkSize != nil {
 		return *spec.ScanChunkSize
 	}
-	// Default targets ~16 chunks per layer; clamp [64, 512] for kernel-tile predictability.
-	target := T / 16
-	if target < 64 {
-		target = 64
-	}
-	if target > 512 {
-		target = 512
-	}
-	return powerOfTwoFloor(target)
-}
-
-func powerOfTwoFloor(x int) int {
-	return 1 << (bits.Len(uint(x)) - 1)
+	// Keep the implicit path on the Metal-tested chunk width. Larger chunks are
+	// still available through explicit scan_chunk_size overrides.
+	return defaultGatedDeltaNetScanChunkSize
 }
 
 func effectiveGatedDeltaNetDV(spec BlockSpec) int {
