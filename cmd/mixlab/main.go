@@ -13,6 +13,8 @@ import (
 	"github.com/mrothroc/mixlab/train"
 )
 
+const minGatedDeltaNetMaxOpsPerBuffer = 16000
+
 func main() {
 	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
@@ -171,7 +173,7 @@ func must(err error) {
 	}
 }
 
-// autoTuneMaxOps computes the CUDA graph batch size from the model's IR.
+// autoTuneMaxOps computes the MLX graph batch size from the model's IR.
 // Uses pure Go (arch package) — no GPU, no CGO, no MLX.
 // Returns 0 if no config is available or IR can't be built.
 func autoTuneMaxOps(configPath, configsDir string) int {
@@ -193,7 +195,7 @@ func opsFromConfig(path string) int {
 	if err != nil {
 		return 0
 	}
-	return len(prog.Ops) * 3 // forward + backward + optimizer margin
+	return tunedMaxOpsForProgram(cfg, prog)
 }
 
 func maxOpsFromDir(dir string) int {
@@ -211,4 +213,26 @@ func maxOpsFromDir(dir string) int {
 		}
 	}
 	return maxOps
+}
+
+func tunedMaxOpsForProgram(cfg *arch.ArchConfig, prog *arch.Program) int {
+	maxOps := len(prog.Ops) * 3 // forward + backward + optimizer margin
+	if hasGatedDeltaNet(cfg) && maxOps < minGatedDeltaNetMaxOpsPerBuffer {
+		// GatedDeltaScan is a compact IR op that expands into a much larger MLX
+		// graph on Metal/CUDA, so raw IR op count can under-size MLX buffers.
+		return minGatedDeltaNetMaxOpsPerBuffer
+	}
+	return maxOps
+}
+
+func hasGatedDeltaNet(cfg *arch.ArchConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, block := range cfg.Blocks {
+		if block.Type == "gated_deltanet" {
+			return true
+		}
+	}
+	return false
 }

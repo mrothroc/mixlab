@@ -464,18 +464,19 @@ make build
 On Apple M1 Max (Metal): ~8.5 seconds per 100 training steps at `d=1024`,
 `seq_len=1024`. Smaller models (`d=128`) train in seconds.
 
-**CUDA graph tuning:** MLX uses CUDA graphs but defaults to small graph
-batches (20 ops) on some GPUs. mixlab auto-tunes this based on your model's
-IR op count, which typically gives ~10% speedup on GPUs like the A40. If you
-still see low GPU utilization, you can override manually:
+**MLX graph tuning:** MLX can default to small graph batches on some GPUs.
+mixlab auto-tunes this based on your model's IR op count, with a larger floor
+for `gated_deltanet` because its compact IR scan op expands into many MLX ops.
+This typically gives ~10% speedup on GPUs like the A40. If you still see low
+GPU utilization, you can override manually:
 
 ```bash
 MLX_MAX_OPS_PER_BUFFER=2000 MLX_MAX_MB_PER_BUFFER=4000 ./mixlab -mode arch ...
 ```
 
-Higher values batch more kernels into each CUDA graph, reducing dispatch
-overhead at the cost of more GPU memory. The auto-tuned default (3x IR ops)
-captures most of the benefit.
+Higher values batch more kernels into each graph, reducing dispatch overhead at
+the cost of more GPU memory. The auto-tuned default (3x IR ops, or at least
+16000 ops for `gated_deltanet`) captures most of the benefit.
 
 ### Step timing breakdown
 
