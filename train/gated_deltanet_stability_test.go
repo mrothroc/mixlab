@@ -49,7 +49,7 @@ func TestGatedDeltaNetChunkedTrainStable(t *testing.T) {
 	rng := rand.New(rand.NewSource(cfg.Training.Seed))
 	x, y := generateSyntheticBatch(rng, cfg.Training.BatchTokens, cfg.VocabSize)
 
-	const steps = 50
+	const steps = 100
 	for step := 0; step < steps; step++ {
 		loss, err := trainer.TrainStepGPU(x, y, batchSize, cfg.SeqLen, float32(cfg.Training.LR))
 		if err != nil {

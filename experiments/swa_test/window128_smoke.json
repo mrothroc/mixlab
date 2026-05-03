@@ -12,9 +12,9 @@
   ],
   "training": {
     "steps": 50,
-    "lr": 0.001,
+    "lr": 0.0003,
     "seed": 1,
-    "batch_tokens": 128,
+    "batch_tokens": 512,
     "grad_clip": 1.0,
     "weight_decay": 0.01,
     "beta1": 0.9,

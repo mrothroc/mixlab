@@ -289,11 +289,16 @@ mx::array gated_delta_scan_chunked(
       auto raw_power = raw_attn;
       for (int width = 2; width < chunk_size; width <<= 1) {
         raw_power = as_float32(mx::matmul(raw_power, raw_power));
-        // CUDA matmul does not preserve exact triangular sparsity, and the tiny
-        // upper-triangle roundoff it introduces compounds across Neumann powers.
+        // Batched matmul does not preserve exact triangular sparsity, and the
+        // tiny upper-triangle roundoff compounds across Neumann powers.
         raw_power = as_float32(mx::tril(raw_power, -1));
+        // Keep the backward graph bounded. Without these barriers, long Metal
+        // GDN training runs can fail later as a misleading collect_loss error.
+        mx::eval(raw_power);
         auto solve_factor = as_float32(eye_f + raw_power);
+        mx::eval(solve_factor);
         solve = as_float32(mx::matmul(solve, solve_factor));
+        mx::eval(solve);
       }
       return solve;
     }

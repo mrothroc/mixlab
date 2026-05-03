@@ -5,6 +5,7 @@
 
 #include <mlx/mlx.h>
 
+#include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <cstdint>
@@ -23,8 +24,39 @@ std::vector<std::optional<mx::array>> g_handle_pool;
 std::vector<std::unique_ptr<mlx_ir::IRProgram>> g_ir_program_pool;
 std::vector<std::unique_ptr<mlx_ir::IRTrainer>> g_ir_trainer_pool;
 
+namespace {
+
+std::string env_value_or_unset(const char* name) {
+  const char* value = std::getenv(name);
+  if (!value || value[0] == '\0') {
+    return "unset";
+  }
+  return value;
+}
+
+bool is_cuda_cache_thrash_message(const std::string& message) {
+  return message.find("Cache thrashing is happening") != std::string::npos ||
+      message.find("MLX_CUDA_GRAPH_CACHE_SIZE") != std::string::npos;
+}
+
+std::string bridge_exception_message(const std::exception& e) {
+  std::string message = e.what();
+  if (!is_cuda_cache_thrash_message(message)) {
+    return message;
+  }
+  return "Cache thrashing is happening. The MLX CUDA buffer-batching limits are too small "
+      "for this workload. Increase MLX_MAX_OPS_PER_BUFFER (current " +
+      env_value_or_unset("MLX_MAX_OPS_PER_BUFFER") + ") and/or MLX_MAX_MB_PER_BUFFER (current " +
+      env_value_or_unset("MLX_MAX_MB_PER_BUFFER") +
+      "). For graph-variant-heavy workloads, start with MLX_MAX_OPS_PER_BUFFER=16000. "
+      "MLX_CUDA_GRAPH_CACHE_SIZE may appear in upstream MLX errors, but mixlab's CUDA "
+      "batching knobs are MLX_MAX_OPS_PER_BUFFER and MLX_MAX_MB_PER_BUFFER.";
+}
+
+}  // namespace
+
 void log_bridge_exception(const char* fn, const std::exception& e) {
-  std::cerr << "[mlx_bridge] " << fn << " exception: " << e.what() << std::endl;
+  std::cout << "[mlx_bridge] " << fn << " exception: " << bridge_exception_message(e) << std::endl;
 }
 
 mx::array* get_handle(int64_t handle) {

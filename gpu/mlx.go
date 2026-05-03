@@ -349,11 +349,14 @@ func mlxTrainerSubmitStep(t TrainerHandle, inputs []TensorInput) error {
 		return err
 	}
 	defer cleanup()
-	C.mlx_ir_trainer_submit_step(
+	status := C.mlx_ir_trainer_submit_step(
 		C.int64_t(t),
 		(*C.mlx_tensor_input)(unsafe.Pointer(&cInputs[0])),
 		C.int(len(cInputs)),
 	)
+	if status != 0 {
+		return fmt.Errorf("mlx_ir_trainer_submit_step failed")
+	}
 	return nil
 }
 
