@@ -12,3 +12,15 @@ checkpoints/
 .weft/
 .claude/
 .venv/
+
+# macOS Finder metadata
+.DS_Store
+
+# Downloaded training data (gigabytes)
+data/fineweb_sp*/
+
+# Compiled Go test binaries
+*.test
+
+# Local experiment artifacts
+experiments/leader_hybrid_race_*/
