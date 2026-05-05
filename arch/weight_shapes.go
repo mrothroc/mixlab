@@ -3,7 +3,6 @@ package arch
 import (
 	"fmt"
 	"math"
-	"strings"
 )
 
 // DefaultFFNMultiplier is the default FFN hidden dimension as a multiple of
@@ -68,7 +67,7 @@ func blockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, blockSca
 }
 
 func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, blockScales, residMix bool) ([]WeightMeta, error) {
-	switch strings.ToLower(strings.TrimSpace(spec.Type)) {
+	switch blockTypeName(spec.Type) {
 	case "plain":
 		heads := spec.Heads
 		if heads <= 0 {
@@ -207,7 +206,7 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 			{Name: "scan_decay", Shape: []int{inner}},
 		}, nil
 
-	case "mamba3":
+	case "gated_linear_ssm":
 		inner := spec.InnerDim
 		if inner <= 0 {
 			inner = D

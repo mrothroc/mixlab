@@ -19,7 +19,7 @@ func BlockWeightCount(spec BlockSpec, blockScales, residMix bool) (int, error) {
 
 // blockTypeKey returns a canonical key for weight-tying purposes.
 func blockTypeKey(spec BlockSpec) string {
-	return strings.ToLower(strings.TrimSpace(spec.Type))
+	return blockTypeName(spec.Type)
 }
 
 func normalizePlainKVHeads(heads, kvHeads int) (int, error) {

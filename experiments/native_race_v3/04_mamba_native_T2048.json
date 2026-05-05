@@ -12,15 +12,15 @@
   "bigram_vocab_size": 3072,
   "bigram_dim": 112,
   "blocks": [
-    {"type": "mamba3", "weight_group": "ssm_a"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm_a"},
     {"type": "swiglu", "weight_group": "ffn_a"},
-    {"type": "mamba3", "weight_group": "ssm_b"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm_b"},
     {"type": "swiglu", "weight_group": "ffn_b"},
-    {"type": "mamba3", "weight_group": "ssm_c"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm_c"},
     {"type": "swiglu", "weight_group": "ffn_c"},
-    {"type": "mamba3", "weight_group": "ssm_a"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm_a"},
     {"type": "swiglu", "weight_group": "ffn_a"},
-    {"type": "mamba3", "weight_group": "ssm_b"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm_b"},
     {"type": "swiglu", "weight_group": "ffn_b"}
   ],
   "training": {

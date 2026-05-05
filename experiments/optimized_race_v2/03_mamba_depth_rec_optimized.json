@@ -2,8 +2,8 @@
   "name": "03_mamba_depth_rec_optimized",
 
   // The novel combo from race v1, now with the full optimization stack:
-  // depth-recurrent mamba3 + Muon + late QAT + SWA + softcap + bigrams +
-  // SP-8192. 10 executed blocks built from 3 unique mamba3 + 3 unique FFN.
+  // depth-recurrent gated_linear_ssm + Muon + late QAT + SWA + softcap + bigrams +
+  // SP-8192. 10 executed blocks built from 3 unique gated_linear_ssm + 3 unique FFN.
   "model_dim": 320,
   "vocab_size": 8192,
   "seq_len": 1024,
@@ -11,15 +11,15 @@
   "bigram_vocab_size": 3072,
   "bigram_dim": 80,
   "blocks": [
-    {"type": "mamba3", "weight_group": "ssm_a"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm_a"},
     {"type": "swiglu", "weight_group": "ffn_a"},
-    {"type": "mamba3", "weight_group": "ssm_b"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm_b"},
     {"type": "swiglu", "weight_group": "ffn_b"},
-    {"type": "mamba3", "weight_group": "ssm_c"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm_c"},
     {"type": "swiglu", "weight_group": "ffn_c"},
-    {"type": "mamba3", "weight_group": "ssm_a"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm_a"},
     {"type": "swiglu", "weight_group": "ffn_a"},
-    {"type": "mamba3", "weight_group": "ssm_b"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm_b"},
     {"type": "swiglu", "weight_group": "ffn_b"}
   ],
   "training": {

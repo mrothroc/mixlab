@@ -12,11 +12,11 @@
   "bigram_vocab_size": 3072,
   "bigram_dim": 64,
   "blocks": [
-    {"type": "mamba3", "weight_group": "ssm"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm"},
     {"type": "swiglu", "weight_group": "ffn"},
-    {"type": "mamba3", "weight_group": "ssm"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm"},
     {"type": "swiglu", "weight_group": "ffn"},
-    {"type": "mamba3", "weight_group": "ssm"},
+    {"type": "gated_linear_ssm", "weight_group": "ssm"},
     {"type": "swiglu", "weight_group": "ffn"}
   ],
   "training": {

@@ -4,13 +4,13 @@
   "vocab_size": 1024,
   "seq_len": 64,
   "blocks": [
-    {"type": "mamba3", "inner_dim": 425, "weight_group": "ssm_a"},
+    {"type": "gated_linear_ssm", "inner_dim": 425, "weight_group": "ssm_a"},
     {"type": "swiglu", "weight_group": "ffn_a"},
-    {"type": "mamba3", "inner_dim": 425, "weight_group": "ssm_b"},
+    {"type": "gated_linear_ssm", "inner_dim": 425, "weight_group": "ssm_b"},
     {"type": "swiglu", "weight_group": "ffn_b"},
-    {"type": "mamba3", "inner_dim": 425, "weight_group": "ssm_c"},
+    {"type": "gated_linear_ssm", "inner_dim": 425, "weight_group": "ssm_c"},
     {"type": "swiglu", "weight_group": "ffn_c"},
-    {"type": "mamba3", "inner_dim": 425, "weight_group": "ssm_d"},
+    {"type": "gated_linear_ssm", "inner_dim": 425, "weight_group": "ssm_d"},
     {"type": "swiglu", "weight_group": "ffn_d"}
   ],
   "training": {

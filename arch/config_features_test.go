@@ -2,6 +2,9 @@ package arch
 
 import (
 	"encoding/json"
+	"io"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -180,30 +183,118 @@ func TestParseArchConfig_LogitSoftcapPreserved(t *testing.T) {
 	}
 }
 
-func TestParseArchConfig_AcceptsMamba3(t *testing.T) {
+func TestParseArchConfig_AcceptsGatedLinearSSM(t *testing.T) {
 	cfg := ArchConfig{
-		Name:      "mamba3",
+		Name:      "gated_linear_ssm",
 		ModelDim:  128,
 		VocabSize: 1024,
 		SeqLen:    128,
 		Blocks: []BlockSpec{
-			{Type: "mamba3", InnerDim: 192},
+			{Type: "gated_linear_ssm", InnerDim: 192},
 		},
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	got, err := ParseArchConfig(data, "test_mamba3")
+	got, err := ParseArchConfig(data, "test_gated_linear_ssm")
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if got.Blocks[0].Type != "mamba3" {
-		t.Fatalf("type=%q want mamba3", got.Blocks[0].Type)
+	if got.Blocks[0].Type != "gated_linear_ssm" {
+		t.Fatalf("type=%q want gated_linear_ssm", got.Blocks[0].Type)
 	}
 	if got.Blocks[0].InnerDim != 192 {
 		t.Fatalf("inner_dim=%d want 192", got.Blocks[0].InnerDim)
 	}
+}
+
+func TestParseArchConfig_Mamba3DeprecatedAliasWarnsAndMatchesGatedLinearSSM(t *testing.T) {
+	gated := ArchConfig{
+		Name:        "gated_linear_ssm",
+		ModelDim:    64,
+		VocabSize:   256,
+		SeqLen:      16,
+		BlockScales: true,
+		Blocks: []BlockSpec{
+			{Type: "gated_linear_ssm", InnerDim: 96},
+		},
+		Training: TrainingSpec{BatchTokens: 16},
+	}
+	legacy := gated
+	legacy.Name = "legacy_mamba3"
+	legacy.Blocks = []BlockSpec{{Type: "mamba3", InnerDim: 96}}
+
+	gatedData, err := json.Marshal(gated)
+	if err != nil {
+		t.Fatalf("marshal gated: %v", err)
+	}
+	legacyData, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("marshal legacy: %v", err)
+	}
+
+	mamba3AliasWarningSeen.Store(false)
+	warned, stderr := parseConfigCapturingStderr(t, legacyData, "legacy_mamba3")
+	if !strings.Contains(stderr, mamba3AliasWarning) {
+		t.Fatalf("stderr %q does not contain warning %q", stderr, mamba3AliasWarning)
+	}
+	if warned.Blocks[0].Type != "mamba3" {
+		t.Fatalf("legacy type=%q want preserved mamba3", warned.Blocks[0].Type)
+	}
+	legacyForIR := *warned
+
+	gatedParsed, err := ParseArchConfig(gatedData, "gated_linear_ssm")
+	if err != nil {
+		t.Fatalf("parse gated: %v", err)
+	}
+	warned.Name = gatedParsed.Name
+	warned.Blocks[0].Type = gatedParsed.Blocks[0].Type
+	if !reflect.DeepEqual(warned, gatedParsed) {
+		t.Fatalf("legacy config differs after normalizing alias\nlegacy=%+v\ngated=%+v", warned, gatedParsed)
+	}
+
+	legacyProg, err := BuildIRProgramFromConfig(&legacyForIR)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig legacy: %v", err)
+	}
+	gatedProg, err := BuildIRProgramFromConfig(gatedParsed)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig gated: %v", err)
+	}
+	if !reflect.DeepEqual(legacyProg, gatedProg) {
+		t.Fatalf("legacy and gated_linear_ssm IR programs differ")
+	}
+}
+
+func parseConfigCapturingStderr(t *testing.T, data []byte, source string) (*ArchConfig, string) {
+	t.Helper()
+
+	oldStderr := os.Stderr
+	readEnd, writeEnd, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stderr = writeEnd
+	defer func() {
+		os.Stderr = oldStderr
+	}()
+
+	cfg, parseErr := ParseArchConfig(data, source)
+	if closeErr := writeEnd.Close(); closeErr != nil {
+		t.Fatalf("close stderr pipe writer: %v", closeErr)
+	}
+	out, readErr := io.ReadAll(readEnd)
+	if readErr != nil {
+		t.Fatalf("read stderr pipe: %v", readErr)
+	}
+	if closeErr := readEnd.Close(); closeErr != nil {
+		t.Fatalf("close stderr pipe reader: %v", closeErr)
+	}
+	if parseErr != nil {
+		t.Fatalf("ParseArchConfig: %v", parseErr)
+	}
+	return cfg, string(out)
 }
 
 func TestParseArchConfig_AcceptsMamba3Canonical(t *testing.T) {

@@ -52,7 +52,11 @@ func RegisterBlock(name string, reg BlockRegistration) {
 }
 
 func blockTypeName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
+	key := strings.ToLower(strings.TrimSpace(name))
+	if key == "mamba3" {
+		return "gated_linear_ssm"
+	}
+	return key
 }
 
 func lookupBlock(spec BlockSpec) (BlockRegistration, error) {
@@ -115,7 +119,7 @@ func init() {
 			return gatedDeltaNetWeightShapes(spec, D, T, B, V)
 		},
 	})
-	for _, name := range []string{"mamba", "mamba3", "mamba3-canonical", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
+	for _, name := range []string{"mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
 		RegisterBlock(name, blockRegistration{
 			Emitter:     builtinBlockEmitter,
 			WeightCount: builtinBlockWeightCount,
@@ -171,7 +175,7 @@ func builtinBlockWeightCount(spec BlockSpec, blockScales, residMix bool) (int, e
 		return mlpWeightCount(spec, blockScales, residMix)
 	case "mamba":
 		return 4, nil
-	case "mamba3":
+	case "gated_linear_ssm":
 		return 6, nil
 	case "mamba3-canonical":
 		total := 19
@@ -204,7 +208,7 @@ func builtinBlockEmitter(prog *Program, spec BlockSpec, stream string, wi, D, T,
 			inner = D
 		}
 		return emitMambaIR(prog, stream, wi, inner, T, B, idx)
-	case "mamba3":
+	case "gated_linear_ssm":
 		inner := spec.InnerDim
 		if inner <= 0 {
 			inner = D

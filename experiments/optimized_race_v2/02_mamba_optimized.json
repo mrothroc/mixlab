@@ -12,15 +12,15 @@
   "bigram_vocab_size": 3072,
   "bigram_dim": 80,
   "blocks": [
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"}
   ],
   "training": {

@@ -1,7 +1,7 @@
 {
   "name": "03_mamba_only",
 
-  // Pure mamba3 stack — constant-gate scan with FFT-optimized path. Tests
+  // Pure gated_linear_ssm stack — constant-gate scan with FFT-optimized path. Tests
   // whether linear attention (state-space) alone, with no quadratic
   // attention, can match the baseline at this scale.
   "model_dim": 256,
@@ -11,11 +11,11 @@
   "bigram_vocab_size": 3072,
   "bigram_dim": 64,
   "blocks": [
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"}
   ],
   "training": {

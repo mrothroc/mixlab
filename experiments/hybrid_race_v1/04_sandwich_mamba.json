@@ -1,7 +1,7 @@
 {
   "name": "04_sandwich_mamba",
 
-  // Sandwich pattern: 2 attention + 2 mamba3 (linear) + 2 attention. Tests
+  // Sandwich pattern: 2 attention + 2 gated_linear_ssm (linear) + 2 attention. Tests
   // the "capability injection" hypothesis from Paper A — quadratic attention
   // at the boundaries, linear attention in the middle for cheap mixing.
   // Different parameter mix than pure mamba or pure attention.
@@ -15,9 +15,9 @@
   "blocks": [
     {"type": "plain", "heads": 4, "qk_gain": 1.0},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
     {"type": "plain", "heads": 4, "qk_gain": 1.0},
     {"type": "swiglu"}

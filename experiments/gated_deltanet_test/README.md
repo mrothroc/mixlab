@@ -103,7 +103,7 @@ Without the env vars, the tests are skipped (so CI doesn't require torch).
 
 ## Training-recipe notes
 
-GatedDeltaNet trains differently from mamba3 / standard attention. The 200-step
+GatedDeltaNet trains differently from gated_linear_ssm / standard attention. The 200-step
 control on `data/example/train_*.bin` lands at:
 
 | Architecture | Optimizer recipe | Final train | Final val |
@@ -111,7 +111,7 @@ control on `data/example/train_*.bin` lands at:
 | GatedDeltaNet (mixlab default) | Muon for matrices, default schedule | 5.55 | 5.82 |
 | GatedDeltaNet (matched recipe) | All-AdamW, constant lr=1e-3, wd=0.04 | 4.81 | 4.99 |
 | PyTorch reference (faithful) | Same matched recipe | 4.94 | 4.87 |
-| mamba3 (matched recipe) | Same matched recipe | 4.56 | 4.63 |
+| gated_linear_ssm (matched recipe) | Same matched recipe | 4.56 | 4.63 |
 
 Two takeaways:
 1. The default mixlab recipe (Muon-on-everything + 100-step warmup in a 200-step
@@ -121,7 +121,7 @@ Two takeaways:
    the verified PyTorch reference — confirming the implementation is faithful
    end-to-end, not just at single-step parity.
 
-mamba3 still trains marginally better on this small example (0.25 nat under
+gated_linear_ssm still trains marginally better on this small example (0.25 nat under
 matched recipe), within seed-noise band. Don't read architectural conclusions
 from a single 200-step matched-param run on `data/example`; for that, use
 `arch_race` with multi-seed verification on real shards.

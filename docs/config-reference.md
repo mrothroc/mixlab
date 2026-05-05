@@ -217,13 +217,15 @@ Example:
 {"type": "mamba", "inner_dim": 768}
 ```
 
-### `mamba3`
+### `gated_linear_ssm`
 
-Mamba-3 style gated scan block with RMSNorm, separate gate / SSM / delta-t projections, learned temporal gating, scan recurrence, and residual add.
+Simplified gated linear SSM with RMSNorm, separate gate / SSM / delta-t projections, learned temporal gating, scan recurrence, and residual add.
+
+This block was historically named `mamba3`, but that config string is deprecated. Use `gated_linear_ssm` for the simplified gated scan. Canonical Mamba-3 is `mamba3-canonical`.
 
 Required fields:
 
-- `type: "mamba3"`
+- `type: "gated_linear_ssm"`
 
 Optional fields:
 
@@ -232,7 +234,7 @@ Optional fields:
 Example:
 
 ```json
-{"type": "mamba3", "inner_dim": 512}
+{"type": "gated_linear_ssm", "inner_dim": 512}
 ```
 
 ### `retnet`

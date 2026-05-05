@@ -166,10 +166,10 @@ func emitMambaIR(prog *Program, x string, wi, inner, T, B, idx int) (int, error)
 	return wi, nil
 }
 
-// emitMamba3IR emits a Mamba-3 block with learned delta_t gating via sigmoid.
-// This is the key difference from the plain mamba block: instead of a single
-// gated recurrence, mamba3 modulates the scan input by sigmoid(dt_projection),
-// giving the model learned temporal gating control.
+// emitMamba3IR emits the gated_linear_ssm block: a simplified gated linear
+// SSM with learned delta_t gating via sigmoid. This block was historically
+// exposed as "mamba3", but that name is deprecated because canonical Mamba-3
+// is implemented separately as "mamba3-canonical".
 //
 // Weight layout (6 weights per block):
 //
@@ -192,7 +192,7 @@ func emitMambaIR(prog *Program, x string, wi, inner, T, B, idx int) (int, error)
 //	x       = x + out                        residual
 func emitMamba3IR(prog *Program, x string, wi, inner, T, B, idx int) (int, error) {
 	if inner <= 0 {
-		return wi, fmt.Errorf("mamba3 inner_dim must be > 0, got %d", inner)
+		return wi, fmt.Errorf("gated_linear_ssm inner_dim must be > 0, got %d", inner)
 	}
 
 	prefix := tmpName(x+"_mamba3", idx)

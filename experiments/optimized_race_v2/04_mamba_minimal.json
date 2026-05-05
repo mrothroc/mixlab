@@ -1,7 +1,7 @@
 {
   "name": "04_mamba_minimal",
 
-  // Control: same mamba3 architecture as config 02, but stripped of the
+  // Control: same gated_linear_ssm architecture as config 02, but stripped of the
   // optimization stack (no QAT, no SWA, no softcap, no bigrams, just
   // AdamW). Measures how much the optimization stack contributes vs the
   // architecture alone.
@@ -9,15 +9,15 @@
   "vocab_size": 8192,
   "seq_len": 1024,
   "blocks": [
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"},
-    {"type": "mamba3"},
+    {"type": "gated_linear_ssm"},
     {"type": "swiglu"}
   ],
   "training": {

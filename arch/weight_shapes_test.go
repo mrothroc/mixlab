@@ -22,8 +22,9 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 		{Type: "mlp"},
 		{Type: "mamba", InnerDim: 32},
 		{Type: "mamba"}, // default inner = D
-		{Type: "mamba3", InnerDim: 32},
-		{Type: "mamba3"}, // default inner = D
+		{Type: "gated_linear_ssm", InnerDim: 32},
+		{Type: "gated_linear_ssm"}, // default inner = D
+		{Type: "mamba3"},           // deprecated alias for gated_linear_ssm
 		{Type: "mamba3-canonical", InnerDim: 64, StateSize: 16, NGroups: 4, DTRank: 4},
 		{Type: "rwkv"},
 		{Type: "token_blend"},
@@ -193,7 +194,7 @@ func TestCollectWeightShapes_CountMatchesCountWeights(t *testing.T) {
 		},
 		{
 			name:   "mixed",
-			blocks: []BlockSpec{{Type: "plain", Heads: 4}, {Type: "swiglu"}, {Type: "mamba3"}},
+			blocks: []BlockSpec{{Type: "plain", Heads: 4}, {Type: "swiglu"}, {Type: "gated_linear_ssm"}},
 		},
 		{
 			name:   "rwkv",

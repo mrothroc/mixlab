@@ -7,7 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
+
+var mamba3AliasWarningSeen atomic.Bool
+
+const mamba3AliasWarning = `WARN: block type "mamba3" is deprecated; use "gated_linear_ssm". The "mamba3" name will be reassigned to canonical Mamba-3 in a future release.`
 
 // ArchConfig defines a model architecture for mixlab.
 type ArchConfig struct {
@@ -358,7 +363,19 @@ func ParseArchConfig(data []byte, source string) (*ArchConfig, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w (check field names against docs/config-reference.md)", source, err)
 	}
+	warnDeprecatedMamba3Blocks(cfg.Blocks)
 	return validateConfig(&cfg, source)
+}
+
+func warnDeprecatedMamba3Blocks(blocks []BlockSpec) {
+	for _, block := range blocks {
+		if strings.EqualFold(strings.TrimSpace(block.Type), "mamba3") {
+			if mamba3AliasWarningSeen.CompareAndSwap(false, true) {
+				fmt.Fprintln(os.Stderr, mamba3AliasWarning)
+			}
+			return
+		}
+	}
 }
 
 // validateConfig checks invariants and applies defaults.
@@ -785,7 +802,7 @@ func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, c
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	switch b.Type {
-	case "plain", "swiglu", "mlp", "mamba", "mamba3", "mamba3-canonical", "gated_deltanet", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
+	case "plain", "swiglu", "mlp", "mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
 		// valid
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)

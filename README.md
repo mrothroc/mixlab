@@ -63,8 +63,9 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
 ## Features
 
 - JSON-first model definition: no Go or Python changes required for most experiments.
-- Built-in block families: `plain`, `swiglu`, `mamba`, `mamba3`, `retnet`,
-  `rwkv`, `perceiver`, `bottleneck`, `cross_attention`, `token_blend`, `mlp`, `custom`.
+- Built-in block families: `plain`, `swiglu`, `mamba`, `gated_linear_ssm`,
+  `mamba3-canonical`, `retnet`, `rwkv`, `perceiver`, `bottleneck`,
+  `cross_attention`, `token_blend`, `mlp`, `custom`.
 - Architecture features: U-Net skip connections, parallel residuals, recurrence,
   residual mixing, tied embeddings, hashed bigram embeddings, configurable MLP width,
   QK-Gain, partial RoPE, XSA (V-orthogonal projection).
@@ -379,7 +380,8 @@ These built-in block types are available in JSON configs:
 | `plain` | Causal self-attention + FFN. Requires `heads`. Optional `kv_heads` (GQA), `qk_gain` (learnable QK scaling), `rope_dims` (partial RoPE), `xsa` (V-orthogonal projection), `kv_source` (share K/V from earlier block). |
 | `swiglu` | SwiGLU feed-forward block with residual connection. |
 | `mamba` | Mamba selective state-space block. Optional `inner_dim`. |
-| `mamba3` | Mamba-3 style gated scan block with learned delta-t gating. Optional `inner_dim`. |
+| `gated_linear_ssm` | Simplified gated linear SSM formerly exposed as `mamba3`. Optional `inner_dim`. |
+| `mamba3-canonical` | Canonical Mamba-3 block. Optional `inner_dim`, `state_size`, `n_groups`, `dt_rank`, `conv_kernel`, `use_conv`. |
 | `retnet` | RetNet retention block. Requires `heads`. Optional `decay` field in config. |
 | `rwkv` | RWKV-style recurrent mixing block. |
 | `perceiver` | Perceiver latent bottleneck. Requires `heads`. Optional `num_latents`. |
