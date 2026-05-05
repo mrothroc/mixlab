@@ -71,6 +71,25 @@ func TestInitWeightData_InitValue(t *testing.T) {
 	}
 }
 
+func TestInitWeightData_Mamba3CanonicalSpecialInits(t *testing.T) {
+	weights := initWeightData([]WeightShape{
+		{Name: "A_log", Shape: []int{2, 4}, InitLogArange: true},
+		{Name: "dt_bias", Shape: []int{8}, InitDtBias: true, DtMin: 0.001, DtMax: 0.1},
+	}, 123, "", 0)
+	wantALog := []float32{0, float32(math.Log(2)), float32(math.Log(3)), float32(math.Log(4)), 0, float32(math.Log(2)), float32(math.Log(3)), float32(math.Log(4))}
+	for i, want := range wantALog {
+		if math.Abs(float64(weights[0][i]-want)) > 1e-6 {
+			t.Fatalf("A_log[%d]=%g want %g", i, weights[0][i], want)
+		}
+	}
+	for i, raw := range weights[1] {
+		dt := math.Log1p(math.Exp(float64(raw)))
+		if dt < 0.001 || dt > 0.1 {
+			t.Fatalf("dt_bias[%d] softplus=%g out of range", i, dt)
+		}
+	}
+}
+
 func TestInitWeightData_NormalInit(t *testing.T) {
 	shapes := []WeightShape{
 		{Name: "norm", Shape: []int{8}, IsNormScale: true},

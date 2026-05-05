@@ -1,5 +1,7 @@
 #include "ir_trainer.h"
 
+#include <mlx/compile.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
@@ -7,6 +9,7 @@
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <sstream>
 #include <string>
 #include <stdexcept>
 
@@ -615,6 +618,36 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program, c
   return output_names;
 }
 
+std::vector<std::string> sorted_input_names(const TensorMap& inputs) {
+  std::vector<std::string> names;
+  names.reserve(inputs.size());
+  for (const auto& kv : inputs) {
+    names.push_back(kv.first);
+  }
+  std::sort(names.begin(), names.end());
+  return names;
+}
+
+std::string named_step_signature(
+    const TensorMap& inputs,
+    const std::vector<std::string>& output_names,
+    size_t n_weights) {
+  auto names = sorted_input_names(inputs);
+  std::ostringstream oss;
+  oss << "nw=" << n_weights;
+  for (const auto& output_name : output_names) {
+    oss << "|out=" << output_name;
+  }
+  for (const auto& name : names) {
+    const auto& desc = inputs.at(name);
+    oss << "|in=" << name << ";dt=" << static_cast<int>(desc.dtype);
+    for (int dim : desc.shape) {
+      oss << "," << dim;
+    }
+  }
+  return oss.str();
+}
+
 float finalize_pending_step(
     IRTrainer& trainer,
     std::unordered_map<std::string, mx::array>* outputs) {
@@ -781,18 +814,71 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   std::vector<int> argnums(weights.size());
   std::iota(argnums.begin(), argnums.end(), 0);
   std::vector<std::string> output_names = collect_cached_output_names(program);
-  std::unordered_map<std::string, mx::array> outputs;
-  auto fn = mx::value_and_grad(
-      [this, inputs, &outputs, &output_names](const std::vector<mx::array>& w) {
-        auto effective = effective_training_weights(w, qat_mode);
-        outputs = ir_interpret_outputs(program, effective, inputs, output_names, true);
-        return outputs.at("loss");
-      },
-      argnums);
+  auto input_names = sorted_input_names(inputs);
+  auto input_arrays_by_name = tensor_map_to_arrays(inputs);
+  std::vector<mx::array> args;
+  args.reserve(weights.size() + input_names.size());
+  args.insert(args.end(), weights.begin(), weights.end());
+  for (const auto& name : input_names) {
+    args.push_back(input_arrays_by_name.at(name));
+  }
 
-  auto out = fn(weights);
-  auto loss = out.first;
-  auto grads = std::move(out.second);
+  const auto signature = named_step_signature(inputs, output_names, weights.size());
+  if (!compiled_named_step || compiled_named_step_signature != signature) {
+    auto grad_fn = mx::value_and_grad(
+        [this, input_names, output_names](const std::vector<mx::array>& fn_args) {
+          const auto n_weights = weights.size();
+          if (fn_args.size() < n_weights + input_names.size()) {
+            throw std::runtime_error("compiled IR trainer argument count mismatch");
+          }
+          std::vector<mx::array> w;
+          w.reserve(n_weights);
+          for (size_t i = 0; i < n_weights; ++i) {
+            w.push_back(fn_args[i]);
+          }
+          auto effective = effective_training_weights(w, qat_mode);
+          ArrayMap input_map;
+          input_map.reserve(input_names.size());
+          for (size_t i = 0; i < input_names.size(); ++i) {
+            input_map.emplace(input_names[i], fn_args[n_weights + i]);
+          }
+          auto outputs = ir_interpret_outputs(program, effective, input_map, output_names, true);
+          std::vector<mx::array> values;
+          values.reserve(output_names.size());
+          for (const auto& output_name : output_names) {
+            values.push_back(outputs.at(output_name));
+          }
+          return values;
+        },
+        argnums);
+
+    compiled_named_step = mx::compile(
+        [grad_fn](const std::vector<mx::array>& fn_args) {
+          auto result = grad_fn(fn_args);
+          std::vector<mx::array> out;
+          out.reserve(result.first.size() + result.second.size());
+          out.insert(out.end(), result.first.begin(), result.first.end());
+          out.insert(out.end(), result.second.begin(), result.second.end());
+          return out;
+        },
+        false);
+    compiled_named_step_signature = signature;
+  }
+
+  auto compiled_out = compiled_named_step(args);
+  if (compiled_out.size() != output_names.size() + weights.size()) {
+    throw std::runtime_error("compiled IR trainer output count mismatch");
+  }
+  auto loss = compiled_out[0];
+  std::unordered_map<std::string, mx::array> outputs;
+  for (size_t i = 0; i < output_names.size(); ++i) {
+    outputs.emplace(output_names[i], compiled_out[i]);
+  }
+  std::vector<mx::array> grads;
+  grads.reserve(weights.size());
+  for (size_t i = 0; i < weights.size(); ++i) {
+    grads.push_back(compiled_out[output_names.size() + i]);
+  }
   auto preclip_grads = grads;
   clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
@@ -1073,6 +1159,8 @@ void IRTrainer::set_program(const IRProgram& new_program) {
   program = new_program;
   last_outputs.clear();
   last_grads.clear();
+  compiled_named_step = nullptr;
+  compiled_named_step_signature.clear();
 }
 
 std::unique_ptr<IRTrainer> create_ir_trainer(

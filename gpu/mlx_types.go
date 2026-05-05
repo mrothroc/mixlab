@@ -48,6 +48,8 @@ const (
 	OpSoftplus             = 59
 	OpGatedDeltaScan       = 60
 	OpStopGradient         = 61
+	OpDepthwiseConv1D      = 62
+	OpMamba3SelectiveScan  = 63
 	OpRandomNormal         = 65
 )
 
@@ -157,6 +159,13 @@ func clearHandleSize(handle int64) {
 	handleMetaMu.Lock()
 	delete(handleSizes, handle)
 	handleMetaMu.Unlock()
+}
+
+func getHandleSize(handle int64) (int, bool) {
+	handleMetaMu.RLock()
+	size, ok := handleSizes[handle]
+	handleMetaMu.RUnlock()
+	return size, ok
 }
 
 func cloneShape(shape []int) []int {

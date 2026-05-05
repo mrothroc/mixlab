@@ -206,6 +206,38 @@ func TestParseArchConfig_AcceptsMamba3(t *testing.T) {
 	}
 }
 
+func TestParseArchConfig_AcceptsMamba3Canonical(t *testing.T) {
+	useConv := false
+	cfg := ArchConfig{
+		Name:      "mamba3_canonical",
+		ModelDim:  128,
+		VocabSize: 1024,
+		SeqLen:    128,
+		Blocks: []BlockSpec{{
+			Type:       "mamba3-canonical",
+			InnerDim:   192,
+			StateSize:  16,
+			NGroups:    4,
+			DTRank:     8,
+			ConvKernel: 4,
+			UseConv:    &useConv,
+			DTMin:      0.001,
+			DTMax:      0.1,
+		}},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got, err := ParseArchConfig(data, "test_mamba3_canonical")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if got.Blocks[0].Type != "mamba3-canonical" || got.Blocks[0].InnerDim != 192 || got.Blocks[0].UseConv == nil || *got.Blocks[0].UseConv {
+		t.Fatalf("parsed block = %+v", got.Blocks[0])
+	}
+}
+
 func TestParseArchConfig_AcceptsCrossAttention(t *testing.T) {
 	cfg := ArchConfig{
 		Name:      "xattn",

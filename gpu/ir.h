@@ -66,12 +66,14 @@ enum OpType {
   OP_SOFTPLUS = 59,
   OP_GATED_DELTA_SCAN = 60,
   OP_STOP_GRADIENT = 61,
+  OP_DEPTHWISE_CONV1D = 62,
+  OP_MAMBA3_SELECTIVE_SCAN = 63,
   OP_RANDOM_NORMAL = 65,
 };
 
 struct IRop {
   int type = 0;
-  std::string inputs[5];
+  std::string inputs[8];
   int n_inputs = 0;
   std::string outputs[2];
   int n_outputs = 0;
@@ -97,6 +99,9 @@ struct TensorDesc {
 };
 
 using TensorMap = std::unordered_map<std::string, TensorDesc>;
+using ArrayMap = std::unordered_map<std::string, mlx::core::array>;
+
+ArrayMap tensor_map_to_arrays(const TensorMap& inputs);
 
 mlx::core::array ir_interpret(
     const IRProgram& program,
@@ -116,6 +121,24 @@ mlx::core::array ir_interpret(
     const std::string& output_name,
     bool training);
 
+mlx::core::array ir_interpret(
+    const IRProgram& program,
+    const std::vector<mlx::core::array>& weights,
+    const ArrayMap& inputs);
+
+mlx::core::array ir_interpret(
+    const IRProgram& program,
+    const std::vector<mlx::core::array>& weights,
+    const ArrayMap& inputs,
+    const std::string& output_name);
+
+mlx::core::array ir_interpret(
+    const IRProgram& program,
+    const std::vector<mlx::core::array>& weights,
+    const ArrayMap& inputs,
+    const std::string& output_name,
+    bool training);
+
 std::unordered_map<std::string, mlx::core::array> ir_interpret_outputs(
     const IRProgram& program,
     const std::vector<mlx::core::array>& weights,
@@ -126,6 +149,19 @@ std::unordered_map<std::string, mlx::core::array> ir_interpret_outputs(
     const IRProgram& program,
     const std::vector<mlx::core::array>& weights,
     const TensorMap& inputs,
+    const std::vector<std::string>& output_names,
+    bool training);
+
+std::unordered_map<std::string, mlx::core::array> ir_interpret_outputs(
+    const IRProgram& program,
+    const std::vector<mlx::core::array>& weights,
+    const ArrayMap& inputs,
+    const std::vector<std::string>& output_names);
+
+std::unordered_map<std::string, mlx::core::array> ir_interpret_outputs(
+    const IRProgram& program,
+    const std::vector<mlx::core::array>& weights,
+    const ArrayMap& inputs,
     const std::vector<std::string>& output_names,
     bool training);
 

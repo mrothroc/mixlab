@@ -106,3 +106,7 @@ func TrainerSetWeight(t TrainerHandle, weightIdx int, data []float32) error {
 func TrainerReadOutput(t TrainerHandle, name string, shape []int) ([]float32, error) {
 	return nil, errNotBuilt
 }
+
+func EvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) (float32, [][]float32, error) {
+	return 0, nil, errNotBuilt
+}

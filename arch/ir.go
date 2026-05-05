@@ -47,6 +47,8 @@ const (
 	OpSoftplus             = 59 // OP_SOFTPLUS
 	OpGatedDeltaScan       = 60 // OP_GATED_DELTA_SCAN
 	OpStopGradient         = 61 // OP_STOP_GRADIENT
+	OpDepthwiseConv1D      = 62 // OP_DEPTHWISE_CONV1D
+	OpMamba3SelectiveScan  = 63 // OP_MAMBA3_SELECTIVE_SCAN
 	OpRandomNormal         = 65 // OP_RANDOM_NORMAL
 
 	TensorInt32   = 0
@@ -230,6 +232,30 @@ func (p *Program) Concat(a, b string, axis int, output string) {
 // IntParams layout: [B, T, D].
 func (p *Program) Scan(x, decay, output string, B, T, D int) {
 	p.AddOp(OpScan, []string{x, decay}, []string{output}, nil, []int{B, T, D})
+}
+
+// DepthwiseConv1D emits a causal depthwise 1-D convolution over a flattened
+// [B*T, D] sequence. Weight shape is [D, K]. IntParams layout: [B, T, D, K].
+func (p *Program) DepthwiseConv1D(x, weight, output string, B, T, D, K int) {
+	p.AddOp(OpDepthwiseConv1D, []string{x, weight}, []string{output}, nil, []int{B, T, D, K})
+}
+
+// Mamba3SelectiveScan emits the canonical Mamba-3 recurrent core from Lahoti
+// et al. 2026, Sections 3.1-3.3 / Propositions 1, 2, and 4.
+//
+// Inputs:
+//
+//	x      [B*T, D]     SSM input branch after optional causal depthwise conv
+//	dt     [B*T, D]     raw delta logits including dt_bias; kernel applies softplus
+//	lambda [B*T, D]     raw trapezoid gate logits; kernel applies sigmoid
+//	theta  [B*T, D*N/2] raw complex-state angular velocities for N/2 pairs
+//	a_log  [D, N]       log state decay magnitudes; A = -exp(a_log)
+//	B_proj [B*T, G*N]   MIMO/grouped B, interpreted as [B,T,G,N]
+//	C_proj [B*T, G*N]   MIMO/grouped C, interpreted as [B,T,G,N]
+//
+// Output is [B*T, D]. IntParams layout: [B, T, D, N, G].
+func (p *Program) Mamba3SelectiveScan(x, dt, lambda, theta, aLog, bProj, cProj, output string, B, T, D, N, G int) {
+	p.AddOp(OpMamba3SelectiveScan, []string{x, dt, lambda, theta, aLog, bProj, cProj}, []string{output}, nil, []int{B, T, D, N, G})
 }
 
 // MatrixScan emits a matrix-state gated recurrence (OpMatrixScan) over a sequence.

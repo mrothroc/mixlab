@@ -9,13 +9,17 @@ import (
 )
 
 type WeightShape struct {
-	Name        string
-	Shape       []int
-	IsNormScale bool
-	InitOne     bool
-	InitValue   float32
-	InitZero    bool
-	InitMode    string
+	Name          string
+	Shape         []int
+	IsNormScale   bool
+	InitOne       bool
+	InitValue     float32
+	InitZero      bool
+	InitMode      string
+	InitLogArange bool
+	InitDtBias    bool
+	DtMin         float64
+	DtMax         float64
 }
 
 func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
@@ -31,13 +35,17 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 	shapes := make([]WeightShape, len(metas))
 	for i, m := range metas {
 		shapes[i] = WeightShape{
-			Name:        m.Name,
-			Shape:       m.Shape,
-			IsNormScale: m.IsNormScale,
-			InitOne:     m.InitOne,
-			InitValue:   m.InitValue,
-			InitZero:    m.InitZero,
-			InitMode:    m.InitMode,
+			Name:          m.Name,
+			Shape:         m.Shape,
+			IsNormScale:   m.IsNormScale,
+			InitOne:       m.InitOne,
+			InitValue:     m.InitValue,
+			InitZero:      m.InitZero,
+			InitMode:      m.InitMode,
+			InitLogArange: m.InitLogArange,
+			InitDtBias:    m.InitDtBias,
+			DtMin:         m.DtMin,
+			DtMax:         m.DtMax,
 		}
 	}
 	return shapes, nil
@@ -93,6 +101,30 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 }
 
 func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool {
+	if ws.InitLogArange && len(ws.Shape) == 2 {
+		n := ws.Shape[1]
+		for j := range data {
+			data[j] = float32(math.Log(float64(j%n + 1)))
+		}
+		return true
+	}
+	if ws.InitDtBias && len(ws.Shape) == 1 {
+		dtMin := ws.DtMin
+		if dtMin <= 0 {
+			dtMin = 0.001
+		}
+		dtMax := ws.DtMax
+		if dtMax <= dtMin {
+			dtMax = 0.1
+		}
+		logMin := math.Log(dtMin)
+		logMax := math.Log(dtMax)
+		for i := range data {
+			dt := math.Exp(logMin + rng.Float64()*(logMax-logMin))
+			data[i] = float32(inverseSoftplus(dt))
+		}
+		return true
+	}
 	switch ws.InitMode {
 	case "torch_linear_uniform":
 		if len(ws.Shape) < 2 || ws.Shape[0] <= 0 {

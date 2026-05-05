@@ -119,6 +119,13 @@ type BlockSpec struct {
 	DV               int          `json:"d_v,omitempty"`              // gated_deltanet: value dim per head; defaults to 2*d_k.
 	KVShare          *bool        `json:"kv_share,omitempty"`         // gated_deltanet: share the K/V projection when true (default).
 	ScanChunkSize    *int         `json:"scan_chunk_size,omitempty"`  // gated_deltanet: chunk size for chunked delta scan; 0 keeps the naive scan.
+	StateSize        int          `json:"state_size,omitempty"`       // Mamba-3 canonical state expansion; defaults to 16.
+	NGroups          int          `json:"n_groups,omitempty"`         // Mamba-3 canonical grouped/MIMO axis; defaults to 4.
+	DTRank           int          `json:"dt_rank,omitempty"`          // Mamba-3 canonical low-rank dt/lambda/theta rank; defaults to max(inner/16,1).
+	ConvKernel       int          `json:"conv_kernel,omitempty"`      // Mamba-3 canonical causal conv width; defaults to 4.
+	UseConv          *bool        `json:"use_conv,omitempty"`         // Mamba-3 canonical short conv toggle; defaults to true.
+	DTMin            float64      `json:"dt_min,omitempty"`           // Mamba-3 canonical dt init lower bound; defaults to 0.001.
+	DTMax            float64      `json:"dt_max,omitempty"`           // Mamba-3 canonical dt init upper bound; defaults to 0.1.
 	NumLatents       int          `json:"num_latents,omitempty"`      // Perceiver/bottleneck latent count.
 	SourceStream     string       `json:"source_stream,omitempty"`    // cross_attention: stream providing K/V.
 	Decay            float64      `json:"decay,omitempty"`            // RetNet: initial decay rate in (0,1); defaults to 0.95.
@@ -778,7 +785,7 @@ func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, c
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	switch b.Type {
-	case "plain", "swiglu", "mlp", "mamba", "mamba3", "gated_deltanet", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
+	case "plain", "swiglu", "mlp", "mamba", "mamba3", "mamba3-canonical", "gated_deltanet", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
 		// valid
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)
@@ -826,6 +833,17 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if b.ScanChunkSize != nil && *b.ScanChunkSize < 0 {
 			return fmt.Errorf("config %q %s[%d] type=gated_deltanet has invalid scan_chunk_size=%d (must be >= 0)", source, groupName, idx, *b.ScanChunkSize)
+		}
+	}
+	if b.Type == "mamba3-canonical" {
+		if b.StateSize < 0 || b.NGroups < 0 || b.DTRank < 0 || b.ConvKernel < 0 {
+			return fmt.Errorf("config %q %s[%d] type=mamba3-canonical has negative dimension field", source, groupName, idx)
+		}
+		if b.StateSize > 0 && b.StateSize%2 != 0 {
+			return fmt.Errorf("config %q %s[%d] type=mamba3-canonical requires even state_size for complex state pairs", source, groupName, idx)
+		}
+		if b.DTMin < 0 || b.DTMax < 0 || (b.DTMin > 0 && b.DTMax > 0 && b.DTMax <= b.DTMin) {
+			return fmt.Errorf("config %q %s[%d] type=mamba3-canonical requires 0 < dt_min < dt_max when set", source, groupName, idx)
 		}
 	}
 	if (b.Type == "perceiver" || b.Type == "bottleneck") && b.Heads <= 0 {

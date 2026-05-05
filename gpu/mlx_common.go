@@ -80,8 +80,8 @@ func (p *Program) AddOp(opType int, inputs, outputs []string, floatParams []floa
 	if p == nil || p.handle == 0 {
 		return fmt.Errorf("invalid GPU program handle; create the program with gpu.NewProgram before declaring ops")
 	}
-	if len(inputs) > 5 || len(outputs) > 2 || len(floatParams) > 4 || len(intParams) > 8 {
-		return fmt.Errorf("IR op params exceed bridge limits; keep inputs<=5 outputs<=2 float_params<=4 int_params<=8")
+	if len(inputs) > 8 || len(outputs) > 2 || len(floatParams) > 4 || len(intParams) > 8 {
+		return fmt.Errorf("IR op params exceed bridge limits; keep inputs<=8 outputs<=2 float_params<=4 int_params<=8")
 	}
 	if err := mlxAddOp(p.handle, opType, inputs, outputs, floatParams, intParams); err != nil {
 		return err
@@ -334,4 +334,29 @@ func TrainerReadOutput(t TrainerHandle, name string, shape []int) ([]float32, er
 		return nil, err
 	}
 	return out, nil
+}
+
+func EvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) (float32, [][]float32, error) {
+	if program == nil || program.handle == 0 {
+		return 0, nil, fmt.Errorf("invalid GPU program; create and populate a gpu.Program before evaluating gradients")
+	}
+	if len(weightHandles) == 0 {
+		return 0, nil, fmt.Errorf("no weight handles; upload weights with gpu.FromData before evaluating gradients")
+	}
+	if program.nWeights != len(weightHandles) {
+		return 0, nil, fmt.Errorf("program weight mismatch: program=%d weights=%d", program.nWeights, len(weightHandles))
+	}
+	grads := make([][]float32, len(weightHandles))
+	for i, handle := range weightHandles {
+		size, ok := getHandleSize(handle)
+		if !ok || size <= 0 {
+			return 0, nil, fmt.Errorf("unknown size for weight handle %d", handle)
+		}
+		grads[i] = make([]float32, size)
+	}
+	loss, err := mlxEvalProgramGradientsForOutput(program, weightHandles, inputs, outputName, grads)
+	if err != nil {
+		return 0, nil, err
+	}
+	return loss, grads, nil
 }

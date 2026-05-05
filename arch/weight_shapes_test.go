@@ -24,6 +24,7 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 		{Type: "mamba"}, // default inner = D
 		{Type: "mamba3", InnerDim: 32},
 		{Type: "mamba3"}, // default inner = D
+		{Type: "mamba3-canonical", InnerDim: 64, StateSize: 16, NGroups: 4, DTRank: 4},
 		{Type: "rwkv"},
 		{Type: "token_blend"},
 		{Type: "perceiver", Heads: 4, NumLatents: 16},
@@ -69,6 +70,35 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBlockWeightShapes_Mamba3Canonical(t *testing.T) {
+	metas, err := blockWeightShapes(BlockSpec{Type: "mamba3-canonical", InnerDim: 64, StateSize: 8, NGroups: 2, DTRank: 4}, 64, 32, 1, 256, DefaultFFNMultiplier, false, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes: %v", err)
+	}
+	if got, want := len(metas), 20; got != want {
+		t.Fatalf("weight count = %d, want %d", got, want)
+	}
+	byName := make(map[string]WeightMeta, len(metas))
+	for _, meta := range metas {
+		byName[meta.Name] = meta
+	}
+	if meta := byName["A_log"]; !meta.InitLogArange {
+		t.Fatalf("A_log metadata = %+v", meta)
+	}
+	if meta := byName["dt_bias"]; !meta.InitDtBias || meta.DtMin != 0.001 || meta.DtMax != 0.1 {
+		t.Fatalf("dt_bias metadata = %+v", meta)
+	}
+
+	useConv := false
+	noConv, err := blockWeightShapes(BlockSpec{Type: "mamba3-canonical", InnerDim: 64, StateSize: 8, NGroups: 2, DTRank: 4, UseConv: &useConv}, 64, 32, 1, 256, DefaultFFNMultiplier, false, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes no-conv: %v", err)
+	}
+	if got, want := len(noConv), 19; got != want {
+		t.Fatalf("no-conv weight count = %d, want %d", got, want)
 	}
 }
 

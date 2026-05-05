@@ -7,6 +7,7 @@
 #include <mlx/random.h>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -85,6 +86,8 @@ struct IRTrainer {
   float ready_loss_ = 0.0f;
   std::unordered_map<std::string, mlx::core::array> ready_outputs_;
   int ready_step_index_ = 0;
+  std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_named_step;
+  std::string compiled_named_step_signature;
 
   float max_grad_norm = 0.0f;
   float lr_scale = 1.0f;

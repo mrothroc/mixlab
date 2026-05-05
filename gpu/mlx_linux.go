@@ -384,6 +384,55 @@ func mlxTrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) 
 	return loss, nil
 }
 
+func mlxEvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string, grads [][]float32) (float32, error) {
+	cInputs, cleanup, err := marshalTensorInputs(inputs)
+	if err != nil {
+		return 0, err
+	}
+	defer cleanup()
+	cWeights := make([]C.int64_t, len(weightHandles))
+	for i := range weightHandles {
+		cWeights[i] = C.int64_t(weightHandles[i])
+	}
+	cGradPtrs := make([]*C.float, len(grads))
+	cGradSizes := make([]C.int, len(grads))
+	for i := range grads {
+		if len(grads[i]) == 0 {
+			return 0, fmt.Errorf("gradient buffer %d is empty", i)
+		}
+		cGradPtrs[i] = (*C.float)(C.malloc(C.size_t(len(grads[i])) * C.size_t(unsafe.Sizeof(C.float(0)))))
+		if cGradPtrs[i] == nil {
+			for j := 0; j < i; j++ {
+				C.free(unsafe.Pointer(cGradPtrs[j]))
+			}
+			return 0, fmt.Errorf("failed to allocate gradient buffer %d", i)
+		}
+		defer C.free(unsafe.Pointer(cGradPtrs[i]))
+		cGradSizes[i] = C.int(len(grads[i]))
+	}
+	cOutputName := C.CString(outputName)
+	defer C.free(unsafe.Pointer(cOutputName))
+	var loss C.float
+	status := C.mlx_ir_eval_program_grads_named_for_output(
+		C.int64_t(program.handle),
+		(*C.int64_t)(unsafe.Pointer(&cWeights[0])),
+		C.int(len(cWeights)),
+		(*C.mlx_tensor_input)(unsafe.Pointer(&cInputs[0])),
+		C.int(len(cInputs)),
+		cOutputName,
+		&loss,
+		(**C.float)(unsafe.Pointer(&cGradPtrs[0])),
+		(*C.int)(unsafe.Pointer(&cGradSizes[0])),
+	)
+	if status != 0 {
+		return 0, fmt.Errorf("mlx_ir_eval_program_grads_named_for_output failed")
+	}
+	for i := range grads {
+		copy(grads[i], unsafe.Slice((*float32)(unsafe.Pointer(cGradPtrs[i])), len(grads[i])))
+	}
+	return float32(loss), nil
+}
+
 func mlxTrainerComputeMeanSquareGrads(t TrainerHandle, inputs []TensorInput, outputName string) (float32, error) {
 	cInputs, cleanup, err := marshalTensorInputs(inputs)
 	if err != nil {

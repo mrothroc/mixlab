@@ -115,7 +115,7 @@ func init() {
 			return gatedDeltaNetWeightShapes(spec, D, T, B, V)
 		},
 	})
-	for _, name := range []string{"mamba", "mamba3", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
+	for _, name := range []string{"mamba", "mamba3", "mamba3-canonical", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
 		RegisterBlock(name, blockRegistration{
 			Emitter:     builtinBlockEmitter,
 			WeightCount: builtinBlockWeightCount,
@@ -173,6 +173,12 @@ func builtinBlockWeightCount(spec BlockSpec, blockScales, residMix bool) (int, e
 		return 4, nil
 	case "mamba3":
 		return 6, nil
+	case "mamba3-canonical":
+		total := 19
+		if spec.UseConv == nil || *spec.UseConv {
+			total++
+		}
+		return total, nil
 	case "rwkv":
 		return 10, nil
 	case "perceiver", "bottleneck":
@@ -204,6 +210,29 @@ func builtinBlockEmitter(prog *Program, spec BlockSpec, stream string, wi, D, T,
 			inner = D
 		}
 		return emitMamba3IR(prog, stream, wi, inner, T, B, idx)
+	case "mamba3-canonical":
+		inner := spec.InnerDim
+		if inner <= 0 {
+			inner = D
+		}
+		stateSize := spec.StateSize
+		if stateSize <= 0 {
+			stateSize = 16
+		}
+		nGroups := spec.NGroups
+		if nGroups <= 0 {
+			nGroups = 4
+		}
+		dtRank := spec.DTRank
+		if dtRank <= 0 {
+			dtRank = defaultMamba3CanonicalRank(inner)
+		}
+		convKernel := spec.ConvKernel
+		if convKernel <= 0 {
+			convKernel = 4
+		}
+		useConv := spec.UseConv == nil || *spec.UseConv
+		return emitMamba3CanonicalIR(prog, stream, wi, inner, stateSize, nGroups, dtRank, convKernel, useConv, D, T, B, idx)
 	case "rwkv":
 		return emitRWKVIR(prog, stream, wi, D, T, B, idx)
 	case "perceiver":

@@ -3,15 +3,20 @@
 #include "ir.h"
 #include "ir_trainer.h"
 
+#include <mlx/compile.h>
 #include <mlx/mlx.h>
 
 #include <cstdlib>
 #include <cstring>
 #include <optional>
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <array>
+#include <sstream>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 #include <cmath>
@@ -23,6 +28,8 @@ bool g_initialized = false;
 std::vector<std::optional<mx::array>> g_handle_pool;
 std::vector<std::unique_ptr<mlx_ir::IRProgram>> g_ir_program_pool;
 std::vector<std::unique_ptr<mlx_ir::IRTrainer>> g_ir_trainer_pool;
+std::unordered_map<std::string, std::function<std::vector<mx::array>(const std::vector<mx::array>&)>>
+    g_compiled_ir_grad_pool;
 
 namespace {
 
@@ -177,6 +184,52 @@ mlx_ir::TensorMap to_tensor_map(const mlx_tensor_input* inputs, int n_inputs) {
         });
   }
   return out;
+}
+
+std::string ir_program_fingerprint(const mlx_ir::IRProgram& program) {
+  std::ostringstream oss;
+  oss << "nw=" << program.n_weights << ";ops=" << program.ops.size();
+  for (const auto& op : program.ops) {
+    oss << "|t=" << op.type << ";ni=" << op.n_inputs << ";no=" << op.n_outputs;
+    for (int i = 0; i < op.n_inputs; ++i) {
+      oss << ";i" << i << "=" << op.inputs[i];
+    }
+    for (int i = 0; i < op.n_outputs; ++i) {
+      oss << ";o" << i << "=" << op.outputs[i];
+    }
+    oss << ";nf=" << op.n_float_params;
+    for (int i = 0; i < op.n_float_params; ++i) {
+      oss << ";f" << i << "=" << op.float_params[i];
+    }
+    oss << ";np=" << op.n_int_params;
+    for (int i = 0; i < op.n_int_params; ++i) {
+      oss << ";p" << i << "=" << op.int_params[i];
+    }
+  }
+  return oss.str();
+}
+
+std::string tensor_input_signature(const mlx_tensor_input* inputs, int n_inputs) {
+  std::ostringstream oss;
+  for (int i = 0; i < n_inputs; ++i) {
+    const auto& in = inputs[i];
+    oss << "|in=" << (in.name ? in.name : "") << ";dt=" << in.dtype << ";nd=" << in.ndim;
+    for (int d = 0; d < in.ndim; ++d) {
+      oss << "," << in.shape[d];
+    }
+  }
+  return oss.str();
+}
+
+void erase_compiled_ir_grad_cache_for_program(int64_t program) {
+  const std::string prefix = std::to_string(program) + "|";
+  for (auto it = g_compiled_ir_grad_pool.begin(); it != g_compiled_ir_grad_pool.end();) {
+    if (it->first.rfind(prefix, 0) == 0) {
+      it = g_compiled_ir_grad_pool.erase(it);
+    } else {
+      ++it;
+    }
+  }
 }
 
 extern "C" {
@@ -515,7 +568,7 @@ void mlx_ir_program_add_op(
   if (!p) {
     return;
   }
-  if (n_inputs < 0 || n_inputs > 5 || n_outputs < 0 || n_outputs > 2) {
+  if (n_inputs < 0 || n_inputs > 8 || n_outputs < 0 || n_outputs > 2) {
     return;
   }
   if (n_float_params < 0 || n_float_params > 4 || n_int_params < 0 || n_int_params > 8) {
@@ -541,6 +594,7 @@ void mlx_ir_program_add_op(
       op.int_params[i] = int_params ? int_params[i] : 0;
     }
     p->ops.push_back(std::move(op));
+    erase_compiled_ir_grad_cache_for_program(prog);
   } catch (...) {
   }
 }
@@ -553,6 +607,7 @@ void mlx_ir_program_destroy(int64_t prog) {
   if (idx >= g_ir_program_pool.size()) {
     return;
   }
+  erase_compiled_ir_grad_cache_for_program(prog);
   g_ir_program_pool[idx].reset();
 }
 
@@ -714,7 +769,134 @@ int mlx_ir_eval_program_named_for_output(
   }
 }
 
+int mlx_ir_eval_program_grads_named_for_output(
+    int64_t program,
+    int64_t* weight_handles,
+    int n_weights,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char* output_name,
+    float* loss_out,
+    float** grad_out_ptrs,
+    int* grad_sizes) {
+  if (program <= 0 || !weight_handles || n_weights <= 0 || !inputs || n_inputs <= 0 ||
+      !loss_out || !grad_out_ptrs || !grad_sizes) {
+    return -1;
+  }
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return -1;
+    }
+    auto* prog = get_ir_program(program);
+    if (!prog || prog->n_weights != n_weights) {
+      return -1;
+    }
+
+    std::vector<mx::array> weights;
+    weights.reserve(static_cast<size_t>(n_weights));
+    for (int i = 0; i < n_weights; ++i) {
+      auto* w = get_handle(weight_handles[i]);
+      if (!w) {
+        return -1;
+      }
+      weights.push_back(*w);
+    }
+
+    auto tensor_map = to_tensor_map(inputs, n_inputs);
+    auto input_arrays_by_name = mlx_ir::tensor_map_to_arrays(tensor_map);
+    std::vector<std::string> input_names;
+    input_names.reserve(static_cast<size_t>(n_inputs));
+    std::vector<mx::array> input_arrays;
+    input_arrays.reserve(static_cast<size_t>(n_inputs));
+    for (int i = 0; i < n_inputs; ++i) {
+      std::string name(inputs[i].name);
+      auto it = input_arrays_by_name.find(name);
+      if (it == input_arrays_by_name.end()) {
+        return -1;
+      }
+      input_names.push_back(std::move(name));
+      input_arrays.push_back(it->second);
+    }
+
+    std::vector<mx::array> args;
+    args.reserve(static_cast<size_t>(n_weights + n_inputs));
+    args.insert(args.end(), weights.begin(), weights.end());
+    args.insert(args.end(), input_arrays.begin(), input_arrays.end());
+
+    std::vector<int> argnums(static_cast<size_t>(n_weights));
+    std::iota(argnums.begin(), argnums.end(), 0);
+    const std::string requested_output = (output_name && output_name[0] != '\0') ? std::string(output_name) : std::string();
+
+    const std::string cache_key = std::to_string(program) + "|" + ir_program_fingerprint(*prog) +
+        "|out=" + requested_output + "|nw=" + std::to_string(n_weights) +
+        tensor_input_signature(inputs, n_inputs);
+    auto compiled_it = g_compiled_ir_grad_pool.find(cache_key);
+    if (compiled_it == g_compiled_ir_grad_pool.end()) {
+      auto grad_fn = mx::value_and_grad(
+          [prog, input_names, requested_output, n_weights](const std::vector<mx::array>& fn_args) {
+            if (static_cast<int>(fn_args.size()) < n_weights + static_cast<int>(input_names.size())) {
+              throw std::runtime_error("compiled IR gradient argument count mismatch");
+            }
+            std::vector<mx::array> w;
+            w.reserve(static_cast<size_t>(n_weights));
+            for (int i = 0; i < n_weights; ++i) {
+              w.push_back(fn_args[static_cast<size_t>(i)]);
+            }
+            mlx_ir::ArrayMap input_map;
+            input_map.reserve(input_names.size());
+            for (size_t i = 0; i < input_names.size(); ++i) {
+              input_map.emplace(input_names[i], fn_args[static_cast<size_t>(n_weights) + i]);
+            }
+            auto out = requested_output.empty()
+                ? mlx_ir::ir_interpret(*prog, w, input_map)
+                : mlx_ir::ir_interpret(*prog, w, input_map, requested_output);
+            if (out.size() != 1) {
+              throw std::runtime_error("IR gradient output must be scalar");
+            }
+            return mx::reshape(out, {});
+          },
+          argnums);
+
+      auto compiled = mx::compile(
+          [grad_fn](const std::vector<mx::array>& fn_args) {
+            auto result = grad_fn(fn_args);
+            std::vector<mx::array> out;
+            out.reserve(result.second.size() + 1);
+            out.push_back(result.first);
+            out.insert(out.end(), result.second.begin(), result.second.end());
+            return out;
+          },
+          false);
+      compiled_it = g_compiled_ir_grad_pool.emplace(cache_key, std::move(compiled)).first;
+    }
+
+    auto compiled_out = compiled_it->second(args);
+    if (static_cast<int>(compiled_out.size()) != n_weights + 1) {
+      return -1;
+    }
+    auto loss = compiled_out[0];
+
+    std::vector<mx::array> eval_arrays;
+    eval_arrays.reserve(compiled_out.size());
+    eval_arrays.insert(eval_arrays.end(), compiled_out.begin(), compiled_out.end());
+    mx::eval(eval_arrays);
+
+    *loss_out = loss.item<float>();
+    for (int i = 0; i < n_weights; ++i) {
+      const auto& g = compiled_out[static_cast<size_t>(i + 1)];
+      if (g.dtype() != mx::float32 || g.size() != static_cast<size_t>(grad_sizes[i]) || grad_out_ptrs[i] == nullptr) {
+        return -1;
+      }
+      std::memcpy(grad_out_ptrs[i], g.data<float>(), g.size() * sizeof(float));
+    }
+    return 0;
+  } catch (...) {
+    return -1;
+  }
+}
+
 void mlx_shutdown(void) {
+  g_compiled_ir_grad_pool.clear();
   g_ir_trainer_pool.clear();
   g_ir_program_pool.clear();
   g_handle_pool.clear();

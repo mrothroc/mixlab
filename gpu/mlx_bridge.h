@@ -123,6 +123,16 @@ int mlx_ir_eval_program_named_for_output(
     const char* output_name,
     float* out,
     int out_size);
+int mlx_ir_eval_program_grads_named_for_output(
+    int64_t program,
+    int64_t* weight_handles,
+    int n_weights,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char* output_name,
+    float* loss_out,
+    float** grad_out_ptrs,
+    int* grad_sizes);
 
 int64_t mlx_ir_create_trainer(
     int64_t program,

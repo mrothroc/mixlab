@@ -147,6 +147,124 @@ mx::array running_variance_raw(const mx::array& x_flat, int B, int T, int D, flo
   return out;
 }
 
+mx::array softplus(const mx::array& x) {
+  return mx::log(1.0f + mx::exp(x));
+}
+
+mx::array rotate_pairs_rt_all(const mx::array& x_btn, const mx::array& phi_btdk, int B, int T, int D, int N) {
+  const int K = N / 2;
+  auto even = mx::reshape(mx::slice(x_btn, {0, 0, 0}, {B, T, N}, {1, 1, 2}), {B, T, 1, K});
+  auto odd = mx::reshape(mx::slice(x_btn, {0, 0, 1}, {B, T, N}, {1, 1, 2}), {B, T, 1, K});
+  auto cos_phi = mx::cos(phi_btdk);
+  auto sin_phi = mx::sin(phi_btdk);
+  auto rot_even = cos_phi * even + sin_phi * odd;
+  auto rot_odd = -sin_phi * even + cos_phi * odd;
+  return mx::reshape(mx::stack({rot_even, rot_odd}, 4), {B, T, D, N});
+}
+
+mx::array rotate_grouped_pairs_rt_all(
+    const mx::array& x_btgn,
+    const mx::array& phi_btdk,
+    int B,
+    int T,
+    int D,
+    int N,
+    int G) {
+  const int channels_per_group = D / G;
+  std::vector<mx::array> rotated;
+  rotated.reserve(static_cast<size_t>(G));
+  for (int g = 0; g < G; ++g) {
+    auto x_g = mx::reshape(mx::slice(x_btgn, {0, 0, g, 0}, {B, T, g + 1, N}), {B, T, N});
+    auto phi_g = mx::slice(
+        phi_btdk,
+        {0, 0, g * channels_per_group, 0},
+        {B, T, (g + 1) * channels_per_group, N / 2});
+    rotated.push_back(rotate_pairs_rt_all(x_g, phi_g, B, T, channels_per_group, N));
+  }
+  if (rotated.size() == 1) {
+    return rotated[0];
+  }
+  return mx::concatenate(rotated, 2);
+}
+
+mx::array mamba3_selective_scan_canonical_phase6(
+    const mx::array& x_flat,
+    const mx::array& dt_flat,
+    const mx::array& lambda_flat,
+    const mx::array& theta_flat,
+    const mx::array& a_log,
+    const mx::array& b_proj_flat,
+    const mx::array& c_proj_flat,
+    int B,
+    int T,
+    int D,
+    int N,
+    int G) {
+  if (G <= 0) {
+    throw std::runtime_error("Mamba3 Phase 6 requires n_groups > 0; got G=" + std::to_string(G));
+  }
+  if ((D % G) != 0) {
+    throw std::runtime_error(
+        "Mamba3 Phase 6 requires D divisible by n_groups; got D=" + std::to_string(D) +
+        " G=" + std::to_string(G));
+  }
+  if ((N % 2) != 0) {
+    throw std::runtime_error("Mamba3 Phase 6 requires even state_size N for 2x2 rotations; got N=" + std::to_string(N));
+  }
+
+  // Canonical Mamba-3 grouped/MIMO scan:
+  // Sec. 3.1 Prop. 1 Eq. (5)-(6) gives the exponential-trapezoidal
+  // alpha/beta/gamma recurrence, Sec. 3.2 Prop. 2-4 Eq. (9), Eq. (11), and
+  // proof Eq. (25) give the real 2x2 / RoPE state rotations, and Sec. 3.3
+  // Eq. (12)-(13) plus Appendix C define grouped MIMO B/C. All
+  // timestep-parallel terms are hoisted, then h_t = alpha_t*h_{t-1}+input_t
+  // is evaluated by a Hillis-Steele associative scan over affine pairs.
+  auto x = mx::reshape(x_flat, {B, T, D});
+  auto dt = softplus(mx::reshape(dt_flat, {B, T, D}));
+  auto lambda = mx::sigmoid(mx::reshape(lambda_flat, {B, T, D}));
+  auto theta = mx::reshape(theta_flat, {B, T, D, N / 2});
+  auto phi = mx::cumsum(mx::expand_dims(dt, -1) * theta, 1);
+  auto A = -mx::exp(a_log);
+  auto b_proj = mx::reshape(b_proj_flat, {B, T, G, N});
+  auto c_proj = mx::reshape(c_proj_flat, {B, T, G, N});
+
+  auto A_btdn = mx::reshape(A, {1, 1, D, N});
+  auto dt_btd1 = mx::expand_dims(dt, -1);
+  auto lambda_btd1 = mx::expand_dims(lambda, -1);
+  auto alpha_all = mx::exp(dt_btd1 * A_btdn);
+  auto beta_all = (1.0f - lambda_btd1) * dt_btd1 * alpha_all;
+  auto gamma_all = lambda_btd1 * dt_btd1;
+
+  auto b_rot = rotate_grouped_pairs_rt_all(b_proj, phi, B, T, D, N, G);
+  auto c_rot = rotate_grouped_pairs_rt_all(c_proj, phi, B, T, D, N, G);
+  auto current_all = gamma_all * b_rot * mx::expand_dims(x, -1);
+  auto previous_all = mx::zeros({B, T, D, N}, mx::float32);
+  if (T > 1) {
+    auto beta_tail = mx::slice(beta_all, {0, 1, 0, 0}, {B, T, D, N});
+    auto b_prev = mx::slice(b_rot, {0, 0, 0, 0}, {B, T - 1, D, N});
+    auto x_prev = mx::slice(x, {0, 0, 0}, {B, T - 1, D});
+    auto previous_tail = beta_tail * b_prev * mx::expand_dims(x_prev, -1);
+    previous_all = mx::concatenate({mx::zeros({B, 1, D, N}, mx::float32), previous_tail}, 1);
+  }
+
+  auto scan_alpha = alpha_all;
+  auto scan_input = current_all + previous_all;
+  for (int step = 1; step < T; step <<= 1) {
+    auto head_alpha = mx::slice(scan_alpha, {0, 0, 0, 0}, {B, step, D, N});
+    auto head_input = mx::slice(scan_input, {0, 0, 0, 0}, {B, step, D, N});
+    auto tail_alpha = mx::slice(scan_alpha, {0, step, 0, 0}, {B, T, D, N});
+    auto tail_input = mx::slice(scan_input, {0, step, 0, 0}, {B, T, D, N});
+    auto prev_alpha = mx::slice(scan_alpha, {0, 0, 0, 0}, {B, T - step, D, N});
+    auto prev_input = mx::slice(scan_input, {0, 0, 0, 0}, {B, T - step, D, N});
+
+    auto updated_alpha = tail_alpha * prev_alpha;
+    auto updated_input = tail_alpha * prev_input + tail_input;
+    scan_alpha = mx::concatenate({head_alpha, updated_alpha}, 1);
+    scan_input = mx::concatenate({head_input, updated_input}, 1);
+  }
+  return mx::reshape(mx::sum(scan_input * c_rot, 3), {B * T, D});
+}
+
 mx::array gated_delta_scan_naive(
     const mx::array& q,
     const mx::array& k,
@@ -490,6 +608,15 @@ std::string inferred_output_name(const mlx_ir::IRProgram& program, const std::st
 
 namespace mlx_ir {
 
+ArrayMap tensor_map_to_arrays(const TensorMap& inputs) {
+  ArrayMap out;
+  out.reserve(inputs.size());
+  for (const auto& kv : inputs) {
+    out.emplace(kv.first, tensor_desc_to_array(kv.second));
+  }
+  return out;
+}
+
 void report_gated_delta_timing_summary(const char* phase, int index) {
   if (!gated_delta_timing_enabled()) {
     return;
@@ -530,6 +657,13 @@ mx::array ir_interpret(
 mx::array ir_interpret(
     const IRProgram& program,
     const std::vector<mx::array>& weights,
+    const ArrayMap& inputs) {
+  return ir_interpret(program, weights, inputs, "");
+}
+
+mx::array ir_interpret(
+    const IRProgram& program,
+    const std::vector<mx::array>& weights,
     const TensorMap& inputs,
     const std::string& output_name) {
   return ir_interpret(program, weights, inputs, output_name, false);
@@ -539,6 +673,23 @@ mx::array ir_interpret(
     const IRProgram& program,
     const std::vector<mx::array>& weights,
     const TensorMap& inputs,
+    const std::string& output_name,
+    bool training) {
+  return ir_interpret(program, weights, tensor_map_to_arrays(inputs), output_name, training);
+}
+
+mx::array ir_interpret(
+    const IRProgram& program,
+    const std::vector<mx::array>& weights,
+    const ArrayMap& inputs,
+    const std::string& output_name) {
+  return ir_interpret(program, weights, inputs, output_name, false);
+}
+
+mx::array ir_interpret(
+    const IRProgram& program,
+    const std::vector<mx::array>& weights,
+    const ArrayMap& inputs,
     const std::string& output_name,
     bool training) {
   const std::vector<std::string> keep_outputs = output_name.empty()
@@ -572,7 +723,24 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
 std::unordered_map<std::string, mx::array> ir_interpret_outputs(
     const IRProgram& program,
     const std::vector<mx::array>& weights,
+    const ArrayMap& inputs,
+    const std::vector<std::string>& output_names) {
+  return ir_interpret_outputs(program, weights, inputs, output_names, false);
+}
+
+std::unordered_map<std::string, mx::array> ir_interpret_outputs(
+    const IRProgram& program,
+    const std::vector<mx::array>& weights,
     const TensorMap& inputs,
+    const std::vector<std::string>& output_names,
+    bool training) {
+  return ir_interpret_outputs(program, weights, tensor_map_to_arrays(inputs), output_names, training);
+}
+
+std::unordered_map<std::string, mx::array> ir_interpret_outputs(
+    const IRProgram& program,
+    const std::vector<mx::array>& weights,
+    const ArrayMap& inputs,
     const std::vector<std::string>& output_names,
     bool training) {
   std::unordered_map<std::string, mx::array> env;
@@ -580,7 +748,7 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
   std::unordered_set<std::string> pinned;
   pinned.reserve(static_cast<size_t>(inputs.size()) + weights.size() + 1);
   for (const auto& kv : inputs) {
-    env.emplace(kv.first, tensor_desc_to_array(kv.second));
+    env.emplace(kv.first, kv.second);
     pinned.emplace(kv.first);
   }
 
@@ -1079,6 +1247,49 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         } else {
           set_out(op, 0, gated_delta_scan_chunked(q, k, v, beta, gate, B, T, H, Dk, Dv, chunk_size));
         }
+        break;
+      }
+      case OP_DEPTHWISE_CONV1D: {
+        if (op.n_int_params < 4) {
+          throw std::runtime_error("OP_DEPTHWISE_CONV1D requires B,T,D,K");
+        }
+        int B = op.int_params[0];
+        int T = op.int_params[1];
+        int D = op.int_params[2];
+        int K = op.int_params[3];
+        auto x = mx::reshape(get(op, 0), {B, T, D});
+        auto w = get(op, 1);
+        auto out = mx::zeros({B, T, D}, mx::float32);
+        for (int t = 0; t < T; ++t) {
+          auto yt = mx::zeros({B, D}, mx::float32);
+          for (int k = 0; k < K; ++k) {
+            int src_t = t - k;
+            if (src_t < 0) {
+              continue;
+            }
+            auto xt = mx::reshape(mx::slice(x, {0, src_t, 0}, {B, src_t + 1, D}), {B, D});
+            auto wk = mx::reshape(mx::slice(w, {0, k}, {D, k + 1}), {D});
+            yt = yt + xt * wk;
+          }
+          out = mx::slice_update(out, mx::reshape(yt, {B, 1, D}), mx::Shape{0, t, 0}, mx::Shape{B, t + 1, D});
+        }
+        set_out(op, 0, mx::reshape(out, {B * T, D}));
+        break;
+      }
+      case OP_MAMBA3_SELECTIVE_SCAN: {
+        if (op.n_inputs < 7 || op.n_int_params < 5) {
+          throw std::runtime_error("OP_MAMBA3_SELECTIVE_SCAN requires 7 inputs and B,T,D,N,G params");
+        }
+        const int B = op.int_params[0];
+        const int T = op.int_params[1];
+        const int D = op.int_params[2];
+        const int N = op.int_params[3];
+        const int G = op.int_params[4];
+        set_out(
+            op,
+            0,
+            mamba3_selective_scan_canonical_phase6(
+                get(op, 0), get(op, 1), get(op, 2), get(op, 3), get(op, 4), get(op, 5), get(op, 6), B, T, D, N, G));
         break;
       }
       case OP_GATHER_POSITIONS: {

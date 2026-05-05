@@ -245,6 +245,161 @@ func emitMamba3IR(prog *Program, x string, wi, inner, T, B, idx int) (int, error
 	return wi, nil
 }
 
+// emitMamba3CanonicalIR emits a canonical Mamba-3 block following Lahoti et
+// al. 2026, Sections 3.1-3.4.
+//
+// Weight layout (20 weights with use_conv=true, 19 with use_conv=false),
+// matching the paper notation where possible. Lahoti et al. Section 3.1.2 /
+// Remark 4 says the exponential-trapezoidal recurrence induces its own
+// width-2 state-input convolution and can empirically replace the short causal
+// conv; mixlab keeps the Mamba-family short conv enabled by default for
+// continuity, but configs may set use_conv=false for the paper-style variant.
+//
+//	w[wi+0]  = pre_norm_scale       [D]
+//	w[wi+1]  = W_X                  [D, inner]       input branch projection
+//	w[wi+2]  = conv_w               [inner, K]       optional causal depthwise conv
+//	w[...]   = W_dt_low/high        [inner,R], [R,inner] delta projection
+//	w[...]   = W_lambda_low/high    [inner,R], [R,inner] trapezoid gate lambda_t
+//	w[...]   = W_theta_low/high     [inner,R], [R,inner*N/2] complex angular velocity
+//	w[...]   = W_B                  [inner, G*N]     MIMO B projection
+//	w[...]   = W_C                  [inner, G*N]     MIMO C projection
+//	w[...]   = B_norm_scale         [N]              per-group BC/QK norm scale
+//	w[...]   = C_norm_scale         [N]              per-group BC/QK norm scale
+//	w[...]   = B_bias               [G*N]            trainable B bias, init 1
+//	w[...]   = C_bias               [G*N]            trainable C bias, init 1
+//	w[...]   = A_log                [inner, N]       real decay A=-exp(A_log)
+//	w[...]   = dt_bias              [inner]          inv-softplus log-uniform dt
+//	w[...]   = post_norm_scale      [inner]          pre-gate output RMSNorm
+//	w[...]   = W_Z                  [D, inner]       residual gate projection
+//	w[...]   = W_O                  [inner, D]       output projection
+func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, D, T, B, idx int) (int, error) {
+	if inner <= 0 {
+		return wi, fmt.Errorf("mamba3-canonical inner_dim must be > 0, got %d", inner)
+	}
+	if stateSize <= 0 {
+		return wi, fmt.Errorf("mamba3-canonical state_size must be > 0, got %d", stateSize)
+	}
+	if stateSize%2 != 0 {
+		return wi, fmt.Errorf("mamba3-canonical state_size must be even for complex 2x2 state pairs, got %d", stateSize)
+	}
+	if nGroups <= 0 {
+		return wi, fmt.Errorf("mamba3-canonical n_groups must be > 0, got %d", nGroups)
+	}
+	if inner%nGroups != 0 {
+		return wi, fmt.Errorf("mamba3-canonical inner_dim=%d must be divisible by n_groups=%d", inner, nGroups)
+	}
+	if dtRank <= 0 {
+		return wi, fmt.Errorf("mamba3-canonical dt_rank must be > 0, got %d", dtRank)
+	}
+	if useConv && convKernel <= 0 {
+		return wi, fmt.Errorf("mamba3-canonical conv_kernel must be > 0, got %d", convKernel)
+	}
+
+	base := wi
+	prefix := tmpName(x+"_mamba3_canonical", idx)
+	xNorm := prefix + "_x_norm"
+	xProj := prefix + "_x_proj"
+	xConv := prefix + "_x_conv"
+	xBranch := xProj
+	dtLow := prefix + "_dt_low"
+	dtRaw := prefix + "_dt_raw"
+	dt := prefix + "_dt"
+	lambdaLow := prefix + "_lambda_low"
+	lambda := prefix + "_lambda"
+	thetaLow := prefix + "_theta_low"
+	theta := prefix + "_theta"
+	bProj := prefix + "_B"
+	bProjGroup := prefix + "_B_group"
+	bNorm := prefix + "_B_norm"
+	bNormFlat := prefix + "_B_norm_flat"
+	bBiased := prefix + "_B_biased"
+	cProj := prefix + "_C"
+	cProjGroup := prefix + "_C_group"
+	cNorm := prefix + "_C_norm"
+	cNormFlat := prefix + "_C_norm_flat"
+	cBiased := prefix + "_C_biased"
+	y := prefix + "_y"
+	yNorm := prefix + "_y_norm"
+	z := prefix + "_z"
+	zAct := prefix + "_z_act"
+	yGated := prefix + "_y_gated"
+	out := prefix + "_out"
+
+	w := base
+	prog.RMSNorm(x, weightName(w), xNorm, 1e-5)
+	w++
+	prog.MatMul(xNorm, weightName(w), xProj)
+	w++
+	if useConv {
+		prog.DepthwiseConv1D(xProj, weightName(w), xConv, B, T, inner, convKernel)
+		w++
+		xBranch = xConv
+	}
+
+	prog.MatMul(xBranch, weightName(w), dtLow)
+	w++
+	prog.MatMul(dtLow, weightName(w), dtRaw)
+	w++
+	prog.MatMul(xBranch, weightName(w), lambdaLow)
+	w++
+	prog.MatMul(lambdaLow, weightName(w), lambda)
+	w++
+	prog.MatMul(xBranch, weightName(w), thetaLow)
+	w++
+	prog.MatMul(thetaLow, weightName(w), theta)
+	w++
+
+	prog.MatMul(xBranch, weightName(w), bProj)
+	w++
+	prog.MatMul(xBranch, weightName(w), cProj)
+	w++
+
+	bNormScale := weightName(w)
+	w++
+	cNormScale := weightName(w)
+	w++
+	bBias := weightName(w)
+	w++
+	cBias := weightName(w)
+	w++
+	aLog := weightName(w)
+	w++
+	dtBias := weightName(w)
+	w++
+	postNorm := weightName(w)
+	w++
+	wGate := weightName(w)
+	w++
+	wOut := weightName(w)
+	w++
+
+	prog.Add(dtRaw, dtBias, dt)
+
+	// BCNorm is per group over N, matching the reference code's
+	// RMSNormGated(d_state) applied to tensors shaped [..., R, G, N].
+	prog.Reshape(bProj, []int{B * T * nGroups, stateSize}, bProjGroup)
+	prog.RMSNorm(bProjGroup, bNormScale, bNorm, 1e-5)
+	prog.Reshape(bNorm, []int{B * T, nGroups * stateSize}, bNormFlat)
+	prog.Add(bNormFlat, bBias, bBiased)
+
+	prog.Reshape(cProj, []int{B * T * nGroups, stateSize}, cProjGroup)
+	prog.RMSNorm(cProjGroup, cNormScale, cNorm, 1e-5)
+	prog.Reshape(cNorm, []int{B * T, nGroups * stateSize}, cNormFlat)
+	prog.Add(cNormFlat, cBias, cBiased)
+
+	prog.Mamba3SelectiveScan(xBranch, dt, lambda, theta, aLog, bBiased, cBiased, y, B, T, inner, stateSize, nGroups)
+	prog.RMSNorm(y, postNorm, yNorm, 1e-5)
+
+	prog.MatMul(xNorm, wGate, z)
+	prog.SiLU(z, zAct)
+
+	prog.Mul(yNorm, zAct, yGated)
+	prog.MatMul(yGated, wOut, out)
+
+	prog.Add(x, out, x)
+	return w, nil
+}
+
 // emitRWKVIR emits a simplified RWKV-style linear-time block with
 // channel-mixing and time-mixing using learned per-channel decay.
 //

@@ -12,13 +12,17 @@ const DefaultFFNMultiplier = 2.67
 
 // WeightMeta describes a single weight tensor's shape and initialization hint.
 type WeightMeta struct {
-	Name        string
-	Shape       []int
-	IsNormScale bool // true for normalization scales (init 1.0); false for other 1-D params (init 0.0)
-	InitOne     bool // true for non-norm weights that should initialize to 1.0
-	InitValue   float32
-	InitZero    bool
-	InitMode    string
+	Name          string
+	Shape         []int
+	IsNormScale   bool // true for normalization scales (init 1.0); false for other 1-D params (init 0.0)
+	InitOne       bool // true for non-norm weights that should initialize to 1.0
+	InitValue     float32
+	InitZero      bool
+	InitMode      string
+	InitLogArange bool
+	InitDtBias    bool
+	DtMin         float64
+	DtMax         float64
 }
 
 // ffnDim computes the FFN hidden dimension, clamped to at least D.
@@ -31,6 +35,14 @@ func ffnDim(D int, multiplier float64) int {
 		return D
 	}
 	return f
+}
+
+func defaultMamba3CanonicalRank(inner int) int {
+	r := inner / 16
+	if r < 1 {
+		return 1
+	}
+	return r
 }
 
 // blockWeightShapes returns the WeightMeta for a single block given model
@@ -208,6 +220,74 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 			{Name: "wo", Shape: []int{inner, D}},
 			{Name: "scan_decay", Shape: []int{inner}},
 		}, nil
+
+	case "mamba3-canonical":
+		inner := spec.InnerDim
+		if inner <= 0 {
+			inner = D
+		}
+		stateSize := spec.StateSize
+		if stateSize <= 0 {
+			stateSize = 16
+		}
+		if stateSize%2 != 0 {
+			return nil, fmt.Errorf("mamba3-canonical state_size must be even for complex 2x2 state pairs, got %d", stateSize)
+		}
+		nGroups := spec.NGroups
+		if nGroups <= 0 {
+			nGroups = 4
+		}
+		if inner%nGroups != 0 {
+			return nil, fmt.Errorf("mamba3-canonical inner_dim=%d must be divisible by n_groups=%d", inner, nGroups)
+		}
+		dtRank := spec.DTRank
+		if dtRank <= 0 {
+			dtRank = defaultMamba3CanonicalRank(inner)
+		}
+		convKernel := spec.ConvKernel
+		if convKernel <= 0 {
+			convKernel = 4
+		}
+		dtMin := spec.DTMin
+		if dtMin <= 0 {
+			dtMin = 0.001
+		}
+		dtMax := spec.DTMax
+		if dtMax <= 0 {
+			dtMax = 0.1
+		}
+		if dtMin <= 0 || dtMax <= dtMin {
+			return nil, fmt.Errorf("mamba3-canonical requires 0 < dt_min < dt_max, got dt_min=%g dt_max=%g", dtMin, dtMax)
+		}
+		groupState := nGroups * stateSize
+		metas := []WeightMeta{
+			{Name: "pre_norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
+			{Name: "w_x", Shape: []int{D, inner}},
+		}
+		useConv := spec.UseConv == nil || *spec.UseConv
+		if useConv {
+			metas = append(metas, WeightMeta{Name: "conv_w", Shape: []int{inner, convKernel}})
+		}
+		metas = append(metas,
+			WeightMeta{Name: "w_dt_low", Shape: []int{inner, dtRank}},
+			WeightMeta{Name: "w_dt_high", Shape: []int{dtRank, inner}},
+			WeightMeta{Name: "w_lambda_low", Shape: []int{inner, dtRank}},
+			WeightMeta{Name: "w_lambda_high", Shape: []int{dtRank, inner}},
+			WeightMeta{Name: "w_theta_low", Shape: []int{inner, dtRank}},
+			WeightMeta{Name: "w_theta_high", Shape: []int{dtRank, inner * (stateSize / 2)}},
+			WeightMeta{Name: "w_B", Shape: []int{inner, groupState}},
+			WeightMeta{Name: "w_C", Shape: []int{inner, groupState}},
+			WeightMeta{Name: "B_norm_scale", Shape: []int{stateSize}, IsNormScale: true, InitOne: true},
+			WeightMeta{Name: "C_norm_scale", Shape: []int{stateSize}, IsNormScale: true, InitOne: true},
+			WeightMeta{Name: "B_bias", Shape: []int{groupState}, InitOne: true},
+			WeightMeta{Name: "C_bias", Shape: []int{groupState}, InitOne: true},
+			WeightMeta{Name: "A_log", Shape: []int{inner, stateSize}, InitLogArange: true},
+			WeightMeta{Name: "dt_bias", Shape: []int{inner}, InitDtBias: true, DtMin: dtMin, DtMax: dtMax},
+			WeightMeta{Name: "post_norm_scale", Shape: []int{inner}, IsNormScale: true, InitOne: true},
+			WeightMeta{Name: "w_gate", Shape: []int{D, inner}},
+			WeightMeta{Name: "w_out", Shape: []int{inner, D}},
+		)
+		return metas, nil
 
 	case "gated_deltanet":
 		return gatedDeltaNetWeightShapes(spec, D, T, B, V)
