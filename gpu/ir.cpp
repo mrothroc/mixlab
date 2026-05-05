@@ -377,7 +377,12 @@ mx::array gated_delta_scan_chunked(
   auto lower_inclusive_f = mx::astype(mx::expand_dims(mx::expand_dims(mx::expand_dims(lower_inclusive, 0), 0), 0), mx::float32);
   auto eye_f = mx::reshape(eye, {1, 1, 1, chunk_size, chunk_size});
 
-  const bool timing = gated_delta_timing_enabled();
+  // GatedDeltaScan is used inside compiled value_and_grad graphs. MLX forbids
+  // mx::eval() while transformations such as compile/vmap are tracing, so this
+  // kernel must not materialize intermediates for timing or graph flushing.
+  // The old timing path forced raw_attn/solve/state/out evaluation here, which
+  // made OP_GATED_DELTA_SCAN fail under the compiled trainer path.
+  constexpr bool timing = false;
   double raw_attn_ms = 0.0;
   double solve_ms = 0.0;
   double post_solve_ms = 0.0;
@@ -450,7 +455,6 @@ mx::array gated_delta_scan_chunked(
   section_start = GatedDeltaTimingClock::now();
   auto state = mx::zeros({B, H, Dk, Dv}, mx::float32);
   auto out = mx::zeros({B, H, n_chunks, chunk_size, Dv}, mx::float32);
-  const bool fuse_chunk_loop = fuse_gated_delta_chunk_loop();
   for (int chunk = 0; chunk < n_chunks; ++chunk) {
     // Each slice keeps a singleton chunk axis, and the reshapes below only
     // squeeze that axis away. This remains a view as long as the chunk packing
@@ -476,9 +480,6 @@ mx::array gated_delta_scan_chunked(
         mx::transpose(k_i * mx::expand_dims(carry, -1), {0, 1, 3, 2}),
         v_new));
     state = as_float32(state * mx::reshape(stable_exp_nonpos(decay_last), {B, H, 1, 1}) + state_update);
-    if (!fuse_chunk_loop || (chunk + 1) % EVAL_EVERY_K_CHUNKS == 0) {
-      mx::eval(state);
-    }
   }
   if (timing) {
     mx::eval(out);
