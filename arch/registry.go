@@ -232,7 +232,7 @@ func builtinBlockEmitter(prog *Program, spec BlockSpec, stream string, wi, D, T,
 			convKernel = 4
 		}
 		useConv := spec.UseConv == nil || *spec.UseConv
-		return emitMamba3CanonicalIR(prog, stream, wi, inner, stateSize, nGroups, dtRank, convKernel, useConv, D, T, B, idx)
+		return emitMamba3CanonicalIR(prog, stream, wi, inner, stateSize, nGroups, dtRank, convKernel, useConv, T, B, idx)
 	case "rwkv":
 		return emitRWKVIR(prog, stream, wi, D, T, B, idx)
 	case "perceiver":

@@ -272,7 +272,7 @@ func emitMamba3IR(prog *Program, x string, wi, inner, T, B, idx int) (int, error
 //	w[...]   = post_norm_scale      [inner]          pre-gate output RMSNorm
 //	w[...]   = W_Z                  [D, inner]       residual gate projection
 //	w[...]   = W_O                  [inner, D]       output projection
-func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, D, T, B, idx int) (int, error) {
+func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, T, B, idx int) (int, error) {
 	if inner <= 0 {
 		return wi, fmt.Errorf("mamba3-canonical inner_dim must be > 0, got %d", inner)
 	}
