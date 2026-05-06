@@ -75,3 +75,22 @@ func TestEmitBlock_UnregisteredTypeReturnsError(t *testing.T) {
 		t.Fatal("expected error for unregistered block type, got nil")
 	}
 }
+
+func TestBlockWeightShapes_DelegatesToRegisteredShaper(t *testing.T) {
+	spec := BlockSpec{Type: "plain", Heads: 2}
+	metas, err := BlockWeightShapes(spec, 64, 16, 1, 1024)
+	if err != nil {
+		t.Fatalf("BlockWeightShapes(plain): %v", err)
+	}
+	if len(metas) == 0 {
+		t.Fatal("plain weight shapes empty")
+	}
+}
+
+func TestBlockWeightShapes_UnregisteredTypeReturnsError(t *testing.T) {
+	spec := BlockSpec{Type: "nonexistent_block_type"}
+	_, err := BlockWeightShapes(spec, 64, 16, 1, 1024)
+	if err == nil {
+		t.Fatal("expected error for unregistered block type, got nil")
+	}
+}

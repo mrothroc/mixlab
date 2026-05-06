@@ -81,6 +81,19 @@ func EmitBlock(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx
 	return reg.Emitter(prog, spec, stream, wi, D, T, B, V, idx, opts)
 }
 
+// BlockWeightShapes returns the weight metadata for a block via the registry's
+// registered WeightShapes function.
+func BlockWeightShapes(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
+	reg, err := lookupBlock(spec)
+	if err != nil {
+		return nil, err
+	}
+	if reg.WeightShapes == nil {
+		return nil, fmt.Errorf("block type %q has no registered weight shaper", spec.Type)
+	}
+	return reg.WeightShapes(spec, D, T, B, V)
+}
+
 func init() {
 	RegisterBlock("plain", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
