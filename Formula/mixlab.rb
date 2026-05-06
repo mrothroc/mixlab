@@ -3,7 +3,7 @@ class Mixlab < Formula
   homepage "https://github.com/mrothroc/mixlab"
   url "https://github.com/mrothroc/mixlab.git",
       tag:      "v0.19.0",
-      revision: "316a7c81846d870cb4cab7958e3d8ba4275fce9a"
+      revision: "dad30d496ef9b469b83006e6fa79efeed6cfebdd"
   license "MIT"
   head "https://github.com/mrothroc/mixlab.git", branch: "main"
 
