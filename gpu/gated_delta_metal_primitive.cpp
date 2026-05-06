@@ -3,6 +3,7 @@
 #include <mlx/allocator.h>
 #include <mlx/ops.h>
 #include <mlx/primitives.h>
+#include <mlx/version.h>
 
 #include <algorithm>
 #include <memory>
@@ -81,7 +82,11 @@ class SolveStrictlyLowerMetalPrimitive : public mx::UnaryPrimitive {
     }
 
     auto& device = mx::metal::device(stream().device);
+#if MLX_VERSION_NUMERIC >= 31002
+    auto& encoder = mx::metal::get_command_encoder(stream());
+#else
     auto& encoder = device.get_command_encoder(stream().index);
+#endif
     out.set_data(mx::allocator::malloc(out.nbytes()));
 
     auto* library = device.get_library(
