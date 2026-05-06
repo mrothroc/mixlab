@@ -44,3 +44,34 @@ func TestRegisterBlockOverridesLookup(t *testing.T) {
 		t.Fatalf("next weight index=%d want 6", next)
 	}
 }
+
+func TestEmitBlock_DelegatesToRegisteredEmitter(t *testing.T) {
+	prog := NewProgram(7)
+	spec := BlockSpec{Type: "plain", Heads: 2}
+	wi, err := EmitBlock(prog, spec, "x", 0, 64, 16, 1, 1024, 0, EmitOptions{MLPMult: 2.67})
+	if err != nil {
+		t.Fatalf("EmitBlock(plain): %v", err)
+	}
+	if wi != 7 {
+		t.Errorf("plain emitter consumed %d weights, want 7", wi)
+	}
+
+	hasNorm := false
+	for _, op := range prog.Ops {
+		if op.Code == OpRMSNorm {
+			hasNorm = true
+		}
+	}
+	if !hasNorm {
+		t.Error("plain block missing RMSNorm op")
+	}
+}
+
+func TestEmitBlock_UnregisteredTypeReturnsError(t *testing.T) {
+	prog := NewProgram(0)
+	spec := BlockSpec{Type: "nonexistent_block_type"}
+	_, err := EmitBlock(prog, spec, "x", 0, 64, 16, 1, 1024, 0, EmitOptions{})
+	if err == nil {
+		t.Fatal("expected error for unregistered block type, got nil")
+	}
+}

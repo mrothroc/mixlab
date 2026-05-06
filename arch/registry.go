@@ -68,6 +68,19 @@ func lookupBlock(spec BlockSpec) (BlockRegistration, error) {
 	return reg, nil
 }
 
+// EmitBlock emits the block specified by spec using the registry's registered
+// emitter. It returns the new weight index after consuming this block's weights.
+func EmitBlock(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
+	reg, err := lookupBlock(spec)
+	if err != nil {
+		return wi, err
+	}
+	if reg.Emitter == nil {
+		return wi, fmt.Errorf("block type %q has no registered emitter", spec.Type)
+	}
+	return reg.Emitter(prog, spec, stream, wi, D, T, B, V, idx, opts)
+}
+
 func init() {
 	RegisterBlock("plain", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
