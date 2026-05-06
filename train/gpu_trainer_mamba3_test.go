@@ -207,7 +207,7 @@ func TestMamba3CanonicalSmokeLossDecreases(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("smoke max weight delta after compiled multi-step training: %g", maxWeightDelta)
+	t.Logf("smoke max weight delta after multi-step training: %g", maxWeightDelta)
 	if maxWeightDelta == 0 {
 		t.Fatalf("weights did not update across compiled multi-step training")
 	}
