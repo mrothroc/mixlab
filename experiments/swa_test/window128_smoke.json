@@ -1,7 +1,7 @@
 {
   "name": "swa_window128_smoke",
   "model_dim": 64,
-  "vocab_size": 256,
+  "vocab_size": 1024,
   "seq_len": 128,
   "mlp_mult": 2.0,
   "blocks": [
