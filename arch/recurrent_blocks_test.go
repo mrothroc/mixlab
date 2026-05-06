@@ -690,7 +690,7 @@ func TestEmitMamba3IR_OpCounts(t *testing.T) {
 
 func TestEmitMamba3CanonicalIR(t *testing.T) {
 	p := NewProgram(20)
-	wi, err := emitMamba3CanonicalIR(p, "x", 0, 64, 8, 2, 4, 4, true, 16, 1, 0)
+	wi, err := emitMamba3CanonicalIR(p, "x", 0, 64, 8, 2, 4, 4, true, defaultMamba3CanonicalScanChunkSize, 16, 1, 0)
 	if err != nil {
 		t.Fatalf("emitMamba3CanonicalIR: %v", err)
 	}
@@ -709,7 +709,7 @@ func TestEmitMamba3CanonicalIR(t *testing.T) {
 			if got, want := len(op.Inputs), 7; got != want {
 				t.Fatalf("scan input arity=%d want %d", got, want)
 			}
-			if got, want := op.IntParams, []int{1, 16, 64, 8, 2}; !reflect.DeepEqual(got, want) {
+			if got, want := op.IntParams, []int{1, 16, 64, 8, 2, defaultMamba3CanonicalScanChunkSize}; !reflect.DeepEqual(got, want) {
 				t.Fatalf("scan params=%v want %v", got, want)
 			}
 		case OpRMSNorm:

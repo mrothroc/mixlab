@@ -253,9 +253,21 @@ func (p *Program) DepthwiseConv1D(x, weight, output string, B, T, D, K int) {
 //	B_proj [B*T, G*N]   MIMO/grouped B, interpreted as [B,T,G,N]
 //	C_proj [B*T, G*N]   MIMO/grouped C, interpreted as [B,T,G,N]
 //
-// Output is [B*T, D]. IntParams layout: [B, T, D, N, G].
+// Output is [B*T, D]. IntParams layout: [B, T, D, N, G] or
+// [B, T, D, N, G, scan_chunk_size]. A positive scan_chunk_size uses an exact
+// chunked affine scan; 0/omitted keeps the original full-sequence scan.
 func (p *Program) Mamba3SelectiveScan(x, dt, lambda, theta, aLog, bProj, cProj, output string, B, T, D, N, G int) {
-	p.AddOp(OpMamba3SelectiveScan, []string{x, dt, lambda, theta, aLog, bProj, cProj}, []string{output}, nil, []int{B, T, D, N, G})
+	p.Mamba3SelectiveScanChunked(x, dt, lambda, theta, aLog, bProj, cProj, output, B, T, D, N, G, 0)
+}
+
+// Mamba3SelectiveScanChunked emits the same canonical recurrence as
+// Mamba3SelectiveScan, evaluated in chunks when scanChunkSize > 0.
+func (p *Program) Mamba3SelectiveScanChunked(x, dt, lambda, theta, aLog, bProj, cProj, output string, B, T, D, N, G, scanChunkSize int) {
+	params := []int{B, T, D, N, G}
+	if scanChunkSize > 0 {
+		params = append(params, scanChunkSize)
+	}
+	p.AddOp(OpMamba3SelectiveScan, []string{x, dt, lambda, theta, aLog, bProj, cProj}, []string{output}, nil, params)
 }
 
 // MatrixScan emits a matrix-state gated recurrence (OpMatrixScan) over a sequence.

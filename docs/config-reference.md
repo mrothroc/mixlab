@@ -237,6 +237,30 @@ Example:
 {"type": "gated_linear_ssm", "inner_dim": 512}
 ```
 
+### `mamba3-canonical`
+
+Canonical Mamba-3 block with RMSNorm, optional causal depthwise convolution, low-rank delta/lambda/theta projections, grouped MIMO B/C projections, complex-pair rotation, exponential-trapezoidal recurrence, gated output projection, and residual add.
+
+Required fields:
+
+- `type: "mamba3-canonical"`
+
+Optional fields:
+
+- `inner_dim` — SSM width; defaults to `model_dim`.
+- `state_size` — recurrent state expansion; defaults to `16` and must be even.
+- `n_groups` — grouped B/C projection count; defaults to `4`.
+- `dt_rank` — low-rank projection width for delta/lambda/theta; defaults to `max(inner_dim/16, 1)`.
+- `conv_kernel` — causal depthwise convolution width; defaults to `4`.
+- `use_conv` — whether to keep the short causal convolution; defaults to `true`.
+- `scan_chunk_size` — exact affine scan chunk size; defaults to `64`. `0` uses the original full-sequence parallel scan, mainly for debugging.
+
+Example:
+
+```json
+{"type": "mamba3-canonical", "inner_dim": 512, "scan_chunk_size": 64}
+```
+
 ### `retnet`
 
 Retention block with RMSNorm, multi-head retention mask construction, learned per-head decay weights, FFN tail, and residual connections.

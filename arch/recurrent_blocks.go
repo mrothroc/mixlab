@@ -245,6 +245,15 @@ func emitMamba3IR(prog *Program, x string, wi, inner, T, B, idx int) (int, error
 	return wi, nil
 }
 
+const defaultMamba3CanonicalScanChunkSize = 64
+
+func effectiveMamba3CanonicalScanChunkSize(spec BlockSpec) int {
+	if spec.ScanChunkSize != nil {
+		return *spec.ScanChunkSize
+	}
+	return defaultMamba3CanonicalScanChunkSize
+}
+
 // emitMamba3CanonicalIR emits a canonical Mamba-3 block following Lahoti et
 // al. 2026, Sections 3.1-3.4.
 //
@@ -272,7 +281,7 @@ func emitMamba3IR(prog *Program, x string, wi, inner, T, B, idx int) (int, error
 //	w[...]   = post_norm_scale      [inner]          pre-gate output RMSNorm
 //	w[...]   = W_Z                  [D, inner]       residual gate projection
 //	w[...]   = W_O                  [inner, D]       output projection
-func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, T, B, idx int) (int, error) {
+func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, scanChunkSize, T, B, idx int) (int, error) {
 	if inner <= 0 {
 		return wi, fmt.Errorf("mamba3-canonical inner_dim must be > 0, got %d", inner)
 	}
@@ -293,6 +302,9 @@ func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroup
 	}
 	if useConv && convKernel <= 0 {
 		return wi, fmt.Errorf("mamba3-canonical conv_kernel must be > 0, got %d", convKernel)
+	}
+	if scanChunkSize < 0 {
+		return wi, fmt.Errorf("mamba3-canonical scan_chunk_size must be >= 0, got %d", scanChunkSize)
 	}
 
 	base := wi
@@ -387,7 +399,7 @@ func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroup
 	prog.Reshape(cNorm, []int{B * T, nGroups * stateSize}, cNormFlat)
 	prog.Add(cNormFlat, cBias, cBiased)
 
-	prog.Mamba3SelectiveScan(xBranch, dt, lambda, theta, aLog, bBiased, cBiased, y, B, T, inner, stateSize, nGroups)
+	prog.Mamba3SelectiveScanChunked(xBranch, dt, lambda, theta, aLog, bBiased, cBiased, y, B, T, inner, stateSize, nGroups, scanChunkSize)
 	prog.RMSNorm(y, postNorm, yNorm, 1e-5)
 
 	prog.MatMul(xNorm, wGate, z)

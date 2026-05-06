@@ -187,6 +187,86 @@ mx::array rotate_grouped_pairs_rt_all(
   return mx::concatenate(rotated, 2);
 }
 
+struct AffineScanPair {
+  mx::array alpha;
+  mx::array input;
+};
+
+AffineScanPair affine_scan_hillis_steele(
+    const mx::array& alpha,
+    const mx::array& input,
+    int B,
+    int T,
+    int D,
+    int N) {
+  auto scan_alpha = alpha;
+  auto scan_input = input;
+  for (int step = 1; step < T; step <<= 1) {
+    auto head_alpha = mx::slice(scan_alpha, {0, 0, 0, 0}, {B, step, D, N});
+    auto head_input = mx::slice(scan_input, {0, 0, 0, 0}, {B, step, D, N});
+    auto tail_alpha = mx::slice(scan_alpha, {0, step, 0, 0}, {B, T, D, N});
+    auto tail_input = mx::slice(scan_input, {0, step, 0, 0}, {B, T, D, N});
+    auto prev_alpha = mx::slice(scan_alpha, {0, 0, 0, 0}, {B, T - step, D, N});
+    auto prev_input = mx::slice(scan_input, {0, 0, 0, 0}, {B, T - step, D, N});
+
+    auto updated_alpha = tail_alpha * prev_alpha;
+    auto updated_input = tail_alpha * prev_input + tail_input;
+    scan_alpha = mx::concatenate({head_alpha, updated_alpha}, 1);
+    scan_input = mx::concatenate({head_input, updated_input}, 1);
+  }
+  return AffineScanPair{scan_alpha, scan_input};
+}
+
+mx::array affine_scan_chunked(
+    const mx::array& alpha,
+    const mx::array& input,
+    int B,
+    int T,
+    int D,
+    int N,
+    int chunk_size) {
+  if (chunk_size <= 0 || chunk_size >= T) {
+    return affine_scan_hillis_steele(alpha, input, B, T, D, N).input;
+  }
+
+  const int chunk = std::max(1, chunk_size);
+  const int n_chunks = (T + chunk - 1) / chunk;
+  std::vector<mx::array> local_alphas;
+  std::vector<mx::array> local_inputs;
+  std::vector<mx::array> chunk_alphas;
+  std::vector<mx::array> chunk_inputs;
+  local_alphas.reserve(static_cast<size_t>(n_chunks));
+  local_inputs.reserve(static_cast<size_t>(n_chunks));
+  chunk_alphas.reserve(static_cast<size_t>(n_chunks));
+  chunk_inputs.reserve(static_cast<size_t>(n_chunks));
+
+  for (int start = 0; start < T; start += chunk) {
+    const int end = std::min(T, start + chunk);
+    const int len = end - start;
+    auto local_alpha = mx::slice(alpha, {0, start, 0, 0}, {B, end, D, N});
+    auto local_input = mx::slice(input, {0, start, 0, 0}, {B, end, D, N});
+    auto local = affine_scan_hillis_steele(local_alpha, local_input, B, len, D, N);
+    local_alphas.push_back(local.alpha);
+    local_inputs.push_back(local.input);
+    chunk_alphas.push_back(mx::slice(local.alpha, {0, len - 1, 0, 0}, {B, len, D, N}));
+    chunk_inputs.push_back(mx::slice(local.input, {0, len - 1, 0, 0}, {B, len, D, N}));
+  }
+
+  auto summary_alpha = mx::concatenate(chunk_alphas, 1);
+  auto summary_input = mx::concatenate(chunk_inputs, 1);
+  auto summary = affine_scan_hillis_steele(summary_alpha, summary_input, B, n_chunks, D, N);
+
+  std::vector<mx::array> adjusted;
+  adjusted.reserve(static_cast<size_t>(n_chunks));
+  for (int c = 0; c < n_chunks; ++c) {
+    mx::array prior = c == 0
+        ? mx::zeros({B, 1, D, N}, mx::float32)
+        : mx::slice(summary.input, {0, c - 1, 0, 0}, {B, c, D, N});
+    adjusted.push_back(local_alphas[static_cast<size_t>(c)] * prior + local_inputs[static_cast<size_t>(c)]);
+  }
+  return mx::concatenate(adjusted, 1);
+}
+
 mx::array mamba3_selective_scan_canonical_phase6(
     const mx::array& x_flat,
     const mx::array& dt_flat,
@@ -199,7 +279,8 @@ mx::array mamba3_selective_scan_canonical_phase6(
     int T,
     int D,
     int N,
-    int G) {
+    int G,
+    int scan_chunk_size) {
   if (G <= 0) {
     throw std::runtime_error("Mamba3 Phase 6 requires n_groups > 0; got G=" + std::to_string(G));
   }
@@ -247,21 +328,7 @@ mx::array mamba3_selective_scan_canonical_phase6(
     previous_all = mx::concatenate({mx::zeros({B, 1, D, N}, mx::float32), previous_tail}, 1);
   }
 
-  auto scan_alpha = alpha_all;
-  auto scan_input = current_all + previous_all;
-  for (int step = 1; step < T; step <<= 1) {
-    auto head_alpha = mx::slice(scan_alpha, {0, 0, 0, 0}, {B, step, D, N});
-    auto head_input = mx::slice(scan_input, {0, 0, 0, 0}, {B, step, D, N});
-    auto tail_alpha = mx::slice(scan_alpha, {0, step, 0, 0}, {B, T, D, N});
-    auto tail_input = mx::slice(scan_input, {0, step, 0, 0}, {B, T, D, N});
-    auto prev_alpha = mx::slice(scan_alpha, {0, 0, 0, 0}, {B, T - step, D, N});
-    auto prev_input = mx::slice(scan_input, {0, 0, 0, 0}, {B, T - step, D, N});
-
-    auto updated_alpha = tail_alpha * prev_alpha;
-    auto updated_input = tail_alpha * prev_input + tail_input;
-    scan_alpha = mx::concatenate({head_alpha, updated_alpha}, 1);
-    scan_input = mx::concatenate({head_input, updated_input}, 1);
-  }
+  auto scan_input = affine_scan_chunked(alpha_all, current_all + previous_all, B, T, D, N, scan_chunk_size);
   return mx::reshape(mx::sum(scan_input * c_rot, 3), {B * T, D});
 }
 
@@ -1286,11 +1353,12 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         const int D = op.int_params[2];
         const int N = op.int_params[3];
         const int G = op.int_params[4];
+        const int scan_chunk_size = op.n_int_params >= 6 ? op.int_params[5] : 0;
         set_out(
             op,
             0,
             mamba3_selective_scan_canonical_phase6(
-                get(op, 0), get(op, 1), get(op, 2), get(op, 3), get(op, 4), get(op, 5), get(op, 6), B, T, D, N, G));
+                get(op, 0), get(op, 1), get(op, 2), get(op, 3), get(op, 4), get(op, 5), get(op, 6), B, T, D, N, G, scan_chunk_size));
         break;
       }
       case OP_GATHER_POSITIONS: {

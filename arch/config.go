@@ -123,7 +123,7 @@ type BlockSpec struct {
 	DK               int          `json:"d_k,omitempty"`              // gated_deltanet: key/query dim per head.
 	DV               int          `json:"d_v,omitempty"`              // gated_deltanet: value dim per head; defaults to 2*d_k.
 	KVShare          *bool        `json:"kv_share,omitempty"`         // gated_deltanet: share the K/V projection when true (default).
-	ScanChunkSize    *int         `json:"scan_chunk_size,omitempty"`  // gated_deltanet: chunk size for chunked delta scan; 0 keeps the naive scan.
+	ScanChunkSize    *int         `json:"scan_chunk_size,omitempty"`  // gated_deltanet/mamba3-canonical: chunk size for chunked scan; 0 keeps the naive/full scan.
 	StateSize        int          `json:"state_size,omitempty"`       // Mamba-3 canonical state expansion; defaults to 16.
 	NGroups          int          `json:"n_groups,omitempty"`         // Mamba-3 canonical grouped/MIMO axis; defaults to 4.
 	DTRank           int          `json:"dt_rank,omitempty"`          // Mamba-3 canonical low-rank dt/lambda/theta rank; defaults to max(inner/16,1).
@@ -855,6 +855,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	if b.Type == "mamba3-canonical" {
 		if b.StateSize < 0 || b.NGroups < 0 || b.DTRank < 0 || b.ConvKernel < 0 {
 			return fmt.Errorf("config %q %s[%d] type=mamba3-canonical has negative dimension field", source, groupName, idx)
+		}
+		if b.ScanChunkSize != nil && *b.ScanChunkSize < 0 {
+			return fmt.Errorf("config %q %s[%d] type=mamba3-canonical has invalid scan_chunk_size=%d (must be >= 0)", source, groupName, idx, *b.ScanChunkSize)
 		}
 		if b.StateSize > 0 && b.StateSize%2 != 0 {
 			return fmt.Errorf("config %q %s[%d] type=mamba3-canonical requires even state_size for complex state pairs", source, groupName, idx)

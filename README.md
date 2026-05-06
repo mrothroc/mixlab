@@ -381,7 +381,7 @@ These built-in block types are available in JSON configs:
 | `swiglu` | SwiGLU feed-forward block with residual connection. |
 | `mamba` | Mamba selective state-space block. Optional `inner_dim`. |
 | `gated_linear_ssm` | Simplified gated linear SSM formerly exposed as `mamba3`. Optional `inner_dim`. |
-| `mamba3-canonical` | Canonical Mamba-3 block. Optional `inner_dim`, `state_size`, `n_groups`, `dt_rank`, `conv_kernel`, `use_conv`. |
+| `mamba3-canonical` | Canonical Mamba-3 block. Optional `inner_dim`, `state_size`, `n_groups`, `dt_rank`, `conv_kernel`, `use_conv`, `scan_chunk_size` (default `64`; `0` restores full-sequence scan). |
 | `retnet` | RetNet retention block. Requires `heads`. Optional `decay` field in config. |
 | `rwkv` | RWKV-style recurrent mixing block. |
 | `perceiver` | Perceiver latent bottleneck. Requires `heads`. Optional `num_latents`. |

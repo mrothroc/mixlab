@@ -18,13 +18,15 @@ func TestMamba3SelectiveScanGrad(t *testing.T) {
 	}
 
 	for _, groups := range []int{1, 2} {
-		t.Run(fmt.Sprintf("G%d", groups), func(t *testing.T) {
-			testMamba3SelectiveScanGrad(t, groups)
-		})
+		for _, chunkSize := range []int{0, 3} {
+			t.Run(fmt.Sprintf("G%d_chunk%d", groups, chunkSize), func(t *testing.T) {
+				testMamba3SelectiveScanGrad(t, groups, chunkSize)
+			})
+		}
 	}
 }
 
-func testMamba3SelectiveScanGrad(t *testing.T, groups int) {
+func testMamba3SelectiveScanGrad(t *testing.T, groups, chunkSize int) {
 	const (
 		B = 2
 		T = 8
@@ -38,7 +40,7 @@ func testMamba3SelectiveScanGrad(t *testing.T, groups int) {
 	prog := arch.NewProgram(7)
 	prog.DeclareInput("dummy", arch.TensorFloat32, []int{1})
 	prog.DeclareOutput("loss", arch.TensorFloat32, []int{1})
-	prog.Mamba3SelectiveScan("w0", "w1", "w2", "w3", "w4", "w5", "w6", "y", B, T, D, N, groups)
+	prog.Mamba3SelectiveScanChunked("w0", "w1", "w2", "w3", "w4", "w5", "w6", "y", B, T, D, N, groups, chunkSize)
 	prog.MeanAxis("y", 1, "loss_rows")
 	prog.MeanAxis("loss_rows", 0, "loss")
 
