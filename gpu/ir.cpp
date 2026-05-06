@@ -3,6 +3,7 @@
 #include "gated_delta_metal_primitive.h"
 
 #include <mlx/random.h>
+#include <mlx/transforms.h>
 
 #include <algorithm>
 #include <chrono>
@@ -14,6 +15,7 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace mx = mlx::core;
 
@@ -267,7 +269,7 @@ mx::array affine_scan_chunked(
   return mx::concatenate(adjusted, 1);
 }
 
-mx::array mamba3_selective_scan_canonical_phase6(
+mx::array mamba3_selective_scan_canonical_phase6_impl(
     const mx::array& x_flat,
     const mx::array& dt_flat,
     const mx::array& lambda_flat,
@@ -304,11 +306,11 @@ mx::array mamba3_selective_scan_canonical_phase6(
   auto dt = softplus(mx::reshape(dt_flat, {B, T, D}));
   auto lambda = mx::sigmoid(mx::reshape(lambda_flat, {B, T, D}));
   auto theta = mx::reshape(theta_flat, {B, T, D, N / 2});
-  auto phi = mx::cumsum(mx::expand_dims(dt, -1) * theta, 1);
   auto A = -mx::exp(a_log);
   auto b_proj = mx::reshape(b_proj_flat, {B, T, G, N});
   auto c_proj = mx::reshape(c_proj_flat, {B, T, G, N});
 
+  auto phi = mx::cumsum(mx::expand_dims(dt, -1) * theta, 1);
   auto A_btdn = mx::reshape(A, {1, 1, D, N});
   auto dt_btd1 = mx::expand_dims(dt, -1);
   auto lambda_btd1 = mx::expand_dims(lambda, -1);
@@ -330,6 +332,34 @@ mx::array mamba3_selective_scan_canonical_phase6(
 
   auto scan_input = affine_scan_chunked(alpha_all, current_all + previous_all, B, T, D, N, scan_chunk_size);
   return mx::reshape(mx::sum(scan_input * c_rot, 3), {B * T, D});
+}
+
+mx::array mamba3_selective_scan_canonical_phase6(
+    const mx::array& x_flat,
+    const mx::array& dt_flat,
+    const mx::array& lambda_flat,
+    const mx::array& theta_flat,
+    const mx::array& a_log,
+    const mx::array& b_proj_flat,
+    const mx::array& c_proj_flat,
+    int B,
+    int T,
+    int D,
+    int N,
+    int G,
+    int scan_chunk_size) {
+  if (scan_chunk_size <= 0) {
+    return mamba3_selective_scan_canonical_phase6_impl(
+        x_flat, dt_flat, lambda_flat, theta_flat, a_log, b_proj_flat, c_proj_flat, B, T, D, N, G, scan_chunk_size);
+  }
+  auto checkpointed = mx::checkpoint(
+      [B, T, D, N, G, scan_chunk_size](const std::vector<mx::array>& args) {
+        return std::vector<mx::array>{
+            mamba3_selective_scan_canonical_phase6_impl(
+                args[0], args[1], args[2], args[3], args[4], args[5], args[6],
+                B, T, D, N, G, scan_chunk_size)};
+      });
+  return checkpointed({x_flat, dt_flat, lambda_flat, theta_flat, a_log, b_proj_flat, c_proj_flat})[0];
 }
 
 mx::array gated_delta_scan_naive(
