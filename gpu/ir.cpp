@@ -189,6 +189,39 @@ mx::array rotate_grouped_pairs_rt_all(
   return mx::concatenate(rotated, 2);
 }
 
+mx::array concat_or_single(const std::vector<mx::array>& arrays, int axis) {
+  if (arrays.empty()) {
+    throw std::runtime_error("concat_or_single requires at least one array");
+  }
+  if (arrays.size() == 1) {
+    return arrays[0];
+  }
+  return mx::concatenate(arrays, axis);
+}
+
+int mamba3_channel_chunk_size(int B, int T, int D, int N) {
+  const char* raw = std::getenv("MIXLAB_MAMBA3_CHANNEL_CHUNK");
+  if (!raw || raw[0] == '\0') {
+    // Bound [B,T,D,N] scan/VJP intermediates without changing the recurrence.
+    // At B=1,T=4096,N=16 this selects 16 channels per chunk.
+    constexpr long long kTargetChunkElements = 1LL << 20;
+    const long long per_channel_elements = static_cast<long long>(std::max(1, B)) *
+        static_cast<long long>(std::max(1, T)) *
+        static_cast<long long>(std::max(1, N));
+    const long long channels = std::max(1LL, kTargetChunkElements / per_channel_elements);
+    return static_cast<int>(std::min<long long>(D, channels));
+  }
+  char* end = nullptr;
+  long parsed = std::strtol(raw, &end, 10);
+  if (end == raw || (end && *end != '\0') || parsed <= 0) {
+    return 0;
+  }
+  if (parsed > D) {
+    return D;
+  }
+  return static_cast<int>(parsed);
+}
+
 struct AffineScanPair {
   mx::array alpha;
   mx::array input;
@@ -376,6 +409,33 @@ std::vector<mx::array> rotate_grouped_pairs_rt_all_vjp(
       grad_phi};
 }
 
+mx::array mamba3_selective_scan_canonical_phase6_impl_channel_chunked(
+    const mx::array& x_flat,
+    const mx::array& dt_flat,
+    const mx::array& lambda_flat,
+    const mx::array& theta_flat,
+    const mx::array& a_log,
+    const mx::array& b_proj_flat,
+    const mx::array& c_proj_flat,
+    int B,
+    int T,
+    int D,
+    int N,
+    int G,
+    int scan_chunk_size,
+    int channel_chunk_size);
+
+std::vector<mx::array> mamba3_selective_scan_canonical_phase6_vjp_channel_chunked(
+    const std::vector<mx::array>& args,
+    const std::vector<mx::array>& cotangents,
+    int B,
+    int T,
+    int D,
+    int N,
+    int G,
+    int scan_chunk_size,
+    int channel_chunk_size);
+
 // Exact VJP for the canonical Mamba3 scan. This avoids asking MLX autodiff to
 // differentiate through the full parallel scan, which was creating an
 // oversized compiled CUDA graph at D=448, T=4096, 8 layers.
@@ -389,6 +449,12 @@ std::vector<mx::array> mamba3_selective_scan_canonical_phase6_vjp(
     int N,
     int G,
     int scan_chunk_size) {
+  const int channel_chunk_size = mamba3_channel_chunk_size(B, T, D, N);
+  if (channel_chunk_size > 0 && channel_chunk_size < D) {
+    return mamba3_selective_scan_canonical_phase6_vjp_channel_chunked(
+        args, cotangents, B, T, D, N, G, scan_chunk_size, channel_chunk_size);
+  }
+
   const auto& x_flat = args[0];
   const auto& dt_flat = args[1];
   const auto& lambda_flat = args[2];
@@ -465,6 +531,148 @@ std::vector<mx::array> mamba3_selective_scan_canonical_phase6_vjp(
       rot_grads[1]};
 }
 
+std::vector<mx::array> mamba3_selective_scan_canonical_phase6_vjp_channel_chunked(
+    const std::vector<mx::array>& args,
+    const std::vector<mx::array>& cotangents,
+    int B,
+    int T,
+    int D,
+    int N,
+    int G,
+    int scan_chunk_size,
+    int channel_chunk_size) {
+  const auto& x_flat = args[0];
+  const auto& dt_flat = args[1];
+  const auto& lambda_flat = args[2];
+  const auto& theta_flat = args[3];
+  const auto& a_log = args[4];
+  const auto& b_proj_flat = args[5];
+  const auto& c_proj_flat = args[6];
+
+  const int K = N / 2;
+  const int channels_per_group = D / G;
+  auto x = mx::reshape(x_flat, {B, T, D});
+  auto dt_raw_all = mx::reshape(dt_flat, {B, T, D});
+  auto lambda_raw_all = mx::reshape(lambda_flat, {B, T, D});
+  auto theta_all = mx::reshape(theta_flat, {B, T, D, K});
+  auto b_proj = mx::reshape(b_proj_flat, {B, T, G, N});
+  auto c_proj = mx::reshape(c_proj_flat, {B, T, G, N});
+  auto dy_all = mx::reshape(cotangents[0], {B, T, D});
+
+  std::vector<mx::array> grad_x_chunks;
+  std::vector<mx::array> grad_dt_chunks;
+  std::vector<mx::array> grad_lambda_chunks;
+  std::vector<mx::array> grad_theta_chunks;
+  std::vector<mx::array> grad_a_log_chunks;
+  std::vector<mx::array> grad_b_groups;
+  std::vector<mx::array> grad_c_groups;
+  grad_x_chunks.reserve(static_cast<size_t>((D + channel_chunk_size - 1) / channel_chunk_size));
+  grad_dt_chunks.reserve(grad_x_chunks.capacity());
+  grad_lambda_chunks.reserve(grad_x_chunks.capacity());
+  grad_theta_chunks.reserve(grad_x_chunks.capacity());
+  grad_a_log_chunks.reserve(grad_x_chunks.capacity());
+  grad_b_groups.reserve(static_cast<size_t>(G));
+  grad_c_groups.reserve(static_cast<size_t>(G));
+
+  for (int g = 0; g < G; ++g) {
+    const int group_d0 = g * channels_per_group;
+    const int group_d1 = (g + 1) * channels_per_group;
+    auto b_g = mx::reshape(mx::slice(b_proj, {0, 0, g, 0}, {B, T, g + 1, N}), {B, T, N});
+    auto c_g = mx::reshape(mx::slice(c_proj, {0, 0, g, 0}, {B, T, g + 1, N}), {B, T, N});
+    mx::array grad_b_g = mx::zeros({B, T, 1, N}, mx::float32);
+    mx::array grad_c_g = mx::zeros({B, T, 1, N}, mx::float32);
+
+    for (int d0 = group_d0; d0 < group_d1; d0 += channel_chunk_size) {
+      const int d1 = std::min(group_d1, d0 + channel_chunk_size);
+      const int DC = d1 - d0;
+      auto x_c = mx::slice(x, {0, 0, d0}, {B, T, d1});
+      auto dt_raw = mx::slice(dt_raw_all, {0, 0, d0}, {B, T, d1});
+      auto dt = softplus(dt_raw);
+      auto lambda = mx::sigmoid(mx::slice(lambda_raw_all, {0, 0, d0}, {B, T, d1}));
+      auto theta = mx::slice(theta_all, {0, 0, d0, 0}, {B, T, d1, K});
+      auto A_c = mx::slice(a_log, {d0, 0}, {d1, N});
+      auto A = -mx::exp(A_c);
+      auto dy = mx::slice(dy_all, {0, 0, d0}, {B, T, d1});
+      auto phi = mx::cumsum(mx::expand_dims(dt, -1) * theta, 1);
+
+      auto A_btdn = mx::reshape(A, {1, 1, DC, N});
+      auto dt_btd1 = mx::expand_dims(dt, -1);
+      auto lambda_btd1 = mx::expand_dims(lambda, -1);
+      auto alpha = mx::exp(dt_btd1 * A_btdn);
+      auto beta = (1.0f - lambda_btd1) * dt_btd1 * alpha;
+      auto gamma = lambda_btd1 * dt_btd1;
+      auto b_rot = rotate_pairs_rt_all(b_g, phi, B, T, DC, N);
+      auto c_rot = rotate_pairs_rt_all(c_g, phi, B, T, DC, N);
+      auto current = gamma * b_rot * mx::expand_dims(x_c, -1);
+      auto previous = beta * shift_time_right_zero4(b_rot, B, T, DC, N) *
+          mx::expand_dims(shift_time_right_zero3(x_c, B, T, DC), -1);
+      auto h_after = affine_scan_chunked(alpha, current + previous, B, T, DC, N, scan_chunk_size);
+      auto h_before = shift_time_right_zero4(h_after, B, T, DC, N);
+
+      auto local_dh = mx::expand_dims(dy, -1) * c_rot;
+      auto alpha_next = shift_time_left_zero4(alpha, B, T, DC, N);
+      auto upstream = affine_scan_suffix_hillis_steele(alpha_next, local_dh, B, T, DC, N).input;
+
+      auto grad_c_rot = mx::expand_dims(dy, -1) * h_after;
+      auto beta_next = shift_time_left_zero4(beta, B, T, DC, N);
+      auto upstream_next = shift_time_left_zero4(upstream, B, T, DC, N);
+      auto grad_x = mx::sum(gamma * b_rot * upstream, 3) + mx::sum(beta_next * b_rot * upstream_next, 3);
+      auto grad_b_rot = gamma * mx::expand_dims(x_c, -1) * upstream +
+          beta_next * mx::expand_dims(x_c, -1) * upstream_next;
+
+      auto prev_x = shift_time_right_zero3(x_c, B, T, DC);
+      auto prev_b_rot = shift_time_right_zero4(b_rot, B, T, DC, N);
+      auto prev_input = prev_b_rot * mx::expand_dims(prev_x, -1);
+      auto current_input = b_rot * mx::expand_dims(x_c, -1);
+      auto delta_term =
+          A_btdn * alpha * h_before +
+          (1.0f - lambda_btd1) * (alpha + dt_btd1 * A_btdn * alpha) * prev_input +
+          lambda_btd1 * current_input;
+      auto a_log_term =
+          dt_btd1 * alpha * A_btdn * h_before +
+          (1.0f - lambda_btd1) * dt_btd1 * dt_btd1 * alpha * A_btdn * prev_input;
+      auto grad_delta = mx::sum(delta_term * upstream, 3);
+      auto grad_a_log = mx::sum(a_log_term * upstream, {0, 1});
+      auto grad_lambda =
+          mx::sum((-dt_btd1 * alpha * prev_input + dt_btd1 * current_input) * upstream, 3) *
+          lambda * (1.0f - lambda);
+
+      auto rot_grads = rotate_grouped_pairs_rt_all_vjp(grad_b_rot, grad_c_rot, b_rot, c_rot, phi, B, T, DC, N, 1);
+      auto grad_phi = rot_grads[2];
+      auto phi_carry = mx::cumsum(grad_phi, 1, true);
+      auto grad_theta = phi_carry * mx::expand_dims(dt, -1);
+      grad_delta = grad_delta + mx::sum(phi_carry * theta, 3);
+      auto grad_dt = grad_delta * mx::sigmoid(dt_raw);
+
+      grad_x_chunks.push_back(grad_x);
+      grad_dt_chunks.push_back(grad_dt);
+      grad_lambda_chunks.push_back(grad_lambda);
+      grad_theta_chunks.push_back(grad_theta);
+      grad_a_log_chunks.push_back(grad_a_log);
+      grad_b_g = grad_b_g + mx::reshape(rot_grads[0], {B, T, 1, N});
+      grad_c_g = grad_c_g + mx::reshape(rot_grads[1], {B, T, 1, N});
+    }
+    grad_b_groups.push_back(grad_b_g);
+    grad_c_groups.push_back(grad_c_g);
+  }
+
+  auto grad_x = concat_or_single(grad_x_chunks, 2);
+  auto grad_dt = concat_or_single(grad_dt_chunks, 2);
+  auto grad_lambda = concat_or_single(grad_lambda_chunks, 2);
+  auto grad_theta = concat_or_single(grad_theta_chunks, 2);
+  auto grad_a_log = concat_or_single(grad_a_log_chunks, 0);
+  auto grad_b = concat_or_single(grad_b_groups, 2);
+  auto grad_c = concat_or_single(grad_c_groups, 2);
+  return {
+      mx::reshape(grad_x, {B * T, D}),
+      mx::reshape(grad_dt, {B * T, D}),
+      mx::reshape(grad_lambda, {B * T, D}),
+      mx::reshape(grad_theta, {B * T, D * K}),
+      grad_a_log,
+      mx::reshape(grad_b, {B * T, G * N}),
+      mx::reshape(grad_c, {B * T, G * N})};
+}
+
 mx::array mamba3_selective_scan_canonical_phase6_impl(
     const mx::array& x_flat,
     const mx::array& dt_flat,
@@ -489,6 +697,13 @@ mx::array mamba3_selective_scan_canonical_phase6_impl(
   }
   if ((N % 2) != 0) {
     throw std::runtime_error("Mamba3 Phase 6 requires even state_size N for 2x2 rotations; got N=" + std::to_string(N));
+  }
+
+  const int channel_chunk_size = mamba3_channel_chunk_size(B, T, D, N);
+  if (channel_chunk_size > 0 && channel_chunk_size < D) {
+    return mamba3_selective_scan_canonical_phase6_impl_channel_chunked(
+        x_flat, dt_flat, lambda_flat, theta_flat, a_log, b_proj_flat, c_proj_flat,
+        B, T, D, N, G, scan_chunk_size, channel_chunk_size);
   }
 
   // Canonical Mamba-3 grouped/MIMO scan:
@@ -528,6 +743,74 @@ mx::array mamba3_selective_scan_canonical_phase6_impl(
 
   auto scan_input = affine_scan_chunked(alpha_all, current_all + previous_all, B, T, D, N, scan_chunk_size);
   return mx::reshape(mx::sum(scan_input * c_rot, 3), {B * T, D});
+}
+
+mx::array mamba3_selective_scan_canonical_phase6_impl_channel_chunked(
+    const mx::array& x_flat,
+    const mx::array& dt_flat,
+    const mx::array& lambda_flat,
+    const mx::array& theta_flat,
+    const mx::array& a_log,
+    const mx::array& b_proj_flat,
+    const mx::array& c_proj_flat,
+    int B,
+    int T,
+    int D,
+    int N,
+    int G,
+    int scan_chunk_size,
+    int channel_chunk_size) {
+  const int K = N / 2;
+  const int channels_per_group = D / G;
+  auto x = mx::reshape(x_flat, {B, T, D});
+  auto dt_all = softplus(mx::reshape(dt_flat, {B, T, D}));
+  auto lambda_all = mx::sigmoid(mx::reshape(lambda_flat, {B, T, D}));
+  auto theta_all = mx::reshape(theta_flat, {B, T, D, K});
+  auto A_all = -mx::exp(a_log);
+  auto b_proj = mx::reshape(b_proj_flat, {B, T, G, N});
+  auto c_proj = mx::reshape(c_proj_flat, {B, T, G, N});
+
+  std::vector<mx::array> y_chunks;
+  y_chunks.reserve(static_cast<size_t>((D + channel_chunk_size - 1) / channel_chunk_size));
+  for (int g = 0; g < G; ++g) {
+    const int group_d0 = g * channels_per_group;
+    const int group_d1 = (g + 1) * channels_per_group;
+    auto b_g = mx::reshape(mx::slice(b_proj, {0, 0, g, 0}, {B, T, g + 1, N}), {B, T, N});
+    auto c_g = mx::reshape(mx::slice(c_proj, {0, 0, g, 0}, {B, T, g + 1, N}), {B, T, N});
+
+    for (int d0 = group_d0; d0 < group_d1; d0 += channel_chunk_size) {
+      const int d1 = std::min(group_d1, d0 + channel_chunk_size);
+      const int DC = d1 - d0;
+      auto x_c = mx::slice(x, {0, 0, d0}, {B, T, d1});
+      auto dt = mx::slice(dt_all, {0, 0, d0}, {B, T, d1});
+      auto lambda = mx::slice(lambda_all, {0, 0, d0}, {B, T, d1});
+      auto theta = mx::slice(theta_all, {0, 0, d0, 0}, {B, T, d1, K});
+      auto A = mx::slice(A_all, {d0, 0}, {d1, N});
+
+      auto phi = mx::cumsum(mx::expand_dims(dt, -1) * theta, 1);
+      auto A_btdn = mx::reshape(A, {1, 1, DC, N});
+      auto dt_btd1 = mx::expand_dims(dt, -1);
+      auto lambda_btd1 = mx::expand_dims(lambda, -1);
+      auto alpha_all = mx::exp(dt_btd1 * A_btdn);
+      auto beta_all = (1.0f - lambda_btd1) * dt_btd1 * alpha_all;
+      auto gamma_all = lambda_btd1 * dt_btd1;
+      auto b_rot = rotate_pairs_rt_all(b_g, phi, B, T, DC, N);
+      auto c_rot = rotate_pairs_rt_all(c_g, phi, B, T, DC, N);
+      auto current_all = gamma_all * b_rot * mx::expand_dims(x_c, -1);
+      auto previous_all = mx::zeros({B, T, DC, N}, mx::float32);
+      if (T > 1) {
+        auto beta_tail = mx::slice(beta_all, {0, 1, 0, 0}, {B, T, DC, N});
+        auto b_prev = mx::slice(b_rot, {0, 0, 0, 0}, {B, T - 1, DC, N});
+        auto x_prev = mx::slice(x_c, {0, 0, 0}, {B, T - 1, DC});
+        auto previous_tail = beta_tail * b_prev * mx::expand_dims(x_prev, -1);
+        previous_all = mx::concatenate({mx::zeros({B, 1, DC, N}, mx::float32), previous_tail}, 1);
+      }
+
+      auto scan_input = affine_scan_chunked(alpha_all, current_all + previous_all, B, T, DC, N, scan_chunk_size);
+      y_chunks.push_back(mx::reshape(mx::sum(scan_input * c_rot, 3), {B, T, DC}));
+    }
+  }
+  return mx::reshape(concat_or_single(y_chunks, 2), {B * T, D});
 }
 
 mx::array mamba3_selective_scan_canonical_phase6(

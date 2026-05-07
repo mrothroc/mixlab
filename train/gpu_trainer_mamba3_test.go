@@ -26,6 +26,19 @@ func TestMamba3SelectiveScanGrad(t *testing.T) {
 	}
 }
 
+func TestMamba3SelectiveScanGradChannelChunked(t *testing.T) {
+	if !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_MAMBA3_CHANNEL_CHUNK", "2")
+
+	for _, groups := range []int{1, 2} {
+		t.Run(fmt.Sprintf("G%d", groups), func(t *testing.T) {
+			testMamba3SelectiveScanGrad(t, groups, 3)
+		})
+	}
+}
+
 func testMamba3SelectiveScanGrad(t *testing.T, groups, chunkSize int) {
 	const (
 		B = 2
