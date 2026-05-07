@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -32,6 +33,19 @@ bool log_cuda_kernel_debug() {
 
 std::mutex g_cuda_kernel_load_mu;
 std::unordered_set<std::string> g_precompiled_cuda_load_failures;
+
+std::string cuda_array_shape_string(const mx::array& array) {
+  std::ostringstream oss;
+  oss << "[";
+  for (int i = 0; i < array.ndim(); ++i) {
+    if (i > 0) {
+      oss << ",";
+    }
+    oss << array.shape(i);
+  }
+  oss << "]";
+  return oss.str();
+}
 
 std::string lookup_precompiled_kernel_blob(const std::string& kernel_name) {
   if (cuda_kernels::kEmbeddedCudaKernelImageCount == 0) {
@@ -194,11 +208,28 @@ void launch_precompiled_cuda_kernel_into(
 #ifdef __linux__
   auto& encoder = mx::cu::get_command_encoder(stream);
   if (allocate_outputs) {
-    for (auto* out : outputs) {
+    for (size_t output_idx = 0; output_idx < outputs.size(); ++output_idx) {
+      auto* out = outputs[output_idx];
       if (out == nullptr) {
         throw std::runtime_error("null output passed to precompiled CUDA kernel");
       }
-      out->set_data(mx::cu::malloc_async(out->nbytes(), encoder));
+      try {
+        out->set_data(mx::cu::malloc_async(out->nbytes(), encoder));
+      } catch (const std::exception& e) {
+        size_t free_bytes = 0;
+        size_t total_bytes = 0;
+        const auto mem_status = cuMemGetInfo(&free_bytes, &total_bytes);
+        std::ostringstream oss;
+        oss << "CUDA allocation failed for kernel " << kernel_name
+            << " output[" << output_idx << "]"
+            << " shape=" << cuda_array_shape_string(*out)
+            << " nbytes=" << out->nbytes();
+        if (mem_status == CUDA_SUCCESS) {
+          oss << " cuda_free=" << free_bytes << " cuda_total=" << total_bytes;
+        }
+        oss << ": " << e.what();
+        throw std::runtime_error(oss.str());
+      }
     }
   }
 

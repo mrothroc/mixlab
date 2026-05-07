@@ -409,6 +409,37 @@ void clip_gradients(std::vector<mx::array>& grads, float max_grad_norm) {
   }
 }
 
+mx::array gradient_clip_scale(const std::vector<mx::array>& grads, float max_grad_norm) {
+  if (max_grad_norm <= 0.0f) {
+    return mx::array(1.0f, mx::float32);
+  }
+  auto total_norm_sq = mx::array(0.0f, mx::float32);
+  for (const auto& g : grads) {
+    total_norm_sq = total_norm_sq + mx::sum(mx::square(g));
+  }
+  auto total_norm = mx::sqrt(total_norm_sq);
+  return mx::minimum(
+      mx::array(1.0f, mx::float32),
+      mx::array(max_grad_norm, mx::float32) / (total_norm + mx::array(1e-6f, mx::float32)));
+}
+
+void scale_gradients(std::vector<mx::array>& grads, const mx::array& scale) {
+  for (auto& g : grads) {
+    g = g * scale;
+  }
+}
+
+bool use_low_memory_mamba3_updates(const IRProgram& program) {
+  if (env_truthy("MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES")) {
+    return false;
+  }
+  return program_has_op(program, OP_MAMBA3_SELECTIVE_SCAN);
+}
+
+int low_memory_mamba3_update_chunk_size() {
+  return std::max(1, getenv_int("MIXLAB_MAMBA3_UPDATE_CHUNK", 64));
+}
+
 void init_lora_optimizer_state(const mx::array& weight, const OptimizerGroupConfig& group, LoraOptimizerState& state) {
   switch (group.kind) {
     case OptimizerKind::AdamW:
@@ -750,80 +781,106 @@ void IRTrainer::apply_optimizer_updates(const std::vector<mx::array>& grads) {
   }
 
   for (size_t i = 0; i < weights.size(); ++i) {
-    if (i >= weight_optimizers.size()) {
-      throw std::runtime_error("missing weight optimizer spec");
-    }
-    const auto& spec = weight_optimizers[i];
-    if (spec.group_index >= optimizer_groups.size()) {
-      throw std::runtime_error("weight optimizer group index out of range");
-    }
-    const auto& group = optimizer_groups[spec.group_index];
-    const float effective_lr = group.lr * lr_scale;
-    auto& w = weights[i];
-    const auto& g = grads[i];
+    apply_weight_optimizer_update(i, grads[i]);
+  }
+}
 
-    switch (group.kind) {
-      case OptimizerKind::AdamW: {
-        if (has_adam_state[i] == 0) {
-          throw std::runtime_error("AdamW state missing for weight");
-        }
-        const float b1t = 1.0f - std::pow(group.beta1, static_cast<float>(step_count));
-        const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(step_count));
-        const float one_minus_beta1 = 1.0f - group.beta1;
-        const float one_minus_beta2 = 1.0f - group.beta2;
-        adam_m[i] = group.beta1 * adam_m[i] + one_minus_beta1 * g;
-        adam_v[i] = group.beta2 * adam_v[i] + one_minus_beta2 * mx::square(g);
+void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
+  if (i >= weights.size()) {
+    throw std::runtime_error("weight optimizer index out of range");
+  }
+  if (i >= weight_optimizers.size()) {
+    throw std::runtime_error("missing weight optimizer spec");
+  }
+  const auto& spec = weight_optimizers[i];
+  if (spec.group_index >= optimizer_groups.size()) {
+    throw std::runtime_error("weight optimizer group index out of range");
+  }
+  const auto& group = optimizer_groups[spec.group_index];
+  const float effective_lr = group.lr * lr_scale;
+  auto& w = weights[i];
 
-        auto mhat = adam_m[i] / b1t;
-        auto vhat = adam_v[i] / b2t;
+  switch (group.kind) {
+    case OptimizerKind::AdamW: {
+      if (has_adam_state[i] == 0) {
+        throw std::runtime_error("AdamW state missing for weight");
+      }
+      const float b1t = 1.0f - std::pow(group.beta1, static_cast<float>(step_count));
+      const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(step_count));
+      const float one_minus_beta1 = 1.0f - group.beta1;
+      const float one_minus_beta2 = 1.0f - group.beta2;
+      adam_m[i] = group.beta1 * adam_m[i] + one_minus_beta1 * g;
+      adam_v[i] = group.beta2 * adam_v[i] + one_minus_beta2 * mx::square(g);
 
-        w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
-        w = w - effective_lr * mhat / (mx::sqrt(vhat) + group.eps);
-        break;
-      }
-      case OptimizerKind::Muon: {
-        if (has_muon_state[i] == 0) {
-          throw std::runtime_error("Muon state missing for weight");
-        }
-        if (w.ndim() != 2) {
-          throw std::runtime_error("Muon only supports rank-2 weights");
-        }
-        muon_momentum[i] = group.beta1 * muon_momentum[i] + g;
-        mx::array update = group.nesterov ? (g + group.beta1 * muon_momentum[i]) : muon_momentum[i];
-        update = zeropower_via_newtonschulz5(update, group.backend_steps, group.newton_schulz_variant);
-        const auto rows = static_cast<float>(w.shape(0));
-        const auto cols = static_cast<float>(w.shape(1));
-        const float aspect = std::sqrt(std::max(1.0f, rows / cols));
-        update = update * mx::array(aspect, mx::float32);
-        switch (group.muon_normalization) {
-          case MuonNormalization::None:
-            break;
-          case MuonNormalization::RowL2:
-            update = row_l2_normalize(update);
-            break;
-          case MuonNormalization::NorMuon:
-            if (has_muon_second_moment_state[i] == 0) {
-              throw std::runtime_error("NorMuon state missing for weight");
-            }
-            update = normuon_normalize(update, muon_second_moment[i], group.beta2);
-            break;
-        }
-        w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
-        w = w - effective_lr * update;
-        break;
-      }
-      case OptimizerKind::SGD: {
-        if (has_sgd_state[i] == 0) {
-          throw std::runtime_error("SGD state missing for weight");
-        }
-        sgd_momentum[i] = group.beta1 * sgd_momentum[i] + g;
-        w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
-        w = w - effective_lr * sgd_momentum[i];
-        break;
-      }
-      default:
-        throw std::runtime_error("unsupported optimizer kind");
+      auto mhat = adam_m[i] / b1t;
+      auto vhat = adam_v[i] / b2t;
+
+      w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
+      w = w - effective_lr * mhat / (mx::sqrt(vhat) + group.eps);
+      break;
     }
+    case OptimizerKind::Muon: {
+      if (has_muon_state[i] == 0) {
+        throw std::runtime_error("Muon state missing for weight");
+      }
+      if (w.ndim() != 2) {
+        throw std::runtime_error("Muon only supports rank-2 weights");
+      }
+      muon_momentum[i] = group.beta1 * muon_momentum[i] + g;
+      mx::array update = group.nesterov ? (g + group.beta1 * muon_momentum[i]) : muon_momentum[i];
+      update = zeropower_via_newtonschulz5(update, group.backend_steps, group.newton_schulz_variant);
+      const auto rows = static_cast<float>(w.shape(0));
+      const auto cols = static_cast<float>(w.shape(1));
+      const float aspect = std::sqrt(std::max(1.0f, rows / cols));
+      update = update * mx::array(aspect, mx::float32);
+      switch (group.muon_normalization) {
+        case MuonNormalization::None:
+          break;
+        case MuonNormalization::RowL2:
+          update = row_l2_normalize(update);
+          break;
+        case MuonNormalization::NorMuon:
+          if (has_muon_second_moment_state[i] == 0) {
+            throw std::runtime_error("NorMuon state missing for weight");
+          }
+          update = normuon_normalize(update, muon_second_moment[i], group.beta2);
+          break;
+      }
+      w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
+      w = w - effective_lr * update;
+      break;
+    }
+    case OptimizerKind::SGD: {
+      if (has_sgd_state[i] == 0) {
+        throw std::runtime_error("SGD state missing for weight");
+      }
+      sgd_momentum[i] = group.beta1 * sgd_momentum[i] + g;
+      w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
+      w = w - effective_lr * sgd_momentum[i];
+      break;
+    }
+    default:
+      throw std::runtime_error("unsupported optimizer kind");
+  }
+}
+
+void IRTrainer::collect_weight_state_for_eval(size_t i, std::vector<mx::array>& eval_arrays) const {
+  if (i >= weights.size()) {
+    throw std::runtime_error("weight eval index out of range");
+  }
+  eval_arrays.push_back(weights[i]);
+  if (i < adam_m.size() && has_adam_state[i] != 0) {
+    eval_arrays.push_back(adam_m[i]);
+    eval_arrays.push_back(adam_v[i]);
+  }
+  if (i < muon_momentum.size() && has_muon_state[i] != 0) {
+    eval_arrays.push_back(muon_momentum[i]);
+  }
+  if (i < muon_second_moment.size() && has_muon_second_moment_state[i] != 0) {
+    eval_arrays.push_back(muon_second_moment[i]);
+  }
+  if (i < sgd_momentum.size() && has_sgd_state[i] != 0) {
+    eval_arrays.push_back(sgd_momentum[i]);
   }
 }
 
@@ -937,6 +994,49 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     grads.push_back(step_out[output_names.size() + i]);
   }
   auto preclip_grads = grads;
+  if (!use_compiled_step && use_low_memory_mamba3_updates(program)) {
+    const int update_chunk_size = low_memory_mamba3_update_chunk_size();
+    if (!low_memory_update_notice_logged_) {
+      std::cerr << "[mlx_ir] canonical Mamba3 using low-memory optimizer eval"
+                << " (update_chunk=" << update_chunk_size
+                << "; set MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES=1 to disable)"
+                << std::endl;
+      low_memory_update_notice_logged_ = true;
+    }
+
+    std::vector<mx::array> output_eval_arrays;
+    output_eval_arrays.reserve(1 + outputs.size());
+    output_eval_arrays.push_back(loss);
+    for (const auto& [_, output] : outputs) {
+      output_eval_arrays.push_back(output);
+    }
+    mx::eval(output_eval_arrays);
+
+    if (max_grad_norm > 0.0f) {
+      const float clip_scale_value = gradient_clip_scale(grads, max_grad_norm).item<float>();
+      scale_gradients(grads, mx::array(clip_scale_value, mx::float32));
+    }
+
+    for (size_t start = 0; start < grads.size(); start += static_cast<size_t>(update_chunk_size)) {
+      const size_t end = std::min(grads.size(), start + static_cast<size_t>(update_chunk_size));
+      std::vector<mx::array> update_eval_arrays;
+      update_eval_arrays.reserve((end - start) * 3);
+      for (size_t i = start; i < end; ++i) {
+        apply_weight_optimizer_update(i, grads[i]);
+        collect_weight_state_for_eval(i, update_eval_arrays);
+      }
+      mx::eval(update_eval_arrays);
+    }
+
+    log_submit_step_debug(*this, step_count, preclip_grads);
+    report_gated_delta_timing_summary("step", step_count);
+    pending_loss_ = loss;
+    pending_outputs_ = std::move(outputs);
+    has_pending_step_ = true;
+    pending_step_index_ = step_count;
+    return;
+  }
+
   clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
   log_submit_step_debug(*this, step_count, preclip_grads);

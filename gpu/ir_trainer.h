@@ -6,6 +6,7 @@
 #include <mlx/mlx.h>
 #include <mlx/random.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -87,6 +88,7 @@ struct IRTrainer {
   std::unordered_map<std::string, mlx::core::array> ready_outputs_;
   int ready_step_index_ = 0;
   bool memory_safe_step_notice_logged_ = false;
+  bool low_memory_update_notice_logged_ = false;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_named_step;
   std::string compiled_named_step_signature;
 
@@ -109,6 +111,8 @@ struct IRTrainer {
   mlx::core::array read_grad(int weight_idx) const;
   void set_program(const IRProgram& new_program);
   void apply_optimizer_updates(const std::vector<mlx::core::array>& grads);
+  void apply_weight_optimizer_update(size_t weight_index, const mlx::core::array& grad);
+  void collect_weight_state_for_eval(size_t weight_index, std::vector<mlx::core::array>& eval_arrays) const;
 };
 
 std::unique_ptr<IRTrainer> create_ir_trainer(
