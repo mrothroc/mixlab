@@ -444,7 +444,36 @@ std::vector<mx::array> compute_weight_grad_chunk(
   }
 }
 
-float gradient_clip_scale_value_chunked(
+float gradient_clip_scale_value_from_grads(
+    const std::vector<mx::array>& grads,
+    float max_grad_norm,
+    int chunk_size) {
+  if (max_grad_norm <= 0.0f) {
+    return 1.0f;
+  }
+  double total_norm_sq = 0.0;
+  const size_t step = static_cast<size_t>(std::max(1, chunk_size));
+  for (size_t start = 0; start < grads.size(); start += step) {
+    const size_t end = std::min(grads.size(), start + step);
+    auto partial_norm_sq = mx::array(0.0f, mx::float32);
+    for (size_t i = start; i < end; ++i) {
+      partial_norm_sq = partial_norm_sq + mx::sum(mx::square(grads[i]));
+    }
+    try {
+      total_norm_sq += static_cast<double>(partial_norm_sq.item<float>());
+    } catch (const std::exception& e) {
+      throw std::runtime_error(
+          "canonical Mamba3 grad norm chunk [" + std::to_string(start) + "," +
+          std::to_string(end) + ") failed: " + e.what());
+    }
+  }
+  const double total_norm = std::sqrt(total_norm_sq);
+  return static_cast<float>(std::min(
+      1.0,
+      static_cast<double>(max_grad_norm) / (total_norm + 1e-6)));
+}
+
+float gradient_clip_scale_value_chunked_autodiff(
     const StepForwardFn& forward_fn,
     const std::vector<mx::array>& args,
     size_t n_weights,
@@ -495,6 +524,10 @@ int low_memory_mamba3_update_chunk_size() {
 
 int low_memory_mamba3_grad_chunk_size() {
   return std::max(1, getenv_int("MIXLAB_MAMBA3_GRAD_CHUNK", 8));
+}
+
+bool use_chunked_mamba3_autodiff() {
+  return env_truthy("MIXLAB_MAMBA3_CHUNKED_AUTODIFF");
 }
 
 void init_lora_optimizer_state(const mx::array& weight, const OptimizerGroupConfig& group, LoraOptimizerState& state) {
@@ -1006,6 +1039,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   if (!use_compiled_step && use_low_memory_mamba3_updates(program)) {
     const int grad_chunk_size = low_memory_mamba3_grad_chunk_size();
     const int update_chunk_size = low_memory_mamba3_update_chunk_size();
+    const bool chunked_autodiff = use_chunked_mamba3_autodiff();
     if (!memory_safe_step_notice_logged_) {
       std::cerr << "[mlx_ir] canonical Mamba3 scan detected; using uncompiled"
                 << (checkpoint_step ? " checkpointed" : "")
@@ -1014,15 +1048,31 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       memory_safe_step_notice_logged_ = true;
     }
     if (!low_memory_update_notice_logged_) {
-      std::cerr << "[mlx_ir] canonical Mamba3 using low-memory chunked gradients"
+      std::cerr << "[mlx_ir] canonical Mamba3 using low-memory "
+                << (chunked_autodiff ? "chunked-autodiff" : "single-backward")
+                << " gradient eval"
                 << " (grad_chunk=" << grad_chunk_size
                 << " update_chunk=" << update_chunk_size
+                << "; set MIXLAB_MAMBA3_CHUNKED_AUTODIFF=1 for the slowest fallback"
                 << "; set MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES=1 to disable)"
                 << std::endl;
       low_memory_update_notice_logged_ = true;
     }
 
-    auto output_values = forward_fn(args);
+    auto grad_forward_fn = checkpoint_step ? mx::checkpoint(forward_fn) : forward_fn;
+    std::vector<mx::array> output_values;
+    std::vector<mx::array> all_grads;
+    if (chunked_autodiff) {
+      output_values = forward_fn(args);
+    } else {
+      auto grad_fn = mx::value_and_grad(grad_forward_fn, argnums);
+      auto result = grad_fn(args);
+      output_values = std::move(result.first);
+      all_grads = std::move(result.second);
+      if (all_grads.size() != weights.size()) {
+        throw std::runtime_error("canonical Mamba3 gradient count mismatch");
+      }
+    }
     if (output_values.size() != output_names.size()) {
       throw std::runtime_error("IR trainer output count mismatch");
     }
@@ -1041,24 +1091,34 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         output_eval_arrays,
         "canonical Mamba3 low-memory output eval");
 
-    auto grad_forward_fn = checkpoint_step ? mx::checkpoint(forward_fn) : forward_fn;
-    const float clip_scale_value = gradient_clip_scale_value_chunked(
-        grad_forward_fn,
-        args,
-        weights.size(),
-        max_grad_norm,
-        grad_chunk_size);
+    const float clip_scale_value = chunked_autodiff
+        ? gradient_clip_scale_value_chunked_autodiff(
+              grad_forward_fn,
+              args,
+              weights.size(),
+              max_grad_norm,
+              grad_chunk_size)
+        : gradient_clip_scale_value_from_grads(
+              all_grads,
+              max_grad_norm,
+              grad_chunk_size);
     const auto clip_scale = mx::array(clip_scale_value, mx::float32);
 
     for (size_t start = 0; start < weights.size(); start += static_cast<size_t>(update_chunk_size)) {
       const size_t end = std::min(weights.size(), start + static_cast<size_t>(update_chunk_size));
-      auto grads = compute_weight_grad_chunk(
-          grad_forward_fn,
-          args,
-          start,
-          end,
-          "canonical Mamba3 optimizer grad chunk [" + std::to_string(start) +
-          "," + std::to_string(end) + ")");
+      std::vector<mx::array> grads;
+      if (chunked_autodiff) {
+        grads = compute_weight_grad_chunk(
+            grad_forward_fn,
+            args,
+            start,
+            end,
+            "canonical Mamba3 optimizer grad chunk [" + std::to_string(start) +
+            "," + std::to_string(end) + ")");
+      } else {
+        grads.assign(all_grads.begin() + static_cast<std::ptrdiff_t>(start),
+                     all_grads.begin() + static_cast<std::ptrdiff_t>(end));
+      }
       if (grads.size() != end - start) {
         throw std::runtime_error("canonical Mamba3 gradient chunk size mismatch");
       }
