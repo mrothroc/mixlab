@@ -136,6 +136,16 @@ void append_array_debug_stats(std::vector<mx::array>& eval_arrays, const ArrayDe
   eval_arrays.push_back(stats.nonfinite_count);
 }
 
+void eval_arrays_with_context(
+    const std::vector<mx::array>& arrays,
+    const std::string& context) {
+  try {
+    mx::eval(arrays);
+  } catch (const std::exception& e) {
+    throw std::runtime_error(context + ": " + e.what());
+  }
+}
+
 struct WeightDebugSummary {
   int idx = -1;
   float l2 = 0.0f;
@@ -409,24 +419,33 @@ void clip_gradients(std::vector<mx::array>& grads, float max_grad_norm) {
   }
 }
 
-mx::array gradient_clip_scale(const std::vector<mx::array>& grads, float max_grad_norm) {
+float gradient_clip_scale_value_chunked(
+    const std::vector<mx::array>& grads,
+    float max_grad_norm,
+    int chunk_size) {
   if (max_grad_norm <= 0.0f) {
-    return mx::array(1.0f, mx::float32);
+    return 1.0f;
   }
-  auto total_norm_sq = mx::array(0.0f, mx::float32);
-  for (const auto& g : grads) {
-    total_norm_sq = total_norm_sq + mx::sum(mx::square(g));
+  double total_norm_sq = 0.0;
+  const size_t step = static_cast<size_t>(std::max(1, chunk_size));
+  for (size_t start = 0; start < grads.size(); start += step) {
+    const size_t end = std::min(grads.size(), start + step);
+    auto partial_norm_sq = mx::array(0.0f, mx::float32);
+    for (size_t i = start; i < end; ++i) {
+      partial_norm_sq = partial_norm_sq + mx::sum(mx::square(grads[i]));
+    }
+    try {
+      total_norm_sq += static_cast<double>(partial_norm_sq.item<float>());
+    } catch (const std::exception& e) {
+      throw std::runtime_error(
+          "canonical Mamba3 grad norm chunk [" + std::to_string(start) + "," +
+          std::to_string(end) + ") failed: " + e.what());
+    }
   }
-  auto total_norm = mx::sqrt(total_norm_sq);
-  return mx::minimum(
-      mx::array(1.0f, mx::float32),
-      mx::array(max_grad_norm, mx::float32) / (total_norm + mx::array(1e-6f, mx::float32)));
-}
-
-void scale_gradients(std::vector<mx::array>& grads, const mx::array& scale) {
-  for (auto& g : grads) {
-    g = g * scale;
-  }
+  const double total_norm = std::sqrt(total_norm_sq);
+  return static_cast<float>(std::min(
+      1.0,
+      static_cast<double>(max_grad_norm) / (total_norm + 1e-6)));
 }
 
 bool use_low_memory_mamba3_updates(const IRProgram& program) {
@@ -993,7 +1012,6 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   for (size_t i = 0; i < weights.size(); ++i) {
     grads.push_back(step_out[output_names.size() + i]);
   }
-  auto preclip_grads = grads;
   if (!use_compiled_step && use_low_memory_mamba3_updates(program)) {
     const int update_chunk_size = low_memory_mamba3_update_chunk_size();
     if (!low_memory_update_notice_logged_) {
@@ -1010,25 +1028,30 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     for (const auto& [_, output] : outputs) {
       output_eval_arrays.push_back(output);
     }
-    mx::eval(output_eval_arrays);
+    eval_arrays_with_context(
+        output_eval_arrays,
+        "canonical Mamba3 low-memory output eval");
 
-    if (max_grad_norm > 0.0f) {
-      const float clip_scale_value = gradient_clip_scale(grads, max_grad_norm).item<float>();
-      scale_gradients(grads, mx::array(clip_scale_value, mx::float32));
-    }
+    const float clip_scale_value =
+        gradient_clip_scale_value_chunked(grads, max_grad_norm, update_chunk_size);
+    const auto clip_scale = mx::array(clip_scale_value, mx::float32);
 
     for (size_t start = 0; start < grads.size(); start += static_cast<size_t>(update_chunk_size)) {
       const size_t end = std::min(grads.size(), start + static_cast<size_t>(update_chunk_size));
       std::vector<mx::array> update_eval_arrays;
       update_eval_arrays.reserve((end - start) * 3);
       for (size_t i = start; i < end; ++i) {
-        apply_weight_optimizer_update(i, grads[i]);
+        auto clipped_grad = grads[i] * clip_scale;
+        apply_weight_optimizer_update(i, clipped_grad);
         collect_weight_state_for_eval(i, update_eval_arrays);
       }
-      mx::eval(update_eval_arrays);
+      eval_arrays_with_context(
+          update_eval_arrays,
+          "canonical Mamba3 optimizer update chunk [" + std::to_string(start) +
+          "," + std::to_string(end) + ")");
     }
 
-    log_submit_step_debug(*this, step_count, preclip_grads);
+    log_submit_step_debug(*this, step_count, grads);
     report_gated_delta_timing_summary("step", step_count);
     pending_loss_ = loss;
     pending_outputs_ = std::move(outputs);
@@ -1037,6 +1060,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     return;
   }
 
+  auto preclip_grads = grads;
   clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
   log_submit_step_debug(*this, step_count, preclip_grads);
