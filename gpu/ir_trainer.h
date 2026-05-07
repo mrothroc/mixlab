@@ -86,6 +86,7 @@ struct IRTrainer {
   float ready_loss_ = 0.0f;
   std::unordered_map<std::string, mlx::core::array> ready_outputs_;
   int ready_step_index_ = 0;
+  bool memory_safe_step_notice_logged_ = false;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_named_step;
   std::string compiled_named_step_signature;
 

@@ -1,6 +1,7 @@
 #include "ir_trainer.h"
 
 #include <mlx/compile.h>
+#include <mlx/transforms.h>
 
 #include <algorithm>
 #include <cmath>
@@ -51,6 +52,42 @@ int getenv_int(const char* name, int fallback) {
     return std::numeric_limits<int>::max();
   }
   return static_cast<int>(parsed);
+}
+
+bool env_truthy(const char* name) {
+  const char* raw = std::getenv(name);
+  if (!raw || raw[0] == '\0') {
+    return false;
+  }
+  return std::strcmp(raw, "0") != 0 &&
+      std::strcmp(raw, "false") != 0 &&
+      std::strcmp(raw, "FALSE") != 0;
+}
+
+bool program_has_op(const IRProgram& program, int op_type) {
+  for (const auto& op : program.ops) {
+    if (op.type == op_type) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool use_compiled_training_step(const IRProgram& program) {
+  if (env_truthy("MIXLAB_FORCE_COMPILED_STEP")) {
+    return true;
+  }
+  if (env_truthy("MIXLAB_DISABLE_COMPILED_STEP")) {
+    return false;
+  }
+  return !program_has_op(program, OP_MAMBA3_SELECTIVE_SCAN);
+}
+
+bool checkpoint_training_step(const IRProgram& program) {
+  if (env_truthy("MIXLAB_DISABLE_TRAINING_CHECKPOINT")) {
+    return false;
+  }
+  return program_has_op(program, OP_MAMBA3_SELECTIVE_SCAN);
 }
 
 StepDebugConfig step_debug_config() {
@@ -824,60 +861,80 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   }
 
   const auto signature = named_step_signature(inputs, output_names, weights.size());
-  if (!compiled_named_step || compiled_named_step_signature != signature) {
-    auto grad_fn = mx::value_and_grad(
-        [this, input_names, output_names](const std::vector<mx::array>& fn_args) {
-          const auto n_weights = weights.size();
-          if (fn_args.size() < n_weights + input_names.size()) {
-            throw std::runtime_error("compiled IR trainer argument count mismatch");
-          }
-          std::vector<mx::array> w;
-          w.reserve(n_weights);
-          for (size_t i = 0; i < n_weights; ++i) {
-            w.push_back(fn_args[i]);
-          }
-          auto effective = effective_training_weights(w, qat_mode);
-          ArrayMap input_map;
-          input_map.reserve(input_names.size());
-          for (size_t i = 0; i < input_names.size(); ++i) {
-            input_map.emplace(input_names[i], fn_args[n_weights + i]);
-          }
-          auto outputs = ir_interpret_outputs(program, effective, input_map, output_names, true);
-          std::vector<mx::array> values;
-          values.reserve(output_names.size());
-          for (const auto& output_name : output_names) {
-            values.push_back(outputs.at(output_name));
-          }
-          return values;
-        },
-        argnums);
+  auto forward_fn = std::function<std::vector<mx::array>(const std::vector<mx::array>&)>(
+      [this, input_names, output_names](const std::vector<mx::array>& fn_args) {
+        const auto n_weights = weights.size();
+        if (fn_args.size() < n_weights + input_names.size()) {
+          throw std::runtime_error("IR trainer argument count mismatch");
+        }
+        std::vector<mx::array> w;
+        w.reserve(n_weights);
+        for (size_t i = 0; i < n_weights; ++i) {
+          w.push_back(fn_args[i]);
+        }
+        auto effective = effective_training_weights(w, qat_mode);
+        ArrayMap input_map;
+        input_map.reserve(input_names.size());
+        for (size_t i = 0; i < input_names.size(); ++i) {
+          input_map.emplace(input_names[i], fn_args[n_weights + i]);
+        }
+        auto outputs = ir_interpret_outputs(program, effective, input_map, output_names, true);
+        std::vector<mx::array> values;
+        values.reserve(output_names.size());
+        for (const auto& output_name : output_names) {
+          values.push_back(outputs.at(output_name));
+        }
+        return values;
+      });
 
-    compiled_named_step = mx::compile(
-        [grad_fn](const std::vector<mx::array>& fn_args) {
-          auto result = grad_fn(fn_args);
-          std::vector<mx::array> out;
-          out.reserve(result.first.size() + result.second.size());
-          out.insert(out.end(), result.first.begin(), result.first.end());
-          out.insert(out.end(), result.second.begin(), result.second.end());
-          return out;
-        },
-        false);
-    compiled_named_step_signature = signature;
+  const bool use_compiled_step = use_compiled_training_step(program);
+  const bool checkpoint_step = checkpoint_training_step(program);
+  std::vector<mx::array> step_out;
+  if (use_compiled_step) {
+    if (!compiled_named_step || compiled_named_step_signature != signature) {
+      auto compiled_forward_fn = checkpoint_step ? mx::checkpoint(forward_fn) : forward_fn;
+      auto grad_fn = mx::value_and_grad(compiled_forward_fn, argnums);
+      compiled_named_step = mx::compile(
+          [grad_fn](const std::vector<mx::array>& fn_args) {
+            auto result = grad_fn(fn_args);
+            std::vector<mx::array> out;
+            out.reserve(result.first.size() + result.second.size());
+            out.insert(out.end(), result.first.begin(), result.first.end());
+            out.insert(out.end(), result.second.begin(), result.second.end());
+            return out;
+          },
+          false);
+      compiled_named_step_signature = signature;
+    }
+    step_out = compiled_named_step(args);
+  } else {
+    if (!memory_safe_step_notice_logged_) {
+      std::cerr << "[mlx_ir] canonical Mamba3 scan detected; using uncompiled"
+                << (checkpoint_step ? " checkpointed" : "")
+                << " training step to avoid oversized CUDA graphs"
+                << " (set MIXLAB_FORCE_COMPILED_STEP=1 to override)" << std::endl;
+      memory_safe_step_notice_logged_ = true;
+    }
+    auto eager_forward_fn = checkpoint_step ? mx::checkpoint(forward_fn) : forward_fn;
+    auto grad_fn = mx::value_and_grad(eager_forward_fn, argnums);
+    auto result = grad_fn(args);
+    step_out.reserve(result.first.size() + result.second.size());
+    step_out.insert(step_out.end(), result.first.begin(), result.first.end());
+    step_out.insert(step_out.end(), result.second.begin(), result.second.end());
   }
 
-  auto compiled_out = compiled_named_step(args);
-  if (compiled_out.size() != output_names.size() + weights.size()) {
-    throw std::runtime_error("compiled IR trainer output count mismatch");
+  if (step_out.size() != output_names.size() + weights.size()) {
+    throw std::runtime_error("IR trainer output count mismatch");
   }
-  auto loss = compiled_out[0];
+  auto loss = step_out[0];
   std::unordered_map<std::string, mx::array> outputs;
   for (size_t i = 0; i < output_names.size(); ++i) {
-    outputs.emplace(output_names[i], compiled_out[i]);
+    outputs.emplace(output_names[i], step_out[i]);
   }
   std::vector<mx::array> grads;
   grads.reserve(weights.size());
   for (size_t i = 0; i < weights.size(); ++i) {
-    grads.push_back(compiled_out[output_names.size() + i]);
+    grads.push_back(step_out[output_names.size() + i]);
   }
   auto preclip_grads = grads;
   clip_gradients(grads, max_grad_norm);
