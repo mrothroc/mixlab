@@ -25,9 +25,10 @@ RUN CGO_ENABLED=1 go build -tags mlx -o /mixlab ./cmd/mixlab \
     && echo "Build OK: $(file /mixlab)"
 
 # --- Runtime image ---
-# MLX JIT-compiles CUDA kernels at runtime, so it needs the full devel image
-# (CUDA headers + nvrtc compiler). The runtime-only image does not work.
-FROM --platform=linux/amd64 nvidia/cuda:12.4.1-devel-ubuntu22.04
+# MLX JIT-compiles CUDA kernels at runtime, so use the same MLX CUDA base that
+# built the binary. A plain CUDA image can have different CUDA/MLX libraries and
+# report the MLX GPU backend as unavailable at runtime.
+FROM ${BASE_IMAGE} AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenblas0 liblapack3 \
@@ -36,6 +37,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Binary
 COPY --from=builder /mixlab /usr/local/bin/mixlab
+RUN ldd /usr/local/bin/mixlab \
+    && ! ldd /usr/local/bin/mixlab | grep -q 'not found'
 
 # Example configs
 COPY examples/ /examples/
