@@ -8,7 +8,7 @@ import "fmt"
 // Must be called before Available() or any other GPU function.
 // Values <= 0 are ignored.
 func SetCUDAGraphLimits(maxOps, maxMB int) {
-	mlxSetCUDAGraphLimits(maxOps, maxMB)
+	setCUDAGraphLimitEnv(maxOps, maxMB)
 }
 
 func Available() bool {

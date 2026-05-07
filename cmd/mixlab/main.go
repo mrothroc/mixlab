@@ -4,16 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"runtime/pprof"
-	"strconv"
 
-	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/train"
 )
-
-const minGatedDeltaNetMaxOpsPerBuffer = 16000
 
 func main() {
 	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate (training configs may set training.target_val_loss for early stopping)")
@@ -80,16 +75,9 @@ func main() {
 		}()
 	}
 
-	// Best-effort CUDA graph tuning. Sets MLX_MAX_OPS_PER_BUFFER from the
-	// model's IR op count so MLX batches more kernels per graph. This helps
-	// reduce dispatch overhead on small models; large models saturate the
-	// GPU regardless. Users can override: MLX_MAX_OPS_PER_BUFFER=2000 mixlab ...
-	if os.Getenv("MLX_MAX_OPS_PER_BUFFER") == "" {
-		maxOps := autoTuneMaxOps(*configPath, *configsDir)
-		if maxOps > 0 {
-			_ = os.Setenv("MLX_MAX_OPS_PER_BUFFER", strconv.Itoa(maxOps))
-		}
-	}
+	// Configure backend graph limits before MLX initializes. User-provided
+	// environment overrides are preserved.
+	train.ConfigureCUDAGraphLimits(*configPath, *configsDir)
 
 	switch *quantize {
 	case "none", "int8", "int6":
@@ -171,68 +159,4 @@ func must(err error) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-// autoTuneMaxOps computes the MLX graph batch size from the model's IR.
-// Uses pure Go (arch package) — no GPU, no CGO, no MLX.
-// Returns 0 if no config is available or IR can't be built.
-func autoTuneMaxOps(configPath, configsDir string) int {
-	if configPath != "" {
-		return opsFromConfig(configPath)
-	}
-	if configsDir != "" {
-		return maxOpsFromDir(configsDir)
-	}
-	return 0
-}
-
-func opsFromConfig(path string) int {
-	cfg, err := arch.LoadArchConfig(path)
-	if err != nil {
-		return 0
-	}
-	prog, err := arch.BuildIRProgramFromConfig(cfg)
-	if err != nil {
-		return 0
-	}
-	return tunedMaxOpsForProgram(cfg, prog)
-}
-
-func maxOpsFromDir(dir string) int {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return 0
-	}
-	maxOps := 0
-	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
-			continue
-		}
-		if ops := opsFromConfig(filepath.Join(dir, e.Name())); ops > maxOps {
-			maxOps = ops
-		}
-	}
-	return maxOps
-}
-
-func tunedMaxOpsForProgram(cfg *arch.ArchConfig, prog *arch.Program) int {
-	maxOps := len(prog.Ops) * 3 // forward + backward + optimizer margin
-	if hasGatedDeltaNet(cfg) && maxOps < minGatedDeltaNetMaxOpsPerBuffer {
-		// GatedDeltaScan is a compact IR op that expands into a much larger MLX
-		// graph on Metal/CUDA, so raw IR op count can under-size MLX buffers.
-		return minGatedDeltaNetMaxOpsPerBuffer
-	}
-	return maxOps
-}
-
-func hasGatedDeltaNet(cfg *arch.ArchConfig) bool {
-	if cfg == nil {
-		return false
-	}
-	for _, block := range cfg.Blocks {
-		if block.Type == "gated_deltanet" {
-			return true
-		}
-	}
-	return false
 }
