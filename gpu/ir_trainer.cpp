@@ -433,6 +433,12 @@ struct MaterializedGrad {
   std::vector<float> values;
 };
 
+struct WeightGradChunk {
+  size_t start = 0;
+  size_t end = 0;
+  size_t elements = 0;
+};
+
 std::vector<int> weight_argnums_chunk(size_t start, size_t end) {
   std::vector<int> out;
   out.reserve(end - start);
@@ -456,6 +462,33 @@ std::vector<mx::array> compute_weight_grad_chunk(
   }
 }
 
+std::vector<WeightGradChunk> build_weight_grad_chunks(
+    const std::vector<mx::array>& weights,
+    int max_weights,
+    int max_elements) {
+  if (weights.empty()) {
+    return {};
+  }
+  const size_t max_count = static_cast<size_t>(std::max(1, max_weights));
+  const size_t max_elems = static_cast<size_t>(std::max(1, max_elements));
+  std::vector<WeightGradChunk> chunks;
+  size_t start = 0;
+  size_t elements = 0;
+  for (size_t i = 0; i < weights.size(); ++i) {
+    const size_t weight_elems = weights[i].size();
+    const bool count_full = i > start && (i - start) >= max_count;
+    const bool elems_full = i > start && elements + weight_elems > max_elems;
+    if (count_full || elems_full) {
+      chunks.push_back(WeightGradChunk{start, i, elements});
+      start = i;
+      elements = 0;
+    }
+    elements += weight_elems;
+  }
+  chunks.push_back(WeightGradChunk{start, weights.size(), elements});
+  return chunks;
+}
+
 mx::array materialized_grad_to_array(const MaterializedGrad& grad) {
   return mx::array(grad.values.data(), grad.shape, mx::float32);
 }
@@ -474,19 +507,17 @@ std::pair<std::vector<MaterializedGrad>, double> materialize_weight_grad_chunks(
     const StepForwardFn& forward_fn,
     const std::vector<mx::array>& args,
     size_t n_weights,
-    int chunk_size) {
+    const std::vector<WeightGradChunk>& chunks) {
   std::vector<MaterializedGrad> out(n_weights);
   double total_norm_sq = 0.0;
-  const size_t step = static_cast<size_t>(std::max(1, chunk_size));
-  for (size_t start = 0; start < n_weights; start += step) {
-    const size_t end = std::min(n_weights, start + step);
+  for (const auto& chunk : chunks) {
     auto grads = compute_weight_grad_chunk(
         forward_fn,
         args,
-        start,
-        end,
-        "canonical Mamba3 materialized grad chunk [" + std::to_string(start) +
-        "," + std::to_string(end) + ")");
+        chunk.start,
+        chunk.end,
+        "canonical Mamba3 materialized grad chunk [" + std::to_string(chunk.start) +
+        "," + std::to_string(chunk.end) + ")");
     std::vector<mx::array> flat_grads;
     flat_grads.reserve(grads.size());
     for (const auto& grad : grads) {
@@ -497,11 +528,11 @@ std::pair<std::vector<MaterializedGrad>, double> materialize_weight_grad_chunks(
     eval_arrays_with_context(
         flat_grads,
         "canonical Mamba3 materialized grad eval chunk [" +
-        std::to_string(start) + "," + std::to_string(end) + ")");
-    for (size_t i = start; i < end; ++i) {
-      const auto& flat = flat_grads[i - start];
+        std::to_string(chunk.start) + "," + std::to_string(chunk.end) + ")");
+    for (size_t i = chunk.start; i < chunk.end; ++i) {
+      const auto& flat = flat_grads[i - chunk.start];
       auto& saved = out[i];
-      saved.shape = grads[i - start].shape();
+      saved.shape = grads[i - chunk.start].shape();
       saved.values.resize(flat.size());
       std::memcpy(
           saved.values.data(),
@@ -591,7 +622,15 @@ int low_memory_mamba3_update_chunk_size() {
 }
 
 int low_memory_mamba3_grad_chunk_size() {
-  return std::max(1, getenv_int("MIXLAB_MAMBA3_GRAD_CHUNK", 8));
+  return std::max(1, getenv_int("MIXLAB_MAMBA3_GRAD_CHUNK", 64));
+}
+
+int low_memory_mamba3_grad_chunk_elements() {
+  return std::max(1, getenv_int("MIXLAB_MAMBA3_GRAD_CHUNK_ELEMS", 4 * 1024 * 1024));
+}
+
+bool checkpoint_chunked_mamba3_gradients() {
+  return env_truthy("MIXLAB_MAMBA3_CHECKPOINT_CHUNKED_GRADS");
 }
 
 Mamba3LowMemoryGradientMode low_memory_mamba3_gradient_mode() {
@@ -1125,11 +1164,17 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   const bool checkpoint_step = checkpoint_training_step(program);
   if (!use_compiled_step && use_low_memory_mamba3_updates(program)) {
     const int grad_chunk_size = low_memory_mamba3_grad_chunk_size();
+    const int grad_chunk_elements = low_memory_mamba3_grad_chunk_elements();
     const int update_chunk_size = low_memory_mamba3_update_chunk_size();
     const auto gradient_mode = low_memory_mamba3_gradient_mode();
+    const auto grad_chunks = build_weight_grad_chunks(weights, grad_chunk_size, grad_chunk_elements);
+    const bool checkpoint_grad_forward =
+        checkpoint_step &&
+        (gradient_mode == Mamba3LowMemoryGradientMode::SingleBackward ||
+         checkpoint_chunked_mamba3_gradients());
     if (!memory_safe_step_notice_logged_) {
       std::cerr << "[mlx_ir] canonical Mamba3 scan detected; using uncompiled"
-                << (checkpoint_step ? " checkpointed" : "")
+                << (checkpoint_grad_forward ? " checkpointed" : "")
                 << " training step to avoid oversized CUDA graphs"
                 << " (set MIXLAB_FORCE_COMPILED_STEP=1 to override)" << std::endl;
       memory_safe_step_notice_logged_ = true;
@@ -1139,7 +1184,10 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
                 << low_memory_mamba3_gradient_mode_label(gradient_mode)
                 << " gradient eval"
                 << " (grad_chunk=" << grad_chunk_size
+                << " grad_chunk_elems=" << grad_chunk_elements
+                << " grad_chunks=" << grad_chunks.size()
                 << " update_chunk=" << update_chunk_size
+                << "; set MIXLAB_MAMBA3_CHECKPOINT_CHUNKED_GRADS=1 if chunked grads OOM"
                 << "; set MIXLAB_MAMBA3_SINGLE_BACKWARD=1 to retry the full backward graph"
                 << "; set MIXLAB_MAMBA3_CHUNKED_AUTODIFF=1 for the slowest no-cache fallback"
                 << "; set MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES=1 to disable)"
@@ -1147,7 +1195,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       low_memory_update_notice_logged_ = true;
     }
 
-    auto grad_forward_fn = checkpoint_step ? mx::checkpoint(forward_fn) : forward_fn;
+    auto grad_forward_fn = checkpoint_grad_forward ? mx::checkpoint(forward_fn) : forward_fn;
     std::vector<mx::array> output_values;
     std::vector<mx::array> all_grads;
     std::vector<MaterializedGrad> materialized_grads;
@@ -1166,7 +1214,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
           grad_forward_fn,
           args,
           weights.size(),
-          grad_chunk_size);
+          grad_chunks);
       materialized_grads = std::move(materialized.first);
       materialized_norm_sq = materialized.second;
     } else {
