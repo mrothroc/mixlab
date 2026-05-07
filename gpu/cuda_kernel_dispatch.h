@@ -30,7 +30,8 @@ void launch_precompiled_cuda_kernel_into(
     std::tuple<int, int, int> grid,
     std::tuple<int, int, int> threadgroup,
     mlx::core::Stream stream,
-    int shared_memory = 0);
+    int shared_memory = 0,
+    bool allocate_outputs = true);
 
 } // namespace mlx_ir
 

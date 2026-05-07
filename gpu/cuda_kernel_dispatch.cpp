@@ -112,14 +112,17 @@ void launch_precompiled_cuda_kernel_into(
     std::tuple<int, int, int> grid,
     std::tuple<int, int, int> threadgroup,
     mx::Stream stream,
-    int shared_memory) {
+    int shared_memory,
+    bool allocate_outputs) {
 #ifdef __linux__
   auto& encoder = mx::cu::get_command_encoder(stream);
-  for (auto* out : outputs) {
-    if (out == nullptr) {
-      throw std::runtime_error("null output passed to precompiled CUDA kernel");
+  if (allocate_outputs) {
+    for (auto* out : outputs) {
+      if (out == nullptr) {
+        throw std::runtime_error("null output passed to precompiled CUDA kernel");
+      }
+      out->set_data(mx::cu::malloc_async(out->nbytes(), encoder));
     }
-    out->set_data(mx::cu::malloc_async(out->nbytes(), encoder));
   }
 
   mx::cu::JitModule& mod = mx::cu::get_jit_module(
@@ -185,6 +188,7 @@ void launch_precompiled_cuda_kernel_into(
   (void)threadgroup;
   (void)stream;
   (void)shared_memory;
+  (void)allocate_outputs;
   throw std::runtime_error("precompiled CUDA kernels are unavailable on this platform");
 #endif
 }

@@ -1,6 +1,7 @@
 #include "ir.h"
 #include "gated_delta_cuda_primitive.h"
 #include "gated_delta_metal_primitive.h"
+#include "mamba3_cuda_primitive.h"
 
 #include <mlx/random.h>
 #include <mlx/transforms.h>
@@ -449,6 +450,10 @@ std::vector<mx::array> mamba3_selective_scan_canonical_phase6_vjp(
     int N,
     int G,
     int scan_chunk_size) {
+  if (mlx_ir::mamba3_selective_scan_cuda_primitive_available(N)) {
+    return mlx_ir::mamba3_selective_scan_cuda_vjp(args, cotangents, B, T, D, N, G);
+  }
+
   const int channel_chunk_size = mamba3_channel_chunk_size(B, T, D, N);
   if (channel_chunk_size > 0 && channel_chunk_size < D) {
     return mamba3_selective_scan_canonical_phase6_vjp_channel_chunked(
@@ -697,6 +702,12 @@ mx::array mamba3_selective_scan_canonical_phase6_impl(
   }
   if ((N % 2) != 0) {
     throw std::runtime_error("Mamba3 Phase 6 requires even state_size N for 2x2 rotations; got N=" + std::to_string(N));
+  }
+
+  if (mlx_ir::mamba3_selective_scan_cuda_primitive_available(N)) {
+    return mlx_ir::mamba3_selective_scan_cuda_forward(
+        x_flat, dt_flat, lambda_flat, theta_flat, a_log, b_proj_flat, c_proj_flat,
+        B, T, D, N, G);
   }
 
   const int channel_chunk_size = mamba3_channel_chunk_size(B, T, D, N);
