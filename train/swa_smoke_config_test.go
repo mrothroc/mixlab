@@ -17,7 +17,7 @@ func TestSWAWindow128SmokeConfigCoversExampleTokens(t *testing.T) {
 		t.Fatalf("Glob train shards: %v", err)
 	}
 	if len(files) == 0 {
-		t.Fatal("no example train shards found")
+		t.Skip("no example train shards found (data/example is gitignored; skipping in environments without local data)")
 	}
 
 	maxToken := 0
