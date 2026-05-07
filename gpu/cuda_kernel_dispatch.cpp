@@ -13,8 +13,10 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <variant>
 
 namespace mx = mlx::core;
@@ -27,6 +29,9 @@ bool log_cuda_kernel_debug() {
   const char* override = std::getenv("MIXLAB_GATED_DELTA_CUDA_DEBUG");
   return override != nullptr && std::string(override) == "1";
 }
+
+std::mutex g_cuda_kernel_load_mu;
+std::unordered_set<std::string> g_precompiled_cuda_load_failures;
 
 std::string lookup_precompiled_kernel_blob(const std::string& kernel_name) {
   if (cuda_kernels::kEmbeddedCudaKernelImageCount == 0) {
@@ -68,6 +73,23 @@ std::string lookup_cuda_kernel_source(const std::string& kernel_name) {
 mx::cu::JitModule& load_precompiled_or_source_cuda_module(
     mx::Stream stream,
     const std::string& kernel_name) {
+  {
+    std::lock_guard<std::mutex> lock(g_cuda_kernel_load_mu);
+    if (g_precompiled_cuda_load_failures.find(kernel_name) != g_precompiled_cuda_load_failures.end()) {
+      const auto source = lookup_cuda_kernel_source(kernel_name);
+      return mx::cu::get_jit_module(
+          stream.device,
+          kernel_name + "_source",
+          [source, kernel_name]() {
+            return std::make_tuple(
+                false,
+                source,
+                std::vector<std::string>{kernel_name});
+          },
+          false);
+    }
+  }
+
   const auto blob = lookup_precompiled_kernel_blob(kernel_name);
   try {
     return mx::cu::get_jit_module(
@@ -81,6 +103,10 @@ mx::cu::JitModule& load_precompiled_or_source_cuda_module(
         },
         false);
   } catch (const std::exception& e) {
+    {
+      std::lock_guard<std::mutex> lock(g_cuda_kernel_load_mu);
+      g_precompiled_cuda_load_failures.insert(kernel_name);
+    }
     const auto source = lookup_cuda_kernel_source(kernel_name);
     std::cerr << "[cuda_kernel_dispatch] precompiled CUDA kernel load failed for "
               << kernel_name << " (" << e.what()

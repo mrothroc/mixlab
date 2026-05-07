@@ -18,7 +18,8 @@ COPY go.mod ./
 COPY . .
 RUN go mod download
 
-RUN bash gpu/cuda_kernels/generate_registry.sh
+RUN MIXLAB_REQUIRE_CUDA_KERNELS=1 bash gpu/cuda_kernels/generate_registry.sh \
+    && grep -q 'mamba3_selective_scan_fwd' gpu/cuda_kernels/registry_generated.h
 
 RUN CGO_ENABLED=1 go build -tags mlx -o /mixlab ./cmd/mixlab \
     && echo "Build OK: $(file /mixlab)"

@@ -2,5 +2,5 @@
 gpu/cuda_kernels/gated_delta_chunk_solve.cu
 gpu/cuda_kernels/mamba3_selective_scan_zero.cu
 gpu/cuda_kernels/mamba3_selective_scan_fwd.cu
-gpu/cuda_kernels/mamba3_selective_scan_state.cu
+gpu/cuda_kernels/mamba3_selective_scan_checkpoints.cu
 gpu/cuda_kernels/mamba3_selective_scan_bwd.cu

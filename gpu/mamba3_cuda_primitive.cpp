@@ -20,10 +20,24 @@ namespace mlx_ir {
 namespace {
 
 constexpr int kMamba3CUDAThreads = 32;
+constexpr int kMamba3DefaultBackwardWindow = 64;
 
 bool env_is_one(const char* name) {
   const char* raw = std::getenv(name);
   return raw != nullptr && std::string(raw) == "1";
+}
+
+int mamba3_backward_window_size(int T) {
+  const char* raw = std::getenv("MIXLAB_MAMBA3_BWD_WINDOW");
+  if (raw == nullptr || raw[0] == '\0') {
+    return std::min(T, kMamba3DefaultBackwardWindow);
+  }
+  char* end = nullptr;
+  long parsed = std::strtol(raw, &end, 10);
+  if (end == raw || (end && *end != '\0') || parsed <= 0) {
+    return std::min(T, kMamba3DefaultBackwardWindow);
+  }
+  return std::max(1, std::min(T, static_cast<int>(parsed)));
 }
 
 void validate_mamba3_cuda_shape(int B, int T, int D, int N, int G) {
@@ -168,8 +182,8 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
     if (inputs.size() != 8) {
       throw std::runtime_error("Mamba3SelectiveScanCUDABackwardPrimitive expects 8 inputs");
     }
-    if (outputs.size() != 8) {
-      throw std::runtime_error("Mamba3SelectiveScanCUDABackwardPrimitive expects 8 outputs");
+    if (outputs.size() != 9) {
+      throw std::runtime_error("Mamba3SelectiveScanCUDABackwardPrimitive expects 9 outputs");
     }
     require_float32_inputs(inputs, "Mamba3SelectiveScanCUDABackwardPrimitive");
     require_float32_outputs(outputs, "Mamba3SelectiveScanCUDABackwardPrimitive");
@@ -177,7 +191,11 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
 
     const int BT = B_ * T_;
     const int K = N_ / 2;
-    const int h_size = BT * D_ * N_;
+    const int window_size = mamba3_backward_window_size(T_);
+    const int n_windows = (T_ + window_size - 1) / window_size;
+    const int checkpoint_rows = B_ * n_windows;
+    const int h_checkpoints_size = checkpoint_rows * D_ * N_;
+    const int phi_checkpoints_size = checkpoint_rows * D_ * K;
     const int grad_x_size = BT * D_;
     const int grad_dt_size = BT * D_;
     const int grad_lambda_size = BT * D_;
@@ -186,7 +204,8 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
     const int grad_b_size = BT * G_ * N_;
     const int grad_c_size = BT * G_ * N_;
     const int max_size = std::max(
-        {h_size,
+        {h_checkpoints_size,
+         phi_checkpoints_size,
          grad_x_size,
          grad_dt_size,
          grad_lambda_size,
@@ -200,8 +219,9 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
         "mamba3_selective_scan_zero",
         {},
         {&outputs[0], &outputs[1], &outputs[2], &outputs[3],
-         &outputs[4], &outputs[5], &outputs[6], &outputs[7]},
-        {h_size,
+         &outputs[4], &outputs[5], &outputs[6], &outputs[7], &outputs[8]},
+        {h_checkpoints_size,
+         phi_checkpoints_size,
          grad_x_size,
          grad_dt_size,
          grad_lambda_size,
@@ -215,10 +235,10 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
 
     std::vector<mx::array> scan_inputs(inputs.begin(), inputs.begin() + 7);
     launch_precompiled_cuda_kernel_into(
-        "mamba3_selective_scan_state",
+        "mamba3_selective_scan_checkpoints",
         scan_inputs,
-        {&outputs[0]},
-        {B_, T_, D_, N_, G_},
+        {&outputs[0], &outputs[1]},
+        {B_, T_, D_, N_, G_, window_size, n_windows},
         std::make_tuple(D_, B_, 1),
         std::make_tuple(kMamba3CUDAThreads, 1, 1),
         stream(),
@@ -227,12 +247,13 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
 
     std::vector<mx::array> backward_inputs = inputs;
     backward_inputs.push_back(outputs[0]);
+    backward_inputs.push_back(outputs[1]);
     launch_precompiled_cuda_kernel_into(
         "mamba3_selective_scan_bwd",
         backward_inputs,
-        {&outputs[1], &outputs[2], &outputs[3], &outputs[4],
-         &outputs[5], &outputs[6], &outputs[7]},
-        {B_, T_, D_, N_, G_},
+        {&outputs[2], &outputs[3], &outputs[4], &outputs[5],
+         &outputs[6], &outputs[7], &outputs[8]},
+        {B_, T_, D_, N_, G_, window_size, n_windows},
         std::make_tuple(D_, B_, 1),
         std::make_tuple(kMamba3CUDAThreads, 1, 1),
         stream(),
@@ -257,11 +278,17 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
   std::vector<mx::Shape> output_shapes(const std::vector<mx::array>&) override {
     const int BT = B_ * T_;
     const int K = N_ / 2;
+    const int window_size = mamba3_backward_window_size(T_);
+    const int n_windows = (T_ + window_size - 1) / window_size;
+    const int checkpoint_rows = B_ * n_windows;
     return {
         mx::Shape{
-            static_cast<mx::ShapeElem>(BT),
+            static_cast<mx::ShapeElem>(checkpoint_rows),
             static_cast<mx::ShapeElem>(D_),
             static_cast<mx::ShapeElem>(N_)},
+        mx::Shape{
+            static_cast<mx::ShapeElem>(checkpoint_rows),
+            static_cast<mx::ShapeElem>(D_ * K)},
         mx::Shape{
             static_cast<mx::ShapeElem>(BT),
             static_cast<mx::ShapeElem>(D_)},
@@ -358,11 +385,17 @@ std::vector<mx::array> mamba3_selective_scan_cuda_vjp(
       stream, B, T, D, N, G);
   const int BT = B * T;
   const int K = N / 2;
+  const int window_size = mamba3_backward_window_size(T);
+  const int n_windows = (T + window_size - 1) / window_size;
+  const int checkpoint_rows = B * n_windows;
   std::vector<mx::Shape> shapes = {
       mx::Shape{
-          static_cast<mx::ShapeElem>(BT),
+          static_cast<mx::ShapeElem>(checkpoint_rows),
           static_cast<mx::ShapeElem>(D),
           static_cast<mx::ShapeElem>(N)},
+      mx::Shape{
+          static_cast<mx::ShapeElem>(checkpoint_rows),
+          static_cast<mx::ShapeElem>(D * K)},
       mx::Shape{
           static_cast<mx::ShapeElem>(BT),
           static_cast<mx::ShapeElem>(D)},
@@ -387,13 +420,13 @@ std::vector<mx::array> mamba3_selective_scan_cuda_vjp(
   std::vector<mx::Dtype> dtypes(shapes.size(), mx::float32);
   auto outputs = mx::array::make_arrays(shapes, dtypes, primitive, inputs);
   return {
-      outputs[1],
       outputs[2],
       outputs[3],
       outputs[4],
       outputs[5],
       outputs[6],
-      outputs[7]};
+      outputs[7],
+      outputs[8]};
 }
 
 } // namespace mlx_ir

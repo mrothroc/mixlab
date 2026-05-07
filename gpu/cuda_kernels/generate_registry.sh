@@ -6,6 +6,7 @@ LIST_FILE="${ROOT_DIR}/gpu/cuda_kernels/cuda_kernels.list"
 HEADER_FILE="${ROOT_DIR}/gpu/cuda_kernels/registry_generated.h"
 BUILD_DIR="${ROOT_DIR}/gpu/cuda_kernels/.build"
 ARCHES=(80 86 89 90)
+REQUIRE_CUDA_KERNELS="${MIXLAB_REQUIRE_CUDA_KERNELS:-0}"
 
 write_empty_header() {
   cat >"${HEADER_FILE}" <<'EOF'
@@ -32,11 +33,19 @@ EOF
 }
 
 if [[ ! -f "${LIST_FILE}" ]]; then
+  if [[ "${REQUIRE_CUDA_KERNELS}" == "1" ]]; then
+    echo "CUDA kernel list missing: ${LIST_FILE}" >&2
+    exit 1
+  fi
   write_empty_header
   exit 0
 fi
 
 if ! command -v nvcc >/dev/null 2>&1; then
+  if [[ "${REQUIRE_CUDA_KERNELS}" == "1" ]]; then
+    echo "nvcc not found; required for CUDA kernel registry generation" >&2
+    exit 1
+  fi
   echo "nvcc not found; emitting empty CUDA kernel registry" >&2
   write_empty_header
   exit 0
@@ -46,6 +55,10 @@ mkdir -p "${BUILD_DIR}"
 mapfile -t KERNEL_PATHS < <(grep -v '^[[:space:]]*#' "${LIST_FILE}" | sed '/^[[:space:]]*$/d')
 
 if [[ "${#KERNEL_PATHS[@]}" -eq 0 ]]; then
+  if [[ "${REQUIRE_CUDA_KERNELS}" == "1" ]]; then
+    echo "CUDA kernel list is empty: ${LIST_FILE}" >&2
+    exit 1
+  fi
   write_empty_header
   exit 0
 fi

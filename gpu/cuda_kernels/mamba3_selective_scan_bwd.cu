@@ -9,7 +9,8 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
     const float* b_proj_flat,
     const float* c_proj_flat,
     const float* dy_flat,
-    const float* h_state,
+    const float* h_checkpoints,
+    const float* phi_checkpoints,
     float* grad_x,
     float* grad_dt,
     float* grad_lambda,
@@ -21,7 +22,9 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
     int T,
     int D,
     int N,
-    int G) {
+    int G,
+    int window_size,
+    int n_windows) {
   const int d = static_cast<int>(blockIdx.x);
   const int b = static_cast<int>(blockIdx.y);
   const int k = static_cast<int>(threadIdx.x);
@@ -97,12 +100,65 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
       const float beta1 = (1.0f - lambda) * dt * alpha1;
       const float gamma = lambda * dt;
 
-      const float h0 = h_state[mamba3_state_idx(row, d, n0, D, N)];
-      const float h1 = h_state[mamba3_state_idx(row, d, n1, D, N)];
-      const float h_before0 =
-          t > 0 ? h_state[mamba3_state_idx(row - 1, d, n0, D, N)] : 0.0f;
-      const float h_before1 =
-          t > 0 ? h_state[mamba3_state_idx(row - 1, d, n1, D, N)] : 0.0f;
+      const int window = t / window_size;
+      const int window_start = window * window_size;
+      const int checkpoint_row = b * n_windows + window;
+      float h_before0 = h_checkpoints[mamba3_state_idx(checkpoint_row, d, n0, D, N)];
+      float h_before1 = h_checkpoints[mamba3_state_idx(checkpoint_row, d, n1, D, N)];
+      float h0 = h_before0;
+      float h1 = h_before1;
+      float replay_phi = phi_checkpoints[mamba3_theta_idx(checkpoint_row, d, k, D, K)];
+      float replay_prev_b0 = 0.0f;
+      float replay_prev_b1 = 0.0f;
+      float replay_prev_x = 0.0f;
+      if (window_start > 0) {
+        const int prev_row = b * T + window_start - 1;
+        mamba3_rotate_pair(
+            b_proj_flat[mamba3_group_idx(prev_row, g, n0, G, N)],
+            b_proj_flat[mamba3_group_idx(prev_row, g, n1, G, N)],
+            replay_phi,
+            &replay_prev_b0,
+            &replay_prev_b1);
+        replay_prev_x = x_flat[mamba3_channel_idx(prev_row, d, D)];
+      }
+      float prev_input0 = 0.0f;
+      float prev_input1 = 0.0f;
+      for (int replay_t = window_start; replay_t <= t; ++replay_t) {
+        const int replay_row = b * T + replay_t;
+        const int replay_xd = mamba3_channel_idx(replay_row, d, D);
+        const float replay_x = x_flat[replay_xd];
+        const float replay_dt = mamba3_softplus(dt_flat[replay_xd]);
+        const float replay_lambda = mamba3_sigmoid(lambda_flat[replay_xd]);
+        replay_phi += replay_dt * theta_flat[mamba3_theta_idx(replay_row, d, k, D, K)];
+        float replay_b0;
+        float replay_b1;
+        mamba3_rotate_pair(
+            b_proj_flat[mamba3_group_idx(replay_row, g, n0, G, N)],
+            b_proj_flat[mamba3_group_idx(replay_row, g, n1, G, N)],
+            replay_phi,
+            &replay_b0,
+            &replay_b1);
+        const float replay_A0 = -mamba3_exp(a_log[d * N + n0]);
+        const float replay_A1 = -mamba3_exp(a_log[d * N + n1]);
+        const float replay_alpha0 = mamba3_exp(replay_dt * replay_A0);
+        const float replay_alpha1 = mamba3_exp(replay_dt * replay_A1);
+        const float replay_beta0 = (1.0f - replay_lambda) * replay_dt * replay_alpha0;
+        const float replay_beta1 = (1.0f - replay_lambda) * replay_dt * replay_alpha1;
+        const float replay_gamma = replay_lambda * replay_dt;
+        if (replay_t == t) {
+          h_before0 = h0;
+          h_before1 = h1;
+          prev_input0 = replay_prev_b0 * replay_prev_x;
+          prev_input1 = replay_prev_b1 * replay_prev_x;
+        }
+        h0 = replay_alpha0 * h0 + replay_gamma * replay_b0 * replay_x +
+            (replay_t > 0 ? replay_beta0 * replay_prev_b0 * replay_prev_x : 0.0f);
+        h1 = replay_alpha1 * h1 + replay_gamma * replay_b1 * replay_x +
+            (replay_t > 0 ? replay_beta1 * replay_prev_b1 * replay_prev_x : 0.0f);
+        replay_prev_b0 = replay_b0;
+        replay_prev_b1 = replay_b1;
+        replay_prev_x = replay_x;
+      }
 
       const float upstream0 = dy * c0 + alpha_next0 * upstream_next0;
       const float upstream1 = dy * c1 + alpha_next1 * upstream_next1;
@@ -116,22 +172,6 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
           beta_next0 * b0 * upstream_next0 +
           beta_next1 * b1 * upstream_next1;
 
-      float prev_input0 = 0.0f;
-      float prev_input1 = 0.0f;
-      if (t > 0) {
-        const int prev_row = row - 1;
-        float prev_b0;
-        float prev_b1;
-        mamba3_rotate_pair(
-            b_proj_flat[mamba3_group_idx(prev_row, g, n0, G, N)],
-            b_proj_flat[mamba3_group_idx(prev_row, g, n1, G, N)],
-            phi_prev,
-            &prev_b0,
-            &prev_b1);
-        const float prev_x = x_flat[mamba3_channel_idx(prev_row, d, D)];
-        prev_input0 = prev_b0 * prev_x;
-        prev_input1 = prev_b1 * prev_x;
-      }
       const float current_input0 = b0 * x;
       const float current_input1 = b1 * x;
 
