@@ -46,6 +46,57 @@ std::string lookup_precompiled_kernel_blob(const std::string& kernel_name) {
   }
   throw std::runtime_error("embedded CUDA kernel not found: " + kernel_name);
 }
+
+std::string lookup_cuda_kernel_source(const std::string& kernel_name) {
+  if (cuda_kernels::kEmbeddedCudaKernelImageCount == 0) {
+    throw std::runtime_error("no embedded CUDA kernels were built");
+  }
+  for (unsigned int i = 0; i < cuda_kernels::kEmbeddedCudaKernelImageCount; ++i) {
+    const auto& candidate = cuda_kernels::kEmbeddedCudaKernelImages[i];
+    if (kernel_name == candidate.kernel_name) {
+      if (candidate.source == nullptr || candidate.source_len == 0) {
+        throw std::runtime_error("embedded CUDA source not found: " + kernel_name);
+      }
+      return std::string(
+          reinterpret_cast<const char*>(candidate.source),
+          static_cast<size_t>(candidate.source_len));
+    }
+  }
+  throw std::runtime_error("embedded CUDA source not found: " + kernel_name);
+}
+
+mx::cu::JitModule& load_precompiled_or_source_cuda_module(
+    mx::Stream stream,
+    const std::string& kernel_name) {
+  const auto blob = lookup_precompiled_kernel_blob(kernel_name);
+  try {
+    return mx::cu::get_jit_module(
+        stream.device,
+        kernel_name,
+        [blob, kernel_name]() {
+          return std::make_tuple(
+              true,
+              blob,
+              std::vector<std::string>{kernel_name});
+        },
+        false);
+  } catch (const std::exception& e) {
+    const auto source = lookup_cuda_kernel_source(kernel_name);
+    std::cerr << "[cuda_kernel_dispatch] precompiled CUDA kernel load failed for "
+              << kernel_name << " (" << e.what()
+              << "); retrying from embedded source" << std::endl;
+    return mx::cu::get_jit_module(
+        stream.device,
+        kernel_name + "_source",
+        [source, kernel_name]() {
+          return std::make_tuple(
+              false,
+              source,
+              std::vector<std::string>{kernel_name});
+        },
+        false);
+  }
+}
 #endif
 
 } // namespace
@@ -125,16 +176,7 @@ void launch_precompiled_cuda_kernel_into(
     }
   }
 
-  mx::cu::JitModule& mod = mx::cu::get_jit_module(
-      stream.device,
-      kernel_name,
-      [&]() {
-        return std::make_tuple(
-            true,
-            lookup_precompiled_kernel_blob(kernel_name),
-            std::vector<std::string>{kernel_name});
-      },
-      false);
+  mx::cu::JitModule& mod = load_precompiled_or_source_cuda_module(stream, kernel_name);
 
   mx::cu::KernelArgs args;
   for (const auto& in : inputs) {

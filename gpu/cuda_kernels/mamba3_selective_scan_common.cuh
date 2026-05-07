@@ -1,11 +1,9 @@
 #pragma once
 
-#include <math.h>
-
 namespace {
 
 __device__ inline float mamba3_sigmoid(float x) {
-  return 1.0f / (1.0f + expf(-x));
+  return 1.0f / (1.0f + __expf(-x));
 }
 
 __device__ inline float mamba3_softplus(float x) {
@@ -13,9 +11,21 @@ __device__ inline float mamba3_softplus(float x) {
     return x;
   }
   if (x < -20.0f) {
-    return expf(x);
+    return __expf(x);
   }
-  return log1pf(expf(x));
+  return __logf(1.0f + __expf(x));
+}
+
+__device__ inline float mamba3_exp(float x) {
+  return __expf(x);
+}
+
+__device__ inline float mamba3_cos(float x) {
+  return __cosf(x);
+}
+
+__device__ inline float mamba3_sin(float x) {
+  return __sinf(x);
 }
 
 __device__ inline void mamba3_rotate_pair(
@@ -24,8 +34,8 @@ __device__ inline void mamba3_rotate_pair(
     float phi,
     float* rot_even,
     float* rot_odd) {
-  const float c = cosf(phi);
-  const float s = sinf(phi);
+  const float c = mamba3_cos(phi);
+  const float s = mamba3_sin(phi);
   *rot_even = c * even + s * odd;
   *rot_odd = -s * even + c * odd;
 }

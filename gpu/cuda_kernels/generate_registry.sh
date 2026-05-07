@@ -18,6 +18,8 @@ struct EmbeddedKernelImage {
   const char* kernel_name;
   const unsigned char* blob;
   unsigned int blob_len;
+  const unsigned char* source;
+  unsigned int source_len;
 };
 
 static constexpr EmbeddedKernelImage kEmbeddedCudaKernelImages[] = {};
@@ -64,19 +66,40 @@ for kernel_rel in "${KERNEL_PATHS[@]}"; do
     nvcc_args+=(-gencode "arch=compute_${arch},code=sm_${arch}")
   done
   nvcc "${nvcc_args[@]}" "${kernel_src}" -o "${fatbin_out}"
-  python3 - "${JSON_FILE}" "${kernel_name}" "${fatbin_out}" <<'PY'
+  python3 - "${JSON_FILE}" "${kernel_name}" "${fatbin_out}" "${kernel_src}" <<'PY'
 import json
 import pathlib
+import re
 import sys
 
 json_path = pathlib.Path(sys.argv[1])
 kernel_name = sys.argv[2]
 fatbin_path = pathlib.Path(sys.argv[3])
+kernel_src_path = pathlib.Path(sys.argv[4])
+
+include_re = re.compile(r'^\s*#\s*include\s+"([^"]+)"\s*$')
+
+def inline_local_includes(path, seen):
+    path = path.resolve()
+    if path in seen:
+        return ""
+    seen.add(path)
+    out = []
+    for line in path.read_text().splitlines():
+        match = include_re.match(line)
+        if match:
+            candidate = path.parent / match.group(1)
+            if candidate.exists():
+                out.append(inline_local_includes(candidate, seen))
+                continue
+        out.append(line)
+    return "\n".join(out) + "\n"
 
 data = json.loads(json_path.read_text())
 data.append({
     "kernel_name": kernel_name,
     "bytes": list(fatbin_path.read_bytes()),
+    "source": list(inline_local_includes(kernel_src_path, set()).encode()),
 })
 json_path.write_text(json.dumps(data))
 PY
@@ -105,6 +128,8 @@ lines = [
     "  const char* kernel_name;",
     "  const unsigned char* blob;",
     "  unsigned int blob_len;",
+    "  const unsigned char* source;",
+    "  unsigned int source_len;",
     "};",
     "",
 ]
@@ -112,7 +137,8 @@ lines = [
 registry_names = []
 for entry in entries:
     arr_name = f'kFatbin_{ident(entry["kernel_name"])}'
-    registry_names.append((arr_name, entry))
+    src_name = f'kSource_{ident(entry["kernel_name"])}'
+    registry_names.append((arr_name, src_name, entry))
     lines.append(f"static const unsigned char {arr_name}[] = {{")
     blob = entry["bytes"]
     for i in range(0, len(blob), 12):
@@ -120,11 +146,19 @@ for entry in entries:
         lines.append("  " + ", ".join(f"0x{b:02x}" for b in chunk) + ",")
     lines.append("};")
     lines.append("")
+    lines.append(f"static const unsigned char {src_name}[] = {{")
+    source = entry["source"]
+    for i in range(0, len(source), 12):
+        chunk = source[i:i+12]
+        lines.append("  " + ", ".join(f"0x{b:02x}" for b in chunk) + ",")
+    lines.append("};")
+    lines.append("")
 
 lines.append("static constexpr EmbeddedKernelImage kEmbeddedCudaKernelImages[] = {")
-for arr_name, entry in registry_names:
+for arr_name, src_name, entry in registry_names:
     lines.append(
-        f'  {{"{entry["kernel_name"]}", {arr_name}, {len(entry["bytes"])}}},')
+        f'  {{"{entry["kernel_name"]}", {arr_name}, {len(entry["bytes"])}, '
+        f'{src_name}, {len(entry["source"])}}},')
 lines.append("};")
 lines.append(f"static constexpr unsigned int kEmbeddedCudaKernelImageCount = {len(registry_names)};")
 lines.append("")

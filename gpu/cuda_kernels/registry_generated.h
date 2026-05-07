@@ -7,6 +7,8 @@ struct EmbeddedKernelImage {
   const char* kernel_name;
   const unsigned char* blob;
   unsigned int blob_len;
+  const unsigned char* source;
+  unsigned int source_len;
 };
 
 static constexpr EmbeddedKernelImage kEmbeddedCudaKernelImages[] = {};

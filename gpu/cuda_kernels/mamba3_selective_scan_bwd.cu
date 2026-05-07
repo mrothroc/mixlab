@@ -89,10 +89,10 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
           &c0,
           &c1);
 
-      const float A0 = -expf(a_log[d * N + n0]);
-      const float A1 = -expf(a_log[d * N + n1]);
-      const float alpha0 = expf(dt * A0);
-      const float alpha1 = expf(dt * A1);
+      const float A0 = -mamba3_exp(a_log[d * N + n0]);
+      const float A1 = -mamba3_exp(a_log[d * N + n1]);
+      const float alpha0 = mamba3_exp(dt * A0);
+      const float alpha1 = mamba3_exp(dt * A1);
       const float beta0 = (1.0f - lambda) * dt * alpha0;
       const float beta1 = (1.0f - lambda) * dt * alpha1;
       const float gamma = lambda * dt;
@@ -162,8 +162,8 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
       grad_lambda_pair +=
           (-dt * alpha1 * prev_input1 + dt * current_input1) * upstream1;
 
-      const float cphi = cosf(phi);
-      const float sphi = sinf(phi);
+      const float cphi = mamba3_cos(phi);
+      const float sphi = mamba3_sin(phi);
       atomicAdd(&grad_b[mamba3_group_idx(row, g, n0, G, N)], cphi * grad_b0 - sphi * grad_b1);
       atomicAdd(&grad_b[mamba3_group_idx(row, g, n1, G, N)], sphi * grad_b0 + cphi * grad_b1);
       atomicAdd(&grad_c[mamba3_group_idx(row, g, n0, G, N)], cphi * grad_c0 - sphi * grad_c1);

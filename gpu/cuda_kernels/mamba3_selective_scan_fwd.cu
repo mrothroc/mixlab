@@ -63,10 +63,10 @@ extern "C" __global__ void mamba3_selective_scan_fwd(
           &c0,
           &c1);
 
-      const float A0 = -expf(a_log[d * N + n0]);
-      const float A1 = -expf(a_log[d * N + n1]);
-      const float alpha0 = expf(dt * A0);
-      const float alpha1 = expf(dt * A1);
+      const float A0 = -mamba3_exp(a_log[d * N + n0]);
+      const float A1 = -mamba3_exp(a_log[d * N + n1]);
+      const float alpha0 = mamba3_exp(dt * A0);
+      const float alpha1 = mamba3_exp(dt * A1);
       const float beta0 = (1.0f - lambda) * dt * alpha0;
       const float beta1 = (1.0f - lambda) * dt * alpha1;
       const float gamma = lambda * dt;
