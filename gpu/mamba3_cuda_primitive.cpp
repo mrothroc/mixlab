@@ -1,12 +1,9 @@
 #include "mamba3_cuda_primitive.h"
 #include "cuda_kernel_dispatch.h"
 
+#include <mlx/device.h>
 #include <mlx/ops.h>
 #include <mlx/primitives.h>
-
-#ifdef __linux__
-#include <mlx/backend/cuda/device.h>
-#endif
 
 #include <algorithm>
 #include <atomic>
@@ -306,7 +303,7 @@ bool mamba3_selective_scan_cuda_primitive_available(int state_size) {
     return false;
   }
 #ifdef __linux__
-  return mx::cu::is_available();
+  return mx::is_available(mx::Device::gpu);
 #else
   return false;
 #endif

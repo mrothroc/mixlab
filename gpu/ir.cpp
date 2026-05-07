@@ -3,6 +3,7 @@
 #include "gated_delta_metal_primitive.h"
 #include "mamba3_cuda_primitive.h"
 
+#include <mlx/device.h>
 #include <mlx/random.h>
 #include <mlx/transforms.h>
 
@@ -128,6 +129,14 @@ bool use_chunked_gated_delta_scan_cuda_fast_path() {
 bool fuse_gated_delta_chunk_loop() {
   const char* override = std::getenv("MIXLAB_GATED_DELTA_FUSE_CHUNK_LOOP");
   return override != nullptr && std::string(override) == "1";
+}
+
+bool cuda_gpu_available() {
+#ifdef __linux__
+  return mx::is_available(mx::Device::gpu);
+#else
+  return false;
+#endif
 }
 
 mx::array running_variance_raw(const mx::array& x_flat, int B, int T, int D, float alpha) {
@@ -990,7 +999,7 @@ mx::array gated_delta_scan_chunked(
   auto solve_attn = [&]() -> mx::array {
     const int matrix_count = B * H * n_chunks;
     auto raw_attn_mats = mx::contiguous(mx::reshape(raw_attn, {matrix_count, chunk_size, chunk_size}));
-    if (mlx::core::cu::is_available()) {
+    if (cuda_gpu_available()) {
       auto solve = mlx_ir::solve_strictly_lower_cuda_primitive(
           raw_attn_mats,
           matrix_count,
