@@ -25,6 +25,8 @@ func main() {
 	lutDir := flag.String("lut-dir", "data", "directory containing BPB lookup tables (bytes_per_token.bin, etc.)")
 	checkpointDir := flag.String("checkpoint-dir", "", "directory for periodic safetensors checkpoints")
 	checkpointEvery := flag.Int("checkpoint-every", 0, "save a safetensors checkpoint every N training steps (0 disables)")
+	logEvery := flag.Int("log-every", 0, "print progress every N training steps (0 uses default; MIXLAB_LOG_EVERY overrides)")
+	valEvery := flag.Int("val-every", 0, "run validation every N training steps (0 uses default; MIXLAB_VAL_EVERY overrides)")
 	timing := flag.Bool("timing", false, "print per-step timing breakdown")
 	maxTokens := flag.Int("max-tokens", 256, "maximum number of tokens to generate (generate mode)")
 	temperature := flag.Float64("temperature", 0.8, "sampling temperature (generate mode)")
@@ -131,6 +133,8 @@ func main() {
 		LUTDir:          *lutDir,
 		CheckpointDir:   *checkpointDir,
 		CheckpointEvery: *checkpointEvery,
+		LogEvery:        *logEvery,
+		ValEvery:        *valEvery,
 		Timing:          *timing,
 	}
 

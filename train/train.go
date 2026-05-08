@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -270,6 +271,8 @@ type TrainOptions struct {
 	LUTDir          string // Directory containing BPB lookup tables
 	CheckpointDir   string // Directory for periodic safetensors checkpoints
 	CheckpointEvery int    // Save checkpoint every N steps; 0 disables
+	LogEvery        int    // Print progress every N steps; 0 uses default/env cadence
+	ValEvery        int    // Run validation every N steps; 0 uses default/env cadence
 	Timing          bool   // If true, print per-step timing breakdown at log intervals
 
 	// OptimizerOverride lets callers customize the optimizer plan that RunArch
@@ -449,6 +452,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	var firstLoss, lastLoss float64
 	lastValLoss := math.NaN()
 	hasValLoss := false
+	logEvery := effectiveTrainEvery(opts.LogEvery, "MIXLAB_LOG_EVERY", 100)
+	valEvery := effectiveTrainEvery(opts.ValEvery, "MIXLAB_VAL_EVERY", 100)
 	start := time.Now()
 	// steadyStart is set after step 0 completes — excludes one-time
 	// compile/warmup costs from tok/s and ETA estimates.
@@ -552,12 +557,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				updateEMAWeights(swaEMA, weights, swaDecay)
 			}
 
-			// Log every 100 steps or at the last step
-			if step%100 == 0 || step == steps-1 {
+			if shouldLogTrainingStep(step, steps, logEvery) {
 				logStart := time.Now()
 				valDuration := time.Duration(0)
 				valStr := ""
-				if valSet != nil && len(valSet.Batches) > 0 {
+				if valSet != nil && len(valSet.Batches) > 0 && shouldRunValidationStep(step, steps, valEvery) {
 					valStart := time.Now()
 					valAvg, err := meanValidationLoss(valSet, trainer, batchSize, seqLen)
 					valDuration = time.Since(valStart)
@@ -871,6 +875,51 @@ func readTrainerOutput(trainer GPUTrainer, name string, shape []int) ([]float32,
 
 func shouldWriteCheckpoint(step, every int) bool {
 	return every > 0 && (step+1)%every == 0
+}
+
+func effectiveTrainEvery(option int, envName string, fallback int) int {
+	if option > 0 {
+		return option
+	}
+	if raw := strings.TrimSpace(os.Getenv(envName)); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func isPowerOfTwo(n int) bool {
+	return n > 0 && n&(n-1) == 0
+}
+
+func shouldLogTrainingStep(step, totalSteps, every int) bool {
+	if totalSteps <= 0 {
+		return false
+	}
+	if step == 0 || step == totalSteps-1 {
+		return true
+	}
+	if every <= 0 {
+		every = 100
+	}
+	if step < every && isPowerOfTwo(step) {
+		return true
+	}
+	return step%every == 0
+}
+
+func shouldRunValidationStep(step, totalSteps, every int) bool {
+	if totalSteps <= 0 {
+		return false
+	}
+	if step == 0 || step == totalSteps-1 {
+		return true
+	}
+	if every <= 0 {
+		every = 100
+	}
+	return step%every == 0
 }
 
 func checkpointPath(dir string, step int) string {

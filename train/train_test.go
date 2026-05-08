@@ -437,6 +437,32 @@ func TestCheckpointHelpers(t *testing.T) {
 	}
 }
 
+func TestShouldLogTrainingStep_EarlyPowersOfTwo(t *testing.T) {
+	logged := []int{}
+	for step := 0; step <= 101; step++ {
+		if shouldLogTrainingStep(step, 30000, 100) {
+			logged = append(logged, step)
+		}
+	}
+	want := []int{0, 1, 2, 4, 8, 16, 32, 64, 100}
+	if !reflect.DeepEqual(logged, want) {
+		t.Fatalf("logged steps = %v, want %v", logged, want)
+	}
+}
+
+func TestShouldRunValidationStep_IndependentCadence(t *testing.T) {
+	for _, step := range []int{1, 2, 4, 8, 16, 32, 64} {
+		if shouldRunValidationStep(step, 30000, 100) {
+			t.Fatalf("did not expect validation at early diagnostic step %d", step)
+		}
+	}
+	for _, step := range []int{0, 100, 29999} {
+		if !shouldRunValidationStep(step, 30000, 100) {
+			t.Fatalf("expected validation at step %d", step)
+		}
+	}
+}
+
 // ---------- TrainResult.formatSummary ----------
 
 func TestFormatSummary_WithValLoss(t *testing.T) {
