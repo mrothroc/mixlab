@@ -85,6 +85,10 @@ bool program_has_canonical_mamba3(const IRProgram& program) {
       program_has_op(program, OP_MAMBA3_CANONICAL_BLOCK);
 }
 
+bool program_has_fused_canonical_mamba3_block(const IRProgram& program) {
+  return program_has_op(program, OP_MAMBA3_CANONICAL_BLOCK);
+}
+
 bool use_compiled_training_step(const IRProgram& program) {
   if (env_truthy("MIXLAB_FORCE_COMPILED_STEP")) {
     return true;
@@ -805,6 +809,18 @@ void log_mamba3_grad_chunk_fallback_once(
   trainer.adaptive_mamba3_grad_chunk_fallback_logged = true;
 }
 
+void log_mamba3_single_backward_fallback_once(IRTrainer& trainer, const std::exception& e) {
+  if (trainer.mamba3_single_backward_fallback_logged) {
+    return;
+  }
+  std::cerr << "[mlx_ir] canonical Mamba3 single-backward gradient eval failed ("
+            << e.what()
+            << "); falling back to materialized gradient chunks"
+            << " (set MIXLAB_MAMBA3_MATERIALIZED_GRADS=1 to skip single-backward)"
+            << std::endl;
+  trainer.mamba3_single_backward_fallback_logged = true;
+}
+
 float gradient_clip_scale_value_from_grads(
     const std::vector<mx::array>& grads,
     float max_grad_norm,
@@ -892,7 +908,7 @@ bool checkpoint_chunked_mamba3_gradients() {
   return env_truthy("MIXLAB_MAMBA3_CHECKPOINT_CHUNKED_GRADS");
 }
 
-Mamba3LowMemoryGradientMode low_memory_mamba3_gradient_mode() {
+Mamba3LowMemoryGradientMode low_memory_mamba3_gradient_mode(const IRProgram& program) {
   if (env_truthy("MIXLAB_MAMBA3_SINGLE_BACKWARD")) {
     return Mamba3LowMemoryGradientMode::SingleBackward;
   }
@@ -900,7 +916,29 @@ Mamba3LowMemoryGradientMode low_memory_mamba3_gradient_mode() {
       env_truthy("MIXLAB_MAMBA3_RECOMPUTE_GRADS_FOR_UPDATES")) {
     return Mamba3LowMemoryGradientMode::RecomputeChunks;
   }
+  if (env_truthy("MIXLAB_MAMBA3_MATERIALIZED_GRADS")) {
+    return Mamba3LowMemoryGradientMode::MaterializedChunks;
+  }
+  if (program_has_fused_canonical_mamba3_block(program)) {
+    return Mamba3LowMemoryGradientMode::SingleBackward;
+  }
   return Mamba3LowMemoryGradientMode::MaterializedChunks;
+}
+
+bool should_checkpoint_mamba3_grad_forward(
+    const IRProgram& program,
+    bool checkpoint_step,
+    Mamba3LowMemoryGradientMode gradient_mode) {
+  if (!checkpoint_step) {
+    return false;
+  }
+  if (gradient_mode == Mamba3LowMemoryGradientMode::SingleBackward) {
+    if (env_truthy("MIXLAB_MAMBA3_CHECKPOINT_SINGLE_BACKWARD")) {
+      return true;
+    }
+    return !program_has_fused_canonical_mamba3_block(program);
+  }
+  return checkpoint_chunked_mamba3_gradients();
 }
 
 const char* low_memory_mamba3_gradient_mode_label(Mamba3LowMemoryGradientMode mode) {
@@ -1430,7 +1468,11 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     const int grad_chunk_size = low_memory_mamba3_grad_chunk_size();
     const int requested_grad_chunk_elements = low_memory_mamba3_grad_chunk_elements();
     const int update_chunk_size = low_memory_mamba3_update_chunk_size();
-    const auto gradient_mode = low_memory_mamba3_gradient_mode();
+    auto gradient_mode = low_memory_mamba3_gradient_mode(program);
+    if (gradient_mode == Mamba3LowMemoryGradientMode::SingleBackward &&
+        mamba3_single_backward_disabled) {
+      gradient_mode = Mamba3LowMemoryGradientMode::MaterializedChunks;
+    }
     const auto grad_chunk_element_candidates =
         gradient_mode == Mamba3LowMemoryGradientMode::MaterializedChunks
         ? mamba3_grad_chunk_element_candidates(*this, requested_grad_chunk_elements)
@@ -1438,9 +1480,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     const int grad_chunk_elements = grad_chunk_element_candidates.front();
     const auto grad_chunks = build_weight_grad_chunks(weights, grad_chunk_size, grad_chunk_elements);
     const bool checkpoint_grad_forward =
-        checkpoint_step &&
-        (gradient_mode == Mamba3LowMemoryGradientMode::SingleBackward ||
-         checkpoint_chunked_mamba3_gradients());
+        should_checkpoint_mamba3_grad_forward(program, checkpoint_step, gradient_mode);
     if (!memory_safe_step_notice_logged_) {
       std::cerr << "[mlx_ir] canonical Mamba3 detected; using uncompiled"
                 << (checkpoint_grad_forward ? " checkpointed" : "")
@@ -1458,7 +1498,9 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
                 << " update_chunk=" << update_chunk_size
                 << " compiled_grad_chunks=" << (use_compiled_mamba3_grad_chunks() ? "on" : "off")
                 << "; set MIXLAB_MAMBA3_CHECKPOINT_CHUNKED_GRADS=1 if chunked grads OOM"
-                << "; set MIXLAB_MAMBA3_SINGLE_BACKWARD=1 to retry the full backward graph"
+                << "; set MIXLAB_MAMBA3_SINGLE_BACKWARD=1 to force the full backward graph"
+                << "; set MIXLAB_MAMBA3_MATERIALIZED_GRADS=1 to force materialized chunks"
+                << "; set MIXLAB_MAMBA3_CHECKPOINT_SINGLE_BACKWARD=1 if single backward OOMs"
                 << "; set MIXLAB_MAMBA3_CHUNKED_AUTODIFF=1 for the slowest no-cache fallback"
                 << "; set MIXLAB_MAMBA3_COMPILED_GRAD_CHUNKS=1 to try per-chunk CUDA graphs"
                 << "; set MIXLAB_MAMBA3_ADAPTIVE_GRAD_CHUNKS=1 to probe larger grad chunks"
@@ -1467,20 +1509,49 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       low_memory_update_notice_logged_ = true;
     }
 
-    auto grad_forward_fn = checkpoint_grad_forward ? mx::checkpoint(forward_fn) : forward_fn;
+    auto grad_forward_fn_for_mode =
+        [&](Mamba3LowMemoryGradientMode mode) -> StepForwardFn {
+          return should_checkpoint_mamba3_grad_forward(program, checkpoint_step, mode)
+              ? mx::checkpoint(forward_fn)
+              : forward_fn;
+        };
     std::vector<mx::array> output_values;
     std::vector<mx::array> all_grads;
     std::vector<MaterializedGrad> materialized_grads;
     double materialized_norm_sq = 0.0;
+    float single_clip_scale_value = 1.0f;
+    bool single_clip_scale_ready = false;
     if (gradient_mode == Mamba3LowMemoryGradientMode::SingleBackward) {
-      auto grad_fn = mx::value_and_grad(grad_forward_fn, argnums);
-      auto result = grad_fn(args);
-      output_values = std::move(result.first);
-      all_grads = std::move(result.second);
-      if (all_grads.size() != weights.size()) {
-        throw std::runtime_error("canonical Mamba3 gradient count mismatch");
+      try {
+        auto grad_fn = mx::value_and_grad(grad_forward_fn_for_mode(gradient_mode), argnums);
+        auto result = grad_fn(args);
+        output_values = std::move(result.first);
+        all_grads = std::move(result.second);
+        if (all_grads.size() != weights.size()) {
+          throw std::runtime_error("canonical Mamba3 gradient count mismatch");
+        }
+        eval_arrays_with_context(
+            output_values,
+            "canonical Mamba3 single-backward output eval");
+        single_clip_scale_value = gradient_clip_scale_value_from_grads(
+            all_grads,
+            max_grad_norm,
+            grad_chunk_size);
+        single_clip_scale_ready = true;
+      } catch (const std::exception& e) {
+        if (!is_retriable_cuda_memory_error(e) ||
+            env_truthy("MIXLAB_MAMBA3_SINGLE_BACKWARD")) {
+          throw;
+        }
+        log_mamba3_single_backward_fallback_once(*this, e);
+        mamba3_single_backward_disabled = true;
+        gradient_mode = Mamba3LowMemoryGradientMode::MaterializedChunks;
+        output_values.clear();
+        all_grads.clear();
       }
-    } else if (gradient_mode == Mamba3LowMemoryGradientMode::MaterializedChunks) {
+    }
+    if (gradient_mode == Mamba3LowMemoryGradientMode::MaterializedChunks) {
+      auto grad_forward_fn = grad_forward_fn_for_mode(gradient_mode);
       bool materialized_ok = false;
       std::exception_ptr last_materialize_error;
       for (size_t candidate_idx = 0; candidate_idx < grad_chunk_element_candidates.size(); ++candidate_idx) {
@@ -1527,7 +1598,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         }
         throw std::runtime_error("canonical Mamba3 materialized gradients were not produced");
       }
-    } else {
+    } else if (gradient_mode == Mamba3LowMemoryGradientMode::RecomputeChunks) {
+      auto grad_forward_fn = grad_forward_fn_for_mode(gradient_mode);
       output_values = forward_fn(args);
     }
     if (output_values.size() != output_names.size()) {
@@ -1550,15 +1622,18 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
 
     float clip_scale_value = 1.0f;
     if (gradient_mode == Mamba3LowMemoryGradientMode::SingleBackward) {
-      clip_scale_value = gradient_clip_scale_value_from_grads(
-          all_grads,
-          max_grad_norm,
-          grad_chunk_size);
+      clip_scale_value = single_clip_scale_ready
+          ? single_clip_scale_value
+          : gradient_clip_scale_value_from_grads(
+                all_grads,
+                max_grad_norm,
+                grad_chunk_size);
     } else if (gradient_mode == Mamba3LowMemoryGradientMode::MaterializedChunks) {
       clip_scale_value = gradient_clip_scale_from_norm_sq(
           materialized_norm_sq,
           max_grad_norm);
     } else {
+      auto grad_forward_fn = grad_forward_fn_for_mode(gradient_mode);
       clip_scale_value = gradient_clip_scale_value_chunked_autodiff(
               grad_forward_fn,
               args,
@@ -1580,6 +1655,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
           grads.push_back(materialized_grad_to_array(materialized_grads[i]));
         }
       } else {
+        auto grad_forward_fn = grad_forward_fn_for_mode(gradient_mode);
         grads = compute_weight_grad_chunk(
             grad_forward_fn,
             args,

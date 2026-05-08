@@ -97,6 +97,8 @@ struct IRTrainer {
   bool compiled_mamba3_grad_chunks_fallback_logged = false;
   int adaptive_mamba3_grad_chunk_elements = 0;
   bool adaptive_mamba3_grad_chunk_fallback_logged = false;
+  bool mamba3_single_backward_disabled = false;
+  bool mamba3_single_backward_fallback_logged = false;
 
   float max_grad_norm = 0.0f;
   float lr_scale = 1.0f;
