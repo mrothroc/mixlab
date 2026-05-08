@@ -96,6 +96,10 @@ bool use_compiled_training_step(const IRProgram& program) {
   if (env_truthy("MIXLAB_DISABLE_COMPILED_STEP")) {
     return false;
   }
+  if (program_has_fused_canonical_mamba3_block(program) &&
+      !env_truthy("MIXLAB_DISABLE_MAMBA3_COMPILED_STEP")) {
+    return true;
+  }
   return !program_has_canonical_mamba3(program);
 }
 
@@ -821,6 +825,18 @@ void log_mamba3_single_backward_fallback_once(IRTrainer& trainer, const std::exc
   trainer.mamba3_single_backward_fallback_logged = true;
 }
 
+void log_fused_mamba3_compiled_step_fallback_once(IRTrainer& trainer, const std::exception& e) {
+  if (trainer.fused_mamba3_compiled_step_fallback_logged) {
+    return;
+  }
+  std::cerr << "[mlx_ir] fused canonical Mamba3 compiled training step failed ("
+            << e.what()
+            << "); falling back to uncompiled low-memory training step"
+            << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_STEP=1 to skip compiled retry)"
+            << std::endl;
+  trainer.fused_mamba3_compiled_step_fallback_logged = true;
+}
+
 float gradient_clip_scale_value_from_grads(
     const std::vector<mx::array>& grads,
     float max_grad_norm,
@@ -1462,9 +1478,14 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         return values;
       });
 
-  const bool use_compiled_step = use_compiled_training_step(program);
+  bool use_compiled_step = use_compiled_training_step(program);
+  if (program_has_fused_canonical_mamba3_block(program) &&
+      fused_mamba3_compiled_step_disabled &&
+      !env_truthy("MIXLAB_FORCE_COMPILED_STEP")) {
+    use_compiled_step = false;
+  }
   const bool checkpoint_step = checkpoint_training_step(program);
-  if (!use_compiled_step && use_low_memory_mamba3_updates(program)) {
+  auto run_low_memory_mamba3_step = [&]() {
     const int grad_chunk_size = low_memory_mamba3_grad_chunk_size();
     const int requested_grad_chunk_elements = low_memory_mamba3_grad_chunk_elements();
     const int update_chunk_size = low_memory_mamba3_update_chunk_size();
@@ -1685,27 +1706,55 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     pending_outputs_ = std::move(outputs);
     has_pending_step_ = true;
     pending_step_index_ = step_count;
+  };
+  if (!use_compiled_step && use_low_memory_mamba3_updates(program)) {
+    run_low_memory_mamba3_step();
     return;
   }
 
   std::vector<mx::array> step_out;
   if (use_compiled_step) {
-    if (!compiled_named_step || compiled_named_step_signature != signature) {
-      auto compiled_forward_fn = checkpoint_step ? mx::checkpoint(forward_fn) : forward_fn;
-      auto grad_fn = mx::value_and_grad(compiled_forward_fn, argnums);
-      compiled_named_step = mx::compile(
-          [grad_fn](const std::vector<mx::array>& fn_args) {
-            auto result = grad_fn(fn_args);
-            std::vector<mx::array> out;
-            out.reserve(result.first.size() + result.second.size());
-            out.insert(out.end(), result.first.begin(), result.first.end());
-            out.insert(out.end(), result.second.begin(), result.second.end());
-            return out;
-          },
-          false);
-      compiled_named_step_signature = signature;
+    if (program_has_fused_canonical_mamba3_block(program) &&
+        !fused_mamba3_compiled_step_notice_logged) {
+      std::cerr << "[mlx_ir] fused canonical Mamba3 using compiled training step"
+                << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_STEP=1 to use low-memory fallback)"
+                << std::endl;
+      fused_mamba3_compiled_step_notice_logged = true;
     }
-    step_out = compiled_named_step(args);
+    try {
+      if (!compiled_named_step || compiled_named_step_signature != signature) {
+        const bool compiled_checkpoint_step =
+            checkpoint_step &&
+            (!program_has_fused_canonical_mamba3_block(program) ||
+             env_truthy("MIXLAB_MAMBA3_CHECKPOINT_COMPILED_STEP"));
+        auto compiled_forward_fn = compiled_checkpoint_step ? mx::checkpoint(forward_fn) : forward_fn;
+        auto grad_fn = mx::value_and_grad(compiled_forward_fn, argnums);
+        compiled_named_step = mx::compile(
+            [grad_fn](const std::vector<mx::array>& fn_args) {
+              auto result = grad_fn(fn_args);
+              std::vector<mx::array> out;
+              out.reserve(result.first.size() + result.second.size());
+              out.insert(out.end(), result.first.begin(), result.first.end());
+              out.insert(out.end(), result.second.begin(), result.second.end());
+              return out;
+            },
+            false);
+        compiled_named_step_signature = signature;
+      }
+      step_out = compiled_named_step(args);
+    } catch (const std::exception& e) {
+      if (!program_has_fused_canonical_mamba3_block(program) ||
+          !use_low_memory_mamba3_updates(program) ||
+          env_truthy("MIXLAB_FORCE_COMPILED_STEP")) {
+        throw;
+      }
+      log_fused_mamba3_compiled_step_fallback_once(*this, e);
+      fused_mamba3_compiled_step_disabled = true;
+      compiled_named_step = nullptr;
+      compiled_named_step_signature.clear();
+      run_low_memory_mamba3_step();
+      return;
+    }
   } else {
     if (!memory_safe_step_notice_logged_) {
       std::cerr << "[mlx_ir] canonical Mamba3 detected; using uncompiled"
@@ -2023,6 +2072,11 @@ void IRTrainer::set_program(const IRProgram& new_program) {
   compiled_mamba3_grad_chunks_fallback_logged = false;
   adaptive_mamba3_grad_chunk_elements = 0;
   adaptive_mamba3_grad_chunk_fallback_logged = false;
+  fused_mamba3_compiled_step_disabled = false;
+  fused_mamba3_compiled_step_notice_logged = false;
+  fused_mamba3_compiled_step_fallback_logged = false;
+  mamba3_single_backward_disabled = false;
+  mamba3_single_backward_fallback_logged = false;
 }
 
 std::unique_ptr<IRTrainer> create_ir_trainer(
