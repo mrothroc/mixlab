@@ -39,6 +39,66 @@ func TestMamba3SelectiveScanGradChannelChunked(t *testing.T) {
 	}
 }
 
+func TestDepthwiseConv1DGrad(t *testing.T) {
+	if !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+
+	const (
+		B = 2
+		T = 5
+		D = 3
+		K = 4
+	)
+	prog := arch.NewProgram(2)
+	prog.DeclareInput("dummy", arch.TensorFloat32, []int{1})
+	prog.DeclareOutput("loss", arch.TensorFloat32, []int{1})
+	prog.DepthwiseConv1D("w0", "w1", "y", B, T, D, K)
+	prog.MeanAxis("y", 1, "loss_rows")
+	prog.MeanAxis("loss_rows", 0, "loss")
+
+	gpuProg, err := gpu.LowerIRProgram(prog)
+	if err != nil {
+		t.Fatalf("LowerIRProgram: %v", err)
+	}
+	defer gpuProg.Destroy()
+
+	rng := rand.New(rand.NewSource(5678))
+	x := seededFloats(rng, B*T*D, 0.4)
+	w := seededFloats(rng, D*K, 0.3)
+	handles := make([]int64, 2)
+	handles[0], err = gpu.FromData(x, B*T, D)
+	if err != nil {
+		t.Fatalf("FromData(x): %v", err)
+	}
+	defer gpu.FreeHandle(handles[0])
+	handles[1], err = gpu.FromData(w, D, K)
+	if err != nil {
+		t.Fatalf("FromData(w): %v", err)
+	}
+	defer gpu.FreeHandle(handles[1])
+
+	loss, gotGrads, err := gpu.EvalProgramGradientsForOutput(
+		gpuProg,
+		handles,
+		[]gpu.TensorInput{{Name: "dummy", DType: gpu.TensorFloat32, Shape: []int{1}, Data: []float32{0}}},
+		"loss",
+	)
+	if err != nil {
+		t.Fatalf("EvalProgramGradientsForOutput: %v", err)
+	}
+	wantLoss, wantGradX, wantGradW := depthwiseConv1DCPUForwardBackward(x, w, B, T, D, K)
+	if diff := math.Abs(float64(loss - wantLoss)); diff > 1e-6 {
+		t.Fatalf("loss mismatch: mlx=%g cpu=%g diff=%g", loss, wantLoss, diff)
+	}
+	if maxRel, maxAbs := maxGradientError(gotGrads[0], wantGradX); maxRel > 1e-5 && maxAbs > 1e-6 {
+		t.Fatalf("dL/dx mismatch: max_relative_error=%g max_absolute_error=%g", maxRel, maxAbs)
+	}
+	if maxRel, maxAbs := maxGradientError(gotGrads[1], wantGradW); maxRel > 1e-5 && maxAbs > 1e-6 {
+		t.Fatalf("dL/dw mismatch: max_relative_error=%g max_absolute_error=%g", maxRel, maxAbs)
+	}
+}
+
 func testMamba3SelectiveScanGrad(t *testing.T, groups, chunkSize int) {
 	const (
 		B = 2
@@ -232,6 +292,33 @@ func seededFloats(rng *rand.Rand, n int, scale float64) []float32 {
 		out[i] = float32((rng.Float64()*2 - 1) * scale)
 	}
 	return out
+}
+
+func depthwiseConv1DCPUForwardBackward(x, w []float32, B, T, D, K int) (float32, []float32, []float32) {
+	denom := float32(B * T * D)
+	gradX := make([]float32, len(x))
+	gradW := make([]float32, len(w))
+	var loss float32
+	for b := 0; b < B; b++ {
+		for t := 0; t < T; t++ {
+			for d := 0; d < D; d++ {
+				var y float32
+				for k := 0; k < K; k++ {
+					srcT := t - k
+					if srcT < 0 {
+						continue
+					}
+					xIdx := (b*T+srcT)*D + d
+					wIdx := d*K + k
+					y += x[xIdx] * w[wIdx]
+					gradX[xIdx] += w[wIdx] / denom
+					gradW[wIdx] += x[xIdx] / denom
+				}
+				loss += y / denom
+			}
+		}
+	}
+	return loss, gradX, gradW
 }
 
 func mamba3MIMOCPUForwardBackward(x, dtRaw, lambdaInput, theta, aLog, bProj, cProj []float32, B, T, D, N, G int) (float32, [][]float32) {

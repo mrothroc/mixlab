@@ -349,6 +349,31 @@ mx::array shift_time_right_zero3(const mx::array& x, int B, int T, int D) {
       1);
 }
 
+mx::array causal_depthwise_conv1d(
+    const mx::array& x_flat,
+    const mx::array& weight,
+    int B,
+    int T,
+    int D,
+    int K) {
+  if (B <= 0 || T <= 0 || D <= 0 || K <= 0) {
+    throw std::runtime_error("OP_DEPTHWISE_CONV1D requires positive B,T,D,K");
+  }
+  auto x = mx::reshape(x_flat, {B, T, D});
+  auto out = mx::zeros({B, T, D}, mx::float32);
+  for (int k = 0; k < K && k < T; ++k) {
+    auto shifted = k == 0
+        ? x
+        : mx::concatenate(
+              {mx::zeros({B, k, D}, mx::float32),
+               mx::slice(x, {0, 0, 0}, {B, T - k, D})},
+              1);
+    auto wk = mx::reshape(mx::slice(weight, {0, k}, {D, k + 1}), {1, 1, D});
+    out = out + shifted * wk;
+  }
+  return mx::reshape(out, {B * T, D});
+}
+
 mx::array shift_time_left_zero4(const mx::array& x, int B, int T, int D, int N) {
   if (T <= 1) {
     return mx::zeros({B, T, D, N}, mx::float32);
@@ -1857,23 +1882,7 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         int T = op.int_params[1];
         int D = op.int_params[2];
         int K = op.int_params[3];
-        auto x = mx::reshape(get(op, 0), {B, T, D});
-        auto w = get(op, 1);
-        auto out = mx::zeros({B, T, D}, mx::float32);
-        for (int t = 0; t < T; ++t) {
-          auto yt = mx::zeros({B, D}, mx::float32);
-          for (int k = 0; k < K; ++k) {
-            int src_t = t - k;
-            if (src_t < 0) {
-              continue;
-            }
-            auto xt = mx::reshape(mx::slice(x, {0, src_t, 0}, {B, src_t + 1, D}), {B, D});
-            auto wk = mx::reshape(mx::slice(w, {0, k}, {D, k + 1}), {D});
-            yt = yt + xt * wk;
-          }
-          out = mx::slice_update(out, mx::reshape(yt, {B, 1, D}), mx::Shape{0, t, 0}, mx::Shape{B, t + 1, D});
-        }
-        set_out(op, 0, mx::reshape(out, {B * T, D}));
+        set_out(op, 0, causal_depthwise_conv1d(get(op, 0), get(op, 1), B, T, D, K));
         break;
       }
       case OP_MAMBA3_SELECTIVE_SCAN: {

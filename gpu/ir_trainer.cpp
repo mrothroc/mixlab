@@ -457,7 +457,10 @@ std::vector<int> weight_argnums_chunk(size_t start, size_t end) {
 }
 
 bool use_compiled_mamba3_grad_chunks() {
-  return !env_truthy("MIXLAB_DISABLE_MAMBA3_COMPILED_GRAD_CHUNKS");
+  if (env_truthy("MIXLAB_DISABLE_MAMBA3_COMPILED_GRAD_CHUNKS")) {
+    return false;
+  }
+  return env_truthy("MIXLAB_MAMBA3_COMPILED_GRAD_CHUNKS");
 }
 
 std::string mamba3_grad_chunks_signature(
@@ -511,11 +514,14 @@ void reset_compiled_mamba3_grad_chunks_if_needed(
 
 void disable_compiled_mamba3_grad_chunks(IRTrainer& trainer, const std::exception& e) {
   trainer.compiled_mamba3_grad_chunks_disabled = true;
+  for (auto& compiled : trainer.compiled_mamba3_grad_chunks) {
+    compiled = StepArrayFn{};
+  }
   if (!trainer.compiled_mamba3_grad_chunks_fallback_logged) {
     std::cerr << "[mlx_ir] canonical Mamba3 compiled grad chunk failed ("
               << e.what()
               << "); falling back to uncompiled gpu-resident chunks"
-              << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_GRAD_CHUNKS=1 to skip this path)"
+              << " (unset MIXLAB_MAMBA3_COMPILED_GRAD_CHUNKS to skip this path)"
               << std::endl;
     trainer.compiled_mamba3_grad_chunks_fallback_logged = true;
   }
@@ -613,108 +619,120 @@ MaterializedGradResult materialize_weight_grad_chunks(
   }
   for (size_t chunk_idx = 0; chunk_idx < chunks.size(); ++chunk_idx) {
     const auto& chunk = chunks[chunk_idx];
-    std::vector<mx::array> grads;
-    bool used_compiled_chunk = false;
-    if (compiled_chunks_enabled && !trainer.compiled_mamba3_grad_chunks_disabled) {
-      try {
-        auto& compiled = trainer.compiled_mamba3_grad_chunks[chunk_idx];
-        if (!compiled) {
-          compiled = compile_weight_grad_chunk_fn(
+    bool chunk_complete = false;
+    while (!chunk_complete) {
+      std::vector<mx::array> grads;
+      bool used_compiled_chunk = false;
+      if (compiled_chunks_enabled && !trainer.compiled_mamba3_grad_chunks_disabled) {
+        try {
+          auto& compiled = trainer.compiled_mamba3_grad_chunks[chunk_idx];
+          if (!compiled) {
+            compiled = compile_weight_grad_chunk_fn(
+                forward_fn,
+                chunk.start,
+                chunk.end,
+                chunk_idx == 0);
+          }
+          auto packed = compiled(args);
+          if (chunk_idx == 0) {
+            const size_t grad_count = chunk.end - chunk.start;
+            if (packed.size() < grad_count) {
+              throw std::runtime_error("compiled first grad chunk returned too few outputs");
+            }
+            out.output_values.assign(
+                packed.begin(),
+                packed.begin() + static_cast<std::ptrdiff_t>(packed.size() - grad_count));
+            grads.assign(
+                packed.begin() + static_cast<std::ptrdiff_t>(out.output_values.size()),
+                packed.end());
+          } else {
+            grads = std::move(packed);
+          }
+          used_compiled_chunk = true;
+        } catch (const std::exception& e) {
+          disable_compiled_mamba3_grad_chunks(trainer, e);
+        }
+      }
+      if (!used_compiled_chunk) {
+        if (chunk_idx == 0) {
+          auto result = compute_weight_value_grad_chunk(
               forward_fn,
+              args,
               chunk.start,
               chunk.end,
-              chunk_idx == 0);
-        }
-        auto packed = compiled(args);
-        if (chunk_idx == 0) {
-          const size_t grad_count = chunk.end - chunk.start;
-          if (packed.size() < grad_count) {
-            throw std::runtime_error("compiled first grad chunk returned too few outputs");
-          }
-          out.output_values.assign(
-              packed.begin(),
-              packed.begin() + static_cast<std::ptrdiff_t>(packed.size() - grad_count));
-          grads.assign(
-              packed.begin() + static_cast<std::ptrdiff_t>(out.output_values.size()),
-              packed.end());
+              "canonical Mamba3 materialized grad chunk [" + std::to_string(chunk.start) +
+              "," + std::to_string(chunk.end) + ")");
+          out.output_values = std::move(result.first);
+          grads = std::move(result.second);
         } else {
-          grads = std::move(packed);
+          grads = compute_weight_grad_chunk(
+              forward_fn,
+              args,
+              chunk.start,
+              chunk.end,
+              "canonical Mamba3 materialized grad chunk [" + std::to_string(chunk.start) +
+              "," + std::to_string(chunk.end) + ")");
         }
-        used_compiled_chunk = true;
+      }
+      std::vector<mx::array> flat_grads;
+      flat_grads.reserve(grads.size());
+      auto partial_norm_sq = mx::array(0.0f, mx::float32);
+      auto nonfinite_count = mx::array(0.0f, mx::float32);
+      for (const auto& grad : grads) {
+        auto flat = mx::reshape(
+            mx::astype(grad, mx::float32),
+            {static_cast<mx::ShapeElem>(grad.size())});
+        partial_norm_sq = partial_norm_sq + mx::sum(mx::square(flat));
+        nonfinite_count = nonfinite_count +
+            mx::sum(mx::astype(mx::logical_not(mx::isfinite(flat)), mx::float32));
+        flat_grads.push_back(flat);
+      }
+      std::vector<mx::array> eval_arrays = flat_grads;
+      eval_arrays.push_back(partial_norm_sq);
+      eval_arrays.push_back(nonfinite_count);
+      try {
+        eval_arrays_with_context(
+            eval_arrays,
+            "canonical Mamba3 materialized grad eval chunk [" +
+            std::to_string(chunk.start) + "," + std::to_string(chunk.end) + ")");
       } catch (const std::exception& e) {
-        disable_compiled_mamba3_grad_chunks(trainer, e);
+        if (used_compiled_chunk) {
+          disable_compiled_mamba3_grad_chunks(trainer, e);
+          continue;
+        }
+        throw;
       }
-    }
-    if (!used_compiled_chunk) {
-      if (chunk_idx == 0) {
-        auto result = compute_weight_value_grad_chunk(
-            forward_fn,
-            args,
-            chunk.start,
-            chunk.end,
-            "canonical Mamba3 materialized grad chunk [" + std::to_string(chunk.start) +
-            "," + std::to_string(chunk.end) + ")");
-        out.output_values = std::move(result.first);
-        grads = std::move(result.second);
-      } else {
-        grads = compute_weight_grad_chunk(
-            forward_fn,
-            args,
-            chunk.start,
-            chunk.end,
-            "canonical Mamba3 materialized grad chunk [" + std::to_string(chunk.start) +
-            "," + std::to_string(chunk.end) + ")");
+      const float nonfinite = nonfinite_count.item<float>();
+      if (nonfinite > 0.0f) {
+        throw std::runtime_error(
+            "canonical Mamba3 materialized grad chunk [" +
+            std::to_string(chunk.start) + "," + std::to_string(chunk.end) +
+            ") produced " + std::to_string(static_cast<int>(nonfinite)) +
+            " non-finite gradient values");
       }
-    }
-    std::vector<mx::array> flat_grads;
-    flat_grads.reserve(grads.size());
-    auto partial_norm_sq = mx::array(0.0f, mx::float32);
-    auto nonfinite_count = mx::array(0.0f, mx::float32);
-    for (const auto& grad : grads) {
-      auto flat = mx::reshape(
-          mx::astype(grad, mx::float32),
-          {static_cast<mx::ShapeElem>(grad.size())});
-      partial_norm_sq = partial_norm_sq + mx::sum(mx::square(flat));
-      nonfinite_count = nonfinite_count +
-          mx::sum(mx::astype(mx::logical_not(mx::isfinite(flat)), mx::float32));
-      flat_grads.push_back(flat);
-    }
-    std::vector<mx::array> eval_arrays = flat_grads;
-    eval_arrays.push_back(partial_norm_sq);
-    eval_arrays.push_back(nonfinite_count);
-    eval_arrays_with_context(
-        eval_arrays,
-        "canonical Mamba3 materialized grad eval chunk [" +
-        std::to_string(chunk.start) + "," + std::to_string(chunk.end) + ")");
-    const float nonfinite = nonfinite_count.item<float>();
-    if (nonfinite > 0.0f) {
-      throw std::runtime_error(
-          "canonical Mamba3 materialized grad chunk [" +
-          std::to_string(chunk.start) + "," + std::to_string(chunk.end) +
-          ") produced " + std::to_string(static_cast<int>(nonfinite)) +
-          " non-finite gradient values");
-    }
-    const float chunk_norm_sq = partial_norm_sq.item<float>();
-    if (!std::isfinite(chunk_norm_sq)) {
-      throw std::runtime_error(
-          "canonical Mamba3 materialized grad chunk [" +
-          std::to_string(chunk.start) + "," + std::to_string(chunk.end) +
-          ") produced non-finite gradient norm");
-    }
-    out.norm_sq += static_cast<double>(chunk_norm_sq);
-    for (size_t i = chunk.start; i < chunk.end; ++i) {
-      const auto& flat = flat_grads[i - chunk.start];
-      auto& saved = out.grads[i];
-      saved.shape = grads[i - chunk.start].shape();
-      if (materialize_on_cpu) {
-        saved.cpu_values.resize(flat.size());
-        std::memcpy(
-            saved.cpu_values.data(),
-            flat.data<float>(),
-            saved.cpu_values.size() * sizeof(float));
-      } else {
-        saved.flat = mx::stop_gradient(flat);
+      const float chunk_norm_sq = partial_norm_sq.item<float>();
+      if (!std::isfinite(chunk_norm_sq)) {
+        throw std::runtime_error(
+            "canonical Mamba3 materialized grad chunk [" +
+            std::to_string(chunk.start) + "," + std::to_string(chunk.end) +
+            ") produced non-finite gradient norm");
       }
+      out.norm_sq += static_cast<double>(chunk_norm_sq);
+      for (size_t i = chunk.start; i < chunk.end; ++i) {
+        const auto& flat = flat_grads[i - chunk.start];
+        auto& saved = out.grads[i];
+        saved.shape = grads[i - chunk.start].shape();
+        if (materialize_on_cpu) {
+          saved.cpu_values.resize(flat.size());
+          std::memcpy(
+              saved.cpu_values.data(),
+              flat.data<float>(),
+              saved.cpu_values.size() * sizeof(float));
+        } else {
+          saved.flat = mx::stop_gradient(flat);
+        }
+      }
+      chunk_complete = true;
     }
   }
   return out;
@@ -1374,7 +1392,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
                 << "; set MIXLAB_MAMBA3_CHECKPOINT_CHUNKED_GRADS=1 if chunked grads OOM"
                 << "; set MIXLAB_MAMBA3_SINGLE_BACKWARD=1 to retry the full backward graph"
                 << "; set MIXLAB_MAMBA3_CHUNKED_AUTODIFF=1 for the slowest no-cache fallback"
-                << "; set MIXLAB_DISABLE_MAMBA3_COMPILED_GRAD_CHUNKS=1 to skip per-chunk CUDA graphs"
+                << "; set MIXLAB_MAMBA3_COMPILED_GRAD_CHUNKS=1 to try per-chunk CUDA graphs"
                 << "; set MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES=1 to disable)"
                 << std::endl;
       low_memory_update_notice_logged_ = true;
