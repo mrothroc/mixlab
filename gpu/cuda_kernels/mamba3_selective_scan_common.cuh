@@ -1,5 +1,7 @@
 #pragma once
 
+#define MAMBA3_MAX_BWD_WINDOW 64
+
 namespace {
 
 __device__ inline float mamba3_sigmoid(float x) {

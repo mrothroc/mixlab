@@ -151,6 +151,73 @@ func (s *InferenceSession) EvalTokens(tokens []uint16) ([]float32, error) {
 	return out, nil
 }
 
+// EvalLogits runs next-token evaluation on a flat token stream and returns the
+// full logits for each adjacent token pair in row-major [pairs, vocab] order.
+//
+// The shape and batching requirements match EvalTokens. This is intended for
+// analysis tooling that needs ranks/top-1 predictions without reimplementing a
+// model outside the MLX IR path.
+func (s *InferenceSession) EvalLogits(tokens []uint16) ([]float32, error) {
+	if s == nil {
+		return nil, fmt.Errorf("nil inference session")
+	}
+	if s.closed || s.trainer == nil {
+		return nil, errInferenceSessionClosed
+	}
+	if s.cfg == nil {
+		return nil, fmt.Errorf("inference session has no config")
+	}
+
+	batchTokens := s.cfg.Training.BatchTokens
+	seqLen := s.cfg.SeqLen
+	vocab := s.cfg.VocabSize
+	if batchTokens <= 0 {
+		return nil, fmt.Errorf("invalid batch_tokens=%d", batchTokens)
+	}
+	if seqLen <= 0 {
+		return nil, fmt.Errorf("invalid seq_len=%d", seqLen)
+	}
+	if vocab <= 0 {
+		return nil, fmt.Errorf("invalid vocab_size=%d", vocab)
+	}
+	if batchTokens%seqLen != 0 {
+		return nil, fmt.Errorf("batch_tokens (%d) must be divisible by seq_len (%d)", batchTokens, seqLen)
+	}
+	if len(tokens) < 2 {
+		return nil, fmt.Errorf("need at least 2 tokens, got %d", len(tokens))
+	}
+
+	pairs := len(tokens) - 1
+	if pairs%batchTokens != 0 {
+		return nil, fmt.Errorf("token pair count (%d) must be a multiple of batch_tokens (%d)", pairs, batchTokens)
+	}
+
+	batchSize := batchTokens / seqLen
+	out := make([]float32, 0, pairs*vocab)
+	for start := 0; start < pairs; start += batchTokens {
+		window := tokens[start : start+batchTokens+1]
+		xTok := make([]int, batchTokens)
+		yTok := make([]int, batchTokens)
+		for i := 0; i < batchTokens; i++ {
+			xTok[i] = int(window[i])
+			yTok[i] = int(window[i+1])
+		}
+		if _, err := s.trainer.EvaluatePerTokenGPU(xTok, yTok, batchSize, seqLen); err != nil {
+			return nil, err
+		}
+		logits, err := readTrainerOutput(s.trainer, "logits", []int{batchTokens, vocab})
+		if err != nil {
+			return nil, err
+		}
+		if len(logits) != batchTokens*vocab {
+			return nil, fmt.Errorf("logits length mismatch: got=%d want=%d", len(logits), batchTokens*vocab)
+		}
+		out = append(out, logits...)
+	}
+
+	return out, nil
+}
+
 // Close releases GPU resources. It is safe to call multiple times.
 func (s *InferenceSession) Close() error {
 	if s == nil || s.closed {

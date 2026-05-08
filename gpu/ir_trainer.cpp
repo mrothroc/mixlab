@@ -573,6 +573,12 @@ MaterializedGradResult materialize_weight_grad_chunks(
           flat.data<float>(),
           saved.values.size() * sizeof(float));
       for (const float v : saved.values) {
+        if (!std::isfinite(v)) {
+          throw std::runtime_error(
+              "canonical Mamba3 materialized grad chunk [" +
+              std::to_string(chunk.start) + "," + std::to_string(chunk.end) +
+              ") produced non-finite gradient for weight " + std::to_string(i));
+        }
         out.norm_sq += static_cast<double>(v) * static_cast<double>(v);
       }
     }
@@ -979,6 +985,11 @@ float finalize_pending_step(
     throw std::runtime_error(
         "pending step " + std::to_string(trainer.pending_step_index_) +
         " failed while materializing loss: " + e.what());
+  }
+  if (!std::isfinite(loss)) {
+    throw std::runtime_error(
+        "pending step " + std::to_string(trainer.pending_step_index_) +
+        " produced non-finite loss");
   }
   if (outputs != nullptr) {
     *outputs = std::move(trainer.pending_outputs_);

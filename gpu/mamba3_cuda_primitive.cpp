@@ -37,7 +37,11 @@ int mamba3_backward_window_size(int T) {
   if (end == raw || (end && *end != '\0') || parsed <= 0) {
     return std::min(T, kMamba3DefaultBackwardWindow);
   }
-  return std::max(1, std::min(T, static_cast<int>(parsed)));
+  return std::max(
+      1,
+      std::min(
+          std::min(T, kMamba3DefaultBackwardWindow),
+          static_cast<int>(parsed)));
 }
 
 void validate_mamba3_cuda_shape(int B, int T, int D, int N, int G) {

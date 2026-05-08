@@ -61,6 +61,8 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
     const int window_start = window * window_size;
     const int window_limit = (window_start + window_size < T) ? window_start + window_size : T;
     const int window_end = window_limit - 1;
+    float h_before0_window[MAMBA3_MAX_BWD_WINDOW];
+    float h_before1_window[MAMBA3_MAX_BWD_WINDOW];
     float h_after0 = 0.0f;
     float h_after1 = 0.0f;
     if (active) {
@@ -82,6 +84,7 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
         replay_prev_x = x_flat[mamba3_channel_idx(prev_row, d, D)];
       }
       for (int replay_t = window_start; replay_t <= window_end; ++replay_t) {
+        const int local_t = replay_t - window_start;
         const int replay_row = b * T + replay_t;
         const int replay_xd = mamba3_channel_idx(replay_row, d, D);
         const float replay_x = x_flat[replay_xd];
@@ -103,6 +106,8 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
         const float replay_beta0 = (1.0f - replay_lambda) * replay_dt * replay_alpha0;
         const float replay_beta1 = (1.0f - replay_lambda) * replay_dt * replay_alpha1;
         const float replay_gamma = replay_lambda * replay_dt;
+        h_before0_window[local_t] = h_after0;
+        h_before1_window[local_t] = h_after1;
         h_after0 = replay_alpha0 * h_after0 + replay_gamma * replay_b0 * replay_x +
             (replay_t > 0 ? replay_beta0 * replay_prev_b0 * replay_prev_x : 0.0f);
         h_after1 = replay_alpha1 * h_after1 + replay_gamma * replay_b1 * replay_x +
@@ -123,6 +128,7 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
       float lambda = 0.0f;
 
       if (active) {
+        const int local_t = t - window_start;
         const float x = x_flat[xd];
         dt_raw = dt_flat[xd];
         const float dt = mamba3_softplus(dt_raw);
@@ -174,12 +180,8 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
         }
         const float current_input0 = b0 * x;
         const float current_input1 = b1 * x;
-        const float safe_alpha0 = fmaxf(alpha0, 1.0e-20f);
-        const float safe_alpha1 = fmaxf(alpha1, 1.0e-20f);
-        const float h_before0 =
-            (h_after0 - gamma * current_input0 - (t > 0 ? beta0 * prev_input0 : 0.0f)) / safe_alpha0;
-        const float h_before1 =
-            (h_after1 - gamma * current_input1 - (t > 0 ? beta1 * prev_input1 : 0.0f)) / safe_alpha1;
+        const float h_before0 = h_before0_window[local_t];
+        const float h_before1 = h_before1_window[local_t];
 
         const float upstream0 = dy * c0 + alpha_next0 * upstream_next0;
         const float upstream1 = dy * c1 + alpha_next1 * upstream_next1;
