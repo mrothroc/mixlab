@@ -969,7 +969,7 @@ int mamba3_canonical_block_expected_inputs(bool use_conv) {
 void log_mamba3_canonical_block_once() {
   static std::atomic<bool> logged{false};
   if (!logged.exchange(true)) {
-    std::cerr << "[mlx_ir] canonical Mamba3 using fused canonical block"
+    std::cerr << "[mlx_ir] canonical Mamba3 using fused canonical block VJP"
               << " (set MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES=1 only for debugging)"
               << std::endl;
   }
@@ -1015,23 +1015,27 @@ mx::array mamba3_canonical_block_impl(
   const int state_size = static_cast<int>(a_log.shape(1));
   const int n_groups = static_cast<int>(w_b.shape(1)) / state_size;
   const int conv_kernel = use_conv ? static_cast<int>(conv_w->shape(1)) : 0;
+  const int dt_rank = static_cast<int>(w_dt_low.shape(1));
+  const int group_state = n_groups * state_size;
   auto x_norm = rmsnorm_forward(x, pre_norm, eps);
   auto x_proj = mx::matmul(x_norm, w_x);
   auto x_branch = use_conv
       ? causal_depthwise_conv1d(x_proj, *conv_w, B, T, inner, conv_kernel)
       : x_proj;
 
-  auto dt_low = mx::matmul(x_branch, w_dt_low);
+  auto aux_weight = mx::concatenate({w_dt_low, w_lambda_low, w_theta_low, w_b, w_c}, 1);
+  auto aux_proj = mx::matmul(x_branch, aux_weight);
+  auto dt_low = mx::slice(aux_proj, {0, 0}, {B * T, dt_rank});
   auto dt = mx::matmul(dt_low, w_dt_high) + dt_bias;
-  auto lambda_low = mx::matmul(x_branch, w_lambda_low);
+  auto lambda_low = mx::slice(aux_proj, {0, dt_rank}, {B * T, dt_rank * 2});
   auto lambda = mx::matmul(lambda_low, w_lambda_high);
-  auto theta_low = mx::matmul(x_branch, w_theta_low);
+  auto theta_low = mx::slice(aux_proj, {0, dt_rank * 2}, {B * T, dt_rank * 3});
   auto theta = mx::matmul(theta_low, w_theta_high);
 
-  auto b_proj = mx::matmul(x_branch, w_b);
+  auto b_proj = mx::slice(aux_proj, {0, dt_rank * 3}, {B * T, dt_rank * 3 + group_state});
   auto b_norm = rmsnorm_forward(mx::reshape(b_proj, {B * T * n_groups, state_size}), b_norm_scale, eps);
   auto b_biased = mx::reshape(b_norm, {B * T, n_groups * state_size}) + b_bias;
-  auto c_proj = mx::matmul(x_branch, w_c);
+  auto c_proj = mx::slice(aux_proj, {0, dt_rank * 3 + group_state}, {B * T, dt_rank * 3 + group_state * 2});
   auto c_norm = rmsnorm_forward(mx::reshape(c_proj, {B * T * n_groups, state_size}), c_norm_scale, eps);
   auto c_biased = mx::reshape(c_norm, {B * T, n_groups * state_size}) + c_bias;
 
@@ -1086,23 +1090,27 @@ std::vector<mx::array> mamba3_canonical_block_vjp(
   const int state_size = static_cast<int>(a_log.shape(1));
   const int n_groups = static_cast<int>(w_b.shape(1)) / state_size;
   const int conv_kernel = use_conv ? static_cast<int>(conv_w->shape(1)) : 0;
+  const int dt_rank = static_cast<int>(w_dt_low.shape(1));
+  const int group_state = n_groups * state_size;
   auto x_norm = rmsnorm_forward(x, pre_norm, eps);
   auto x_proj = mx::matmul(x_norm, w_x);
   auto x_branch = use_conv
       ? causal_depthwise_conv1d(x_proj, *conv_w, B, T, inner, conv_kernel)
       : x_proj;
 
-  auto dt_low = mx::matmul(x_branch, w_dt_low);
+  auto aux_weight = mx::concatenate({w_dt_low, w_lambda_low, w_theta_low, w_b, w_c}, 1);
+  auto aux_proj = mx::matmul(x_branch, aux_weight);
+  auto dt_low = mx::slice(aux_proj, {0, 0}, {B * T, dt_rank});
   auto dt = mx::matmul(dt_low, w_dt_high) + dt_bias;
-  auto lambda_low = mx::matmul(x_branch, w_lambda_low);
+  auto lambda_low = mx::slice(aux_proj, {0, dt_rank}, {B * T, dt_rank * 2});
   auto lambda = mx::matmul(lambda_low, w_lambda_high);
-  auto theta_low = mx::matmul(x_branch, w_theta_low);
+  auto theta_low = mx::slice(aux_proj, {0, dt_rank * 2}, {B * T, dt_rank * 3});
   auto theta = mx::matmul(theta_low, w_theta_high);
-  auto b_proj = mx::matmul(x_branch, w_b);
+  auto b_proj = mx::slice(aux_proj, {0, dt_rank * 3}, {B * T, dt_rank * 3 + group_state});
   auto b_proj_group = mx::reshape(b_proj, {B * T * n_groups, state_size});
   auto b_norm = rmsnorm_forward(b_proj_group, b_norm_scale, eps);
   auto b_biased = mx::reshape(b_norm, {B * T, n_groups * state_size}) + b_bias;
-  auto c_proj = mx::matmul(x_branch, w_c);
+  auto c_proj = mx::slice(aux_proj, {0, dt_rank * 3 + group_state}, {B * T, dt_rank * 3 + group_state * 2});
   auto c_proj_group = mx::reshape(c_proj, {B * T * n_groups, state_size});
   auto c_norm = rmsnorm_forward(c_proj_group, c_norm_scale, eps);
   auto c_biased = mx::reshape(c_norm, {B * T, n_groups * state_size}) + c_bias;
@@ -1231,7 +1239,20 @@ mx::array mamba3_canonical_block(
     int scan_chunk_size,
     float eps) {
   log_mamba3_canonical_block_once();
-  return mamba3_canonical_block_impl(args, B, T, use_conv, scan_chunk_size, eps);
+  auto block = mx::custom_vjp(
+      [B, T, use_conv, scan_chunk_size, eps](const std::vector<mx::array>& fn_args) {
+        return std::vector<mx::array>{
+            mamba3_canonical_block_impl(fn_args, B, T, use_conv, scan_chunk_size, eps)};
+      },
+      [B, T, use_conv, scan_chunk_size, eps](
+          const std::vector<mx::array>& fn_args,
+          const std::vector<mx::array>& cotangents,
+          const std::vector<mx::array>& outputs) {
+        (void)outputs;
+        return mamba3_canonical_block_vjp(
+            fn_args, cotangents, B, T, use_conv, scan_chunk_size, eps);
+      });
+  return block(args)[0];
 }
 
 mx::array gated_delta_scan_naive(
