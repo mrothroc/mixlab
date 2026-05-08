@@ -91,6 +91,10 @@ struct IRTrainer {
   bool low_memory_update_notice_logged_ = false;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_named_step;
   std::string compiled_named_step_signature;
+  std::vector<std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)>> compiled_mamba3_grad_chunks;
+  std::string compiled_mamba3_grad_chunks_signature;
+  bool compiled_mamba3_grad_chunks_disabled = false;
+  bool compiled_mamba3_grad_chunks_fallback_logged = false;
 
   float max_grad_norm = 0.0f;
   float lr_scale = 1.0f;
