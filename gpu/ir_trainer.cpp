@@ -753,8 +753,12 @@ bool is_retriable_cuda_memory_error(const std::exception& e) {
 
 std::vector<int> mamba3_grad_chunk_element_candidates(IRTrainer& trainer, int requested) {
   const int floor = 8 * 1024 * 1024;
+  const int safe_requested = std::max(1, requested);
   if (env_is_set("MIXLAB_MAMBA3_GRAD_CHUNK_ELEMS")) {
-    return {std::max(1, requested)};
+    return {safe_requested};
+  }
+  if (!env_truthy("MIXLAB_MAMBA3_ADAPTIVE_GRAD_CHUNKS")) {
+    return {safe_requested};
   }
   if (trainer.adaptive_mamba3_grad_chunk_elements > 0) {
     return {trainer.adaptive_mamba3_grad_chunk_elements};
@@ -768,10 +772,10 @@ std::vector<int> mamba3_grad_chunk_element_candidates(IRTrainer& trainer, int re
       std::remove_if(
           out.begin(),
           out.end(),
-          [requested](int candidate) { return candidate < requested; }),
+          [safe_requested](int candidate) { return candidate < safe_requested; }),
       out.end());
-  if (out.empty() || out.back() != requested) {
-    out.push_back(requested);
+  if (out.empty() || out.back() != safe_requested) {
+    out.push_back(safe_requested);
   }
   out.erase(std::unique(out.begin(), out.end()), out.end());
   return out;
@@ -1452,6 +1456,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
                 << "; set MIXLAB_MAMBA3_SINGLE_BACKWARD=1 to retry the full backward graph"
                 << "; set MIXLAB_MAMBA3_CHUNKED_AUTODIFF=1 for the slowest no-cache fallback"
                 << "; set MIXLAB_MAMBA3_COMPILED_GRAD_CHUNKS=1 to try per-chunk CUDA graphs"
+                << "; set MIXLAB_MAMBA3_ADAPTIVE_GRAD_CHUNKS=1 to probe larger grad chunks"
                 << "; set MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES=1 to disable)"
                 << std::endl;
       low_memory_update_notice_logged_ = true;
