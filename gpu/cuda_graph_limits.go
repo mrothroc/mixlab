@@ -33,7 +33,7 @@ func TuneCUDAGraphLimits(prog *ir.Program) CUDAGraphLimits {
 	}
 
 	maxOps := len(prog.Ops) * 3 // forward + backward + optimizer margin
-	if programHasOp(prog, ir.OpMamba3SelectiveScan) {
+	if programHasOp(prog, ir.OpMamba3SelectiveScan) || programHasOp(prog, ir.OpMamba3CanonicalBlock) {
 		if maxOps > maxMamba3SelectiveScanOpsPerBuffer {
 			maxOps = maxMamba3SelectiveScanOpsPerBuffer
 		}

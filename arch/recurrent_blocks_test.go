@@ -690,39 +690,26 @@ func TestEmitMamba3IR_OpCounts(t *testing.T) {
 
 func TestEmitMamba3CanonicalIR(t *testing.T) {
 	p := NewProgram(20)
-	wi, err := emitMamba3CanonicalIR(p, "x", 0, 64, 8, 2, 4, 4, true, defaultMamba3CanonicalScanChunkSize, 16, 1, 0)
+	wi, err := emitMamba3CanonicalIR(p, "x", 0, 64, 8, 2, 4, 4, true, defaultMamba3CanonicalScanChunkSize, 16, 1)
 	if err != nil {
 		t.Fatalf("emitMamba3CanonicalIR: %v", err)
 	}
 	if wi != 20 {
 		t.Fatalf("expected wi=20, got %d", wi)
 	}
-	hasConv := false
-	hasScan := false
-	postNorms := 0
+	hasBlock := false
 	for _, op := range p.Ops {
-		switch op.Code {
-		case OpDepthwiseConv1D:
-			hasConv = true
-		case OpMamba3SelectiveScan:
-			hasScan = true
-			if got, want := len(op.Inputs), 7; got != want {
-				t.Fatalf("scan input arity=%d want %d", got, want)
+		if op.Code == OpMamba3CanonicalBlock {
+			hasBlock = true
+			if got, want := len(op.Inputs), 21; got != want {
+				t.Fatalf("canonical block input arity=%d want %d", got, want)
 			}
-			if got, want := op.IntParams, []int{1, 16, 64, 8, 2, defaultMamba3CanonicalScanChunkSize}; !reflect.DeepEqual(got, want) {
-				t.Fatalf("scan params=%v want %v", got, want)
+			if got, want := op.IntParams, []int{1, 16, 1, defaultMamba3CanonicalScanChunkSize}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("canonical block params=%v want %v", got, want)
 			}
-		case OpRMSNorm:
-			postNorms++
 		}
 	}
-	if !hasConv {
-		t.Fatal("missing OpDepthwiseConv1D")
-	}
-	if !hasScan {
-		t.Fatal("missing OpMamba3SelectiveScan")
-	}
-	if postNorms < 4 {
-		t.Fatalf("expected pre/post and B/C RMSNorm ops, got %d", postNorms)
+	if !hasBlock {
+		t.Fatal("missing OpMamba3CanonicalBlock")
 	}
 }

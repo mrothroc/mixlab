@@ -80,6 +80,11 @@ bool program_has_op(const IRProgram& program, int op_type) {
   return false;
 }
 
+bool program_has_canonical_mamba3(const IRProgram& program) {
+  return program_has_op(program, OP_MAMBA3_SELECTIVE_SCAN) ||
+      program_has_op(program, OP_MAMBA3_CANONICAL_BLOCK);
+}
+
 bool use_compiled_training_step(const IRProgram& program) {
   if (env_truthy("MIXLAB_FORCE_COMPILED_STEP")) {
     return true;
@@ -87,14 +92,14 @@ bool use_compiled_training_step(const IRProgram& program) {
   if (env_truthy("MIXLAB_DISABLE_COMPILED_STEP")) {
     return false;
   }
-  return !program_has_op(program, OP_MAMBA3_SELECTIVE_SCAN);
+  return !program_has_canonical_mamba3(program);
 }
 
 bool checkpoint_training_step(const IRProgram& program) {
   if (env_truthy("MIXLAB_DISABLE_TRAINING_CHECKPOINT")) {
     return false;
   }
-  return program_has_op(program, OP_MAMBA3_SELECTIVE_SCAN);
+  return program_has_canonical_mamba3(program);
 }
 
 StepDebugConfig step_debug_config() {
@@ -868,7 +873,7 @@ bool use_low_memory_mamba3_updates(const IRProgram& program) {
   if (env_truthy("MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES")) {
     return false;
   }
-  return program_has_op(program, OP_MAMBA3_SELECTIVE_SCAN);
+  return program_has_canonical_mamba3(program);
 }
 
 int low_memory_mamba3_update_chunk_size() {
@@ -1437,7 +1442,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         (gradient_mode == Mamba3LowMemoryGradientMode::SingleBackward ||
          checkpoint_chunked_mamba3_gradients());
     if (!memory_safe_step_notice_logged_) {
-      std::cerr << "[mlx_ir] canonical Mamba3 scan detected; using uncompiled"
+      std::cerr << "[mlx_ir] canonical Mamba3 detected; using uncompiled"
                 << (checkpoint_grad_forward ? " checkpointed" : "")
                 << " training step to avoid oversized CUDA graphs"
                 << " (set MIXLAB_FORCE_COMPILED_STEP=1 to override)" << std::endl;
@@ -1627,7 +1632,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     step_out = compiled_named_step(args);
   } else {
     if (!memory_safe_step_notice_logged_) {
-      std::cerr << "[mlx_ir] canonical Mamba3 scan detected; using uncompiled"
+      std::cerr << "[mlx_ir] canonical Mamba3 detected; using uncompiled"
                 << (checkpoint_step ? " checkpointed" : "")
                 << " training step to avoid oversized CUDA graphs"
                 << " (set MIXLAB_FORCE_COMPILED_STEP=1 to override)" << std::endl;

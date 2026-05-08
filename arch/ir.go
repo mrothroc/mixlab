@@ -49,6 +49,7 @@ const (
 	OpStopGradient         = 61 // OP_STOP_GRADIENT
 	OpDepthwiseConv1D      = 62 // OP_DEPTHWISE_CONV1D
 	OpMamba3SelectiveScan  = 63 // OP_MAMBA3_SELECTIVE_SCAN
+	OpMamba3CanonicalBlock = 64 // OP_MAMBA3_CANONICAL_BLOCK
 	OpRandomNormal         = 65 // OP_RANDOM_NORMAL
 
 	TensorInt32   = 0
@@ -268,6 +269,22 @@ func (p *Program) Mamba3SelectiveScanChunked(x, dt, lambda, theta, aLog, bProj, 
 		params = append(params, scanChunkSize)
 	}
 	p.AddOp(OpMamba3SelectiveScan, []string{x, dt, lambda, theta, aLog, bProj, cProj}, []string{output}, nil, params)
+}
+
+// Mamba3CanonicalBlock emits the full canonical Mamba-3 block as one IR op.
+// Input layout:
+//
+//	x, pre_norm, W_X, [conv_w], W_dt_low, W_dt_high, W_lambda_low,
+//	W_lambda_high, W_theta_low, W_theta_high, W_B, W_C, B_norm_scale,
+//	C_norm_scale, B_bias, C_bias, A_log, dt_bias, post_norm_scale, W_Z, W_O.
+//
+// IntParams layout: [B, T, use_conv, scan_chunk_size].
+func (p *Program) Mamba3CanonicalBlock(inputs []string, output string, B, T int, useConv bool, scanChunkSize int) {
+	useConvInt := 0
+	if useConv {
+		useConvInt = 1
+	}
+	p.AddOp(OpMamba3CanonicalBlock, inputs, []string{output}, []float32{1e-5}, []int{B, T, useConvInt, scanChunkSize})
 }
 
 // MatrixScan emits a matrix-state gated recurrence (OpMatrixScan) over a sequence.

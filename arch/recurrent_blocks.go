@@ -247,6 +247,13 @@ func emitMamba3IR(prog *Program, x string, wi, inner, T, B, idx int) (int, error
 
 const defaultMamba3CanonicalScanChunkSize = 64
 
+func mamba3CanonicalWeightCount(useConv bool) int {
+	if useConv {
+		return 20
+	}
+	return 19
+}
+
 func effectiveMamba3CanonicalScanChunkSize(spec BlockSpec) int {
 	if spec.ScanChunkSize != nil {
 		return *spec.ScanChunkSize
@@ -281,7 +288,7 @@ func effectiveMamba3CanonicalScanChunkSize(spec BlockSpec) int {
 //	w[...]   = post_norm_scale      [inner]          pre-gate output RMSNorm
 //	w[...]   = W_Z                  [D, inner]       residual gate projection
 //	w[...]   = W_O                  [inner, D]       output projection
-func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, scanChunkSize, T, B, idx int) (int, error) {
+func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, scanChunkSize, T, B int) (int, error) {
 	if inner <= 0 {
 		return wi, fmt.Errorf("mamba3-canonical inner_dim must be > 0, got %d", inner)
 	}
@@ -308,108 +315,17 @@ func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroup
 	}
 
 	base := wi
-	prefix := tmpName(x+"_mamba3_canonical", idx)
-	xNorm := prefix + "_x_norm"
-	xProj := prefix + "_x_proj"
-	xConv := prefix + "_x_conv"
-	xBranch := xProj
-	dtLow := prefix + "_dt_low"
-	dtRaw := prefix + "_dt_raw"
-	dt := prefix + "_dt"
-	lambdaLow := prefix + "_lambda_low"
-	lambda := prefix + "_lambda"
-	thetaLow := prefix + "_theta_low"
-	theta := prefix + "_theta"
-	bProj := prefix + "_B"
-	bProjGroup := prefix + "_B_group"
-	bNorm := prefix + "_B_norm"
-	bNormFlat := prefix + "_B_norm_flat"
-	bBiased := prefix + "_B_biased"
-	cProj := prefix + "_C"
-	cProjGroup := prefix + "_C_group"
-	cNorm := prefix + "_C_norm"
-	cNormFlat := prefix + "_C_norm_flat"
-	cBiased := prefix + "_C_biased"
-	y := prefix + "_y"
-	yNorm := prefix + "_y_norm"
-	z := prefix + "_z"
-	zAct := prefix + "_z_act"
-	yGated := prefix + "_y_gated"
-	out := prefix + "_out"
-
-	w := base
-	prog.RMSNorm(x, weightName(w), xNorm, 1e-5)
-	w++
-	prog.MatMul(xNorm, weightName(w), xProj)
-	w++
+	blockInputs := []string{x, weightName(wi), weightName(wi + 1)}
+	wi += 2
 	if useConv {
-		prog.DepthwiseConv1D(xProj, weightName(w), xConv, B, T, inner, convKernel)
-		w++
-		xBranch = xConv
+		blockInputs = append(blockInputs, weightName(wi))
+		wi++
 	}
-
-	prog.MatMul(xBranch, weightName(w), dtLow)
-	w++
-	prog.MatMul(dtLow, weightName(w), dtRaw)
-	w++
-	prog.MatMul(xBranch, weightName(w), lambdaLow)
-	w++
-	prog.MatMul(lambdaLow, weightName(w), lambda)
-	w++
-	prog.MatMul(xBranch, weightName(w), thetaLow)
-	w++
-	prog.MatMul(thetaLow, weightName(w), theta)
-	w++
-
-	prog.MatMul(xBranch, weightName(w), bProj)
-	w++
-	prog.MatMul(xBranch, weightName(w), cProj)
-	w++
-
-	bNormScale := weightName(w)
-	w++
-	cNormScale := weightName(w)
-	w++
-	bBias := weightName(w)
-	w++
-	cBias := weightName(w)
-	w++
-	aLog := weightName(w)
-	w++
-	dtBias := weightName(w)
-	w++
-	postNorm := weightName(w)
-	w++
-	wGate := weightName(w)
-	w++
-	wOut := weightName(w)
-	w++
-
-	prog.Add(dtRaw, dtBias, dt)
-
-	// BCNorm is per group over N, matching the reference code's
-	// RMSNormGated(d_state) applied to tensors shaped [..., R, G, N].
-	prog.Reshape(bProj, []int{B * T * nGroups, stateSize}, bProjGroup)
-	prog.RMSNorm(bProjGroup, bNormScale, bNorm, 1e-5)
-	prog.Reshape(bNorm, []int{B * T, nGroups * stateSize}, bNormFlat)
-	prog.Add(bNormFlat, bBias, bBiased)
-
-	prog.Reshape(cProj, []int{B * T * nGroups, stateSize}, cProjGroup)
-	prog.RMSNorm(cProjGroup, cNormScale, cNorm, 1e-5)
-	prog.Reshape(cNorm, []int{B * T, nGroups * stateSize}, cNormFlat)
-	prog.Add(cNormFlat, cBias, cBiased)
-
-	prog.Mamba3SelectiveScanChunked(xBranch, dt, lambda, theta, aLog, bBiased, cBiased, y, B, T, inner, stateSize, nGroups, scanChunkSize)
-	prog.RMSNorm(y, postNorm, yNorm, 1e-5)
-
-	prog.MatMul(xNorm, wGate, z)
-	prog.SiLU(z, zAct)
-
-	prog.Mul(yNorm, zAct, yGated)
-	prog.MatMul(yGated, wOut, out)
-
-	prog.Add(x, out, x)
-	return w, nil
+	for ; wi < base+mamba3CanonicalWeightCount(useConv); wi++ {
+		blockInputs = append(blockInputs, weightName(wi))
+	}
+	prog.Mamba3CanonicalBlock(blockInputs, x, B, T, useConv, scanChunkSize)
+	return wi, nil
 }
 
 // emitRWKVIR emits a simplified RWKV-style linear-time block with

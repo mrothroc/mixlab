@@ -8,6 +8,7 @@
 #include <mlx/transforms.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -887,6 +888,362 @@ mx::array mamba3_selective_scan_canonical_phase6(
             args, outputs, cotangents, B, T, D, N, G, scan_chunk_size);
       });
   return scanned({x_flat, dt_flat, lambda_flat, theta_flat, a_log, b_proj_flat, c_proj_flat})[0];
+}
+
+struct RMSNormVJPResult {
+  mx::array input;
+  mx::array scale;
+};
+
+mx::array rmsnorm_forward(
+    const mx::array& x,
+    const mx::array& scale,
+    float eps) {
+  auto ms = mx::mean(mx::square(x), -1, true);
+  auto inv = 1.0f / mx::sqrt(ms + eps);
+  return x * inv * scale;
+}
+
+RMSNormVJPResult rmsnorm_vjp(
+    const mx::array& x,
+    const mx::array& scale,
+    const mx::array& grad_out,
+    float eps) {
+  auto ms = mx::mean(mx::square(x), -1, true);
+  auto inv = 1.0f / mx::sqrt(ms + eps);
+  auto grad_scaled = grad_out * scale;
+  auto mean_grad_dot = mx::mean(grad_scaled * x, -1, true);
+  auto grad_x = inv * (grad_scaled - x * mean_grad_dot * mx::square(inv));
+  auto grad_scale = mx::reshape(mx::sum(grad_out * x * inv, 0), scale.shape());
+  return {grad_x, grad_scale};
+}
+
+struct DepthwiseConv1DVJPResult {
+  mx::array input;
+  mx::array weight;
+};
+
+DepthwiseConv1DVJPResult causal_depthwise_conv1d_vjp(
+    const mx::array& x_flat,
+    const mx::array& weight,
+    const mx::array& grad_y_flat,
+    int B,
+    int T,
+    int D,
+    int K) {
+  auto x = mx::reshape(x_flat, {B, T, D});
+  auto grad_y = mx::reshape(grad_y_flat, {B, T, D});
+  auto grad_x = mx::zeros({B, T, D}, mx::float32);
+  std::vector<mx::array> grad_weight_cols;
+  grad_weight_cols.reserve(static_cast<size_t>(K));
+  for (int k = 0; k < K; ++k) {
+    auto wk = mx::reshape(mx::slice(weight, {0, k}, {D, k + 1}), {1, 1, D});
+    if (k < T) {
+      auto shifted_grad = k == 0
+          ? grad_y
+          : mx::concatenate(
+                {mx::slice(grad_y, {0, k, 0}, {B, T, D}),
+                 mx::zeros({B, k, D}, mx::float32)},
+                1);
+      grad_x = grad_x + shifted_grad * wk;
+
+      auto x_part = k == 0 ? x : mx::slice(x, {0, 0, 0}, {B, T - k, D});
+      auto gy_part = k == 0 ? grad_y : mx::slice(grad_y, {0, k, 0}, {B, T, D});
+      grad_weight_cols.push_back(mx::sum(x_part * gy_part, {0, 1}));
+    } else {
+      grad_weight_cols.push_back(mx::zeros({D}, mx::float32));
+    }
+  }
+  return {mx::reshape(grad_x, {B * T, D}), mx::stack(grad_weight_cols, 1)};
+}
+
+mx::array silu_derivative(const mx::array& x) {
+  auto sig = mx::sigmoid(x);
+  return sig * (1.0f + x * (1.0f - sig));
+}
+
+int mamba3_canonical_block_expected_inputs(bool use_conv) {
+  return use_conv ? 21 : 20;
+}
+
+void log_mamba3_canonical_block_once() {
+  static std::atomic<bool> logged{false};
+  if (!logged.exchange(true)) {
+    std::cerr << "[mlx_ir] canonical Mamba3 using fused canonical block VJP"
+              << " (set MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES=1 only for debugging)"
+              << std::endl;
+  }
+}
+
+mx::array mamba3_canonical_block_impl(
+    const std::vector<mx::array>& args,
+    int B,
+    int T,
+    bool use_conv,
+    int scan_chunk_size,
+    float eps) {
+  if (args.size() != static_cast<size_t>(mamba3_canonical_block_expected_inputs(use_conv))) {
+    throw std::runtime_error("OP_MAMBA3_CANONICAL_BLOCK input count mismatch");
+  }
+  int i = 0;
+  const auto& x = args[i++];
+  const auto& pre_norm = args[i++];
+  const auto& w_x = args[i++];
+  const mx::array* conv_w = nullptr;
+  if (use_conv) {
+    conv_w = &args[i++];
+  }
+  const auto& w_dt_low = args[i++];
+  const auto& w_dt_high = args[i++];
+  const auto& w_lambda_low = args[i++];
+  const auto& w_lambda_high = args[i++];
+  const auto& w_theta_low = args[i++];
+  const auto& w_theta_high = args[i++];
+  const auto& w_b = args[i++];
+  const auto& w_c = args[i++];
+  const auto& b_norm_scale = args[i++];
+  const auto& c_norm_scale = args[i++];
+  const auto& b_bias = args[i++];
+  const auto& c_bias = args[i++];
+  const auto& a_log = args[i++];
+  const auto& dt_bias = args[i++];
+  const auto& post_norm = args[i++];
+  const auto& w_gate = args[i++];
+  const auto& w_out = args[i++];
+
+  const int inner = static_cast<int>(w_x.shape(1));
+  const int state_size = static_cast<int>(a_log.shape(1));
+  const int n_groups = static_cast<int>(w_b.shape(1)) / state_size;
+  const int conv_kernel = use_conv ? static_cast<int>(conv_w->shape(1)) : 0;
+  auto x_norm = rmsnorm_forward(x, pre_norm, eps);
+  auto x_proj = mx::matmul(x_norm, w_x);
+  auto x_branch = use_conv
+      ? causal_depthwise_conv1d(x_proj, *conv_w, B, T, inner, conv_kernel)
+      : x_proj;
+
+  auto dt_low = mx::matmul(x_branch, w_dt_low);
+  auto dt = mx::matmul(dt_low, w_dt_high) + dt_bias;
+  auto lambda_low = mx::matmul(x_branch, w_lambda_low);
+  auto lambda = mx::matmul(lambda_low, w_lambda_high);
+  auto theta_low = mx::matmul(x_branch, w_theta_low);
+  auto theta = mx::matmul(theta_low, w_theta_high);
+
+  auto b_proj = mx::matmul(x_branch, w_b);
+  auto b_norm = rmsnorm_forward(mx::reshape(b_proj, {B * T * n_groups, state_size}), b_norm_scale, eps);
+  auto b_biased = mx::reshape(b_norm, {B * T, n_groups * state_size}) + b_bias;
+  auto c_proj = mx::matmul(x_branch, w_c);
+  auto c_norm = rmsnorm_forward(mx::reshape(c_proj, {B * T * n_groups, state_size}), c_norm_scale, eps);
+  auto c_biased = mx::reshape(c_norm, {B * T, n_groups * state_size}) + c_bias;
+
+  auto y = mamba3_selective_scan_canonical_phase6(
+      x_branch, dt, lambda, theta, a_log, b_biased, c_biased,
+      B, T, inner, state_size, n_groups, scan_chunk_size);
+  auto y_norm = rmsnorm_forward(y, post_norm, eps);
+  auto z = mx::matmul(x_norm, w_gate);
+  auto y_gated = y_norm * z * mx::sigmoid(z);
+  return x + mx::matmul(y_gated, w_out);
+}
+
+std::vector<mx::array> mamba3_canonical_block_vjp(
+    const std::vector<mx::array>& args,
+    const std::vector<mx::array>& cotangents,
+    int B,
+    int T,
+    bool use_conv,
+    int scan_chunk_size,
+    float eps) {
+  if (args.size() != static_cast<size_t>(mamba3_canonical_block_expected_inputs(use_conv)) ||
+      cotangents.size() != 1) {
+    throw std::runtime_error("OP_MAMBA3_CANONICAL_BLOCK VJP input count mismatch");
+  }
+  int i = 0;
+  const auto& x = args[i++];
+  const auto& pre_norm = args[i++];
+  const auto& w_x = args[i++];
+  const mx::array* conv_w = nullptr;
+  if (use_conv) {
+    conv_w = &args[i++];
+  }
+  const auto& w_dt_low = args[i++];
+  const auto& w_dt_high = args[i++];
+  const auto& w_lambda_low = args[i++];
+  const auto& w_lambda_high = args[i++];
+  const auto& w_theta_low = args[i++];
+  const auto& w_theta_high = args[i++];
+  const auto& w_b = args[i++];
+  const auto& w_c = args[i++];
+  const auto& b_norm_scale = args[i++];
+  const auto& c_norm_scale = args[i++];
+  const auto& b_bias = args[i++];
+  const auto& c_bias = args[i++];
+  const auto& a_log = args[i++];
+  const auto& dt_bias = args[i++];
+  const auto& post_norm = args[i++];
+  const auto& w_gate = args[i++];
+  const auto& w_out = args[i++];
+
+  const int inner = static_cast<int>(w_x.shape(1));
+  const int state_size = static_cast<int>(a_log.shape(1));
+  const int n_groups = static_cast<int>(w_b.shape(1)) / state_size;
+  const int conv_kernel = use_conv ? static_cast<int>(conv_w->shape(1)) : 0;
+  auto x_norm = rmsnorm_forward(x, pre_norm, eps);
+  auto x_proj = mx::matmul(x_norm, w_x);
+  auto x_branch = use_conv
+      ? causal_depthwise_conv1d(x_proj, *conv_w, B, T, inner, conv_kernel)
+      : x_proj;
+
+  auto dt_low = mx::matmul(x_branch, w_dt_low);
+  auto dt = mx::matmul(dt_low, w_dt_high) + dt_bias;
+  auto lambda_low = mx::matmul(x_branch, w_lambda_low);
+  auto lambda = mx::matmul(lambda_low, w_lambda_high);
+  auto theta_low = mx::matmul(x_branch, w_theta_low);
+  auto theta = mx::matmul(theta_low, w_theta_high);
+  auto b_proj = mx::matmul(x_branch, w_b);
+  auto b_proj_group = mx::reshape(b_proj, {B * T * n_groups, state_size});
+  auto b_norm = rmsnorm_forward(b_proj_group, b_norm_scale, eps);
+  auto b_biased = mx::reshape(b_norm, {B * T, n_groups * state_size}) + b_bias;
+  auto c_proj = mx::matmul(x_branch, w_c);
+  auto c_proj_group = mx::reshape(c_proj, {B * T * n_groups, state_size});
+  auto c_norm = rmsnorm_forward(c_proj_group, c_norm_scale, eps);
+  auto c_biased = mx::reshape(c_norm, {B * T, n_groups * state_size}) + c_bias;
+  auto y = mamba3_selective_scan_canonical_phase6(
+      x_branch, dt, lambda, theta, a_log, b_biased, c_biased,
+      B, T, inner, state_size, n_groups, scan_chunk_size);
+  auto y_norm = rmsnorm_forward(y, post_norm, eps);
+  auto z = mx::matmul(x_norm, w_gate);
+  auto z_act = z * mx::sigmoid(z);
+  auto y_gated = y_norm * z_act;
+
+  auto grad_out = cotangents[0];
+  auto grad_y_gated = mx::matmul(grad_out, mx::transpose(w_out, {1, 0}));
+  auto grad_w_out = mx::matmul(mx::transpose(y_gated, {1, 0}), grad_out);
+  auto grad_y_norm = grad_y_gated * z_act;
+  auto grad_z = grad_y_gated * y_norm * silu_derivative(z);
+  auto grad_w_gate = mx::matmul(mx::transpose(x_norm, {1, 0}), grad_z);
+  auto grad_x_norm = mx::matmul(grad_z, mx::transpose(w_gate, {1, 0}));
+
+  auto y_norm_vjp = rmsnorm_vjp(y, post_norm, grad_y_norm, eps);
+  auto scan_grads = mamba3_selective_scan_canonical_phase6_vjp(
+      {x_branch, dt, lambda, theta, a_log, b_biased, c_biased},
+      {},
+      {y_norm_vjp.input},
+      B,
+      T,
+      inner,
+      state_size,
+      n_groups,
+      scan_chunk_size);
+  auto grad_x_branch = scan_grads[0];
+  auto grad_dt = scan_grads[1];
+  auto grad_lambda = scan_grads[2];
+  auto grad_theta = scan_grads[3];
+  auto grad_a_log = scan_grads[4];
+
+  auto grad_b_bias = mx::reshape(mx::sum(scan_grads[5], 0), b_bias.shape());
+  auto b_norm_vjp = rmsnorm_vjp(
+      b_proj_group,
+      b_norm_scale,
+      mx::reshape(scan_grads[5], {B * T * n_groups, state_size}),
+      eps);
+  auto grad_b_proj = mx::reshape(b_norm_vjp.input, {B * T, n_groups * state_size});
+  auto grad_w_b = mx::matmul(mx::transpose(x_branch, {1, 0}), grad_b_proj);
+  grad_x_branch = grad_x_branch + mx::matmul(grad_b_proj, mx::transpose(w_b, {1, 0}));
+
+  auto grad_c_bias = mx::reshape(mx::sum(scan_grads[6], 0), c_bias.shape());
+  auto c_norm_vjp = rmsnorm_vjp(
+      c_proj_group,
+      c_norm_scale,
+      mx::reshape(scan_grads[6], {B * T * n_groups, state_size}),
+      eps);
+  auto grad_c_proj = mx::reshape(c_norm_vjp.input, {B * T, n_groups * state_size});
+  auto grad_w_c = mx::matmul(mx::transpose(x_branch, {1, 0}), grad_c_proj);
+  grad_x_branch = grad_x_branch + mx::matmul(grad_c_proj, mx::transpose(w_c, {1, 0}));
+
+  auto grad_dt_bias = mx::reshape(mx::sum(grad_dt, 0), dt_bias.shape());
+  auto grad_w_dt_high = mx::matmul(mx::transpose(dt_low, {1, 0}), grad_dt);
+  auto grad_dt_low = mx::matmul(grad_dt, mx::transpose(w_dt_high, {1, 0}));
+  auto grad_w_dt_low = mx::matmul(mx::transpose(x_branch, {1, 0}), grad_dt_low);
+  grad_x_branch = grad_x_branch + mx::matmul(grad_dt_low, mx::transpose(w_dt_low, {1, 0}));
+
+  auto grad_w_lambda_high = mx::matmul(mx::transpose(lambda_low, {1, 0}), grad_lambda);
+  auto grad_lambda_low = mx::matmul(grad_lambda, mx::transpose(w_lambda_high, {1, 0}));
+  auto grad_w_lambda_low = mx::matmul(mx::transpose(x_branch, {1, 0}), grad_lambda_low);
+  grad_x_branch = grad_x_branch + mx::matmul(grad_lambda_low, mx::transpose(w_lambda_low, {1, 0}));
+
+  auto grad_w_theta_high = mx::matmul(mx::transpose(theta_low, {1, 0}), grad_theta);
+  auto grad_theta_low = mx::matmul(grad_theta, mx::transpose(w_theta_high, {1, 0}));
+  auto grad_w_theta_low = mx::matmul(mx::transpose(x_branch, {1, 0}), grad_theta_low);
+  grad_x_branch = grad_x_branch + mx::matmul(grad_theta_low, mx::transpose(w_theta_low, {1, 0}));
+
+  mx::array grad_x_proj = grad_x_branch;
+  mx::array grad_conv_w = mx::array(0.0f, mx::float32);
+  if (use_conv) {
+    auto conv_vjp = causal_depthwise_conv1d_vjp(
+        x_proj,
+        *conv_w,
+        grad_x_branch,
+        B,
+        T,
+        inner,
+        conv_kernel);
+    grad_x_proj = conv_vjp.input;
+    grad_conv_w = conv_vjp.weight;
+  }
+  auto grad_w_x = mx::matmul(mx::transpose(x_norm, {1, 0}), grad_x_proj);
+  grad_x_norm = grad_x_norm + mx::matmul(grad_x_proj, mx::transpose(w_x, {1, 0}));
+
+  auto pre_norm_vjp = rmsnorm_vjp(x, pre_norm, grad_x_norm, eps);
+  auto grad_x = grad_out + pre_norm_vjp.input;
+
+  std::vector<mx::array> out;
+  out.reserve(args.size());
+  out.push_back(grad_x);
+  out.push_back(pre_norm_vjp.scale);
+  out.push_back(grad_w_x);
+  if (use_conv) {
+    out.push_back(grad_conv_w);
+  }
+  out.push_back(grad_w_dt_low);
+  out.push_back(grad_w_dt_high);
+  out.push_back(grad_w_lambda_low);
+  out.push_back(grad_w_lambda_high);
+  out.push_back(grad_w_theta_low);
+  out.push_back(grad_w_theta_high);
+  out.push_back(grad_w_b);
+  out.push_back(grad_w_c);
+  out.push_back(b_norm_vjp.scale);
+  out.push_back(c_norm_vjp.scale);
+  out.push_back(grad_b_bias);
+  out.push_back(grad_c_bias);
+  out.push_back(grad_a_log);
+  out.push_back(grad_dt_bias);
+  out.push_back(y_norm_vjp.scale);
+  out.push_back(grad_w_gate);
+  out.push_back(grad_w_out);
+  return out;
+}
+
+mx::array mamba3_canonical_block(
+    const std::vector<mx::array>& args,
+    int B,
+    int T,
+    bool use_conv,
+    int scan_chunk_size,
+    float eps) {
+  log_mamba3_canonical_block_once();
+  auto block = mx::custom_vjp(
+      [B, T, use_conv, scan_chunk_size, eps](const std::vector<mx::array>& fn_args) {
+        return std::vector<mx::array>{
+            mamba3_canonical_block_impl(fn_args, B, T, use_conv, scan_chunk_size, eps)};
+      },
+      [B, T, use_conv, scan_chunk_size, eps](
+          const std::vector<mx::array>& fn_args,
+          const std::vector<mx::array>& cotangents,
+          const std::vector<mx::array>&) {
+        return mamba3_canonical_block_vjp(
+            fn_args, cotangents, B, T, use_conv, scan_chunk_size, eps);
+      });
+  return block(args)[0];
 }
 
 mx::array gated_delta_scan_naive(
@@ -1900,6 +2257,32 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
             0,
             mamba3_selective_scan_canonical_phase6(
                 get(op, 0), get(op, 1), get(op, 2), get(op, 3), get(op, 4), get(op, 5), get(op, 6), B, T, D, N, G, scan_chunk_size));
+        break;
+      }
+      case OP_MAMBA3_CANONICAL_BLOCK: {
+        if (op.n_int_params < 4) {
+          throw std::runtime_error("OP_MAMBA3_CANONICAL_BLOCK requires B,T,use_conv,scan_chunk params");
+        }
+        const int B = op.int_params[0];
+        const int T = op.int_params[1];
+        const bool use_conv = op.int_params[2] != 0;
+        const int scan_chunk_size = op.int_params[3];
+        const float eps = op.n_float_params > 0 ? op.float_params[0] : 1e-5f;
+        const int expected_inputs = mamba3_canonical_block_expected_inputs(use_conv);
+        if (op.n_inputs != expected_inputs) {
+          throw std::runtime_error(
+              "OP_MAMBA3_CANONICAL_BLOCK input count mismatch; got " +
+              std::to_string(op.n_inputs) + " want " + std::to_string(expected_inputs));
+        }
+        std::vector<mx::array> block_inputs;
+        block_inputs.reserve(static_cast<size_t>(op.n_inputs));
+        for (int input_idx = 0; input_idx < op.n_inputs; ++input_idx) {
+          block_inputs.push_back(get(op, input_idx));
+        }
+        set_out(
+            op,
+            0,
+            mamba3_canonical_block(block_inputs, B, T, use_conv, scan_chunk_size, eps));
         break;
       }
       case OP_GATHER_POSITIONS: {

@@ -99,6 +99,84 @@ func TestDepthwiseConv1DGrad(t *testing.T) {
 	}
 }
 
+func TestMamba3CanonicalBlockGradMatchesExpanded(t *testing.T) {
+	if !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+
+	const (
+		B          = 2
+		T          = 4
+		D          = 8
+		inner      = 8
+		stateSize  = 4
+		nGroups    = 2
+		dtRank     = 2
+		convKernel = 3
+		scanChunk  = 3
+	)
+
+	expanded := arch.NewProgram(20)
+	expanded.DeclareInput("x_in", arch.TensorFloat32, []int{B * T, D})
+	expanded.DeclareOutput("loss", arch.TensorFloat32, []int{1})
+	emitExpandedMamba3CanonicalTestIR(expanded, B, T, D, inner, stateSize, nGroups, convKernel, scanChunk)
+
+	fused := arch.NewProgram(20)
+	fused.DeclareInput("x_in", arch.TensorFloat32, []int{B * T, D})
+	fused.DeclareOutput("loss", arch.TensorFloat32, []int{1})
+	blockInputs := []string{"x_in"}
+	for i := 0; i < 20; i++ {
+		blockInputs = append(blockInputs, fmt.Sprintf("w%d", i))
+	}
+	fused.Mamba3CanonicalBlock(blockInputs, "out", B, T, true, scanChunk)
+	addMeanLoss(fused, "out")
+
+	expandedGPU, err := gpu.LowerIRProgram(expanded)
+	if err != nil {
+		t.Fatalf("LowerIRProgram(expanded): %v", err)
+	}
+	defer expandedGPU.Destroy()
+	fusedGPU, err := gpu.LowerIRProgram(fused)
+	if err != nil {
+		t.Fatalf("LowerIRProgram(fused): %v", err)
+	}
+	defer fusedGPU.Destroy()
+
+	rng := rand.New(rand.NewSource(20260508))
+	xInput := seededFloats(rng, B*T*D, 0.2)
+	weights, shapes := seededCanonicalBlockWeights(rng, D, inner, stateSize, nGroups, dtRank, convKernel)
+	handles := make([]int64, len(weights))
+	for i := range weights {
+		handles[i], err = gpu.FromData(weights[i], shapes[i][0], shapes[i][1])
+		if err != nil {
+			t.Fatalf("FromData(%d): %v", i, err)
+		}
+		defer gpu.FreeHandle(handles[i])
+	}
+	inputs := []gpu.TensorInput{{Name: "x_in", DType: gpu.TensorFloat32, Shape: []int{B * T, D}, Data: xInput}}
+	expandedLoss, expandedGrads, err := gpu.EvalProgramGradientsForOutput(expandedGPU, handles, inputs, "loss")
+	if err != nil {
+		t.Fatalf("expanded EvalProgramGradientsForOutput: %v", err)
+	}
+	fusedLoss, fusedGrads, err := gpu.EvalProgramGradientsForOutput(fusedGPU, handles, inputs, "loss")
+	if err != nil {
+		t.Fatalf("fused EvalProgramGradientsForOutput: %v", err)
+	}
+	if diff := math.Abs(float64(expandedLoss - fusedLoss)); diff > 2e-5 {
+		t.Fatalf("loss mismatch: expanded=%g fused=%g diff=%g", expandedLoss, fusedLoss, diff)
+	}
+	if len(expandedGrads) != len(fusedGrads) {
+		t.Fatalf("gradient count mismatch: expanded=%d fused=%d", len(expandedGrads), len(fusedGrads))
+	}
+	for i := range expandedGrads {
+		maxRel, maxAbs := maxGradientError(fusedGrads[i], expandedGrads[i])
+		t.Logf("w%d max_relative_error=%g max_absolute_error=%g", i, maxRel, maxAbs)
+		if maxRel > 5e-3 && maxAbs > 5e-5 {
+			t.Fatalf("w%d gradient mismatch: max_relative_error=%g max_absolute_error=%g", i, maxRel, maxAbs)
+		}
+	}
+}
+
 func testMamba3SelectiveScanGrad(t *testing.T, groups, chunkSize int) {
 	const (
 		B = 2
@@ -284,6 +362,88 @@ func TestMamba3CanonicalSmokeLossDecreases(t *testing.T) {
 	if maxWeightDelta == 0 {
 		t.Fatalf("weights did not update across compiled multi-step training")
 	}
+}
+
+func emitExpandedMamba3CanonicalTestIR(prog *arch.Program, B, T, D, inner, stateSize, nGroups, convKernel, scanChunk int) {
+	prog.RMSNorm("x_in", "w0", "x_norm", 1e-5)
+	prog.MatMul("x_norm", "w1", "x_proj")
+	prog.DepthwiseConv1D("x_proj", "w2", "x_conv", B, T, inner, convKernel)
+	prog.MatMul("x_conv", "w3", "dt_low")
+	prog.MatMul("dt_low", "w4", "dt_raw")
+	prog.Add("dt_raw", "w16", "dt")
+	prog.MatMul("x_conv", "w5", "lambda_low")
+	prog.MatMul("lambda_low", "w6", "lambda")
+	prog.MatMul("x_conv", "w7", "theta_low")
+	prog.MatMul("theta_low", "w8", "theta")
+	prog.MatMul("x_conv", "w9", "b_proj")
+	prog.Reshape("b_proj", []int{B * T * nGroups, stateSize}, "b_group")
+	prog.RMSNorm("b_group", "w11", "b_norm", 1e-5)
+	prog.Reshape("b_norm", []int{B * T, nGroups * stateSize}, "b_flat")
+	prog.Add("b_flat", "w13", "b_biased")
+	prog.MatMul("x_conv", "w10", "c_proj")
+	prog.Reshape("c_proj", []int{B * T * nGroups, stateSize}, "c_group")
+	prog.RMSNorm("c_group", "w12", "c_norm", 1e-5)
+	prog.Reshape("c_norm", []int{B * T, nGroups * stateSize}, "c_flat")
+	prog.Add("c_flat", "w14", "c_biased")
+	prog.Mamba3SelectiveScanChunked("x_conv", "dt", "lambda", "theta", "w15", "b_biased", "c_biased", "y", B, T, inner, stateSize, nGroups, scanChunk)
+	prog.RMSNorm("y", "w17", "y_norm", 1e-5)
+	prog.MatMul("x_norm", "w18", "z")
+	prog.SiLU("z", "z_act")
+	prog.Mul("y_norm", "z_act", "y_gated")
+	prog.MatMul("y_gated", "w19", "out_proj")
+	prog.Add("x_in", "out_proj", "out")
+	addMeanLoss(prog, "out")
+}
+
+func addMeanLoss(prog *arch.Program, output string) {
+	prog.MeanAxis(output, 1, "loss_rows")
+	prog.MeanAxis("loss_rows", 0, "loss")
+}
+
+func seededCanonicalBlockWeights(rng *rand.Rand, D, inner, stateSize, nGroups, dtRank, convKernel int) ([][]float32, [][2]int) {
+	groupState := nGroups * stateSize
+	shapes := [][2]int{
+		{1, D},
+		{D, inner},
+		{inner, convKernel},
+		{inner, dtRank},
+		{dtRank, inner},
+		{inner, dtRank},
+		{dtRank, inner},
+		{inner, dtRank},
+		{dtRank, inner * (stateSize / 2)},
+		{inner, groupState},
+		{inner, groupState},
+		{1, stateSize},
+		{1, stateSize},
+		{1, groupState},
+		{1, groupState},
+		{inner, stateSize},
+		{1, inner},
+		{1, inner},
+		{D, inner},
+		{inner, D},
+	}
+	weights := make([][]float32, len(shapes))
+	for i, shape := range shapes {
+		weights[i] = seededFloats(rng, shape[0]*shape[1], 0.08)
+	}
+	for _, idx := range []int{0, 11, 12, 17} {
+		for j := range weights[idx] {
+			weights[idx][j] = 1 + weights[idx][j]
+		}
+	}
+	for _, idx := range []int{13, 14} {
+		for j := range weights[idx] {
+			weights[idx][j] = 1 + weights[idx][j]
+		}
+	}
+	for d := 0; d < inner; d++ {
+		for n := 0; n < stateSize; n++ {
+			weights[15][d*stateSize+n] = float32(math.Log(float64(n+1))) - 2.0
+		}
+	}
+	return weights, shapes
 }
 
 func seededFloats(rng *rand.Rand, n int, scale float64) []float32 {

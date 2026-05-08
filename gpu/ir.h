@@ -68,12 +68,13 @@ enum OpType {
   OP_STOP_GRADIENT = 61,
   OP_DEPTHWISE_CONV1D = 62,
   OP_MAMBA3_SELECTIVE_SCAN = 63,
+  OP_MAMBA3_CANONICAL_BLOCK = 64,
   OP_RANDOM_NORMAL = 65,
 };
 
 struct IRop {
   int type = 0;
-  std::string inputs[8];
+  std::string inputs[24];
   int n_inputs = 0;
   std::string outputs[2];
   int n_outputs = 0;

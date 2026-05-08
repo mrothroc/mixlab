@@ -80,8 +80,8 @@ func (p *Program) AddOp(opType int, inputs, outputs []string, floatParams []floa
 	if p == nil || p.handle == 0 {
 		return fmt.Errorf("invalid GPU program handle; create the program with gpu.NewProgram before declaring ops")
 	}
-	if len(inputs) > 8 || len(outputs) > 2 || len(floatParams) > 4 || len(intParams) > 8 {
-		return fmt.Errorf("IR op params exceed bridge limits; keep inputs<=8 outputs<=2 float_params<=4 int_params<=8")
+	if len(inputs) > 24 || len(outputs) > 2 || len(floatParams) > 4 || len(intParams) > 8 {
+		return fmt.Errorf("IR op params exceed bridge limits; keep inputs<=24 outputs<=2 float_params<=4 int_params<=8")
 	}
 	if err := mlxAddOp(p.handle, opType, inputs, outputs, floatParams, intParams); err != nil {
 		return err

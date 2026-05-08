@@ -50,6 +50,7 @@ const (
 	OpStopGradient         = 61
 	OpDepthwiseConv1D      = 62
 	OpMamba3SelectiveScan  = 63
+	OpMamba3CanonicalBlock = 64
 	OpRandomNormal         = 65
 )
 

@@ -99,8 +99,8 @@ func TestTuneCUDAGraphLimits_CapsCanonicalMamba3Scan(t *testing.T) {
 	if rawTune <= maxMamba3SelectiveScanOpsPerBuffer {
 		t.Fatalf("test fixture raw tune=%d, want above cap=%d", rawTune, maxMamba3SelectiveScanOpsPerBuffer)
 	}
-	if !programHasOp(prog, arch.OpMamba3SelectiveScan) {
-		t.Fatal("test fixture missing canonical Mamba3 selective scan op")
+	if !programHasOp(prog, arch.OpMamba3CanonicalBlock) {
+		t.Fatal("test fixture missing canonical Mamba3 block op")
 	}
 
 	got := TuneCUDAGraphLimits(prog)
