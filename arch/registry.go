@@ -263,7 +263,7 @@ func builtinBlockEmitter(prog *Program, spec BlockSpec, stream string, wi, D, T,
 		}
 		useConv := spec.UseConv == nil || *spec.UseConv
 		scanChunkSize := effectiveMamba3CanonicalScanChunkSize(spec)
-		return emitMamba3CanonicalIR(prog, stream, wi, inner, stateSize, nGroups, dtRank, convKernel, useConv, scanChunkSize, T, B, idx)
+		return emitMamba3CanonicalIR(prog, stream, wi, inner, stateSize, nGroups, dtRank, convKernel, useConv, scanChunkSize, T, B)
 	case "rwkv":
 		return emitRWKVIR(prog, stream, wi, D, T, B, idx)
 	case "perceiver":
