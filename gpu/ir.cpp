@@ -969,7 +969,7 @@ int mamba3_canonical_block_expected_inputs(bool use_conv) {
 void log_mamba3_canonical_block_once() {
   static std::atomic<bool> logged{false};
   if (!logged.exchange(true)) {
-    std::cerr << "[mlx_ir] canonical Mamba3 using fused canonical block VJP"
+    std::cerr << "[mlx_ir] canonical Mamba3 using fused canonical block"
               << " (set MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES=1 only for debugging)"
               << std::endl;
   }
@@ -1231,19 +1231,7 @@ mx::array mamba3_canonical_block(
     int scan_chunk_size,
     float eps) {
   log_mamba3_canonical_block_once();
-  auto block = mx::custom_vjp(
-      [B, T, use_conv, scan_chunk_size, eps](const std::vector<mx::array>& fn_args) {
-        return std::vector<mx::array>{
-            mamba3_canonical_block_impl(fn_args, B, T, use_conv, scan_chunk_size, eps)};
-      },
-      [B, T, use_conv, scan_chunk_size, eps](
-          const std::vector<mx::array>& fn_args,
-          const std::vector<mx::array>& cotangents,
-          const std::vector<mx::array>&) {
-        return mamba3_canonical_block_vjp(
-            fn_args, cotangents, B, T, use_conv, scan_chunk_size, eps);
-      });
-  return block(args)[0];
+  return mamba3_canonical_block_impl(args, B, T, use_conv, scan_chunk_size, eps);
 }
 
 mx::array gated_delta_scan_naive(
