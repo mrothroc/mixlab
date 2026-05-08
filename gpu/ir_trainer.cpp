@@ -430,7 +430,8 @@ enum class Mamba3LowMemoryGradientMode {
 
 struct MaterializedGrad {
   mx::Shape shape;
-  std::vector<float> values;
+  mx::array flat = mx::array(0.0f, mx::float32);
+  std::vector<float> cpu_values;
 };
 
 struct MaterializedGradResult {
@@ -510,7 +511,14 @@ std::vector<WeightGradChunk> build_weight_grad_chunks(
 }
 
 mx::array materialized_grad_to_array(const MaterializedGrad& grad) {
-  return mx::array(grad.values.data(), grad.shape, mx::float32);
+  if (!grad.cpu_values.empty()) {
+    return mx::array(grad.cpu_values.data(), grad.shape, mx::float32);
+  }
+  return mx::reshape(grad.flat, grad.shape);
+}
+
+bool materialize_mamba3_grads_on_cpu() {
+  return env_truthy("MIXLAB_MAMBA3_MATERIALIZE_GRADS_ON_CPU");
 }
 
 float gradient_clip_scale_from_norm_sq(double total_norm_sq, float max_grad_norm) {
@@ -530,6 +538,7 @@ MaterializedGradResult materialize_weight_grad_chunks(
     const std::vector<WeightGradChunk>& chunks) {
   MaterializedGradResult out;
   out.grads.resize(n_weights);
+  const bool materialize_on_cpu = materialize_mamba3_grads_on_cpu();
   for (size_t chunk_idx = 0; chunk_idx < chunks.size(); ++chunk_idx) {
     const auto& chunk = chunks[chunk_idx];
     std::vector<mx::array> grads;
@@ -554,32 +563,52 @@ MaterializedGradResult materialize_weight_grad_chunks(
     }
     std::vector<mx::array> flat_grads;
     flat_grads.reserve(grads.size());
+    auto partial_norm_sq = mx::array(0.0f, mx::float32);
+    auto nonfinite_count = mx::array(0.0f, mx::float32);
     for (const auto& grad : grads) {
-      flat_grads.push_back(mx::reshape(
+      auto flat = mx::reshape(
           mx::astype(grad, mx::float32),
-          {static_cast<mx::ShapeElem>(grad.size())}));
+          {static_cast<mx::ShapeElem>(grad.size())});
+      partial_norm_sq = partial_norm_sq + mx::sum(mx::square(flat));
+      nonfinite_count = nonfinite_count +
+          mx::sum(mx::astype(mx::logical_not(mx::isfinite(flat)), mx::float32));
+      flat_grads.push_back(flat);
     }
+    std::vector<mx::array> eval_arrays = flat_grads;
+    eval_arrays.push_back(partial_norm_sq);
+    eval_arrays.push_back(nonfinite_count);
     eval_arrays_with_context(
-        flat_grads,
+        eval_arrays,
         "canonical Mamba3 materialized grad eval chunk [" +
         std::to_string(chunk.start) + "," + std::to_string(chunk.end) + ")");
+    const float nonfinite = nonfinite_count.item<float>();
+    if (nonfinite > 0.0f) {
+      throw std::runtime_error(
+          "canonical Mamba3 materialized grad chunk [" +
+          std::to_string(chunk.start) + "," + std::to_string(chunk.end) +
+          ") produced " + std::to_string(static_cast<int>(nonfinite)) +
+          " non-finite gradient values");
+    }
+    const float chunk_norm_sq = partial_norm_sq.item<float>();
+    if (!std::isfinite(chunk_norm_sq)) {
+      throw std::runtime_error(
+          "canonical Mamba3 materialized grad chunk [" +
+          std::to_string(chunk.start) + "," + std::to_string(chunk.end) +
+          ") produced non-finite gradient norm");
+    }
+    out.norm_sq += static_cast<double>(chunk_norm_sq);
     for (size_t i = chunk.start; i < chunk.end; ++i) {
       const auto& flat = flat_grads[i - chunk.start];
       auto& saved = out.grads[i];
       saved.shape = grads[i - chunk.start].shape();
-      saved.values.resize(flat.size());
-      std::memcpy(
-          saved.values.data(),
-          flat.data<float>(),
-          saved.values.size() * sizeof(float));
-      for (const float v : saved.values) {
-        if (!std::isfinite(v)) {
-          throw std::runtime_error(
-              "canonical Mamba3 materialized grad chunk [" +
-              std::to_string(chunk.start) + "," + std::to_string(chunk.end) +
-              ") produced non-finite gradient for weight " + std::to_string(i));
-        }
-        out.norm_sq += static_cast<double>(v) * static_cast<double>(v);
+      if (materialize_on_cpu) {
+        saved.cpu_values.resize(flat.size());
+        std::memcpy(
+            saved.cpu_values.data(),
+            flat.data<float>(),
+            saved.cpu_values.size() * sizeof(float));
+      } else {
+        saved.flat = mx::stop_gradient(flat);
       }
     }
   }
@@ -687,7 +716,7 @@ Mamba3LowMemoryGradientMode low_memory_mamba3_gradient_mode() {
 const char* low_memory_mamba3_gradient_mode_label(Mamba3LowMemoryGradientMode mode) {
   switch (mode) {
     case Mamba3LowMemoryGradientMode::MaterializedChunks:
-      return "materialized-chunk";
+      return materialize_mamba3_grads_on_cpu() ? "cpu-materialized-chunk" : "gpu-resident-chunk";
     case Mamba3LowMemoryGradientMode::SingleBackward:
       return "single-backward";
     case Mamba3LowMemoryGradientMode::RecomputeChunks:
