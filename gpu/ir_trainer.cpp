@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <exception>
 #include <iostream>
 #include <limits>
 #include <numeric>
@@ -63,6 +64,11 @@ bool env_truthy(const char* name) {
   return std::strcmp(raw, "0") != 0 &&
       std::strcmp(raw, "false") != 0 &&
       std::strcmp(raw, "FALSE") != 0;
+}
+
+bool env_is_set(const char* name) {
+  const char* raw = std::getenv(name);
+  return raw != nullptr && raw[0] != '\0';
 }
 
 bool program_has_op(const IRProgram& program, int op_type) {
@@ -738,6 +744,58 @@ MaterializedGradResult materialize_weight_grad_chunks(
   return out;
 }
 
+bool is_retriable_cuda_memory_error(const std::exception& e) {
+  const std::string message = e.what();
+  return message.find("out of memory") != std::string::npos ||
+      message.find("cudaMallocAsync") != std::string::npos ||
+      message.find("cudaGraphInstantiate") != std::string::npos;
+}
+
+std::vector<int> mamba3_grad_chunk_element_candidates(IRTrainer& trainer, int requested) {
+  const int floor = 8 * 1024 * 1024;
+  if (env_is_set("MIXLAB_MAMBA3_GRAD_CHUNK_ELEMS")) {
+    return {std::max(1, requested)};
+  }
+  if (trainer.adaptive_mamba3_grad_chunk_elements > 0) {
+    return {trainer.adaptive_mamba3_grad_chunk_elements};
+  }
+  std::vector<int> out{
+      32 * 1024 * 1024,
+      16 * 1024 * 1024,
+      floor,
+  };
+  out.erase(
+      std::remove_if(
+          out.begin(),
+          out.end(),
+          [requested](int candidate) { return candidate < requested; }),
+      out.end());
+  if (out.empty() || out.back() != requested) {
+    out.push_back(requested);
+  }
+  out.erase(std::unique(out.begin(), out.end()), out.end());
+  return out;
+}
+
+void log_mamba3_grad_chunk_fallback_once(
+    IRTrainer& trainer,
+    int failed_elements,
+    int next_elements,
+    const std::exception& e) {
+  if (trainer.adaptive_mamba3_grad_chunk_fallback_logged) {
+    return;
+  }
+  std::cerr << "[mlx_ir] canonical Mamba3 grad_chunk_elems="
+            << failed_elements
+            << " failed with CUDA memory pressure ("
+            << e.what()
+            << "); retrying with grad_chunk_elems="
+            << next_elements
+            << " (set MIXLAB_MAMBA3_GRAD_CHUNK_ELEMS to pin a value)"
+            << std::endl;
+  trainer.adaptive_mamba3_grad_chunk_fallback_logged = true;
+}
+
 float gradient_clip_scale_value_from_grads(
     const std::vector<mx::array>& grads,
     float max_grad_norm,
@@ -1361,18 +1419,19 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   const bool checkpoint_step = checkpoint_training_step(program);
   if (!use_compiled_step && use_low_memory_mamba3_updates(program)) {
     const int grad_chunk_size = low_memory_mamba3_grad_chunk_size();
-    const int grad_chunk_elements = low_memory_mamba3_grad_chunk_elements();
+    const int requested_grad_chunk_elements = low_memory_mamba3_grad_chunk_elements();
     const int update_chunk_size = low_memory_mamba3_update_chunk_size();
     const auto gradient_mode = low_memory_mamba3_gradient_mode();
+    const auto grad_chunk_element_candidates =
+        gradient_mode == Mamba3LowMemoryGradientMode::MaterializedChunks
+        ? mamba3_grad_chunk_element_candidates(*this, requested_grad_chunk_elements)
+        : std::vector<int>{requested_grad_chunk_elements};
+    const int grad_chunk_elements = grad_chunk_element_candidates.front();
     const auto grad_chunks = build_weight_grad_chunks(weights, grad_chunk_size, grad_chunk_elements);
     const bool checkpoint_grad_forward =
         checkpoint_step &&
         (gradient_mode == Mamba3LowMemoryGradientMode::SingleBackward ||
          checkpoint_chunked_mamba3_gradients());
-    const std::string compiled_grad_chunks_signature = mamba3_grad_chunks_signature(
-        signature,
-        grad_chunks,
-        checkpoint_grad_forward);
     if (!memory_safe_step_notice_logged_) {
       std::cerr << "[mlx_ir] canonical Mamba3 scan detected; using uncompiled"
                 << (checkpoint_grad_forward ? " checkpointed" : "")
@@ -1412,16 +1471,52 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         throw std::runtime_error("canonical Mamba3 gradient count mismatch");
       }
     } else if (gradient_mode == Mamba3LowMemoryGradientMode::MaterializedChunks) {
-      auto materialized = materialize_weight_grad_chunks(
-          *this,
-          grad_forward_fn,
-          args,
-          weights.size(),
-          grad_chunks,
-          compiled_grad_chunks_signature);
-      output_values = std::move(materialized.output_values);
-      materialized_grads = std::move(materialized.grads);
-      materialized_norm_sq = materialized.norm_sq;
+      bool materialized_ok = false;
+      std::exception_ptr last_materialize_error;
+      for (size_t candidate_idx = 0; candidate_idx < grad_chunk_element_candidates.size(); ++candidate_idx) {
+        const int candidate_elements = grad_chunk_element_candidates[candidate_idx];
+        const auto candidate_chunks = build_weight_grad_chunks(weights, grad_chunk_size, candidate_elements);
+        const auto candidate_signature = mamba3_grad_chunks_signature(
+            signature,
+            candidate_chunks,
+            checkpoint_grad_forward);
+        try {
+          auto materialized = materialize_weight_grad_chunks(
+              *this,
+              grad_forward_fn,
+              args,
+              weights.size(),
+              candidate_chunks,
+              candidate_signature);
+          output_values = std::move(materialized.output_values);
+          materialized_grads = std::move(materialized.grads);
+          materialized_norm_sq = materialized.norm_sq;
+          adaptive_mamba3_grad_chunk_elements = candidate_elements;
+          materialized_ok = true;
+          break;
+        } catch (const std::exception& e) {
+          last_materialize_error = std::current_exception();
+          if (!is_retriable_cuda_memory_error(e) ||
+              candidate_idx + 1 >= grad_chunk_element_candidates.size() ||
+              env_is_set("MIXLAB_MAMBA3_GRAD_CHUNK_ELEMS")) {
+            std::rethrow_exception(last_materialize_error);
+          }
+          log_mamba3_grad_chunk_fallback_once(
+              *this,
+              candidate_elements,
+              grad_chunk_element_candidates[candidate_idx + 1],
+              e);
+          compiled_mamba3_grad_chunks.clear();
+          compiled_mamba3_grad_chunks_signature.clear();
+          compiled_mamba3_grad_chunks_disabled = false;
+        }
+      }
+      if (!materialized_ok) {
+        if (last_materialize_error) {
+          std::rethrow_exception(last_materialize_error);
+        }
+        throw std::runtime_error("canonical Mamba3 materialized gradients were not produced");
+      }
     } else {
       output_values = forward_fn(args);
     }
@@ -1840,6 +1935,8 @@ void IRTrainer::set_program(const IRProgram& new_program) {
   compiled_mamba3_grad_chunks_signature.clear();
   compiled_mamba3_grad_chunks_disabled = false;
   compiled_mamba3_grad_chunks_fallback_logged = false;
+  adaptive_mamba3_grad_chunk_elements = 0;
+  adaptive_mamba3_grad_chunk_fallback_logged = false;
 }
 
 std::unique_ptr<IRTrainer> create_ir_trainer(
