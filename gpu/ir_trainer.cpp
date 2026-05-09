@@ -4,6 +4,7 @@
 #include <mlx/transforms.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -129,6 +130,21 @@ StepDebugConfig step_debug_config() {
 bool should_log_step_debug(int step) {
   const auto cfg = step_debug_config();
   return cfg.enabled && step >= cfg.start && step <= cfg.end;
+}
+
+bool should_log_mamba3_host_timing(int step) {
+  if (env_truthy("MIXLAB_DISABLE_MAMBA3_HOST_TIMING")) {
+    return false;
+  }
+  const int start = std::max(0, getenv_int("MIXLAB_MAMBA3_HOST_TIMING_START", 100));
+  const int every = std::max(1, getenv_int("MIXLAB_MAMBA3_HOST_TIMING_EVERY", 100));
+  return step >= start && ((step - start) % every) == 0;
+}
+
+using HostClock = std::chrono::steady_clock;
+
+long long elapsed_us(HostClock::time_point start, HostClock::time_point end) {
+  return std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
 }
 
 ArrayDebugStats build_array_debug_stats(const mx::array& src) {
@@ -1708,6 +1724,7 @@ float IRTrainer::step_named(const TensorMap& inputs) {
 }
 
 void IRTrainer::submit_step(const TensorMap& inputs) {
+  const auto submit_t0 = HostClock::now();
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
   }
@@ -1718,6 +1735,34 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     move_pending_step_to_ready(*this);
   }
   step_count++;
+  const bool timing_enabled =
+      program_has_fused_canonical_mamba3_block(program) &&
+      should_log_mamba3_host_timing(step_count);
+  long long timing_prep_us = 0;
+  long long timing_grad_us = -1;
+  long long timing_opt_us = -1;
+  long long timing_eval_us = -1;
+  auto log_timing = [&](const char* path) {
+    if (!timing_enabled) {
+      return;
+    }
+    const auto now = HostClock::now();
+    std::cerr << "[mlx_ir] canonical Mamba3 host timing"
+              << " step=" << step_count
+              << " path=" << path
+              << " prep_us=" << timing_prep_us;
+    if (timing_grad_us >= 0) {
+      std::cerr << " grad_us=" << timing_grad_us;
+    }
+    if (timing_opt_us >= 0) {
+      std::cerr << " opt_us=" << timing_opt_us;
+    }
+    if (timing_eval_us >= 0) {
+      std::cerr << " eval_us=" << timing_eval_us;
+    }
+    std::cerr << " total_us=" << elapsed_us(submit_t0, now)
+              << std::endl;
+  };
 
   ensure_named_step_metadata(*this, inputs);
   const auto& argnums = cached_named_step_argnums;
@@ -1735,6 +1780,9 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   args.reserve(weights.size() + input_names.size());
   args.insert(args.end(), weights.begin(), weights.end());
   args.insert(args.end(), ordered_input_arrays.begin(), ordered_input_arrays.end());
+  if (timing_enabled) {
+    timing_prep_us = elapsed_us(submit_t0, HostClock::now());
+  }
 
   StepForwardFn forward_fn;
   auto get_forward_fn = [&]() -> const StepForwardFn& {
@@ -2000,6 +2048,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     pending_outputs_ = std::move(outputs);
     has_pending_step_ = true;
     pending_step_index_ = step_count;
+    log_timing("low-memory");
   };
   if (!use_compiled_step && use_low_memory_mamba3_updates(program)) {
     run_low_memory_mamba3_step();
@@ -2121,8 +2170,12 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         compiled_named_update_step_signature = update_signature;
       }
 
+      const auto update_t0 = HostClock::now();
       auto update_args = build_compiled_adamw_update_step_args(*this, ordered_input_arrays);
       auto update_out = compiled_named_update_step(update_args);
+      if (timing_enabled) {
+        timing_opt_us = elapsed_us(update_t0, HostClock::now());
+      }
       const size_t expected_out = output_names.size() + weights.size() * 3;
       if (update_out.size() != expected_out) {
         throw std::runtime_error("compiled AdamW update step output count mismatch");
@@ -2163,7 +2216,11 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       eval_arrays.insert(eval_arrays.end(), next_weights.begin(), next_weights.end());
       eval_arrays.insert(eval_arrays.end(), next_adam_m.begin(), next_adam_m.end());
       eval_arrays.insert(eval_arrays.end(), next_adam_v.begin(), next_adam_v.end());
+      const auto eval_t0 = HostClock::now();
       mx::eval(eval_arrays);
+      if (timing_enabled) {
+        timing_eval_us = elapsed_us(eval_t0, HostClock::now());
+      }
       weights = std::move(next_weights);
       adam_m = std::move(next_adam_m);
       adam_v = std::move(next_adam_v);
@@ -2172,6 +2229,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       pending_outputs_ = std::move(outputs);
       has_pending_step_ = true;
       pending_step_index_ = step_count;
+      log_timing("compiled-update-step");
       return true;
     } catch (const std::exception& e) {
       if (env_truthy("MIXLAB_FORCE_MAMBA3_COMPILED_UPDATE_STEP")) {
@@ -2221,7 +2279,11 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
             false);
         compiled_named_step_signature = signature;
       }
+      const auto grad_t0 = HostClock::now();
       step_out = compiled_named_step(args);
+      if (timing_enabled) {
+        timing_grad_us = elapsed_us(grad_t0, HostClock::now());
+      }
     } catch (const std::exception& e) {
       if (!program_has_fused_canonical_mamba3_block(program) ||
           !use_low_memory_mamba3_updates(program) ||
@@ -2246,7 +2308,11 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     const auto base_forward_fn = get_forward_fn();
     auto eager_forward_fn = checkpoint_step ? mx::checkpoint(base_forward_fn) : base_forward_fn;
     auto grad_fn = mx::value_and_grad(eager_forward_fn, argnums);
+    const auto grad_t0 = HostClock::now();
     auto result = grad_fn(args);
+    if (timing_enabled) {
+      timing_grad_us = elapsed_us(grad_t0, HostClock::now());
+    }
     step_out.reserve(result.first.size() + result.second.size());
     step_out.insert(step_out.end(), result.first.begin(), result.first.end());
     step_out.insert(step_out.end(), result.second.begin(), result.second.end());
@@ -2348,8 +2414,12 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         compiled_mamba3_optimizer_update_signature = update_signature;
       }
 
+      const auto update_t0 = HostClock::now();
       auto update_args = build_compiled_adamw_optimizer_update_args(*this, grads);
       auto update_out = compiled_mamba3_optimizer_update(update_args);
+      if (timing_enabled) {
+        timing_opt_us = elapsed_us(update_t0, HostClock::now());
+      }
       const size_t expected_out = weights.size() * 3;
       if (update_out.size() != expected_out) {
         throw std::runtime_error("compiled AdamW optimizer update output count mismatch");
@@ -2384,7 +2454,11 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       eval_arrays.insert(eval_arrays.end(), next_weights.begin(), next_weights.end());
       eval_arrays.insert(eval_arrays.end(), next_adam_m.begin(), next_adam_m.end());
       eval_arrays.insert(eval_arrays.end(), next_adam_v.begin(), next_adam_v.end());
+      const auto eval_t0 = HostClock::now();
       mx::eval(eval_arrays);
+      if (timing_enabled) {
+        timing_eval_us = elapsed_us(eval_t0, HostClock::now());
+      }
       weights = std::move(next_weights);
       adam_m = std::move(next_adam_m);
       adam_v = std::move(next_adam_v);
@@ -2393,6 +2467,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       pending_outputs_ = std::move(outputs);
       has_pending_step_ = true;
       pending_step_index_ = step_count;
+      log_timing("compiled-gradient+compiled-adamw");
       return true;
     } catch (const std::exception& e) {
       log_fused_mamba3_compiled_optimizer_update_fallback_once(*this, e);
@@ -2406,8 +2481,12 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     return;
   }
   auto preclip_grads = grads;
+  const auto opt_t0 = HostClock::now();
   clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
+  if (timing_enabled) {
+    timing_opt_us = elapsed_us(opt_t0, HostClock::now());
+  }
   log_submit_step_debug(*this, step_count, preclip_grads);
 
   std::vector<mx::array> eval_arrays;
@@ -2419,20 +2498,46 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     eval_arrays.push_back(output);
   }
   collect_state_for_eval(*this, eval_arrays, false);
+  const auto eval_t0 = HostClock::now();
   mx::eval(eval_arrays);
+  if (timing_enabled) {
+    timing_eval_us = elapsed_us(eval_t0, HostClock::now());
+  }
   report_gated_delta_timing_summary("step", step_count);
   pending_loss_ = loss;
   pending_outputs_ = std::move(outputs);
   has_pending_step_ = true;
   pending_step_index_ = step_count;
+  log_timing(use_compiled_step ? "compiled-gradient+host-update" : "eager-gradient+host-update");
 }
 
 float IRTrainer::collect_loss() {
+  const int timing_step =
+      has_ready_step_ ? ready_step_index_ : (has_pending_step_ ? pending_step_index_ : step_count);
+  const bool timing_enabled =
+      program_has_fused_canonical_mamba3_block(program) &&
+      should_log_mamba3_host_timing(timing_step);
+  const auto collect_t0 = HostClock::now();
+  auto log_collect_timing = [&](const char* state_label) {
+    if (!timing_enabled) {
+      return;
+    }
+    std::cerr << "[mlx_ir] canonical Mamba3 host timing"
+              << " step=" << timing_step
+              << " path=collect"
+              << " state=" << state_label
+              << " collect_us=" << elapsed_us(collect_t0, HostClock::now())
+              << std::endl;
+  };
   if (has_ready_step_) {
-    return finalize_ready_step(*this, &last_outputs);
+    float loss = finalize_ready_step(*this, &last_outputs);
+    log_collect_timing("ready");
+    return loss;
   }
   last_outputs.clear();
-  return finalize_pending_step(*this, &last_outputs);
+  float loss = finalize_pending_step(*this, &last_outputs);
+  log_collect_timing("pending");
+  return loss;
 }
 
 void IRTrainer::flush() {
