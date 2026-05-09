@@ -1412,15 +1412,15 @@ std::vector<std::string> sorted_input_names(const TensorMap& inputs) {
 
 std::string named_step_signature(
     const TensorMap& inputs,
+    const std::vector<std::string>& input_names,
     const std::vector<std::string>& output_names,
     size_t n_weights) {
-  auto names = sorted_input_names(inputs);
   std::ostringstream oss;
   oss << "nw=" << n_weights;
   for (const auto& output_name : output_names) {
     oss << "|out=" << output_name;
   }
-  for (const auto& name : names) {
+  for (const auto& name : input_names) {
     const auto& desc = inputs.at(name);
     oss << "|in=" << name << ";dt=" << static_cast<int>(desc.dtype);
     for (int dim : desc.shape) {
@@ -1428,6 +1428,56 @@ std::string named_step_signature(
     }
   }
   return oss.str();
+}
+
+bool named_step_metadata_matches(const IRTrainer& trainer, const TensorMap& inputs) {
+  if (!trainer.cached_named_step_metadata_valid ||
+      trainer.cached_named_step_input_names.size() != inputs.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < trainer.cached_named_step_input_names.size(); ++i) {
+    auto it = inputs.find(trainer.cached_named_step_input_names[i]);
+    if (it == inputs.end()) {
+      return false;
+    }
+    const auto& desc = it->second;
+    if (desc.dtype != trainer.cached_named_step_input_dtypes[i] ||
+        desc.shape != trainer.cached_named_step_input_shapes[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void refresh_named_step_metadata(IRTrainer& trainer, const TensorMap& inputs) {
+  trainer.cached_named_step_argnums.resize(trainer.weights.size());
+  std::iota(
+      trainer.cached_named_step_argnums.begin(),
+      trainer.cached_named_step_argnums.end(),
+      0);
+  trainer.cached_named_step_output_names = collect_cached_output_names(trainer.program);
+  trainer.cached_named_step_input_names = sorted_input_names(inputs);
+  trainer.cached_named_step_input_dtypes.clear();
+  trainer.cached_named_step_input_shapes.clear();
+  trainer.cached_named_step_input_dtypes.reserve(trainer.cached_named_step_input_names.size());
+  trainer.cached_named_step_input_shapes.reserve(trainer.cached_named_step_input_names.size());
+  for (const auto& name : trainer.cached_named_step_input_names) {
+    const auto& desc = inputs.at(name);
+    trainer.cached_named_step_input_dtypes.push_back(desc.dtype);
+    trainer.cached_named_step_input_shapes.push_back(desc.shape);
+  }
+  trainer.cached_named_step_signature = named_step_signature(
+      inputs,
+      trainer.cached_named_step_input_names,
+      trainer.cached_named_step_output_names,
+      trainer.weights.size());
+  trainer.cached_named_step_metadata_valid = true;
+}
+
+void ensure_named_step_metadata(IRTrainer& trainer, const TensorMap& inputs) {
+  if (!named_step_metadata_matches(trainer, inputs)) {
+    refresh_named_step_metadata(trainer, inputs);
+  }
 }
 
 float materialize_step_loss(
@@ -1669,10 +1719,12 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   }
   step_count++;
 
-  std::vector<int> argnums(weights.size());
-  std::iota(argnums.begin(), argnums.end(), 0);
-  std::vector<std::string> output_names = collect_cached_output_names(program);
-  auto input_names = sorted_input_names(inputs);
+  ensure_named_step_metadata(*this, inputs);
+  const auto& argnums = cached_named_step_argnums;
+  const auto& output_names = cached_named_step_output_names;
+  const auto& input_names = cached_named_step_input_names;
+  const auto& signature = cached_named_step_signature;
+
   auto input_arrays_by_name = tensor_map_to_arrays(inputs);
   std::vector<mx::array> ordered_input_arrays;
   ordered_input_arrays.reserve(input_names.size());
@@ -1684,11 +1736,17 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   args.insert(args.end(), weights.begin(), weights.end());
   args.insert(args.end(), ordered_input_arrays.begin(), ordered_input_arrays.end());
 
-  const auto signature = named_step_signature(inputs, output_names, weights.size());
-  auto forward_fn = std::function<std::vector<mx::array>(const std::vector<mx::array>&)>(
-      [this, input_names, output_names](const std::vector<mx::array>& fn_args) {
+  StepForwardFn forward_fn;
+  auto get_forward_fn = [&]() -> const StepForwardFn& {
+    if (forward_fn) {
+      return forward_fn;
+    }
+    const auto local_input_names = input_names;
+    const auto local_output_names = output_names;
+    forward_fn = StepForwardFn(
+      [this, local_input_names, local_output_names](const std::vector<mx::array>& fn_args) {
         const auto n_weights = weights.size();
-        if (fn_args.size() < n_weights + input_names.size()) {
+        if (fn_args.size() < n_weights + local_input_names.size()) {
           throw std::runtime_error("IR trainer argument count mismatch");
         }
         std::vector<mx::array> w;
@@ -1698,18 +1756,20 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         }
         auto effective = effective_training_weights(w, qat_mode);
         ArrayMap input_map;
-        input_map.reserve(input_names.size());
-        for (size_t i = 0; i < input_names.size(); ++i) {
-          input_map.emplace(input_names[i], fn_args[n_weights + i]);
+        input_map.reserve(local_input_names.size());
+        for (size_t i = 0; i < local_input_names.size(); ++i) {
+          input_map.emplace(local_input_names[i], fn_args[n_weights + i]);
         }
-        auto outputs = ir_interpret_outputs(program, effective, input_map, output_names, true);
+        auto outputs = ir_interpret_outputs(program, effective, input_map, local_output_names, true);
         std::vector<mx::array> values;
-        values.reserve(output_names.size());
-        for (const auto& output_name : output_names) {
+        values.reserve(local_output_names.size());
+        for (const auto& output_name : local_output_names) {
           values.push_back(outputs.at(output_name));
         }
         return values;
       });
+    return forward_fn;
+  };
 
   bool use_compiled_step = use_compiled_training_step(program);
   if (program_has_fused_canonical_mamba3_block(program) &&
@@ -1765,9 +1825,10 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
 
     auto grad_forward_fn_for_mode =
         [&](Mamba3LowMemoryGradientMode mode) -> StepForwardFn {
+          const auto base_forward_fn = get_forward_fn();
           return should_checkpoint_mamba3_grad_forward(program, checkpoint_step, mode)
-              ? mx::checkpoint(forward_fn)
-              : forward_fn;
+              ? mx::checkpoint(base_forward_fn)
+              : base_forward_fn;
         };
     std::vector<mx::array> output_values;
     std::vector<mx::array> all_grads;
@@ -1854,7 +1915,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       }
     } else if (gradient_mode == Mamba3LowMemoryGradientMode::RecomputeChunks) {
       auto grad_forward_fn = grad_forward_fn_for_mode(gradient_mode);
-      output_values = forward_fn(args);
+      output_values = get_forward_fn()(args);
     }
     if (output_values.size() != output_names.size()) {
       throw std::runtime_error("IR trainer output count mismatch");
@@ -1966,8 +2027,9 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         const auto local_weight_optimizers = weight_optimizers;
         const auto local_groups = optimizer_groups;
         const float local_max_grad_norm = max_grad_norm;
+        const auto base_forward_fn = get_forward_fn();
         auto update_forward_fn = StepForwardFn(
-            [forward_fn, n_weights, input_count](const std::vector<mx::array>& full_args) {
+            [base_forward_fn, n_weights, input_count](const std::vector<mx::array>& full_args) {
               const size_t input_offset = n_weights * 3;
               if (full_args.size() < input_offset + input_count) {
                 throw std::runtime_error("compiled AdamW update step argument count mismatch");
@@ -1982,7 +2044,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
                   forward_args.end(),
                   full_args.begin() + static_cast<std::ptrdiff_t>(input_offset),
                   full_args.begin() + static_cast<std::ptrdiff_t>(input_offset + input_count));
-              return forward_fn(forward_args);
+              return base_forward_fn(forward_args);
             });
         auto grad_fn = mx::value_and_grad(update_forward_fn, argnums);
         compiled_named_update_step = mx::compile(
@@ -2142,7 +2204,10 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
             checkpoint_step &&
             (!program_has_fused_canonical_mamba3_block(program) ||
              env_truthy("MIXLAB_MAMBA3_CHECKPOINT_COMPILED_STEP"));
-        auto compiled_forward_fn = compiled_checkpoint_step ? mx::checkpoint(forward_fn) : forward_fn;
+        const auto base_forward_fn = get_forward_fn();
+        auto compiled_forward_fn = compiled_checkpoint_step
+            ? mx::checkpoint(base_forward_fn)
+            : base_forward_fn;
         auto grad_fn = mx::value_and_grad(compiled_forward_fn, argnums);
         compiled_named_step = mx::compile(
             [grad_fn](const std::vector<mx::array>& fn_args) {
@@ -2178,7 +2243,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
                 << " (set MIXLAB_FORCE_COMPILED_STEP=1 to override)" << std::endl;
       memory_safe_step_notice_logged_ = true;
     }
-    auto eager_forward_fn = checkpoint_step ? mx::checkpoint(forward_fn) : forward_fn;
+    const auto base_forward_fn = get_forward_fn();
+    auto eager_forward_fn = checkpoint_step ? mx::checkpoint(base_forward_fn) : base_forward_fn;
     auto grad_fn = mx::value_and_grad(eager_forward_fn, argnums);
     auto result = grad_fn(args);
     step_out.reserve(result.first.size() + result.second.size());
@@ -2617,6 +2683,13 @@ void IRTrainer::set_program(const IRProgram& new_program) {
   program = new_program;
   last_outputs.clear();
   last_grads.clear();
+  cached_named_step_metadata_valid = false;
+  cached_named_step_argnums.clear();
+  cached_named_step_output_names.clear();
+  cached_named_step_input_names.clear();
+  cached_named_step_input_dtypes.clear();
+  cached_named_step_input_shapes.clear();
+  cached_named_step_signature.clear();
   compiled_named_step = nullptr;
   compiled_named_step_signature.clear();
   compiled_named_update_step = nullptr;

@@ -89,6 +89,13 @@ struct IRTrainer {
   int ready_step_index_ = 0;
   bool memory_safe_step_notice_logged_ = false;
   bool low_memory_update_notice_logged_ = false;
+  bool cached_named_step_metadata_valid = false;
+  std::vector<int> cached_named_step_argnums;
+  std::vector<std::string> cached_named_step_output_names;
+  std::vector<std::string> cached_named_step_input_names;
+  std::vector<TensorDesc::DType> cached_named_step_input_dtypes;
+  std::vector<std::vector<int>> cached_named_step_input_shapes;
+  std::string cached_named_step_signature;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_named_step;
   std::string compiled_named_step_signature;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_named_update_step;
