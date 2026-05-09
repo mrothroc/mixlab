@@ -37,8 +37,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Binary
 COPY --from=builder /mixlab /usr/local/bin/mixlab
+# Allow libcuda.so.1 to be missing at build time — it's the NVIDIA driver lib,
+# bind-mounted by NVIDIA Container Toolkit at runtime on the GPU host. All
+# other "not found" entries are real build-time errors.
 RUN ldd /usr/local/bin/mixlab \
-    && ! ldd /usr/local/bin/mixlab | grep -q 'not found'
+    && ! ldd /usr/local/bin/mixlab | grep 'not found' | grep -qv 'libcuda\.so\.1'
 
 # Example configs
 COPY examples/ /examples/
