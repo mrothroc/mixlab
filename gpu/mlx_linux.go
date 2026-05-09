@@ -18,6 +18,7 @@ import "C"
 import (
 	"fmt"
 	"math"
+	"runtime"
 	"unsafe"
 )
 
@@ -151,8 +152,10 @@ func marshalTensorInputs(inputs []TensorInput) ([]C.mlx_tensor_input, func(), er
 		return nil, nil, fmt.Errorf("no tensor inputs")
 	}
 	cInputs := make([]C.mlx_tensor_input, len(inputs))
-	toFree := make([]unsafe.Pointer, 0, len(inputs)*3)
+	toFree := make([]unsafe.Pointer, 0, len(inputs))
+	var pinner runtime.Pinner
 	cleanup := func() {
+		pinner.Unpin()
 		for _, p := range toFree {
 			C.free(p)
 		}
@@ -181,7 +184,8 @@ func marshalTensorInputs(inputs []TensorInput) ([]C.mlx_tensor_input, func(), er
 			shapeElemCount *= dim
 		}
 
-		var dataBytes []byte
+		var dataPtr unsafe.Pointer
+		var dataSizeBytes int
 		switch v := in.Data.(type) {
 		case []int32:
 			if in.DType != 0 {
@@ -192,7 +196,13 @@ func marshalTensorInputs(inputs []TensorInput) ([]C.mlx_tensor_input, func(), er
 				cleanup()
 				return nil, nil, fmt.Errorf("tensor %q data length=%d shape_elems=%d", in.Name, len(v), shapeElemCount)
 			}
-			dataBytes = cBytesFromInt32(v)
+			if len(v) == 0 {
+				cleanup()
+				return nil, nil, fmt.Errorf("tensor %q has empty data", in.Name)
+			}
+			pinner.Pin(&v[0])
+			dataPtr = unsafe.Pointer(&v[0])
+			dataSizeBytes = len(v) * 4
 		case []float32:
 			if in.DType != 1 {
 				cleanup()
@@ -202,28 +212,29 @@ func marshalTensorInputs(inputs []TensorInput) ([]C.mlx_tensor_input, func(), er
 				cleanup()
 				return nil, nil, fmt.Errorf("tensor %q data length=%d shape_elems=%d", in.Name, len(v), shapeElemCount)
 			}
-			dataBytes = cBytesFromFloat32(v)
+			if len(v) == 0 {
+				cleanup()
+				return nil, nil, fmt.Errorf("tensor %q has empty data", in.Name)
+			}
+			pinner.Pin(&v[0])
+			dataPtr = unsafe.Pointer(&v[0])
+			dataSizeBytes = len(v) * 4
 		default:
 			cleanup()
 			return nil, nil, fmt.Errorf("tensor %q unsupported Data type %T", in.Name, in.Data)
 		}
-		if len(dataBytes) == 0 {
-			cleanup()
-			return nil, nil, fmt.Errorf("tensor %q has empty data", in.Name)
-		}
 
 		cName := C.CString(in.Name)
-		cShape := C.CBytes(cBytesFromInt32(shape32))
-		cData := C.CBytes(dataBytes)
-		toFree = append(toFree, unsafe.Pointer(cName), cShape, cData)
+		toFree = append(toFree, unsafe.Pointer(cName))
 
+		pinner.Pin(&shape32[0])
 		cInputs[i] = C.mlx_tensor_input{
 			name:       cName,
 			dtype:      C.int(in.DType),
-			shape:      (*C.int)(cShape),
+			shape:      (*C.int)(unsafe.Pointer(&shape32[0])),
 			ndim:       C.int(len(shape32)),
-			data:       cData,
-			size_bytes: C.int(len(dataBytes)),
+			data:       dataPtr,
+			size_bytes: C.int(dataSizeBytes),
 		}
 	}
 	return cInputs, cleanup, nil
