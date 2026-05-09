@@ -84,7 +84,7 @@ struct IRTrainer {
   std::unordered_map<std::string, mlx::core::array> pending_outputs_;
   int pending_step_index_ = 0;
   bool has_ready_step_ = false;
-  float ready_loss_ = 0.0f;
+  mlx::core::array ready_loss_;
   std::unordered_map<std::string, mlx::core::array> ready_outputs_;
   int ready_step_index_ = 0;
   bool memory_safe_step_notice_logged_ = false;

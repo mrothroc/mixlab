@@ -1430,25 +1430,36 @@ std::string named_step_signature(
   return oss.str();
 }
 
+float materialize_step_loss(
+    mx::array& loss_array,
+    int step_index,
+    const char* state_label) {
+  float loss = 0.0f;
+  try {
+    loss = loss_array.item<float>();
+  } catch (const std::exception& e) {
+    throw std::runtime_error(
+        std::string(state_label) + " step " + std::to_string(step_index) +
+        " failed while materializing loss: " + e.what());
+  }
+  if (!std::isfinite(loss)) {
+    throw std::runtime_error(
+        std::string(state_label) + " step " + std::to_string(step_index) +
+        " produced non-finite loss");
+  }
+  return loss;
+}
+
 float finalize_pending_step(
     IRTrainer& trainer,
     std::unordered_map<std::string, mx::array>* outputs) {
   if (!trainer.has_pending_step_) {
     throw std::runtime_error("no pending step to collect");
   }
-  float loss = 0.0f;
-  try {
-    loss = trainer.pending_loss_.item<float>();
-  } catch (const std::exception& e) {
-    throw std::runtime_error(
-        "pending step " + std::to_string(trainer.pending_step_index_) +
-        " failed while materializing loss: " + e.what());
-  }
-  if (!std::isfinite(loss)) {
-    throw std::runtime_error(
-        "pending step " + std::to_string(trainer.pending_step_index_) +
-        " produced non-finite loss");
-  }
+  const float loss = materialize_step_loss(
+      trainer.pending_loss_,
+      trainer.pending_step_index_,
+      "pending");
   if (outputs != nullptr) {
     *outputs = std::move(trainer.pending_outputs_);
   }
@@ -1458,9 +1469,46 @@ float finalize_pending_step(
   return loss;
 }
 
+float finalize_ready_step(
+    IRTrainer& trainer,
+    std::unordered_map<std::string, mx::array>* outputs) {
+  if (!trainer.has_ready_step_) {
+    throw std::runtime_error("no ready step to collect");
+  }
+  const float loss = materialize_step_loss(
+      trainer.ready_loss_,
+      trainer.ready_step_index_,
+      "ready");
+  if (outputs != nullptr) {
+    *outputs = std::move(trainer.ready_outputs_);
+  }
+  trainer.ready_outputs_.clear();
+  trainer.has_ready_step_ = false;
+  trainer.ready_step_index_ = 0;
+  return loss;
+}
+
+void move_pending_step_to_ready(IRTrainer& trainer) {
+  if (!trainer.has_pending_step_) {
+    throw std::runtime_error("no pending step to queue");
+  }
+  if (trainer.has_ready_step_) {
+    throw std::runtime_error("previous step loss must be collected before submitting another step");
+  }
+  trainer.ready_loss_ = std::move(trainer.pending_loss_);
+  trainer.ready_outputs_ = std::move(trainer.pending_outputs_);
+  trainer.ready_step_index_ = trainer.pending_step_index_;
+  trainer.has_ready_step_ = true;
+  trainer.pending_outputs_.clear();
+  trainer.has_pending_step_ = false;
+  trainer.pending_step_index_ = 0;
+}
+
 } // namespace
 
-IRTrainer::IRTrainer() : pending_loss_(mx::array(0.0f, mx::float32)) {}
+IRTrainer::IRTrainer()
+    : pending_loss_(mx::array(0.0f, mx::float32)),
+      ready_loss_(mx::array(0.0f, mx::float32)) {}
 
 float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   flush();
@@ -1617,10 +1665,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     throw std::runtime_error("previous step loss must be collected before submitting another step");
   }
   if (has_pending_step_) {
-    const int finalized_step_index = pending_step_index_;
-    ready_loss_ = finalize_pending_step(*this, &ready_outputs_);
-    has_ready_step_ = true;
-    ready_step_index_ = finalized_step_index;
+    move_pending_step_to_ready(*this);
   }
   step_count++;
 
@@ -2318,29 +2363,27 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
 
 float IRTrainer::collect_loss() {
   if (has_ready_step_) {
-    last_outputs = std::move(ready_outputs_);
-    ready_outputs_.clear();
-    has_ready_step_ = false;
-    ready_step_index_ = 0;
-    return ready_loss_;
+    return finalize_ready_step(*this, &last_outputs);
   }
   last_outputs.clear();
   return finalize_pending_step(*this, &last_outputs);
 }
 
 void IRTrainer::flush() {
+  if (has_ready_step_) {
+    ready_loss_.item<float>();
+    last_outputs = std::move(ready_outputs_);
+    ready_outputs_.clear();
+    has_ready_step_ = false;
+    ready_step_index_ = 0;
+  }
   if (has_pending_step_) {
     last_outputs = std::move(pending_outputs_);
     pending_outputs_.clear();
     pending_loss_.item<float>();
     has_pending_step_ = false;
     pending_step_index_ = 0;
-  } else if (has_ready_step_) {
-    last_outputs = std::move(ready_outputs_);
-    ready_outputs_.clear();
   }
-  has_ready_step_ = false;
-  ready_step_index_ = 0;
 }
 
 float IRTrainer::evaluate(const mx::array& tokens, const mx::array& targets) {

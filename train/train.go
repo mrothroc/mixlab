@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -454,6 +453,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	hasValLoss := false
 	logEvery := effectiveTrainEvery(opts.LogEvery, "MIXLAB_LOG_EVERY", 100)
 	valEvery := effectiveTrainEvery(opts.ValEvery, "MIXLAB_VAL_EVERY", 100)
+	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
 	// steadyStart is set after step 0 completes — excludes one-time
 	// compile/warmup costs from tok/s and ETA estimates.
@@ -501,6 +501,84 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		}
 		currentSubmitDuration := time.Since(initialSubmitStart)
 		currentPhaseIdx := -1
+		submitStepWithScheduledState := func(nextStep int, batch trainBatch) (time.Duration, error) {
+			if nextMode := qatModeForStep(cfg.Training, nextStep); nextMode != qatModeForStep(cfg.Training, nextStep-1) {
+				if err := trainer.SetQATGPU(nextMode); err != nil {
+					return 0, fmt.Errorf("set QAT mode at step %d: %w", nextStep, err)
+				}
+				if nextMode != "none" {
+					fmt.Printf("  [%s] QAT enabled at step %d\n", name, nextStep)
+				}
+			}
+			nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)
+			nextHeadUntied := headUntied || (mtpUntieScheduled && nextStep >= mtpUntieStep)
+			nextMTPAuxActive := mtpAuxActive || (mtpAuxActivationScheduled && nextStep >= mtpAuxActivateStep)
+			if nextRecurrenceActive != recurrenceActive || nextHeadUntied != headUntied || nextMTPAuxActive != mtpAuxActive {
+				switcher, ok := trainer.(gpuProgramSwitcher)
+				if !ok {
+					return 0, fmt.Errorf("trainer does not support scheduled program switching")
+				}
+				if nextHeadUntied && !headUntied {
+					copier, ok := trainer.(gpuWeightCopier)
+					if !ok {
+						return 0, fmt.Errorf("trainer does not support LM head untie weight copy")
+					}
+					if err := copier.CopyWeightGPU("head", "embed"); err != nil {
+						return 0, fmt.Errorf("untie LM head at step %d: %w", nextStep, err)
+					}
+				}
+				nextProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+					RecurrenceActive: nextRecurrenceActive,
+					HeadUntied:       nextHeadUntied,
+					MTPAuxInactive:   !nextMTPAuxActive,
+				})
+				if err != nil {
+					return 0, fmt.Errorf("build scheduled IR program at step %d: %w", nextStep, err)
+				}
+				if nextProg.NumWeights != prog.NumWeights {
+					return 0, fmt.Errorf("scheduled IR weight count mismatch at step %d: scheduled=%d final=%d", nextStep, nextProg.NumWeights, prog.NumWeights)
+				}
+				if err := switcher.SetProgramGPU(nextProg); err != nil {
+					return 0, fmt.Errorf("switch scheduled IR program at step %d: %w", nextStep, err)
+				}
+				if nextRecurrenceActive && !recurrenceActive {
+					fmt.Printf("  [%s] recurrence activated at step %d\n", name, nextStep)
+				}
+				if nextHeadUntied && !headUntied {
+					fmt.Printf("  [%s] LM head untied from embedding at step %d\n", name, nextStep)
+				}
+				if nextMTPAuxActive && !mtpAuxActive {
+					fmt.Printf("  [%s] MTP auxiliary loss activated at step %d\n", name, nextStep)
+				}
+				recurrenceActive = nextRecurrenceActive
+				headUntied = nextHeadUntied
+				mtpAuxActive = nextMTPAuxActive
+			}
+			submitStart := time.Now()
+			if err := trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, sched.At(nextStep)); err != nil {
+				return 0, fmt.Errorf("submit step %d: %w", nextStep, err)
+			}
+			return time.Since(submitStart), nil
+		}
+		canSubmitNextBeforeCollect := func(step int) bool {
+			if !stepLookaheadEnabled ||
+				step >= steps-1 ||
+				shouldLogTrainingStep(step, steps, logEvery) ||
+				shouldWriteCheckpoint(step, opts.CheckpointEvery) ||
+				shouldUpdateSWA(step, swaStart, swaInterval) {
+				return false
+			}
+			nextStep := step + 1
+			if qatModeForStep(cfg.Training, nextStep) != qatModeForStep(cfg.Training, step) {
+				return false
+			}
+			nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)
+			nextHeadUntied := headUntied || (mtpUntieScheduled && nextStep >= mtpUntieStep)
+			nextMTPAuxActive := mtpAuxActive || (mtpAuxActivationScheduled && nextStep >= mtpAuxActivateStep)
+			return nextRecurrenceActive == recurrenceActive &&
+				nextHeadUntied == headUntied &&
+				nextMTPAuxActive == mtpAuxActive
+		}
 
 		for step := 0; step < steps; step++ {
 			dataDuration := time.Duration(0)
@@ -528,6 +606,17 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				if nextBatch.err != nil {
 					return TrainResult{}, fmt.Errorf("load batch at step %d: %w", step+1, nextBatch.err)
 				}
+			}
+
+			submittedNextEarly := false
+			earlySubmitDuration := time.Duration(0)
+			if step < steps-1 && canSubmitNextBeforeCollect(step) {
+				var err error
+				earlySubmitDuration, err = submitStepWithScheduledState(step+1, nextBatch)
+				if err != nil {
+					return TrainResult{}, err
+				}
+				submittedNextEarly = true
 			}
 
 			collectStart := time.Now()
@@ -622,67 +711,19 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				fmt.Printf("  [%s] checkpoint saved: %s\n", name, checkpointPath(opts.CheckpointDir, step+1))
 			}
 
-			// Submit next step AFTER validation/checkpoint/logging so flush
-			// inside EvaluateGPU doesn't discard the pending step.
+			// Plain steps may submit the next batch before collecting the
+			// current loss. Boundary steps still submit here, after any
+			// validation/checkpoint/logging that can flush trainer state.
 			if step < steps-1 {
-				nextStep := step + 1
-				if nextMode := qatModeForStep(cfg.Training, nextStep); nextMode != qatModeForStep(cfg.Training, step) {
-					if err := trainer.SetQATGPU(nextMode); err != nil {
-						return TrainResult{}, fmt.Errorf("set QAT mode at step %d: %w", nextStep, err)
-					}
-					if nextMode != "none" {
-						fmt.Printf("  [%s] QAT enabled at step %d\n", name, nextStep)
-					}
-				}
-				nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)
-				nextHeadUntied := headUntied || (mtpUntieScheduled && nextStep >= mtpUntieStep)
-				nextMTPAuxActive := mtpAuxActive || (mtpAuxActivationScheduled && nextStep >= mtpAuxActivateStep)
-				if nextRecurrenceActive != recurrenceActive || nextHeadUntied != headUntied || nextMTPAuxActive != mtpAuxActive {
-					switcher, ok := trainer.(gpuProgramSwitcher)
-					if !ok {
-						return TrainResult{}, fmt.Errorf("trainer does not support scheduled program switching")
-					}
-					if nextHeadUntied && !headUntied {
-						copier, ok := trainer.(gpuWeightCopier)
-						if !ok {
-							return TrainResult{}, fmt.Errorf("trainer does not support LM head untie weight copy")
-						}
-						if err := copier.CopyWeightGPU("head", "embed"); err != nil {
-							return TrainResult{}, fmt.Errorf("untie LM head at step %d: %w", nextStep, err)
-						}
-					}
-					nextProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
-						RecurrenceActive: nextRecurrenceActive,
-						HeadUntied:       nextHeadUntied,
-						MTPAuxInactive:   !nextMTPAuxActive,
-					})
+				if submittedNextEarly {
+					currentSubmitDuration = earlySubmitDuration
+				} else {
+					var err error
+					currentSubmitDuration, err = submitStepWithScheduledState(step+1, nextBatch)
 					if err != nil {
-						return TrainResult{}, fmt.Errorf("build scheduled IR program at step %d: %w", nextStep, err)
+						return TrainResult{}, err
 					}
-					if nextProg.NumWeights != prog.NumWeights {
-						return TrainResult{}, fmt.Errorf("scheduled IR weight count mismatch at step %d: scheduled=%d final=%d", nextStep, nextProg.NumWeights, prog.NumWeights)
-					}
-					if err := switcher.SetProgramGPU(nextProg); err != nil {
-						return TrainResult{}, fmt.Errorf("switch scheduled IR program at step %d: %w", nextStep, err)
-					}
-					if nextRecurrenceActive && !recurrenceActive {
-						fmt.Printf("  [%s] recurrence activated at step %d\n", name, nextStep)
-					}
-					if nextHeadUntied && !headUntied {
-						fmt.Printf("  [%s] LM head untied from embedding at step %d\n", name, nextStep)
-					}
-					if nextMTPAuxActive && !mtpAuxActive {
-						fmt.Printf("  [%s] MTP auxiliary loss activated at step %d\n", name, nextStep)
-					}
-					recurrenceActive = nextRecurrenceActive
-					headUntied = nextHeadUntied
-					mtpAuxActive = nextMTPAuxActive
 				}
-				submitStart := time.Now()
-				if err := trainer.SubmitStepGPU(nextBatch.x, nextBatch.y, batchSize, seqLen, sched.At(nextStep)); err != nil {
-					return TrainResult{}, fmt.Errorf("submit step %d: %w", nextStep, err)
-				}
-				currentSubmitDuration = time.Since(submitStart)
 			}
 		}
 	}
@@ -871,55 +912,6 @@ func readTrainerOutput(trainer GPUTrainer, name string, shape []int) ([]float32,
 		return or.ReadOutput(name, shape)
 	}
 	return nil, fmt.Errorf("trainer does not support reading named outputs; ensure you are using the MLX backend")
-}
-
-func shouldWriteCheckpoint(step, every int) bool {
-	return every > 0 && (step+1)%every == 0
-}
-
-func effectiveTrainEvery(option int, envName string, fallback int) int {
-	if option > 0 {
-		return option
-	}
-	if raw := strings.TrimSpace(os.Getenv(envName)); raw != "" {
-		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
-			return parsed
-		}
-	}
-	return fallback
-}
-
-func isPowerOfTwo(n int) bool {
-	return n > 0 && n&(n-1) == 0
-}
-
-func shouldLogTrainingStep(step, totalSteps, every int) bool {
-	if totalSteps <= 0 {
-		return false
-	}
-	if step == 0 || step == totalSteps-1 {
-		return true
-	}
-	if every <= 0 {
-		every = 100
-	}
-	if step < every && isPowerOfTwo(step) {
-		return true
-	}
-	return step%every == 0
-}
-
-func shouldRunValidationStep(step, totalSteps, every int) bool {
-	if totalSteps <= 0 {
-		return false
-	}
-	if step == 0 || step == totalSteps-1 {
-		return true
-	}
-	if every <= 0 {
-		every = 100
-	}
-	return step%every == 0
 }
 
 func checkpointPath(dir string, step int) string {
