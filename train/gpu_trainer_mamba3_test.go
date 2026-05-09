@@ -289,6 +289,7 @@ func TestMamba3CanonicalSmokeLossDecreases(t *testing.T) {
 			UseConv:    &useConv,
 		}},
 		Training: TrainingSpec{
+			Optimizer:         "adamw",
 			Steps:             10,
 			LR:                3e-3,
 			EmbedLR:           3e-3,
@@ -333,9 +334,12 @@ func TestMamba3CanonicalSmokeLossDecreases(t *testing.T) {
 	}
 	losses := make([]float32, 10)
 	for step := range losses {
-		loss, err := trainer.TrainStepGPU(xTok, yTok, 2, cfg.SeqLen, float32(cfg.Training.LR))
+		if err := trainer.SubmitStepGPU(xTok, yTok, 2, cfg.SeqLen, float32(cfg.Training.LR)); err != nil {
+			t.Fatalf("SubmitStepGPU step %d: %v", step, err)
+		}
+		loss, err := trainer.CollectLossGPU()
 		if err != nil {
-			t.Fatalf("TrainStepGPU step %d: %v", step, err)
+			t.Fatalf("CollectLossGPU step %d: %v", step, err)
 		}
 		if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
 			t.Fatalf("step %d non-finite loss %g", step, loss)

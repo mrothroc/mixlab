@@ -844,15 +844,58 @@ void log_fused_mamba3_compiled_update_step_fallback_once(IRTrainer& trainer, con
   std::cerr << "[mlx_ir] fused canonical Mamba3 compiled AdamW update step failed ("
             << e.what()
             << "); falling back to compiled-gradient training step"
-            << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_UPDATE_STEP=1 to skip full-update compile)"
+            << " (unset MIXLAB_MAMBA3_COMPILED_UPDATE_STEP to skip full-update compile)"
             << std::endl;
   trainer.fused_mamba3_compiled_update_step_fallback_logged = true;
 }
 
+void log_fused_mamba3_compiled_optimizer_update_fallback_once(IRTrainer& trainer, const std::exception& e) {
+  if (trainer.fused_mamba3_compiled_optimizer_update_fallback_logged) {
+    return;
+  }
+  std::cerr << "[mlx_ir] fused canonical Mamba3 compiled AdamW optimizer update failed ("
+            << e.what()
+            << "); falling back to host-built optimizer update"
+            << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_OPTIMIZER_UPDATE=1 to skip this path)"
+            << std::endl;
+  trainer.fused_mamba3_compiled_optimizer_update_fallback_logged = true;
+}
+
 bool supports_compiled_fused_mamba3_adamw_update_step(const IRTrainer& trainer) {
   if (!program_has_fused_canonical_mamba3_block(trainer.program) ||
+      !env_truthy("MIXLAB_MAMBA3_COMPILED_UPDATE_STEP") ||
       env_truthy("MIXLAB_DISABLE_MAMBA3_COMPILED_UPDATE_STEP") ||
       trainer.fused_mamba3_compiled_update_step_disabled ||
+      trainer.qat_mode != QATMode::None ||
+      should_log_step_debug(trainer.step_count)) {
+    return false;
+  }
+  if (trainer.weight_optimizers.size() != trainer.weights.size() ||
+      trainer.adam_m.size() != trainer.weights.size() ||
+      trainer.adam_v.size() != trainer.weights.size() ||
+      trainer.has_adam_state.size() != trainer.weights.size()) {
+    return false;
+  }
+  for (const auto& group : trainer.optimizer_groups) {
+    if (group.kind != OptimizerKind::AdamW || group.cautious_weight_decay) {
+      return false;
+    }
+  }
+  for (size_t i = 0; i < trainer.weights.size(); ++i) {
+    if (trainer.has_adam_state[i] == 0 ||
+        i >= trainer.weight_optimizers.size() ||
+        trainer.weight_optimizers[i].group_index >= trainer.optimizer_groups.size()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool supports_compiled_fused_mamba3_adamw_optimizer_update(const IRTrainer& trainer) {
+  if (!program_has_fused_canonical_mamba3_block(trainer.program) ||
+      env_truthy("MIXLAB_DISABLE_MAMBA3_COMPILED_OPTIMIZER_UPDATE") ||
+      env_truthy("MIXLAB_MAMBA3_COMPILED_UPDATE_STEP") ||
+      trainer.fused_mamba3_compiled_optimizer_update_disabled ||
       trainer.qat_mode != QATMode::None ||
       should_log_step_debug(trainer.step_count)) {
     return false;
@@ -904,6 +947,34 @@ std::string compiled_adamw_update_step_signature(
   return oss.str();
 }
 
+std::string compiled_adamw_optimizer_update_signature(const IRTrainer& trainer) {
+  std::ostringstream oss;
+  oss << "compiled_adamw_optimizer_update=1"
+      << "|nw=" << trainer.weights.size()
+      << "|max_grad_norm=" << trainer.max_grad_norm;
+  for (size_t i = 0; i < trainer.weights.size(); ++i) {
+    oss << "|shape=" << i;
+    for (auto dim : trainer.weights[i].shape()) {
+      oss << "," << dim;
+    }
+  }
+  for (size_t i = 0; i < trainer.weight_optimizers.size(); ++i) {
+    const auto& spec = trainer.weight_optimizers[i];
+    oss << "|wopt=" << i << "," << spec.group_index << "," << (spec.decay ? 1 : 0);
+  }
+  for (size_t i = 0; i < trainer.optimizer_groups.size(); ++i) {
+    const auto& group = trainer.optimizer_groups[i];
+    oss << "|group=" << i
+        << "," << static_cast<int>(group.kind)
+        << "," << group.lr
+        << "," << group.beta1
+        << "," << group.beta2
+        << "," << group.eps
+        << "," << group.weight_decay;
+  }
+  return oss.str();
+}
+
 std::vector<mx::array> build_compiled_adamw_update_step_args(
     const IRTrainer& trainer,
     const std::vector<mx::array>& input_arrays) {
@@ -914,6 +985,31 @@ std::vector<mx::array> build_compiled_adamw_update_step_args(
   args.insert(args.end(), trainer.adam_m.begin(), trainer.adam_m.end());
   args.insert(args.end(), trainer.adam_v.begin(), trainer.adam_v.end());
   args.insert(args.end(), input_arrays.begin(), input_arrays.end());
+  args.push_back(mx::array(trainer.lr_scale, mx::float32));
+  for (const auto& group : trainer.optimizer_groups) {
+    args.push_back(mx::array(
+        1.0f - std::pow(group.beta1, static_cast<float>(trainer.step_count)),
+        mx::float32));
+    args.push_back(mx::array(
+        1.0f - std::pow(group.beta2, static_cast<float>(trainer.step_count)),
+        mx::float32));
+  }
+  return args;
+}
+
+std::vector<mx::array> build_compiled_adamw_optimizer_update_args(
+    const IRTrainer& trainer,
+    const std::vector<mx::array>& grads) {
+  const size_t n_weights = trainer.weights.size();
+  if (grads.size() != n_weights) {
+    throw std::runtime_error("compiled AdamW optimizer update gradient count mismatch");
+  }
+  std::vector<mx::array> args;
+  args.reserve(n_weights * 4 + 1 + trainer.optimizer_groups.size() * 2);
+  args.insert(args.end(), trainer.weights.begin(), trainer.weights.end());
+  args.insert(args.end(), trainer.adam_m.begin(), trainer.adam_m.end());
+  args.insert(args.end(), trainer.adam_v.begin(), trainer.adam_v.end());
+  args.insert(args.end(), grads.begin(), grads.end());
   args.push_back(mx::array(trainer.lr_scale, mx::float32));
   for (const auto& group : trainer.optimizer_groups) {
     args.push_back(mx::array(
@@ -1810,7 +1906,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     }
     if (!fused_mamba3_compiled_update_step_notice_logged) {
       std::cerr << "[mlx_ir] fused canonical Mamba3 using compiled AdamW update training step"
-                << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_UPDATE_STEP=1 to use compiled-gradient path)"
+                << " (experimental; unset MIXLAB_MAMBA3_COMPILED_UPDATE_STEP to use compiled-gradient path)"
                 << std::endl;
       fused_mamba3_compiled_update_step_notice_logged = true;
     }
@@ -2057,6 +2153,146 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   grads.reserve(weights.size());
   for (size_t i = 0; i < weights.size(); ++i) {
     grads.push_back(step_out[output_names.size() + i]);
+  }
+  auto run_compiled_fused_mamba3_adamw_optimizer_update = [&]() -> bool {
+    if (!supports_compiled_fused_mamba3_adamw_optimizer_update(*this)) {
+      return false;
+    }
+    if (!fused_mamba3_compiled_optimizer_update_notice_logged) {
+      std::cerr << "[mlx_ir] fused canonical Mamba3 using compiled AdamW optimizer update"
+                << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_OPTIMIZER_UPDATE=1 to use host-built update)"
+                << std::endl;
+      fused_mamba3_compiled_optimizer_update_notice_logged = true;
+    }
+    try {
+      const auto update_signature = compiled_adamw_optimizer_update_signature(*this);
+      if (!compiled_mamba3_optimizer_update ||
+          compiled_mamba3_optimizer_update_signature != update_signature) {
+        const size_t n_weights = weights.size();
+        const auto local_weight_optimizers = weight_optimizers;
+        const auto local_groups = optimizer_groups;
+        const float local_max_grad_norm = max_grad_norm;
+        compiled_mamba3_optimizer_update = mx::compile(
+            [n_weights,
+             local_weight_optimizers,
+             local_groups,
+             local_max_grad_norm](const std::vector<mx::array>& fn_args) {
+              const size_t m_offset = n_weights;
+              const size_t v_offset = n_weights * 2;
+              const size_t grad_offset = n_weights * 3;
+              const size_t scalar_offset = n_weights * 4;
+              const size_t expected_args = scalar_offset + 1 + local_groups.size() * 2;
+              if (fn_args.size() != expected_args) {
+                throw std::runtime_error("compiled AdamW optimizer update received wrong argument count");
+              }
+
+              auto total_norm_sq = mx::array(0.0f, mx::float32);
+              for (size_t i = 0; i < n_weights; ++i) {
+                total_norm_sq = total_norm_sq + mx::sum(mx::square(fn_args[grad_offset + i]));
+              }
+              auto clip_scale = mx::array(1.0f, mx::float32);
+              if (local_max_grad_norm > 0.0f) {
+                clip_scale = mx::minimum(
+                    mx::array(1.0f, mx::float32),
+                    mx::array(local_max_grad_norm, mx::float32) /
+                        (mx::sqrt(total_norm_sq) + mx::array(1e-6f, mx::float32)));
+              }
+
+              const auto& lr_scale_arg = fn_args[scalar_offset];
+              std::vector<mx::array> updated_weights;
+              std::vector<mx::array> updated_m;
+              std::vector<mx::array> updated_v;
+              updated_weights.reserve(n_weights);
+              updated_m.reserve(n_weights);
+              updated_v.reserve(n_weights);
+              for (size_t i = 0; i < n_weights; ++i) {
+                const auto& spec = local_weight_optimizers[i];
+                const auto& group = local_groups[spec.group_index];
+                const auto& b1t = fn_args[scalar_offset + 1 + static_cast<size_t>(spec.group_index) * 2];
+                const auto& b2t = fn_args[scalar_offset + 2 + static_cast<size_t>(spec.group_index) * 2];
+                auto grad = fn_args[grad_offset + i] * clip_scale;
+                auto m = group.beta1 * fn_args[m_offset + i] + (1.0f - group.beta1) * grad;
+                auto v = group.beta2 * fn_args[v_offset + i] + (1.0f - group.beta2) * mx::square(grad);
+                auto mhat = m / b1t;
+                auto vhat = v / b2t;
+                auto effective_lr = group.lr * lr_scale_arg;
+                auto weight = fn_args[i];
+                if (spec.decay && group.weight_decay > 0.0f) {
+                  weight = weight - (effective_lr * group.weight_decay) * weight;
+                }
+                updated_weights.push_back(
+                    weight - effective_lr * mhat / (mx::sqrt(vhat) + group.eps));
+                updated_m.push_back(m);
+                updated_v.push_back(v);
+              }
+
+              std::vector<mx::array> out;
+              out.reserve(n_weights * 3);
+              out.insert(out.end(), updated_weights.begin(), updated_weights.end());
+              out.insert(out.end(), updated_m.begin(), updated_m.end());
+              out.insert(out.end(), updated_v.begin(), updated_v.end());
+              return out;
+            },
+            false);
+        compiled_mamba3_optimizer_update_signature = update_signature;
+      }
+
+      auto update_args = build_compiled_adamw_optimizer_update_args(*this, grads);
+      auto update_out = compiled_mamba3_optimizer_update(update_args);
+      const size_t expected_out = weights.size() * 3;
+      if (update_out.size() != expected_out) {
+        throw std::runtime_error("compiled AdamW optimizer update output count mismatch");
+      }
+
+      std::vector<mx::array> next_weights;
+      std::vector<mx::array> next_adam_m;
+      std::vector<mx::array> next_adam_v;
+      next_weights.reserve(weights.size());
+      next_adam_m.reserve(adam_m.size());
+      next_adam_v.reserve(adam_v.size());
+      size_t offset = 0;
+      for (size_t i = 0; i < weights.size(); ++i) {
+        next_weights.push_back(update_out[offset + i]);
+      }
+      offset += weights.size();
+      for (size_t i = 0; i < adam_m.size(); ++i) {
+        next_adam_m.push_back(update_out[offset + i]);
+      }
+      offset += adam_m.size();
+      for (size_t i = 0; i < adam_v.size(); ++i) {
+        next_adam_v.push_back(update_out[offset + i]);
+      }
+
+      std::vector<mx::array> eval_arrays;
+      eval_arrays.reserve(
+          1 + outputs.size() + next_weights.size() + next_adam_m.size() + next_adam_v.size());
+      eval_arrays.push_back(loss);
+      for (const auto& [_, output] : outputs) {
+        eval_arrays.push_back(output);
+      }
+      eval_arrays.insert(eval_arrays.end(), next_weights.begin(), next_weights.end());
+      eval_arrays.insert(eval_arrays.end(), next_adam_m.begin(), next_adam_m.end());
+      eval_arrays.insert(eval_arrays.end(), next_adam_v.begin(), next_adam_v.end());
+      mx::eval(eval_arrays);
+      weights = std::move(next_weights);
+      adam_m = std::move(next_adam_m);
+      adam_v = std::move(next_adam_v);
+      report_gated_delta_timing_summary("step", step_count);
+      pending_loss_ = loss;
+      pending_outputs_ = std::move(outputs);
+      has_pending_step_ = true;
+      pending_step_index_ = step_count;
+      return true;
+    } catch (const std::exception& e) {
+      log_fused_mamba3_compiled_optimizer_update_fallback_once(*this, e);
+      fused_mamba3_compiled_optimizer_update_disabled = true;
+      compiled_mamba3_optimizer_update = nullptr;
+      compiled_mamba3_optimizer_update_signature.clear();
+      return false;
+    }
+  };
+  if (use_compiled_step && run_compiled_fused_mamba3_adamw_optimizer_update()) {
+    return;
   }
   auto preclip_grads = grads;
   clip_gradients(grads, max_grad_norm);
@@ -2342,12 +2578,17 @@ void IRTrainer::set_program(const IRProgram& new_program) {
   compiled_named_step_signature.clear();
   compiled_named_update_step = nullptr;
   compiled_named_update_step_signature.clear();
+  compiled_mamba3_optimizer_update = nullptr;
+  compiled_mamba3_optimizer_update_signature.clear();
   compiled_mamba3_grad_chunks.clear();
   compiled_mamba3_grad_chunks_signature.clear();
   compiled_mamba3_grad_chunks_disabled = false;
   compiled_mamba3_grad_chunks_fallback_logged = false;
   adaptive_mamba3_grad_chunk_elements = 0;
   adaptive_mamba3_grad_chunk_fallback_logged = false;
+  fused_mamba3_compiled_optimizer_update_disabled = false;
+  fused_mamba3_compiled_optimizer_update_notice_logged = false;
+  fused_mamba3_compiled_optimizer_update_fallback_logged = false;
   fused_mamba3_compiled_update_step_disabled = false;
   fused_mamba3_compiled_update_step_notice_logged = false;
   fused_mamba3_compiled_update_step_fallback_logged = false;
