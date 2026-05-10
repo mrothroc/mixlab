@@ -37,6 +37,9 @@ func TestTuneCUDAGraphLimits_UsesGatedDeltaNetFloor(t *testing.T) {
 	if got.MaxMBPerBuffer != 0 {
 		t.Fatalf("max MB=%d, want 0", got.MaxMBPerBuffer)
 	}
+	if got.GraphCacheSize != 0 {
+		t.Fatalf("graph cache size=%d, want 0", got.GraphCacheSize)
+	}
 }
 
 func TestTuneCUDAGraphLimits_KeepsPlainIRTune(t *testing.T) {
@@ -66,6 +69,9 @@ func TestTuneCUDAGraphLimits_KeepsPlainIRTune(t *testing.T) {
 	}
 	if got.MaxMBPerBuffer != 0 {
 		t.Fatalf("max MB=%d, want 0", got.MaxMBPerBuffer)
+	}
+	if got.GraphCacheSize != 0 {
+		t.Fatalf("graph cache size=%d, want 0", got.GraphCacheSize)
 	}
 }
 
@@ -110,15 +116,20 @@ func TestTuneCUDAGraphLimits_CapsCanonicalMamba3Scan(t *testing.T) {
 	if got.MaxMBPerBuffer != maxMamba3SelectiveScanMBPerBuffer {
 		t.Fatalf("max MB=%d, want Mamba3 cap %d", got.MaxMBPerBuffer, maxMamba3SelectiveScanMBPerBuffer)
 	}
+	if got.GraphCacheSize != mamba3CUDAGraphCacheSize {
+		t.Fatalf("graph cache size=%d, want Mamba3 cache size %d", got.GraphCacheSize, mamba3CUDAGraphCacheSize)
+	}
 }
 
 func TestApplyCUDAGraphLimits_PreservesUserEnv(t *testing.T) {
 	t.Setenv(MLXMaxOpsPerBufferEnv, "999")
+	t.Setenv(MLXCUDAGraphCacheEnv, "777")
 	unsetEnvForTest(t, MLXMaxMBPerBufferEnv)
 
 	ApplyCUDAGraphLimits(CUDAGraphLimits{
 		MaxOpsPerBuffer: 64,
 		MaxMBPerBuffer:  128,
+		GraphCacheSize:  1024,
 	})
 
 	if got := os.Getenv(MLXMaxOpsPerBufferEnv); got != "999" {
@@ -126,6 +137,25 @@ func TestApplyCUDAGraphLimits_PreservesUserEnv(t *testing.T) {
 	}
 	if got := os.Getenv(MLXMaxMBPerBufferEnv); got != "128" {
 		t.Fatalf("%s=%q, want 128", MLXMaxMBPerBufferEnv, got)
+	}
+	if got := os.Getenv(MLXCUDAGraphCacheEnv); got != "777" {
+		t.Fatalf("%s=%q, want user value 777", MLXCUDAGraphCacheEnv, got)
+	}
+}
+
+func TestApplyCUDAGraphLimits_AppliesGraphCacheSize(t *testing.T) {
+	unsetEnvForTest(t, MLXMaxOpsPerBufferEnv)
+	unsetEnvForTest(t, MLXMaxMBPerBufferEnv)
+	unsetEnvForTest(t, MLXCUDAGraphCacheEnv)
+
+	ApplyCUDAGraphLimits(CUDAGraphLimits{
+		MaxOpsPerBuffer: 64,
+		MaxMBPerBuffer:  128,
+		GraphCacheSize:  1024,
+	})
+
+	if got := os.Getenv(MLXCUDAGraphCacheEnv); got != "1024" {
+		t.Fatalf("%s=%q, want 1024", MLXCUDAGraphCacheEnv, got)
 	}
 }
 

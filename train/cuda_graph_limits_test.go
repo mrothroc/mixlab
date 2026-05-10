@@ -11,7 +11,7 @@ import (
 func TestMergeCUDAGraphLimits_PrioritizesSmallGraphCap(t *testing.T) {
 	got := mergeCUDAGraphLimits(
 		gpu.CUDAGraphLimits{MaxOpsPerBuffer: 16000},
-		gpu.CUDAGraphLimits{MaxOpsPerBuffer: 64, MaxMBPerBuffer: 128},
+		gpu.CUDAGraphLimits{MaxOpsPerBuffer: 64, MaxMBPerBuffer: 128, GraphCacheSize: 1024},
 	)
 
 	if got.MaxOpsPerBuffer != 64 {
@@ -19,6 +19,9 @@ func TestMergeCUDAGraphLimits_PrioritizesSmallGraphCap(t *testing.T) {
 	}
 	if got.MaxMBPerBuffer != 128 {
 		t.Fatalf("max MB=%d, want 128", got.MaxMBPerBuffer)
+	}
+	if got.GraphCacheSize != 1024 {
+		t.Fatalf("graph cache size=%d, want 1024", got.GraphCacheSize)
 	}
 }
 
@@ -61,6 +64,9 @@ func TestCUDAGraphLimitsForSelection_LoadsConfigDir(t *testing.T) {
 	if got.MaxMBPerBuffer != 128 {
 		t.Fatalf("max MB=%d, want Mamba3 cap 128", got.MaxMBPerBuffer)
 	}
+	if got.GraphCacheSize != 1024 {
+		t.Fatalf("graph cache size=%d, want Mamba3 graph cache 1024", got.GraphCacheSize)
+	}
 }
 
 func TestConfigureCUDAGraphLimits_AppliesConfigWithoutOverridingUserEnv(t *testing.T) {
@@ -86,6 +92,7 @@ func TestConfigureCUDAGraphLimits_AppliesConfigWithoutOverridingUserEnv(t *testi
 	}`)
 
 	t.Setenv(gpu.MLXMaxOpsPerBufferEnv, "999")
+	t.Setenv(gpu.MLXCUDAGraphCacheEnv, "777")
 	unsetEnvForTest(t, gpu.MLXMaxMBPerBufferEnv)
 
 	ConfigureCUDAGraphLimits(path, "")
@@ -95,6 +102,9 @@ func TestConfigureCUDAGraphLimits_AppliesConfigWithoutOverridingUserEnv(t *testi
 	}
 	if got := os.Getenv(gpu.MLXMaxMBPerBufferEnv); got != "128" {
 		t.Fatalf("%s=%q, want 128", gpu.MLXMaxMBPerBufferEnv, got)
+	}
+	if got := os.Getenv(gpu.MLXCUDAGraphCacheEnv); got != "777" {
+		t.Fatalf("%s=%q, want user value 777", gpu.MLXCUDAGraphCacheEnv, got)
 	}
 }
 

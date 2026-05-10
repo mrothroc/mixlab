@@ -97,7 +97,7 @@ void log_mamba3_cuda_once() {
   static std::atomic<bool> logged{false};
   if (!logged.exchange(true)) {
     std::cerr << "[mlx_ir] canonical Mamba3 scan using fused CUDA primitive"
-              << " (set MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE=1 to use MLX fallback)"
+              << " (set MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE=1 only for small debug fallback runs)"
               << std::endl;
   }
 }

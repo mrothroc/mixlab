@@ -10,6 +10,7 @@ import (
 const (
 	MLXMaxOpsPerBufferEnv = "MLX_MAX_OPS_PER_BUFFER"
 	MLXMaxMBPerBufferEnv  = "MLX_MAX_MB_PER_BUFFER"
+	MLXCUDAGraphCacheEnv  = "MLX_CUDA_GRAPH_CACHE_SIZE"
 
 	minGatedDeltaNetMaxOpsPerBuffer = 16000
 
@@ -18,11 +19,13 @@ const (
 	// H100-scale D=448/T=4096 runs without changing canonical Mamba3 math.
 	maxMamba3SelectiveScanOpsPerBuffer = 64
 	maxMamba3SelectiveScanMBPerBuffer  = 128
+	mamba3CUDAGraphCacheSize           = 1024
 )
 
 type CUDAGraphLimits struct {
 	MaxOpsPerBuffer int
 	MaxMBPerBuffer  int
+	GraphCacheSize  int
 }
 
 // TuneCUDAGraphLimits derives MLX CUDA graph batching limits from backend IR.
@@ -40,6 +43,7 @@ func TuneCUDAGraphLimits(prog *ir.Program) CUDAGraphLimits {
 		return CUDAGraphLimits{
 			MaxOpsPerBuffer: maxOps,
 			MaxMBPerBuffer:  maxMamba3SelectiveScanMBPerBuffer,
+			GraphCacheSize:  mamba3CUDAGraphCacheSize,
 		}
 	}
 	if programHasOp(prog, ir.OpGatedDeltaScan) && maxOps < minGatedDeltaNetMaxOpsPerBuffer {
@@ -61,7 +65,12 @@ func ApplyCUDAGraphLimits(limits CUDAGraphLimits) {
 	if os.Getenv(MLXMaxMBPerBufferEnv) != "" {
 		maxMB = 0
 	}
+	graphCacheSize := limits.GraphCacheSize
+	if os.Getenv(MLXCUDAGraphCacheEnv) != "" {
+		graphCacheSize = 0
+	}
 	SetCUDAGraphLimits(maxOps, maxMB)
+	setCUDAGraphCacheSizeEnv(graphCacheSize)
 }
 
 func setCUDAGraphLimitEnv(maxOps, maxMB int) {
@@ -70,6 +79,12 @@ func setCUDAGraphLimitEnv(maxOps, maxMB int) {
 	}
 	if maxMB > 0 {
 		_ = os.Setenv(MLXMaxMBPerBufferEnv, strconv.Itoa(maxMB))
+	}
+}
+
+func setCUDAGraphCacheSizeEnv(size int) {
+	if size > 0 {
+		_ = os.Setenv(MLXCUDAGraphCacheEnv, strconv.Itoa(size))
 	}
 }
 

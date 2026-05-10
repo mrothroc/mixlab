@@ -43,7 +43,7 @@ Canonical Mamba-3 at competition scale (D=448, T=4096, 8 layers on H100) needed 
 | 1 | Time-axis chunked Hillis-Steele scan | `gpu/ir.cpp::affine_scan_chunked` | Full T-length scan materializes T-sized intermediates per pass; chunk to bound them |
 | 2 | Channel-axis chunking | `gpu/ir.cpp::*_channel_chunked` | Even after time chunking, `[B,T,D,N]` intermediates are huge at D=448; chunk D too |
 | 3 | Hand-written closed-form VJP | `gpu/ir.cpp::mamba3_selective_scan_canonical_phase6_vjp` | MLX autodiff through the parallel scan creates oversized compiled CUDA graphs |
-| 4 | Mamba-3-aware CUDA graph caps | `gpu/cuda_graph_limits.go` | `MLX_MAX_OPS_PER_BUFFER=64`, `MLX_MAX_MB_PER_BUFFER=128` for any program with the scan op |
+| 4 | Mamba-3-aware CUDA graph caps | `gpu/cuda_graph_limits.go` | `MLX_MAX_OPS_PER_BUFFER=64`, `MLX_MAX_MB_PER_BUFFER=128`, `MLX_CUDA_GRAPH_CACHE_SIZE=1024` for any program with the scan or fused block op |
 | 5 | Uncompiled trainer fallback | `gpu/ir_trainer.cpp::use_compiled_training_step` | Even with custom VJP, `mx::compile` over the full step graph fuses everything into one CUDA graph instance — too big at H100 scale |
 | 6 | Native CUDA kernels | `gpu/mamba3_cuda_primitive.{cpp,h}` + `gpu/cuda_kernels/mamba3_selective_scan_*.cu` | `mx::Primitive` subclasses with `eval_gpu` that launch precompiled fatbins. M1/Metal/non-CUDA falls back to the MLX-composed path. |
 | 7 | Fused `OP_MAMBA3_CANONICAL_BLOCK` op | `arch/ir.go` + `gpu/ir.cpp` | Block emitted as a single IR op, not 25 separate ones. The IR-side handler does the entire forward + backward in one C++ function. **Do not wrap it in `mx::custom_vjp`** — that recreates the graph-fusion problem (see "Anti-pattern" below). |
@@ -58,7 +58,8 @@ Past incident: commit `e1899bf` wrapped 20+ MLX ops in `mx::custom_vjp` for the 
 
 | Var | Default | Effect |
 |---|---|---|
-| `MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE` | unset | Force MLX-composed fallback even on Linux+CUDA |
+| `MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE` | unset | Disable the native selective-scan primitive for small debug fallback runs. Unsupported for fused canonical block training unless `MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK=1` is also set. |
+| `MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK` | unset | Explicitly allow the debug MLX-composed scan fallback inside fused canonical block training. This can create invalid or oversized CUDA graphs at production scale. |
 | `MIXLAB_MAMBA3_CHANNEL_CHUNK` | auto (~16ch at production) | Channels per chunk in the channel-axis chunking |
 | `MIXLAB_FORCE_COMPILED_STEP` | unset | Force `mx::compile` even for Mamba-3 programs |
 | `MIXLAB_DISABLE_COMPILED_STEP` | unset | Force eager `value_and_grad` for any program |
@@ -67,9 +68,11 @@ Past incident: commit `e1899bf` wrapped 20+ MLX ops in `mx::custom_vjp` for the 
 | `MIXLAB_FORCE_MAMBA3_COMPILED_UPDATE_STEP` | unset | Force compiled update path even if it OOMs |
 | `MIXLAB_MAMBA3_HOST_TIMING_START` | `100` | First step that emits host-timing log |
 | `MIXLAB_MAMBA3_HOST_TIMING_EVERY` | `100` | Cadence of host-timing log |
+| `MIXLAB_MAMBA3_HOST_TIMING` | unset | Emit fused canonical Mamba3 host timing logs |
 | `MIXLAB_DISABLE_MAMBA3_HOST_TIMING` | unset | Suppress host-timing log entirely |
 | `MLX_MAX_OPS_PER_BUFFER` | auto via `gpu.TuneCUDAGraphLimits` | User override of CUDA graph batching cap |
 | `MLX_MAX_MB_PER_BUFFER` | auto | Same, by total bytes |
+| `MLX_CUDA_GRAPH_CACHE_SIZE` | auto (`1024`) | CUDA graph variant cache size for canonical Mamba3; explicit user values are preserved |
 
 ## Verification tests
 - `train/gpu_trainer_mamba3_test.go::TestMamba3SelectiveScanGrad` — analytical CPU oracle vs MLX gradients (~1e-6 relative error) at G ∈ {1,2}, chunk ∈ {0,3}

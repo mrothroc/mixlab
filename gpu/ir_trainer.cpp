@@ -144,6 +144,25 @@ bool should_log_mamba3_host_timing(int step) {
   return step >= start && ((step - start) % every) == 0;
 }
 
+void validate_fused_mamba3_cuda_primitive_config(const IRProgram& program) {
+  if (!program_has_fused_canonical_mamba3_block(program)) {
+    return;
+  }
+  if (!env_truthy("MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE")) {
+    return;
+  }
+  if (env_truthy("MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK")) {
+    return;
+  }
+  throw std::runtime_error(
+      "MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE=1 is unsupported for fused canonical "
+      "Mamba3 training: it disables only the selective-scan CUDA primitive inside "
+      "OP_MAMBA3_CANONICAL_BLOCK, not the fused block lowering, and the MLX-composed "
+      "scan fallback can produce invalid or oversized CUDA graphs at this scale. "
+      "Unset MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE for production, or set "
+      "MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK=1 for small debug-only fallback runs.");
+}
+
 using HostClock = std::chrono::steady_clock;
 
 long long elapsed_us(HostClock::time_point start, HostClock::time_point end) {
@@ -1747,6 +1766,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     move_pending_step_to_ready(*this);
   }
   step_count++;
+  validate_fused_mamba3_cuda_primitive_config(program);
   const bool timing_enabled =
       program_has_fused_canonical_mamba3_block(program) &&
       should_log_mamba3_host_timing(step_count);

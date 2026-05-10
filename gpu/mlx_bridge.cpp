@@ -55,9 +55,9 @@ std::string bridge_exception_message(const std::exception& e) {
       "for this workload. Increase MLX_MAX_OPS_PER_BUFFER (current " +
       env_value_or_unset("MLX_MAX_OPS_PER_BUFFER") + ") and/or MLX_MAX_MB_PER_BUFFER (current " +
       env_value_or_unset("MLX_MAX_MB_PER_BUFFER") +
-      "). For graph-variant-heavy workloads, start with MLX_MAX_OPS_PER_BUFFER=16000. "
-      "MLX_CUDA_GRAPH_CACHE_SIZE may appear in upstream MLX errors, but mixlab's CUDA "
-      "batching knobs are MLX_MAX_OPS_PER_BUFFER and MLX_MAX_MB_PER_BUFFER.";
+      "), and set MLX_CUDA_GRAPH_CACHE_SIZE above the upstream default (current " +
+      env_value_or_unset("MLX_CUDA_GRAPH_CACHE_SIZE") + "). For canonical Mamba3, mixlab "
+      "auto-tunes these before MLX initializes unless the environment already overrides them.";
 }
 
 }  // namespace

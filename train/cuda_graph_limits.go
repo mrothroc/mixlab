@@ -57,6 +57,7 @@ func mergeCUDAGraphLimits(a, b gpu.CUDAGraphLimits) gpu.CUDAGraphLimits {
 	out := gpu.CUDAGraphLimits{
 		MaxOpsPerBuffer: max(a.MaxOpsPerBuffer, b.MaxOpsPerBuffer),
 		MaxMBPerBuffer:  max(a.MaxMBPerBuffer, b.MaxMBPerBuffer),
+		GraphCacheSize:  max(a.GraphCacheSize, b.GraphCacheSize),
 	}
 	if out.MaxMBPerBuffer > 0 {
 		out.MaxOpsPerBuffer = minPositive(a.MaxOpsPerBuffer, b.MaxOpsPerBuffer)
