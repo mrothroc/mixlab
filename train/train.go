@@ -487,7 +487,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 	if steps > 0 {
 		initialWaitStart := time.Now()
+		stopInitialBatchWait := startSlowTrainingPhaseLogger(name, 0, "load_initial_batch")
 		batch, ok := <-batchCh
+		stopInitialBatchWait()
 		initialDataDuration := time.Since(initialWaitStart)
 		if !ok {
 			return TrainResult{}, fmt.Errorf("load initial batch: prefetch pipeline closed unexpectedly")
@@ -496,9 +498,12 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			return TrainResult{}, fmt.Errorf("load initial batch: %w", batch.err)
 		}
 		initialSubmitStart := time.Now()
+		stopInitialSubmit := startSlowTrainingPhaseLogger(name, 0, "submit_step")
 		if err := trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, sched.At(0)); err != nil {
+			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("submit step 0: %w", err)
 		}
+		stopInitialSubmit()
 		currentSubmitDuration := time.Since(initialSubmitStart)
 		currentPhaseIdx := -1
 		submitStepWithScheduledState := func(nextStep int, batch trainBatch) (time.Duration, error) {
@@ -555,20 +560,29 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				mtpAuxActive = nextMTPAuxActive
 			}
 			submitStart := time.Now()
+			stopSubmit := startSlowTrainingPhaseLogger(name, nextStep, "submit_step")
 			if err := trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, sched.At(nextStep)); err != nil {
+				stopSubmit()
 				return 0, fmt.Errorf("submit step %d: %w", nextStep, err)
 			}
+			stopSubmit()
 			return time.Since(submitStart), nil
+		}
+		isBoundaryStep := func(step int) bool {
+			return shouldLogTrainingStep(step, steps, logEvery) ||
+				shouldWriteCheckpoint(step, opts.CheckpointEvery) ||
+				shouldUpdateSWA(step, swaStart, swaInterval)
 		}
 		canSubmitNextBeforeCollect := func(step int) bool {
 			if !stepLookaheadEnabled ||
 				step >= steps-1 ||
-				shouldLogTrainingStep(step, steps, logEvery) ||
-				shouldWriteCheckpoint(step, opts.CheckpointEvery) ||
-				shouldUpdateSWA(step, swaStart, swaInterval) {
+				isBoundaryStep(step) {
 				return false
 			}
 			nextStep := step + 1
+			if isBoundaryStep(nextStep) {
+				return false
+			}
 			if qatModeForStep(cfg.Training, nextStep) != qatModeForStep(cfg.Training, step) {
 				return false
 			}
@@ -598,7 +612,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			var nextBatch trainBatch
 			if step < steps-1 {
 				batchWaitStart := time.Now()
+				stopBatchWait := startSlowTrainingPhaseLogger(name, step+1, "load_batch")
 				nextBatch, ok = <-batchCh
+				stopBatchWait()
 				dataDuration = time.Since(batchWaitStart)
 				if !ok {
 					return TrainResult{}, fmt.Errorf("load batch at step %d: prefetch pipeline closed unexpectedly", step+1)
@@ -620,7 +636,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 
 			collectStart := time.Now()
+			stopCollect := startSlowTrainingPhaseLogger(name, step, "collect_loss")
 			lossV, err := trainer.CollectLossGPU()
+			stopCollect()
 			gpuDuration := currentSubmitDuration + time.Since(collectStart)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step, err)
@@ -636,7 +654,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			lastLoss = v
 
 			if shouldUpdateSWA(step, swaStart, swaInterval) {
+				stopSWA := startSlowTrainingPhaseLogger(name, step, "swa_read")
 				weights, err := readTrainerWeights(trainer)
+				stopSWA()
 				if err != nil {
 					return TrainResult{}, fmt.Errorf("swa read at step %d: %w", step, err)
 				}
@@ -652,7 +672,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				valStr := ""
 				if valSet != nil && len(valSet.Batches) > 0 && shouldRunValidationStep(step, steps, valEvery) {
 					valStart := time.Now()
+					stopValidation := startSlowTrainingPhaseLogger(name, step, "validation")
 					valAvg, err := meanValidationLoss(valSet, trainer, batchSize, seqLen)
+					stopValidation()
 					valDuration = time.Since(valStart)
 					if err == nil {
 						lastValLoss = valAvg
@@ -705,9 +727,12 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 
 			if shouldWriteCheckpoint(step, opts.CheckpointEvery) {
+				stopCheckpoint := startSlowTrainingPhaseLogger(name, step, "checkpoint")
 				if err := writeCheckpoint(cfg, trainer, shapes, opts.CheckpointDir, step+1); err != nil {
+					stopCheckpoint()
 					return TrainResult{}, fmt.Errorf("checkpoint at step %d: %w", step+1, err)
 				}
+				stopCheckpoint()
 				fmt.Printf("  [%s] checkpoint saved: %s\n", name, checkpointPath(opts.CheckpointDir, step+1))
 			}
 

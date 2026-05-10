@@ -1747,20 +1747,20 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       return;
     }
     const auto now = HostClock::now();
-    std::cerr << "[mlx_ir] canonical Mamba3 host timing"
+    std::cout << "[mlx_ir] canonical Mamba3 host timing"
               << " step=" << step_count
               << " path=" << path
               << " prep_us=" << timing_prep_us;
     if (timing_grad_us >= 0) {
-      std::cerr << " grad_us=" << timing_grad_us;
+      std::cout << " grad_us=" << timing_grad_us;
     }
     if (timing_opt_us >= 0) {
-      std::cerr << " opt_us=" << timing_opt_us;
+      std::cout << " opt_us=" << timing_opt_us;
     }
     if (timing_eval_us >= 0) {
-      std::cerr << " eval_us=" << timing_eval_us;
+      std::cout << " eval_us=" << timing_eval_us;
     }
-    std::cerr << " total_us=" << elapsed_us(submit_t0, now)
+    std::cout << " total_us=" << elapsed_us(submit_t0, now)
               << std::endl;
   };
 
@@ -2522,7 +2522,7 @@ float IRTrainer::collect_loss() {
     if (!timing_enabled) {
       return;
     }
-    std::cerr << "[mlx_ir] canonical Mamba3 host timing"
+    std::cout << "[mlx_ir] canonical Mamba3 host timing"
               << " step=" << timing_step
               << " path=collect"
               << " state=" << state_label
