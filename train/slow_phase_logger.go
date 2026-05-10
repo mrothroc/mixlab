@@ -16,6 +16,9 @@ var (
 
 func slowTrainingPhaseThreshold() time.Duration {
 	slowTrainingPhaseThresholdOnce.Do(func() {
+		if !envTruthy("MIXLAB_TRAINING_SLOW_PHASE_LOGS") {
+			return
+		}
 		if envTruthy("MIXLAB_DISABLE_TRAINING_SLOW_PHASE_LOGS") {
 			return
 		}
@@ -36,10 +39,10 @@ func slowTrainingPhaseThreshold() time.Duration {
 }
 
 // startSlowTrainingPhaseLogger arms a watchdog that prints periodic
-// "slow training phase" warnings if the phase exceeds the configured
-// threshold (default 30s, override via MIXLAB_TRAINING_SLOW_PHASE_SECONDS,
-// disable via MIXLAB_DISABLE_TRAINING_SLOW_PHASE_LOGS=1). Returns a stop
-// function the caller invokes when the phase completes.
+// "slow training phase" warnings when MIXLAB_TRAINING_SLOW_PHASE_LOGS=1 and
+// the phase exceeds the configured threshold (default 30s, override via
+// MIXLAB_TRAINING_SLOW_PHASE_SECONDS). Returns a stop function the caller
+// invokes when the phase completes.
 func startSlowTrainingPhaseLogger(runName string, step int, phase string) func() {
 	threshold := slowTrainingPhaseThreshold()
 	if threshold <= 0 {

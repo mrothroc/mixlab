@@ -133,6 +133,9 @@ bool should_log_step_debug(int step) {
 }
 
 bool should_log_mamba3_host_timing(int step) {
+  if (!env_truthy("MIXLAB_MAMBA3_HOST_TIMING")) {
+    return false;
+  }
   if (env_truthy("MIXLAB_DISABLE_MAMBA3_HOST_TIMING")) {
     return false;
   }
@@ -1416,6 +1419,15 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program, c
   return output_names;
 }
 
+std::vector<std::string> collect_training_step_output_names(const IRProgram& program) {
+  if (program_has_fused_canonical_mamba3_block(program) &&
+      env_truthy("MIXLAB_MAMBA3_LOSS_ONLY_TRAIN_OUTPUTS") &&
+      !env_truthy("MIXLAB_MAMBA3_CAPTURE_TRAIN_OUTPUTS")) {
+    return {"loss"};
+  }
+  return collect_cached_output_names(program);
+}
+
 std::vector<std::string> sorted_input_names(const TensorMap& inputs) {
   std::vector<std::string> names;
   names.reserve(inputs.size());
@@ -1471,7 +1483,7 @@ void refresh_named_step_metadata(IRTrainer& trainer, const TensorMap& inputs) {
       trainer.cached_named_step_argnums.begin(),
       trainer.cached_named_step_argnums.end(),
       0);
-  trainer.cached_named_step_output_names = collect_cached_output_names(trainer.program);
+  trainer.cached_named_step_output_names = collect_training_step_output_names(trainer.program);
   trainer.cached_named_step_input_names = sorted_input_names(inputs);
   trainer.cached_named_step_input_dtypes.clear();
   trainer.cached_named_step_input_shapes.clear();

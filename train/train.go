@@ -568,21 +568,15 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			stopSubmit()
 			return time.Since(submitStart), nil
 		}
-		isBoundaryStep := func(step int) bool {
-			return shouldLogTrainingStep(step, steps, logEvery) ||
-				shouldWriteCheckpoint(step, opts.CheckpointEvery) ||
-				shouldUpdateSWA(step, swaStart, swaInterval)
-		}
 		canSubmitNextBeforeCollect := func(step int) bool {
 			if !stepLookaheadEnabled ||
 				step >= steps-1 ||
-				isBoundaryStep(step) {
+				shouldLogTrainingStep(step, steps, logEvery) ||
+				shouldWriteCheckpoint(step, opts.CheckpointEvery) ||
+				shouldUpdateSWA(step, swaStart, swaInterval) {
 				return false
 			}
 			nextStep := step + 1
-			if isBoundaryStep(nextStep) {
-				return false
-			}
 			if qatModeForStep(cfg.Training, nextStep) != qatModeForStep(cfg.Training, step) {
 				return false
 			}
