@@ -35,12 +35,12 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
   const int n0 = 2 * k;
   const int n1 = n0 + 1;
 
-  __shared__ float grad_x_partials[32];
-  __shared__ float grad_dt_partials[32];
-  __shared__ float grad_lambda_partials[32];
-
+  float A0 = 0.0f;
+  float A1 = 0.0f;
   float phi = 0.0f;
   if (active) {
+    A0 = -mamba3_exp(a_log[d * N + n0]);
+    A1 = -mamba3_exp(a_log[d * N + n1]);
     for (int t = 0; t < T; ++t) {
       const int row = b * T + t;
       const int xd = mamba3_channel_idx(row, d, D);
@@ -75,10 +75,14 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
       float replay_prev_x = 0.0f;
       if (window_start > 0) {
         const int prev_row = b * T + window_start - 1;
-        mamba3_rotate_pair(
+        float s_replay_phi;
+        float c_replay_phi;
+        mamba3_sincos(replay_phi, &s_replay_phi, &c_replay_phi);
+        mamba3_rotate_pair_cs(
             b_proj_flat[mamba3_group_idx(prev_row, g, n0, G, N)],
             b_proj_flat[mamba3_group_idx(prev_row, g, n1, G, N)],
-            replay_phi,
+            c_replay_phi,
+            s_replay_phi,
             &replay_prev_b0,
             &replay_prev_b1);
         replay_prev_x = x_flat[mamba3_channel_idx(prev_row, d, D)];
@@ -91,18 +95,20 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
         const float replay_dt = mamba3_softplus(dt_flat[replay_xd]);
         const float replay_lambda = mamba3_sigmoid(lambda_flat[replay_xd]);
         replay_phi += replay_dt * theta_flat[mamba3_theta_idx(replay_row, d, k, D, K)];
+        float s_replay_phi;
+        float c_replay_phi;
+        mamba3_sincos(replay_phi, &s_replay_phi, &c_replay_phi);
         float replay_b0;
         float replay_b1;
-        mamba3_rotate_pair(
+        mamba3_rotate_pair_cs(
             b_proj_flat[mamba3_group_idx(replay_row, g, n0, G, N)],
             b_proj_flat[mamba3_group_idx(replay_row, g, n1, G, N)],
-            replay_phi,
+            c_replay_phi,
+            s_replay_phi,
             &replay_b0,
             &replay_b1);
-        const float replay_A0 = -mamba3_exp(a_log[d * N + n0]);
-        const float replay_A1 = -mamba3_exp(a_log[d * N + n1]);
-        const float replay_alpha0 = mamba3_exp(replay_dt * replay_A0);
-        const float replay_alpha1 = mamba3_exp(replay_dt * replay_A1);
+        const float replay_alpha0 = mamba3_exp(replay_dt * A0);
+        const float replay_alpha1 = mamba3_exp(replay_dt * A1);
         const float replay_beta0 = (1.0f - replay_lambda) * replay_dt * replay_alpha0;
         const float replay_beta1 = (1.0f - replay_lambda) * replay_dt * replay_alpha1;
         const float replay_gamma = replay_lambda * replay_dt;
@@ -137,25 +143,28 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
         const float phi_prev = phi - dt * theta;
         const float dy = dy_flat[xd];
 
+        float sphi;
+        float cphi;
+        mamba3_sincos(phi, &sphi, &cphi);
         float b0;
         float b1;
         float c0;
         float c1;
-        mamba3_rotate_pair(
+        mamba3_rotate_pair_cs(
             b_proj_flat[mamba3_group_idx(row, g, n0, G, N)],
             b_proj_flat[mamba3_group_idx(row, g, n1, G, N)],
-            phi,
+            cphi,
+            sphi,
             &b0,
             &b1);
-        mamba3_rotate_pair(
+        mamba3_rotate_pair_cs(
             c_proj_flat[mamba3_group_idx(row, g, n0, G, N)],
             c_proj_flat[mamba3_group_idx(row, g, n1, G, N)],
-            phi,
+            cphi,
+            sphi,
             &c0,
             &c1);
 
-        const float A0 = -mamba3_exp(a_log[d * N + n0]);
-        const float A1 = -mamba3_exp(a_log[d * N + n1]);
         const float alpha0 = mamba3_exp(dt * A0);
         const float alpha1 = mamba3_exp(dt * A1);
         const float beta0 = (1.0f - lambda) * dt * alpha0;
@@ -166,12 +175,16 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
         float prev_input1 = 0.0f;
         if (t > 0) {
           const int prev_row = b * T + t - 1;
+          float sphi_prev;
+          float cphi_prev;
+          mamba3_sincos(phi_prev, &sphi_prev, &cphi_prev);
           float prev_b0;
           float prev_b1;
-          mamba3_rotate_pair(
+          mamba3_rotate_pair_cs(
               b_proj_flat[mamba3_group_idx(prev_row, g, n0, G, N)],
               b_proj_flat[mamba3_group_idx(prev_row, g, n1, G, N)],
-              phi_prev,
+              cphi_prev,
+              sphi_prev,
               &prev_b0,
               &prev_b1);
           const float prev_x = x_flat[mamba3_channel_idx(prev_row, d, D)];
@@ -222,8 +235,6 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
         grad_lambda_pair +=
             (-dt * alpha1 * prev_input1 + dt * current_input1) * upstream1;
 
-        const float cphi = mamba3_cos(phi);
-        const float sphi = mamba3_sin(phi);
         atomicAdd(&grad_b[mamba3_group_idx(row, g, n0, G, N)], cphi * grad_b0 - sphi * grad_b1);
         atomicAdd(&grad_b[mamba3_group_idx(row, g, n1, G, N)], sphi * grad_b0 + cphi * grad_b1);
         atomicAdd(&grad_c[mamba3_group_idx(row, g, n0, G, N)], cphi * grad_c0 - sphi * grad_c1);
@@ -245,24 +256,14 @@ extern "C" __global__ void mamba3_selective_scan_bwd(
         phi = phi_prev;
       }
 
-      grad_x_partials[k] = grad_x_pair;
-      grad_dt_partials[k] = grad_dt_pair;
-      grad_lambda_partials[k] = grad_lambda_pair;
-      __syncthreads();
-      for (int stride = 16; stride > 0; stride >>= 1) {
-        if (k < stride) {
-          grad_x_partials[k] += grad_x_partials[k + stride];
-          grad_dt_partials[k] += grad_dt_partials[k + stride];
-          grad_lambda_partials[k] += grad_lambda_partials[k + stride];
-        }
-        __syncthreads();
-      }
+      grad_x_pair = mamba3_warp_sum(grad_x_pair);
+      grad_dt_pair = mamba3_warp_sum(grad_dt_pair);
+      grad_lambda_pair = mamba3_warp_sum(grad_lambda_pair);
       if (k == 0 && b < B && d < D) {
-        grad_x[xd] = grad_x_partials[0];
-        grad_dt[xd] = grad_dt_partials[0] * mamba3_sigmoid(dt_raw);
-        grad_lambda[xd] = grad_lambda_partials[0] * lambda * (1.0f - lambda);
+        grad_x[xd] = grad_x_pair;
+        grad_dt[xd] = grad_dt_pair * mamba3_sigmoid(dt_raw);
+        grad_lambda[xd] = grad_lambda_pair * lambda * (1.0f - lambda);
       }
-      __syncthreads();
     }
   }
 }

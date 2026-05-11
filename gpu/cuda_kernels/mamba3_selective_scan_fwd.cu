@@ -24,14 +24,18 @@ extern "C" __global__ void mamba3_selective_scan_fwd(
   const int n0 = 2 * k;
   const int n1 = n0 + 1;
 
-  __shared__ float partials[32];
-
   float phi = 0.0f;
   float h0 = 0.0f;
   float h1 = 0.0f;
   float prev_b0 = 0.0f;
   float prev_b1 = 0.0f;
   float prev_x = 0.0f;
+  float A0 = 0.0f;
+  float A1 = 0.0f;
+  if (active) {
+    A0 = -mamba3_exp(a_log[d * N + n0]);
+    A1 = -mamba3_exp(a_log[d * N + n1]);
+  }
 
   for (int t = 0; t < T; ++t) {
     const int row = b * T + t;
@@ -46,25 +50,28 @@ extern "C" __global__ void mamba3_selective_scan_fwd(
       const float theta = theta_flat[mamba3_theta_idx(row, d, k, D, K)];
       phi += dt * theta;
 
+      float sphi;
+      float cphi;
+      mamba3_sincos(phi, &sphi, &cphi);
       float b0;
       float b1;
       float c0;
       float c1;
-      mamba3_rotate_pair(
+      mamba3_rotate_pair_cs(
           b_proj_flat[mamba3_group_idx(row, g, n0, G, N)],
           b_proj_flat[mamba3_group_idx(row, g, n1, G, N)],
-          phi,
+          cphi,
+          sphi,
           &b0,
           &b1);
-      mamba3_rotate_pair(
+      mamba3_rotate_pair_cs(
           c_proj_flat[mamba3_group_idx(row, g, n0, G, N)],
           c_proj_flat[mamba3_group_idx(row, g, n1, G, N)],
-          phi,
+          cphi,
+          sphi,
           &c0,
           &c1);
 
-      const float A0 = -mamba3_exp(a_log[d * N + n0]);
-      const float A1 = -mamba3_exp(a_log[d * N + n1]);
       const float alpha0 = mamba3_exp(dt * A0);
       const float alpha1 = mamba3_exp(dt * A1);
       const float beta0 = (1.0f - lambda) * dt * alpha0;
@@ -79,17 +86,9 @@ extern "C" __global__ void mamba3_selective_scan_fwd(
       prev_x = x;
     }
 
-    partials[k] = partial;
-    __syncthreads();
-    for (int stride = 16; stride > 0; stride >>= 1) {
-      if (k < stride) {
-        partials[k] += partials[k + stride];
-      }
-      __syncthreads();
-    }
+    partial = mamba3_warp_sum(partial);
     if (k == 0 && b < B && d < D) {
-      y_flat[xd] = partials[0];
+      y_flat[xd] = partial;
     }
-    __syncthreads();
   }
 }

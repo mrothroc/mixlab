@@ -30,16 +30,38 @@ __device__ inline float mamba3_sin(float x) {
   return __sinf(x);
 }
 
+__device__ inline void mamba3_sincos(float x, float* s, float* c) {
+  __sincosf(x, s, c);
+}
+
+__device__ inline void mamba3_rotate_pair_cs(
+    float even,
+    float odd,
+    float c,
+    float s,
+    float* rot_even,
+    float* rot_odd) {
+  *rot_even = c * even + s * odd;
+  *rot_odd = -s * even + c * odd;
+}
+
 __device__ inline void mamba3_rotate_pair(
     float even,
     float odd,
     float phi,
     float* rot_even,
     float* rot_odd) {
-  const float c = mamba3_cos(phi);
-  const float s = mamba3_sin(phi);
-  *rot_even = c * even + s * odd;
-  *rot_odd = -s * even + c * odd;
+  float s;
+  float c;
+  mamba3_sincos(phi, &s, &c);
+  mamba3_rotate_pair_cs(even, odd, c, s, rot_even, rot_odd);
+}
+
+__device__ inline float mamba3_warp_sum(float value) {
+  for (int offset = 16; offset > 0; offset >>= 1) {
+    value += __shfl_down_sync(0xffffffffu, value, offset);
+  }
+  return value;
 }
 
 __device__ inline int mamba3_state_idx(int row, int d, int n, int D, int N) {

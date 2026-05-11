@@ -36,6 +36,8 @@ extern "C" __global__ void mamba3_selective_scan_checkpoints(
   float prev_b0 = 0.0f;
   float prev_b1 = 0.0f;
   float prev_x = 0.0f;
+  const float A0 = -mamba3_exp(a_log[d * N + n0]);
+  const float A1 = -mamba3_exp(a_log[d * N + n1]);
 
   for (int t = 0; t < T; ++t) {
     if ((t % window_size) == 0) {
@@ -54,17 +56,19 @@ extern "C" __global__ void mamba3_selective_scan_checkpoints(
     const float theta = theta_flat[mamba3_theta_idx(row, d, k, D, K)];
     phi += dt * theta;
 
+    float sphi;
+    float cphi;
+    mamba3_sincos(phi, &sphi, &cphi);
     float b0;
     float b1;
-    mamba3_rotate_pair(
+    mamba3_rotate_pair_cs(
         b_proj_flat[mamba3_group_idx(row, g, n0, G, N)],
         b_proj_flat[mamba3_group_idx(row, g, n1, G, N)],
-        phi,
+        cphi,
+        sphi,
         &b0,
         &b1);
 
-    const float A0 = -mamba3_exp(a_log[d * N + n0]);
-    const float A1 = -mamba3_exp(a_log[d * N + n1]);
     const float alpha0 = mamba3_exp(dt * A0);
     const float alpha1 = mamba3_exp(dt * A1);
     const float beta0 = (1.0f - lambda) * dt * alpha0;
