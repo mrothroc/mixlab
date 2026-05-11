@@ -6,9 +6,9 @@ package gpu
 /*
 #cgo CFLAGS: -I.
 #cgo CXXFLAGS: -std=c++20 -I.
-#cgo darwin CFLAGS: -I/opt/homebrew/lib/python3.11/site-packages/mlx/include
-#cgo darwin CXXFLAGS: -I/opt/homebrew/lib/python3.11/site-packages/mlx/include -I/opt/homebrew/lib/python3.11/site-packages/mlx/include/metal_cpp
-#cgo darwin LDFLAGS: -L/opt/homebrew/lib/python3.11/site-packages/mlx/lib -Wl,-rpath,/opt/homebrew/lib/python3.11/site-packages/mlx/lib -lmlx -framework Metal -framework Foundation -framework Accelerate
+#cgo darwin CFLAGS: -I/opt/homebrew/opt/mlx/include
+#cgo darwin CXXFLAGS: -I/opt/homebrew/opt/mlx/include -I/opt/homebrew/opt/mlx/include/metal_cpp
+#cgo darwin LDFLAGS: -L/opt/homebrew/opt/mlx/lib -Wl,-rpath,/opt/homebrew/opt/mlx/lib -lmlx -framework Metal -framework Foundation -framework Accelerate
 
 #include <stdlib.h>
 #include "mlx_bridge.h"
