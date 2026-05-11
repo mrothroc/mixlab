@@ -39,6 +39,16 @@ func TestMamba3SelectiveScanGradChannelChunked(t *testing.T) {
 	}
 }
 
+func TestMamba3SelectiveScanGradForwardV2(t *testing.T) {
+	if !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_MAMBA3_SCAN_FWD", "v2")
+	t.Setenv("MIXLAB_MAMBA3_SCAN_FWD_CHUNK", "3")
+
+	testMamba3SelectiveScanGrad(t, 2, 3)
+}
+
 func TestDepthwiseConv1DGrad(t *testing.T) {
 	if !gpu.Available() {
 		t.Skip("MLX backend not available")
