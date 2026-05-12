@@ -49,8 +49,6 @@ extern "C" __global__ void mamba3_selective_scan_bwd_v2(
   float beta_next0 = 0.0f;
   float beta_next1 = 0.0f;
   float phi_carry = 0.0f;
-  float grad_a_log0 = 0.0f;
-  float grad_a_log1 = 0.0f;
 
   for (int window = n_windows - 1; window >= 0; --window) {
     const int window_start = window * window_size;
@@ -218,24 +216,26 @@ extern "C" __global__ void mamba3_selective_scan_bwd_v2(
              lambda * current_input1) *
             upstream1;
 
-        grad_a_log0 +=
+        atomicAdd(
+            &grad_a_log[d * N + n0],
             (dt * alpha0 * A0 * h_before0 +
              (1.0f - lambda) * dt * dt * alpha0 * A0 * prev_input0) *
-            upstream0;
-        grad_a_log1 +=
+                upstream0);
+        atomicAdd(
+            &grad_a_log[d * N + n1],
             (dt * alpha1 * A1 * h_before1 +
              (1.0f - lambda) * dt * dt * alpha1 * A1 * prev_input1) *
-            upstream1;
+                upstream1);
 
         grad_lambda_pair +=
             (-dt * alpha0 * prev_input0 + dt * current_input0) * upstream0;
         grad_lambda_pair +=
             (-dt * alpha1 * prev_input1 + dt * current_input1) * upstream1;
 
-        grad_b[mamba3_state_idx(row, d, n0, D, N)] = cphi * grad_b0 - sphi * grad_b1;
-        grad_b[mamba3_state_idx(row, d, n1, D, N)] = sphi * grad_b0 + cphi * grad_b1;
-        grad_c[mamba3_state_idx(row, d, n0, D, N)] = cphi * grad_c0 - sphi * grad_c1;
-        grad_c[mamba3_state_idx(row, d, n1, D, N)] = sphi * grad_c0 + cphi * grad_c1;
+        atomicAdd(&grad_b[mamba3_group_idx(row, g, n0, G, N)], cphi * grad_b0 - sphi * grad_b1);
+        atomicAdd(&grad_b[mamba3_group_idx(row, g, n1, G, N)], sphi * grad_b0 + cphi * grad_b1);
+        atomicAdd(&grad_c[mamba3_group_idx(row, g, n0, G, N)], cphi * grad_c0 - sphi * grad_c1);
+        atomicAdd(&grad_c[mamba3_group_idx(row, g, n1, G, N)], sphi * grad_c0 + cphi * grad_c1);
 
         const float grad_phi = b1 * grad_b0 - b0 * grad_b1 + c1 * grad_c0 - c0 * grad_c1;
         phi_carry += grad_phi;
@@ -262,9 +262,5 @@ extern "C" __global__ void mamba3_selective_scan_bwd_v2(
         grad_lambda[xd] = grad_lambda_pair * lambda * (1.0f - lambda);
       }
     }
-  }
-  if (active) {
-    atomicAdd(&grad_a_log[d * N + n0], grad_a_log0);
-    atomicAdd(&grad_a_log[d * N + n1], grad_a_log1);
   }
 }
