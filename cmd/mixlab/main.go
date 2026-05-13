@@ -34,6 +34,7 @@ func main() {
 	prompt := flag.String("prompt", "", "prompt for generate mode, e.g. token_ids:0,1,2")
 	logprobsOut := flag.String("logprobs-out", "", "write per-token eval NLLs to a binary file (eval mode)")
 	ranksOut := flag.String("ranks-out", "", "write per-token target ranks to a binary file (eval mode); can be combined with -logprobs-out for a single eval pass")
+	uncertaintyOut := flag.String("uncertainty-out", "", "write per-token uncertainty metrics (top-1 prob, entropy, margin) to a binary file (eval mode); can be combined with -logprobs-out and -ranks-out for a single eval pass")
 
 	// profiling flags
 	cpuProfile := flag.String("cpuprofile", "", "write CPU profile to file")
@@ -146,8 +147,8 @@ func main() {
 		must(train.RunArchRace(*configsDir, *trainPattern, opts))
 	case "eval":
 		switch {
-		case *logprobsOut != "" || *ranksOut != "":
-			must(train.RunEvalLogprobsAndRanks(*configPath, *trainPattern, *safetensorsLoad, *lutDir, *logprobsOut, *ranksOut))
+		case *logprobsOut != "" || *ranksOut != "" || *uncertaintyOut != "":
+			must(train.RunEvalLogprobsRanksAndUncertainty(*configPath, *trainPattern, *safetensorsLoad, *lutDir, *logprobsOut, *ranksOut, *uncertaintyOut))
 		default:
 			must(train.RunEvalModeWithLUT(*configPath, *trainPattern, *safetensorsLoad, *lutDir))
 		}

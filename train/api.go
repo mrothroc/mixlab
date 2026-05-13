@@ -55,7 +55,7 @@ func RunEvalModeWithLUT(configPath, trainPattern, safetensorsLoad, lutDir string
 }
 
 func RunEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut string) error {
-	return runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, "")
+	return runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, "", "")
 }
 
 // RunEvalLogprobsAndRanks runs eval mode and writes per-token NLLs to
@@ -64,7 +64,15 @@ func RunEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobs
 // supplied, both outputs are derived from a single GPU pass over the
 // validation set, so the position-aligned records share token IDs.
 func RunEvalLogprobsAndRanks(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut string) error {
-	return runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut)
+	return runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut, "")
+}
+
+// RunEvalLogprobsRanksAndUncertainty runs eval mode and writes any requested
+// per-token NLL, target-rank, and candidate uncertainty files. At least one
+// output path must be non-empty. Rank and uncertainty outputs are derived from
+// one logits pass per batch and align position-by-position with logprobs.
+func RunEvalLogprobsRanksAndUncertainty(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut, uncertaintyOut string) error {
+	return runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut, uncertaintyOut)
 }
 
 func RunGenerate(configPath, safetensorsLoad string, maxTokens int, temperature float32, topK int, prompt string) error {

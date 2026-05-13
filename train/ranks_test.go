@@ -129,6 +129,79 @@ func TestTargetNLLFromLogitsLargeShifted(t *testing.T) {
 	}
 }
 
+func TestUncertaintyFromLogitsUniform(t *testing.T) {
+	logits := []float32{3.0, 3.0, 3.0, 3.0}
+	top1, entropy, margin, err := uncertaintyFromLogits(logits, 4)
+	if err != nil {
+		t.Fatalf("uncertaintyFromLogits: %v", err)
+	}
+	if math.Abs(float64(top1)-0.25) > 1e-6 {
+		t.Fatalf("top1 = %g, want 0.25", top1)
+	}
+	if math.Abs(float64(entropy)-math.Log(4)) > 1e-6 {
+		t.Fatalf("entropy = %g, want log(4)", entropy)
+	}
+	if math.Abs(float64(margin)) > 1e-6 {
+		t.Fatalf("margin = %g, want 0", margin)
+	}
+}
+
+func TestUncertaintyFromLogitsKnownRow(t *testing.T) {
+	logits := []float32{1.0, 2.0, 3.0}
+	top1, entropy, margin, err := uncertaintyFromLogits(logits, 3)
+	if err != nil {
+		t.Fatalf("uncertaintyFromLogits: %v", err)
+	}
+	p0 := math.Exp(1) / (math.Exp(1) + math.Exp(2) + math.Exp(3))
+	p1 := math.Exp(2) / (math.Exp(1) + math.Exp(2) + math.Exp(3))
+	p2 := math.Exp(3) / (math.Exp(1) + math.Exp(2) + math.Exp(3))
+	wantEntropy := -(p0*math.Log(p0) + p1*math.Log(p1) + p2*math.Log(p2))
+	if math.Abs(float64(top1)-p2) > 1e-6 {
+		t.Fatalf("top1 = %g, want %g", top1, p2)
+	}
+	if math.Abs(float64(entropy)-wantEntropy) > 1e-6 {
+		t.Fatalf("entropy = %g, want %g", entropy, wantEntropy)
+	}
+	if math.Abs(float64(margin)-(p2-p1)) > 1e-6 {
+		t.Fatalf("margin = %g, want %g", margin, p2-p1)
+	}
+}
+
+func TestEvalMetricsFromLogitsMatchesHelpers(t *testing.T) {
+	logits := []float32{0.5, 2.0, -1.0, 2.0}
+	nll, rank, top1, entropy, margin, err := evalMetricsFromLogits(logits, 4, 3, true, true)
+	if err != nil {
+		t.Fatalf("evalMetricsFromLogits: %v", err)
+	}
+	wantNLL, err := targetNLLFromLogits(logits, 4, 3)
+	if err != nil {
+		t.Fatalf("targetNLLFromLogits: %v", err)
+	}
+	wantRank, err := targetRankFromLogits(logits, 4, 3)
+	if err != nil {
+		t.Fatalf("targetRankFromLogits: %v", err)
+	}
+	wantTop1, wantEntropy, wantMargin, err := uncertaintyFromLogits(logits, 4)
+	if err != nil {
+		t.Fatalf("uncertaintyFromLogits: %v", err)
+	}
+	if math.Abs(float64(nll-wantNLL)) > 1e-6 {
+		t.Fatalf("nll = %g, want %g", nll, wantNLL)
+	}
+	if rank != wantRank {
+		t.Fatalf("rank = %d, want %d", rank, wantRank)
+	}
+	if math.Abs(float64(top1-wantTop1)) > 1e-6 {
+		t.Fatalf("top1 = %g, want %g", top1, wantTop1)
+	}
+	if math.Abs(float64(entropy-wantEntropy)) > 1e-6 {
+		t.Fatalf("entropy = %g, want %g", entropy, wantEntropy)
+	}
+	if math.Abs(float64(margin-wantMargin)) > 1e-6 {
+		t.Fatalf("margin = %g, want %g", margin, wantMargin)
+	}
+}
+
 func TestTargetRankFromLogitsVocabExceedsUint16(t *testing.T) {
 	// A rank value that would not fit in uint16 must surface as an error.
 	vocab := 1 << 17

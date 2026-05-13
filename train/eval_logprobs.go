@@ -10,9 +10,10 @@ import (
 	"github.com/mrothroc/mixlab/data"
 	"github.com/mrothroc/mixlab/logprobs"
 	"github.com/mrothroc/mixlab/ranks"
+	"github.com/mrothroc/mixlab/uncertainty"
 )
 
-func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut string) error {
+func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut, uncertaintyOut string) error {
 	if configPath == "" {
 		return fmt.Errorf("-config is required for eval mode; pass a JSON config file, e.g.: mixlab -mode eval -config examples/plain_3L.json -safetensors-load weights.st -train 'data/train_*.bin'")
 	}
@@ -22,8 +23,8 @@ func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobs
 	if trainPattern == "" {
 		return fmt.Errorf("-train is required for eval mode; pass a glob pattern for data shards, e.g.: -train 'data/train_*.bin'")
 	}
-	if logprobsOut == "" && ranksOut == "" {
-		return fmt.Errorf("at least one of -logprobs-out or -ranks-out is required for export")
+	if logprobsOut == "" && ranksOut == "" && uncertaintyOut == "" {
+		return fmt.Errorf("at least one of -logprobs-out, -ranks-out, or -uncertainty-out is required for export")
 	}
 
 	session, err := NewInferenceSession(configPath, safetensorsLoad)
@@ -38,7 +39,7 @@ func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobs
 	}
 
 	valPattern := strings.Replace(trainPattern, "train", "val", 1)
-	if err := runFullEvalLogprobs(session, valPattern, lutDir, logprobsOut, ranksOut); err != nil {
+	if err := runFullEvalLogprobs(session, valPattern, lutDir, logprobsOut, ranksOut, uncertaintyOut); err != nil {
 		return err
 	}
 
@@ -51,17 +52,21 @@ func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobs
 	if ranksOut != "" {
 		fmt.Printf("  [%s] wrote per-token target ranks to %s\n", cfg.Name, ranksOut)
 	}
+	if uncertaintyOut != "" {
+		fmt.Printf("  [%s] wrote per-token uncertainty metrics to %s\n", cfg.Name, uncertaintyOut)
+	}
 	return nil
 }
 
-// logprobsRanksWriters bundles the optional writers for the per-token NLL and
-// rank export files so the eval loop can stay clean.
-type logprobsRanksWriters struct {
-	logprobs *logprobs.Writer
-	ranks    *ranks.Writer
+// evalExportWriters bundles the optional writers for per-token export files so
+// the eval loop can stay clean.
+type evalExportWriters struct {
+	logprobs    *logprobs.Writer
+	ranks       *ranks.Writer
+	uncertainty *uncertainty.Writer
 }
 
-func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobsOut, ranksOut string) error {
+func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobsOut, ranksOut, uncertaintyOut string) error {
 	cfg := session.Config()
 	seqLen := cfg.SeqLen
 	batchTokens := cfg.Training.BatchTokens
@@ -92,15 +97,16 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 		return fmt.Errorf("validation set has no complete sequences")
 	}
 
-	writers, closeWriters, err := openExportWriters(cfg.VocabSize, totalTokens, logprobsOut, ranksOut)
+	writers, closeWriters, err := openExportWriters(cfg.VocabSize, totalTokens, logprobsOut, ranksOut, uncertaintyOut)
 	if err != nil {
 		return err
 	}
 	defer closeWriters()
 
-	// When ranks are requested we read logits once per batch and derive both
-	// NLL and rank on the CPU; this avoids a second GPU pass for the same data.
-	deriveFromLogits := ranksOut != ""
+	// When ranks or uncertainty are requested we read logits once per batch and
+	// derive all requested metrics on the CPU; this avoids a second GPU pass for
+	// the same data.
+	deriveFromLogits := ranksOut != "" || uncertaintyOut != ""
 
 	totalLossNats := 0.0
 	totalBytes := 0.0
@@ -114,6 +120,9 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 	// Per-batch scratch reused across iterations.
 	nllsBuf := make([]float32, batchTokens)
 	ranksBuf := make([]uint16, batchTokens)
+	top1Buf := make([]float32, batchTokens)
+	entropyBuf := make([]float32, batchTokens)
+	marginBuf := make([]float32, batchTokens)
 
 	for rawStart < totalTokens {
 		chunkTokens := min(batchTokens, totalTokens-rawStart)
@@ -151,19 +160,20 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 			}
 			for i := range chunkTokens {
 				row := logits[i*vocab : (i+1)*vocab]
-				nll, err := targetNLLFromLogits(row, vocab, yIDs[i])
+				nll, rk, top1, entropy, margin, err := evalMetricsFromLogits(row, vocab, yIDs[i], writers.ranks != nil, writers.uncertainty != nil)
 				if err != nil {
-					return fmt.Errorf("nll derivation failed at token offset %d: %w", rawStart+i, err)
+					return fmt.Errorf("metric derivation failed at token offset %d: %w", rawStart+i, err)
 				}
 				if !logprobs.IsFinite(nll) {
 					return fmt.Errorf("non-finite NLL at token offset %d", rawStart+i)
 				}
-				rk, err := targetRankFromLogits(row, vocab, yIDs[i])
-				if err != nil {
-					return fmt.Errorf("rank derivation failed at token offset %d: %w", rawStart+i, err)
-				}
 				nllsBuf[i] = nll
 				ranksBuf[i] = rk
+				if writers.uncertainty != nil {
+					top1Buf[i] = top1
+					entropyBuf[i] = entropy
+					marginBuf[i] = margin
+				}
 			}
 		} else {
 			batchNLLs, err := session.EvalTokens(local)
@@ -197,6 +207,11 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 				return fmt.Errorf("write ranks at token offset %d: %w", rawStart, err)
 			}
 		}
+		if writers.uncertainty != nil {
+			if err := writers.uncertainty.AppendBatch(yIDs, top1Buf[:chunkTokens], entropyBuf[:chunkTokens], marginBuf[:chunkTokens]); err != nil {
+				return fmt.Errorf("write uncertainty at token offset %d: %w", rawStart, err)
+			}
+		}
 		writtenTokens += chunkTokens
 
 		if cfg.Training.TTTSteps > 0 {
@@ -227,7 +242,7 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 				eta := time.Duration((elapsed.Seconds() / float64(processedSeqs)) * float64(remainingSeqs) * float64(time.Second))
 				etaStr = eta.Round(time.Second).String()
 			}
-			fmt.Printf("  [%s] full_val+logprobs progress seq=%d/%d (%.1f%%) elapsed=%s eta=%s\n",
+			fmt.Printf("  [%s] full_val+exports progress seq=%d/%d (%.1f%%) elapsed=%s eta=%s\n",
 				cfg.Name, processedSeqs, totalSeqs, pct, elapsed.Round(time.Second), etaStr)
 			lastProgress = now
 		}
@@ -243,6 +258,11 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 			return fmt.Errorf("finalize ranks output: %w", err)
 		}
 	}
+	if writers.uncertainty != nil {
+		if err := writers.uncertainty.Close(); err != nil {
+			return fmt.Errorf("finalize uncertainty output: %w", err)
+		}
+	}
 	if writtenTokens != totalTokens {
 		return fmt.Errorf("written token count mismatch: wrote=%d total=%d", writtenTokens, totalTokens)
 	}
@@ -256,16 +276,19 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 	if outputLabel == "" {
 		outputLabel = ranksOut
 	}
-	fmt.Printf("  [%s] full_val+logprobs nll=%.6f bpb=%.6f tokens=%d bytes=%.0f output=%s\n", cfg.Name, avgNLL, bpb, writtenTokens, totalBytes, outputLabel)
+	if outputLabel == "" {
+		outputLabel = uncertaintyOut
+	}
+	fmt.Printf("  [%s] full_val+exports nll=%.6f bpb=%.6f tokens=%d bytes=%.0f output=%s\n", cfg.Name, avgNLL, bpb, writtenTokens, totalBytes, outputLabel)
 	return nil
 }
 
-// openExportWriters creates the optional per-token NLL and rank writers. The
+// openExportWriters creates the optional per-token export writers. The
 // returned closer must always be called (it best-effort-closes the underlying
 // files on early return paths).
-func openExportWriters(vocabSize, totalTokens int, logprobsOut, ranksOut string) (logprobsRanksWriters, func(), error) {
-	var w logprobsRanksWriters
-	closers := make([]func() error, 0, 2)
+func openExportWriters(vocabSize, totalTokens int, logprobsOut, ranksOut, uncertaintyOut string) (evalExportWriters, func(), error) {
+	var w evalExportWriters
+	closers := make([]func() error, 0, 3)
 	cleanup := func() {
 		for i := len(closers) - 1; i >= 0; i-- {
 			_ = closers[i]()
@@ -276,13 +299,13 @@ func openExportWriters(vocabSize, totalTokens int, logprobsOut, ranksOut string)
 		f, err := os.Create(logprobsOut)
 		if err != nil {
 			cleanup()
-			return logprobsRanksWriters{}, func() {}, fmt.Errorf("create logprob output %q: %w", logprobsOut, err)
+			return evalExportWriters{}, func() {}, fmt.Errorf("create logprob output %q: %w", logprobsOut, err)
 		}
 		closers = append(closers, f.Close)
 		lw, err := logprobs.NewWriter(f, uint32(vocabSize), uint32(totalTokens))
 		if err != nil {
 			cleanup()
-			return logprobsRanksWriters{}, func() {}, fmt.Errorf("initialize logprob writer: %w", err)
+			return evalExportWriters{}, func() {}, fmt.Errorf("initialize logprob writer: %w", err)
 		}
 		w.logprobs = lw
 	}
@@ -290,15 +313,29 @@ func openExportWriters(vocabSize, totalTokens int, logprobsOut, ranksOut string)
 		f, err := os.Create(ranksOut)
 		if err != nil {
 			cleanup()
-			return logprobsRanksWriters{}, func() {}, fmt.Errorf("create ranks output %q: %w", ranksOut, err)
+			return evalExportWriters{}, func() {}, fmt.Errorf("create ranks output %q: %w", ranksOut, err)
 		}
 		closers = append(closers, f.Close)
 		rw, err := ranks.NewWriter(f, uint32(vocabSize), uint32(totalTokens))
 		if err != nil {
 			cleanup()
-			return logprobsRanksWriters{}, func() {}, fmt.Errorf("initialize ranks writer: %w", err)
+			return evalExportWriters{}, func() {}, fmt.Errorf("initialize ranks writer: %w", err)
 		}
 		w.ranks = rw
+	}
+	if uncertaintyOut != "" {
+		f, err := os.Create(uncertaintyOut)
+		if err != nil {
+			cleanup()
+			return evalExportWriters{}, func() {}, fmt.Errorf("create uncertainty output %q: %w", uncertaintyOut, err)
+		}
+		closers = append(closers, f.Close)
+		uw, err := uncertainty.NewWriter(f, uint32(vocabSize), uint32(totalTokens))
+		if err != nil {
+			cleanup()
+			return evalExportWriters{}, func() {}, fmt.Errorf("initialize uncertainty writer: %w", err)
+		}
+		w.uncertainty = uw
 	}
 	return w, cleanup, nil
 }
