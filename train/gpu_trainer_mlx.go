@@ -5,6 +5,7 @@ package train
 import (
 	"fmt"
 	"log"
+	"runtime"
 
 	ir "github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/gpu"
@@ -26,6 +27,8 @@ type mlxGPUTrainer struct {
 	tgtBuf     []int32
 	bigramBuf  []int32
 	trigramBuf []int32
+	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
+	lockedOSThread bool
 }
 
 // initMLXGPUTrainer creates a GPU trainer backed by the MLX IR interpreter.
@@ -36,6 +39,14 @@ func initMLXGPUTrainer(
 	loadedWeights [][]float32,
 	optimizerOverride func(gpu.TrainerOptimizerSpec, []WeightShape) (gpu.TrainerOptimizerSpec, error),
 ) (*mlxGPUTrainer, error) {
+	runtime.LockOSThread()
+	releaseOSThread := true
+	defer func() {
+		if releaseOSThread {
+			runtime.UnlockOSThread()
+		}
+	}()
+
 	if !gpu.Available() {
 		return nil, fmt.Errorf("MLX backend unavailable; rebuild with: CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab")
 	}
@@ -135,7 +146,7 @@ func initMLXGPUTrainer(
 			break
 		}
 	}
-	return &mlxGPUTrainer{
+	trainer := &mlxGPUTrainer{
 		handle:             trainerHandle,
 		prog:               gpuProg,
 		handles:            handles,
@@ -149,7 +160,10 @@ func initMLXGPUTrainer(
 		tgtBuf:             make([]int32, batchElems),
 		bigramBuf:          make([]int32, batchElems),
 		trigramBuf:         make([]int32, batchElems),
-	}, nil
+		lockedOSThread:     true,
+	}
+	releaseOSThread = false
+	return trainer, nil
 }
 
 func weightIndexByName(shapes []WeightShape, name string) (int, error) {
@@ -450,6 +464,10 @@ func (t *mlxGPUTrainer) CloseTrainer() {
 	if len(t.handles) > 0 {
 		gpu.FreeHandles(t.handles)
 		t.handles = nil
+	}
+	if t.lockedOSThread {
+		t.lockedOSThread = false
+		runtime.UnlockOSThread()
 	}
 }
 
