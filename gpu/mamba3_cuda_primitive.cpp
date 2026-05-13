@@ -74,7 +74,25 @@ bool mamba3_forward_v3_enabled() {
 }
 
 bool mamba3_backward_v2_enabled() {
+  const char* raw = std::getenv("MIXLAB_MAMBA3_SCAN_BWD");
+  if (raw != nullptr && raw[0] != '\0') {
+    const std::string value(raw);
+    if (value == "v3" || value == "3" || value == "chunked") {
+      return true;
+    }
+  }
   if (env_is_one("MIXLAB_MAMBA3_SCAN_BWD_V2")) {
+    return true;
+  }
+  if (raw == nullptr || raw[0] == '\0') {
+    return false;
+  }
+  const std::string value(raw);
+  return value == "v2" || value == "2" || value == "checkpoint-phi";
+}
+
+bool mamba3_backward_v3_enabled() {
+  if (env_is_one("MIXLAB_MAMBA3_SCAN_BWD_V3")) {
     return true;
   }
   const char* raw = std::getenv("MIXLAB_MAMBA3_SCAN_BWD");
@@ -82,7 +100,7 @@ bool mamba3_backward_v2_enabled() {
     return false;
   }
   const std::string value(raw);
-  return value == "v2" || value == "2" || value == "checkpoint-phi";
+  return value == "v3" || value == "3" || value == "chunked";
 }
 
 int mamba3_forward_v2_chunk_size(int T) {
@@ -181,6 +199,15 @@ void log_mamba3_cuda_backward_v2_once() {
   if (!logged.exchange(true)) {
     std::cerr << "[mlx_ir] canonical Mamba3 scan using backward v2 checkpoint-phi CUDA path"
               << " (set MIXLAB_MAMBA3_SCAN_BWD=v1 to use the original backward kernel)"
+              << std::endl;
+  }
+}
+
+void log_mamba3_cuda_backward_v3_once() {
+  static std::atomic<bool> logged{false};
+  if (!logged.exchange(true)) {
+    std::cerr << "[mlx_ir] canonical Mamba3 scan using backward v3 chunked CUDA path"
+              << " (set MIXLAB_MAMBA3_SCAN_BWD=v2 to use checkpoint-phi serial-window path)"
               << std::endl;
   }
 }
@@ -411,8 +438,16 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
       int D,
       int N,
       int G,
-      bool use_v2)
-      : mx::Primitive(stream), B_(B), T_(T), D_(D), N_(N), G_(G), use_v2_(use_v2) {}
+      bool use_v2,
+      bool use_v3)
+      : mx::Primitive(stream),
+        B_(B),
+        T_(T),
+        D_(D),
+        N_(N),
+        G_(G),
+        use_v2_(use_v2),
+        use_v3_(use_v3) {}
 
   void eval_cpu(const std::vector<mx::array>&, std::vector<mx::array>&) override {
     throw std::runtime_error("Mamba3SelectiveScanCUDABackwardPrimitive is CUDA-only");
@@ -424,8 +459,11 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
     if (inputs.size() != 8) {
       throw std::runtime_error("Mamba3SelectiveScanCUDABackwardPrimitive expects 8 inputs");
     }
-    if (outputs.size() != 9) {
-      throw std::runtime_error("Mamba3SelectiveScanCUDABackwardPrimitive expects 9 outputs");
+    const size_t expected_outputs = use_v3_ ? 11 : 9;
+    if (outputs.size() != expected_outputs) {
+      throw std::runtime_error(
+          "Mamba3SelectiveScanCUDABackwardPrimitive expects " +
+          std::to_string(expected_outputs) + " outputs");
     }
     require_float32_inputs(inputs, "Mamba3SelectiveScanCUDABackwardPrimitive");
     require_float32_outputs(outputs, "Mamba3SelectiveScanCUDABackwardPrimitive");
@@ -477,7 +515,9 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
         stream());
 
     std::vector<mx::array> scan_inputs(inputs.begin(), inputs.begin() + 7);
-    if (use_v2_) {
+    if (use_v3_) {
+      log_mamba3_cuda_backward_v3_once();
+    } else if (use_v2_) {
       log_mamba3_cuda_backward_v2_once();
     }
     launch_precompiled_cuda_kernel_into(
@@ -494,17 +534,49 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
     std::vector<mx::array> backward_inputs = inputs;
     backward_inputs.push_back(outputs[0]);
     backward_inputs.push_back(outputs[1]);
-    launch_precompiled_cuda_kernel_into(
-        use_v2_ ? "mamba3_selective_scan_bwd_v2" : "mamba3_selective_scan_bwd",
-        backward_inputs,
-        {&outputs[2], &outputs[3], &outputs[4], &outputs[5],
-         &outputs[6], &outputs[7], &outputs[8]},
-        {B_, T_, D_, N_, G_, window_size, n_windows},
-        std::make_tuple(D_, B_, 1),
-        std::make_tuple(kMamba3CUDAThreads, 1, 1),
-        stream(),
-        0,
-        false);
+    if (use_v3_) {
+      launch_precompiled_cuda_kernel_into(
+          "mamba3_selective_scan_bwd_v3_summaries",
+          backward_inputs,
+          {&outputs[9]},
+          {B_, T_, D_, N_, G_, window_size, n_windows},
+          std::make_tuple(D_, B_, n_windows),
+          std::make_tuple(kMamba3CUDAThreads, 1, 1),
+          stream());
+      launch_precompiled_cuda_kernel_into(
+          "mamba3_selective_scan_bwd_v3_carries",
+          {outputs[9]},
+          {&outputs[10]},
+          {B_, T_, D_, N_, G_, window_size, n_windows},
+          std::make_tuple(D_, B_, 1),
+          std::make_tuple(kMamba3CUDAThreads, 1, 1),
+          stream());
+      std::vector<mx::array> emit_inputs = backward_inputs;
+      emit_inputs.push_back(outputs[10]);
+      launch_precompiled_cuda_kernel_into(
+          "mamba3_selective_scan_bwd_v3_emit",
+          emit_inputs,
+          {&outputs[2], &outputs[3], &outputs[4], &outputs[5],
+           &outputs[6], &outputs[7], &outputs[8]},
+          {B_, T_, D_, N_, G_, window_size, n_windows},
+          std::make_tuple(D_, B_, n_windows),
+          std::make_tuple(kMamba3CUDAThreads, 1, 1),
+          stream(),
+          0,
+          false);
+    } else {
+      launch_precompiled_cuda_kernel_into(
+          use_v2_ ? "mamba3_selective_scan_bwd_v2" : "mamba3_selective_scan_bwd",
+          backward_inputs,
+          {&outputs[2], &outputs[3], &outputs[4], &outputs[5],
+           &outputs[6], &outputs[7], &outputs[8]},
+          {B_, T_, D_, N_, G_, window_size, n_windows},
+          std::make_tuple(D_, B_, 1),
+          std::make_tuple(kMamba3CUDAThreads, 1, 1),
+          stream(),
+          0,
+          false);
+    }
   }
 
   const char* name() const override {
@@ -519,7 +591,8 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
         D_ == rhs->D_ &&
         N_ == rhs->N_ &&
         G_ == rhs->G_ &&
-        use_v2_ == rhs->use_v2_;
+        use_v2_ == rhs->use_v2_ &&
+        use_v3_ == rhs->use_v3_;
   }
 
   std::vector<mx::Shape> output_shapes(const std::vector<mx::array>&) override {
@@ -529,7 +602,7 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
     const int n_windows = (T_ + window_size - 1) / window_size;
     const int checkpoint_rows = B_ * n_windows;
     const int phi_checkpoint_rows = B_ * (n_windows + (use_v2_ ? 1 : 0));
-    return {
+    std::vector<mx::Shape> shapes = {
         mx::Shape{
             static_cast<mx::ShapeElem>(checkpoint_rows),
             static_cast<mx::ShapeElem>(D_),
@@ -558,6 +631,15 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
         mx::Shape{
             static_cast<mx::ShapeElem>(BT),
             static_cast<mx::ShapeElem>(G_ * N_)}};
+    if (use_v3_) {
+      shapes.push_back(mx::Shape{
+          static_cast<mx::ShapeElem>(B_ * n_windows),
+          static_cast<mx::ShapeElem>(D_ * K * 7)});
+      shapes.push_back(mx::Shape{
+          static_cast<mx::ShapeElem>(B_ * (n_windows + 1)),
+          static_cast<mx::ShapeElem>(D_ * K * 3)});
+    }
+    return shapes;
   }
 
  private:
@@ -567,6 +649,7 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
   int N_;
   int G_;
   bool use_v2_;
+  bool use_v3_;
 };
 
 } // namespace
@@ -669,9 +752,10 @@ std::vector<mx::array> mamba3_selective_scan_cuda_vjp(
   inputs.push_back(mx::contiguous(cotangents[0]));
 
   auto stream = mx::default_stream(mx::default_device());
-  const bool use_backward_v2 = mamba3_backward_v2_enabled();
+  const bool use_backward_v3 = mamba3_backward_v3_enabled();
+  const bool use_backward_v2 = use_backward_v3 || mamba3_backward_v2_enabled();
   auto primitive = std::make_shared<Mamba3SelectiveScanCUDABackwardPrimitive>(
-      stream, B, T, D, N, G, use_backward_v2);
+      stream, B, T, D, N, G, use_backward_v2, use_backward_v3);
   const int BT = B * T;
   const int K = N / 2;
   const int window_size = mamba3_backward_window_size(T);
@@ -707,6 +791,14 @@ std::vector<mx::array> mamba3_selective_scan_cuda_vjp(
       mx::Shape{
           static_cast<mx::ShapeElem>(BT),
           static_cast<mx::ShapeElem>(G * N)}};
+  if (use_backward_v3) {
+    shapes.push_back(mx::Shape{
+        static_cast<mx::ShapeElem>(B * n_windows),
+        static_cast<mx::ShapeElem>(D * K * 7)});
+    shapes.push_back(mx::Shape{
+        static_cast<mx::ShapeElem>(B * (n_windows + 1)),
+        static_cast<mx::ShapeElem>(D * K * 3)});
+  }
   std::vector<mx::Dtype> dtypes(shapes.size(), mx::float32);
   auto outputs = mx::array::make_arrays(shapes, dtypes, primitive, inputs);
   return {

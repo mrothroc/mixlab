@@ -12,3 +12,6 @@ gpu/cuda_kernels/mamba3_selective_scan_checkpoints.cu
 gpu/cuda_kernels/mamba3_selective_scan_checkpoints_v2.cu
 gpu/cuda_kernels/mamba3_selective_scan_bwd.cu
 gpu/cuda_kernels/mamba3_selective_scan_bwd_v2.cu
+gpu/cuda_kernels/mamba3_selective_scan_bwd_v3_summaries.cu
+gpu/cuda_kernels/mamba3_selective_scan_bwd_v3_carries.cu
+gpu/cuda_kernels/mamba3_selective_scan_bwd_v3_emit.cu

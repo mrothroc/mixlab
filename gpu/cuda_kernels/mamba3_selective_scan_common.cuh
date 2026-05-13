@@ -1,6 +1,8 @@
 #pragma once
 
 #define MAMBA3_MAX_BWD_WINDOW 64
+#define MAMBA3_BWD_SUMMARY_SLOTS 7
+#define MAMBA3_BWD_CARRY_SLOTS 3
 
 namespace {
 
@@ -78,6 +80,17 @@ __device__ inline int mamba3_theta_idx(int row, int d, int k, int D, int K) {
 
 __device__ inline int mamba3_group_idx(int row, int g, int n, int G, int N) {
   return row * (G * N) + g * N + n;
+}
+
+__device__ inline int mamba3_pair_slot_idx(
+    int row,
+    int d,
+    int k,
+    int slot,
+    int D,
+    int K,
+    int slots) {
+  return row * (D * K * slots) + d * (K * slots) + k * slots + slot;
 }
 
 } // namespace

@@ -68,6 +68,15 @@ func TestMamba3SelectiveScanGradBackwardV2(t *testing.T) {
 	testMamba3SelectiveScanGrad(t, 2, 3)
 }
 
+func TestMamba3SelectiveScanGradBackwardV3(t *testing.T) {
+	if !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_MAMBA3_SCAN_BWD", "v3")
+
+	testMamba3SelectiveScanGrad(t, 2, 3)
+}
+
 func TestMamba3SelectiveScanGradForwardBackwardV2(t *testing.T) {
 	if !gpu.Available() {
 		t.Skip("MLX backend not available")
@@ -75,6 +84,17 @@ func TestMamba3SelectiveScanGradForwardBackwardV2(t *testing.T) {
 	t.Setenv("MIXLAB_MAMBA3_SCAN_FWD", "v2")
 	t.Setenv("MIXLAB_MAMBA3_SCAN_FWD_CHUNK", "3")
 	t.Setenv("MIXLAB_MAMBA3_SCAN_BWD", "v2")
+
+	testMamba3SelectiveScanGrad(t, 2, 3)
+}
+
+func TestMamba3SelectiveScanGradForwardV3BackwardV3(t *testing.T) {
+	if !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_MAMBA3_SCAN_FWD", "v3")
+	t.Setenv("MIXLAB_MAMBA3_SCAN_FWD_CHUNK", "3")
+	t.Setenv("MIXLAB_MAMBA3_SCAN_BWD", "v3")
 
 	testMamba3SelectiveScanGrad(t, 2, 3)
 }
