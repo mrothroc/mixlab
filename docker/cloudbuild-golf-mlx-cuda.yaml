@@ -4,7 +4,7 @@
 #   gcloud builds submit \
 #     --config=docker/cloudbuild-golf-mlx-cuda.yaml \
 #     --substitutions=_ARCHS="80;86;89;90" \
-#     --timeout=3600s \
+#     --timeout=14400s \
 #     .
 #
 # _ARCHS must be the FULL list of CUDA compute capabilities to embed in libmlx.so
@@ -53,4 +53,4 @@ options:
   # MLX CUDA build artifacts are large; need disk headroom.
   diskSizeGb: 100
 
-timeout: 3600s
+timeout: 14400s
