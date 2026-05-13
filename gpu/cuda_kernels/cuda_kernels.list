@@ -1,17 +1,12 @@
 # Relative paths from repository root.
 gpu/cuda_kernels/gated_delta_chunk_solve.cu
 gpu/cuda_kernels/mamba3_selective_scan_zero.cu
-gpu/cuda_kernels/mamba3_selective_scan_fwd.cu
-gpu/cuda_kernels/mamba3_selective_scan_fwd_v2_phi.cu
 gpu/cuda_kernels/mamba3_selective_scan_fwd_v3_phi_chunks.cu
 gpu/cuda_kernels/mamba3_selective_scan_fwd_v3_phi_prefix.cu
 gpu/cuda_kernels/mamba3_selective_scan_fwd_v2_transform.cu
 gpu/cuda_kernels/mamba3_selective_scan_fwd_v2_hstarts.cu
 gpu/cuda_kernels/mamba3_selective_scan_fwd_v2_emit.cu
-gpu/cuda_kernels/mamba3_selective_scan_checkpoints.cu
 gpu/cuda_kernels/mamba3_selective_scan_checkpoints_v2.cu
-gpu/cuda_kernels/mamba3_selective_scan_bwd.cu
-gpu/cuda_kernels/mamba3_selective_scan_bwd_v2.cu
 gpu/cuda_kernels/mamba3_selective_scan_bwd_v3_summaries.cu
 gpu/cuda_kernels/mamba3_selective_scan_bwd_v3_carries.cu
 gpu/cuda_kernels/mamba3_selective_scan_bwd_v3_emit.cu

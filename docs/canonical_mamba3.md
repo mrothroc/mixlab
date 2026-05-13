@@ -60,9 +60,8 @@ Past incident: commit `e1899bf` wrapped 20+ MLX ops in `mx::custom_vjp` for the 
 |---|---|---|
 | `MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE` | unset | Disable the native selective-scan primitive for small debug fallback runs. Unsupported for fused canonical block training unless `MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK=1` is also set. |
 | `MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK` | unset | Explicitly allow the debug MLX-composed scan fallback inside fused canonical block training. This can create invalid or oversized CUDA graphs at production scale. |
-| `MIXLAB_MAMBA3_SCAN_FWD` | unset (`v1`) | Set to `v2` or `chunked` to test the experimental chunked forward CUDA scan. Set to `v3` or `parallel-phi` to test the chunked path with parallel chunk phase offsets. Backward remains on the production v1 kernel unless `MIXLAB_MAMBA3_SCAN_BWD` is also set. |
-| `MIXLAB_MAMBA3_SCAN_FWD_CHUNK` | `64` | Time chunk length for the experimental forward v2 CUDA scan. |
-| `MIXLAB_MAMBA3_SCAN_BWD` | unset (`v1`) | Set to `v2` or `checkpoint-phi` to test the experimental backward CUDA path that checkpoints final window phase and skips a full serial phase pre-pass. Set to `v3` or `chunked` to test chunked reverse summaries plus a small boundary scan. |
+| `MIXLAB_MAMBA3_SCAN_FWD_CHUNK` | `64` | Time chunk length for the chunked forward CUDA scan. |
+| `MIXLAB_MAMBA3_BWD_WINDOW` | `32` | Time window length for chunked backward. Values up to `64` are supported for comparison; the production sweet spot on H100 was `32`. |
 | `MIXLAB_MAMBA3_CHANNEL_CHUNK` | auto (~16ch at production) | Channels per chunk in the channel-axis chunking |
 | `MIXLAB_FORCE_COMPILED_STEP` | unset | Force `mx::compile` even for Mamba-3 programs |
 | `MIXLAB_DISABLE_COMPILED_STEP` | unset | Force eager `value_and_grad` for any program |
@@ -80,6 +79,7 @@ Past incident: commit `e1899bf` wrapped 20+ MLX ops in `mx::custom_vjp` for the 
 ## Verification tests
 - `train/gpu_trainer_mamba3_test.go::TestMamba3SelectiveScanGrad` — analytical CPU oracle vs MLX gradients (~1e-6 relative error) at G ∈ {1,2}, chunk ∈ {0,3}
 - `TestMamba3SelectiveScanGradChannelChunked` — exercises channel-chunking path with `MIXLAB_MAMBA3_CHANNEL_CHUNK=2`
+- `TestMamba3SelectiveScanGradSmallCudaChunks` — exercises small native CUDA forward chunks and backward windows
 - `TestMamba3CanonicalBlockGradMatchesExpanded` — fused-op vs expanded-25-op equivalence (loss + all 20 weight gradients within 2e-5)
 - `TestMamba3CanonicalSmokeLossDecreases` — 10-step smoke; loss must monotonically decrease
 
