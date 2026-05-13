@@ -33,6 +33,7 @@ func main() {
 	topK := flag.Int("top-k", 40, "top-k sampling cutoff (generate mode)")
 	prompt := flag.String("prompt", "", "prompt for generate mode, e.g. token_ids:0,1,2")
 	logprobsOut := flag.String("logprobs-out", "", "write per-token eval NLLs to a binary file (eval mode)")
+	ranksOut := flag.String("ranks-out", "", "write per-token target ranks to a binary file (eval mode); can be combined with -logprobs-out for a single eval pass")
 
 	// profiling flags
 	cpuProfile := flag.String("cpuprofile", "", "write CPU profile to file")
@@ -144,9 +145,10 @@ func main() {
 	case "arch_race":
 		must(train.RunArchRace(*configsDir, *trainPattern, opts))
 	case "eval":
-		if *logprobsOut != "" {
-			must(train.RunEvalLogprobs(*configPath, *trainPattern, *safetensorsLoad, *lutDir, *logprobsOut))
-		} else {
+		switch {
+		case *logprobsOut != "" || *ranksOut != "":
+			must(train.RunEvalLogprobsAndRanks(*configPath, *trainPattern, *safetensorsLoad, *lutDir, *logprobsOut, *ranksOut))
+		default:
 			must(train.RunEvalModeWithLUT(*configPath, *trainPattern, *safetensorsLoad, *lutDir))
 		}
 	case "hiddenstats":

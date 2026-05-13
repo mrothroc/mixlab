@@ -134,7 +134,7 @@ func (s *InferenceSession) EvalTokens(tokens []uint16) ([]float32, error) {
 		window := tokens[start : start+batchTokens+1]
 		xTok := make([]int, batchTokens)
 		yTok := make([]int, batchTokens)
-		for i := 0; i < batchTokens; i++ {
+		for i := range batchTokens {
 			xTok[i] = int(window[i])
 			yTok[i] = int(window[i+1])
 		}
@@ -157,65 +157,95 @@ func (s *InferenceSession) EvalTokens(tokens []uint16) ([]float32, error) {
 // The shape and batching requirements match EvalTokens. This is intended for
 // analysis tooling that needs ranks/top-1 predictions without reimplementing a
 // model outside the MLX IR path.
+//
+// Memory: the full result has length pairs*vocab; callers that only need
+// streaming per-batch access should use evalLogitsBatch instead.
 func (s *InferenceSession) EvalLogits(tokens []uint16) ([]float32, error) {
-	if s == nil {
-		return nil, fmt.Errorf("nil inference session")
+	if err := s.checkEvalPreconditions(tokens); err != nil {
+		return nil, err
 	}
-	if s.closed || s.trainer == nil {
-		return nil, errInferenceSessionClosed
-	}
-	if s.cfg == nil {
-		return nil, fmt.Errorf("inference session has no config")
-	}
-
 	batchTokens := s.cfg.Training.BatchTokens
-	seqLen := s.cfg.SeqLen
 	vocab := s.cfg.VocabSize
-	if batchTokens <= 0 {
-		return nil, fmt.Errorf("invalid batch_tokens=%d", batchTokens)
-	}
-	if seqLen <= 0 {
-		return nil, fmt.Errorf("invalid seq_len=%d", seqLen)
-	}
-	if vocab <= 0 {
-		return nil, fmt.Errorf("invalid vocab_size=%d", vocab)
-	}
-	if batchTokens%seqLen != 0 {
-		return nil, fmt.Errorf("batch_tokens (%d) must be divisible by seq_len (%d)", batchTokens, seqLen)
-	}
-	if len(tokens) < 2 {
-		return nil, fmt.Errorf("need at least 2 tokens, got %d", len(tokens))
-	}
 
 	pairs := len(tokens) - 1
-	if pairs%batchTokens != 0 {
-		return nil, fmt.Errorf("token pair count (%d) must be a multiple of batch_tokens (%d)", pairs, batchTokens)
-	}
-
-	batchSize := batchTokens / seqLen
 	out := make([]float32, 0, pairs*vocab)
 	for start := 0; start < pairs; start += batchTokens {
 		window := tokens[start : start+batchTokens+1]
-		xTok := make([]int, batchTokens)
-		yTok := make([]int, batchTokens)
-		for i := 0; i < batchTokens; i++ {
-			xTok[i] = int(window[i])
-			yTok[i] = int(window[i+1])
-		}
-		if _, err := s.trainer.EvaluatePerTokenGPU(xTok, yTok, batchSize, seqLen); err != nil {
-			return nil, err
-		}
-		logits, err := readTrainerOutput(s.trainer, "logits", []int{batchTokens, vocab})
+		logits, err := s.evalLogitsBatch(window)
 		if err != nil {
 			return nil, err
 		}
-		if len(logits) != batchTokens*vocab {
-			return nil, fmt.Errorf("logits length mismatch: got=%d want=%d", len(logits), batchTokens*vocab)
-		}
 		out = append(out, logits...)
 	}
-
 	return out, nil
+}
+
+// checkEvalPreconditions validates that a token stream matches the session's
+// configured batch shape. Shared by EvalTokens and EvalLogits.
+func (s *InferenceSession) checkEvalPreconditions(tokens []uint16) error {
+	if s == nil {
+		return fmt.Errorf("nil inference session")
+	}
+	if s.closed || s.trainer == nil {
+		return errInferenceSessionClosed
+	}
+	if s.cfg == nil {
+		return fmt.Errorf("inference session has no config")
+	}
+	batchTokens := s.cfg.Training.BatchTokens
+	seqLen := s.cfg.SeqLen
+	if batchTokens <= 0 {
+		return fmt.Errorf("invalid batch_tokens=%d", batchTokens)
+	}
+	if seqLen <= 0 {
+		return fmt.Errorf("invalid seq_len=%d", seqLen)
+	}
+	if s.cfg.VocabSize <= 0 {
+		return fmt.Errorf("invalid vocab_size=%d", s.cfg.VocabSize)
+	}
+	if batchTokens%seqLen != 0 {
+		return fmt.Errorf("batch_tokens (%d) must be divisible by seq_len (%d)", batchTokens, seqLen)
+	}
+	if len(tokens) < 2 {
+		return fmt.Errorf("need at least 2 tokens, got %d", len(tokens))
+	}
+	pairs := len(tokens) - 1
+	if pairs%batchTokens != 0 {
+		return fmt.Errorf("token pair count (%d) must be a multiple of batch_tokens (%d)", pairs, batchTokens)
+	}
+	return nil
+}
+
+// evalLogitsBatch runs the configured batch shape once and returns row-major
+// [batchTokens, vocab] logits. The caller passes a window of batchTokens+1
+// tokens (the +1 is the target for the last position). Used by EvalLogits and
+// by the eval-mode logprob/rank export path to stream logits one batch at a
+// time without materialising the full [pairs, vocab] tensor.
+func (s *InferenceSession) evalLogitsBatch(window []uint16) ([]float32, error) {
+	batchTokens := s.cfg.Training.BatchTokens
+	seqLen := s.cfg.SeqLen
+	vocab := s.cfg.VocabSize
+	if len(window) != batchTokens+1 {
+		return nil, fmt.Errorf("evalLogitsBatch window length %d, want %d", len(window), batchTokens+1)
+	}
+	batchSize := batchTokens / seqLen
+	xTok := make([]int, batchTokens)
+	yTok := make([]int, batchTokens)
+	for i := range batchTokens {
+		xTok[i] = int(window[i])
+		yTok[i] = int(window[i+1])
+	}
+	if _, err := s.trainer.EvaluatePerTokenGPU(xTok, yTok, batchSize, seqLen); err != nil {
+		return nil, err
+	}
+	logits, err := readTrainerOutput(s.trainer, "logits", []int{batchTokens, vocab})
+	if err != nil {
+		return nil, err
+	}
+	if len(logits) != batchTokens*vocab {
+		return nil, fmt.Errorf("logits length mismatch: got=%d want=%d", len(logits), batchTokens*vocab)
+	}
+	return logits, nil
 }
 
 // Close releases GPU resources. It is safe to call multiple times.

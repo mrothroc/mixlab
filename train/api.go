@@ -55,7 +55,16 @@ func RunEvalModeWithLUT(configPath, trainPattern, safetensorsLoad, lutDir string
 }
 
 func RunEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut string) error {
-	return runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut)
+	return runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, "")
+}
+
+// RunEvalLogprobsAndRanks runs eval mode and writes per-token NLLs to
+// logprobsOut (skipped if empty) and per-token target ranks to ranksOut
+// (skipped if empty). At least one must be non-empty. When ranksOut is
+// supplied, both outputs are derived from a single GPU pass over the
+// validation set, so the position-aligned records share token IDs.
+func RunEvalLogprobsAndRanks(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut string) error {
+	return runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut)
 }
 
 func RunGenerate(configPath, safetensorsLoad string, maxTokens int, temperature float32, topK int, prompt string) error {

@@ -212,6 +212,33 @@ Trains every `.json` config in the given directory and prints a ranked summary.
   -safetensors-load weights.st -train 'data/example/train_*.bin'
 ```
 
+Per-token export flags (both optional, can be combined in a single eval pass):
+
+| Flag | Output |
+|------|--------|
+| `-logprobs-out PATH` | Binary file of per-token NLLs (`logprobs.Record{TokenID, NLL}`); enables BPB / perplexity post-processing. |
+| `-ranks-out PATH` | Binary file of per-token target ranks (`ranks.Record{TokenID, Rank}`); enables Hit@K, MRR, and rank-conditional calibration. Rank is 0-indexed; rank 0 means the target was the model's argmax. |
+
+When both flags are supplied, the records are aligned position-by-position
+(same `TokenID` at each index) and are derived from a single GPU pass over
+the validation shard.
+
+Example reading ranks.bin from Python:
+
+```python
+import struct, numpy as np
+header = struct.Struct("<IIII")  # magic, version, vocab, total_tokens
+record = np.dtype([("token_id", "<u2"), ("rank", "<u2")])
+with open("ranks.bin", "rb") as f:
+    _, _, vocab, n = header.unpack(f.read(16))
+    arr = np.fromfile(f, dtype=record, count=n)
+hit_at_1  = (arr["rank"] == 0).mean()
+hit_at_5  = (arr["rank"] <  5).mean()
+hit_at_10 = (arr["rank"] < 10).mean()
+mrr       = (1.0 / (arr["rank"].astype(np.float64) + 1.0)).mean()
+print(f"Hit@1={hit_at_1:.4f} Hit@5={hit_at_5:.4f} Hit@10={hit_at_10:.4f} MRR={mrr:.4f}")
+```
+
 ### hiddenstats
 
 ```bash
