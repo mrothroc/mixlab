@@ -1,0 +1,56 @@
+# Build the golf-mlx-cuda intermediate image with the requested CUDA architectures.
+#
+# Usage:
+#   gcloud builds submit \
+#     --config=docker/cloudbuild-golf-mlx-cuda.yaml \
+#     --substitutions=_ARCHS="80;86;89;90" \
+#     --timeout=3600s \
+#     .
+#
+# _ARCHS must be the FULL list of CUDA compute capabilities to embed in libmlx.so
+# (cmake -DMLX_CUDA_ARCHITECTURES semicolon-list syntax). Pass everything you want
+# to support, including previously-built archs — the addarch.Dockerfile re-runs
+# cmake against the full list, and Ninja reuses existing .o files so previously-
+# built archs are cheap to re-link.
+#
+# Architectures:
+#   80  A100
+#   86  A40, A5000, RTX 30xx, A4000, A4500
+#   89  RTX 40xx, L4, L40, RTX 4090
+#   90  H100
+#
+# After this build succeeds, trigger the mixlab CI build (or push any commit) so
+# docker/cloudbuild-ci.yaml rebuilds mixlab:latest and mixlab:runpod on top of
+# the updated golf-mlx-cuda:latest.
+
+substitutions:
+  _ARCHS: "80;86;89;90"
+  _REGISTRY_PREFIX: "us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf"
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'docker/addarch.Dockerfile'
+      - '--build-arg'
+      - 'BASE_IMAGE=${_REGISTRY_PREFIX}/golf-mlx-cuda:latest'
+      - '--build-arg'
+      - 'ARCHS=${_ARCHS}'
+      - '-t'
+      - '${_REGISTRY_PREFIX}/golf-mlx-cuda:latest'
+      - '.'
+
+images:
+  - '${_REGISTRY_PREFIX}/golf-mlx-cuda:latest'
+
+options:
+  # MLX CUDA build is RAM-hungry — addarch.Dockerfile docs say ~2GB peak per
+  # concurrent arch at -j4, so 4 archs needs ~8GB. e2-highcpu-32 has 32GB RAM
+  # and 32 vCPUs, well above the minimum. Bumps build wall-time too vs the
+  # default e2-medium (4GB, slow).
+  machineType: 'E2_HIGHCPU_32'
+  # MLX CUDA build artifacts are large; need disk headroom.
+  diskSizeGb: 100
+
+timeout: 3600s
