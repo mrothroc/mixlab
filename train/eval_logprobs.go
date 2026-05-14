@@ -8,12 +8,55 @@ import (
 	"time"
 
 	"github.com/mrothroc/mixlab/data"
+	"github.com/mrothroc/mixlab/logits"
 	"github.com/mrothroc/mixlab/logprobs"
 	"github.com/mrothroc/mixlab/ranks"
 	"github.com/mrothroc/mixlab/uncertainty"
 )
 
-func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut, uncertaintyOut string) error {
+// EvalExportOptions describes the per-token output files mixlab eval mode
+// should produce in a single GPU pass over the validation set. At least one
+// output path must be non-empty.
+type EvalExportOptions struct {
+	LogprobsOut    string
+	RanksOut       string
+	UncertaintyOut string
+	LogitsOut      string
+	// LogitsDType selects the on-disk dtype for -logits-out. Defaults to
+	// DTypeFloat16 when LogitsOut is set.
+	LogitsDType logits.DType
+	// LogitsForm selects whether -logits-out stores raw logits or
+	// log_softmax(logits). Defaults to FormRaw when LogitsOut is set.
+	LogitsForm logits.Form
+}
+
+// validatePaths returns an error if any two non-empty export paths point at
+// the same file. Without this check, two writers would share an inode and
+// silently corrupt each other's output.
+func (e EvalExportOptions) validatePaths() error {
+	paths := []struct {
+		flag string
+		path string
+	}{
+		{"-logprobs-out", e.LogprobsOut},
+		{"-ranks-out", e.RanksOut},
+		{"-uncertainty-out", e.UncertaintyOut},
+		{"-logits-out", e.LogitsOut},
+	}
+	seen := make(map[string]string, len(paths))
+	for _, p := range paths {
+		if p.path == "" {
+			continue
+		}
+		if prev, ok := seen[p.path]; ok {
+			return fmt.Errorf("export paths must be distinct: %s and %s both point at %q", prev, p.flag, p.path)
+		}
+		seen[p.path] = p.flag
+	}
+	return nil
+}
+
+func runEvalExports(configPath, trainPattern, safetensorsLoad, lutDir string, exports EvalExportOptions) error {
 	if configPath == "" {
 		return fmt.Errorf("-config is required for eval mode; pass a JSON config file, e.g.: mixlab -mode eval -config examples/plain_3L.json -safetensors-load weights.st -train 'data/train_*.bin'")
 	}
@@ -23,8 +66,11 @@ func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobs
 	if trainPattern == "" {
 		return fmt.Errorf("-train is required for eval mode; pass a glob pattern for data shards, e.g.: -train 'data/train_*.bin'")
 	}
-	if logprobsOut == "" && ranksOut == "" && uncertaintyOut == "" {
-		return fmt.Errorf("at least one of -logprobs-out, -ranks-out, or -uncertainty-out is required for export")
+	if exports.LogprobsOut == "" && exports.RanksOut == "" && exports.UncertaintyOut == "" && exports.LogitsOut == "" {
+		return fmt.Errorf("at least one of -logprobs-out, -ranks-out, -uncertainty-out, or -logits-out is required for export")
+	}
+	if err := exports.validatePaths(); err != nil {
+		return err
 	}
 
 	session, err := NewInferenceSession(configPath, safetensorsLoad)
@@ -39,23 +85,37 @@ func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobs
 	}
 
 	valPattern := strings.Replace(trainPattern, "train", "val", 1)
-	if err := runFullEvalLogprobs(session, valPattern, lutDir, logprobsOut, ranksOut, uncertaintyOut); err != nil {
+	if err := runFullEvalLogprobs(session, valPattern, lutDir, exports); err != nil {
 		return err
 	}
 
 	fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
 		cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
 	fmt.Printf("  [%s] loaded %d weights from %s\n", cfg.Name, session.weightCount, safetensorsLoad)
-	if logprobsOut != "" {
-		fmt.Printf("  [%s] wrote per-token eval NLLs to %s\n", cfg.Name, logprobsOut)
+	if exports.LogprobsOut != "" {
+		fmt.Printf("  [%s] wrote per-token eval NLLs to %s\n", cfg.Name, exports.LogprobsOut)
 	}
-	if ranksOut != "" {
-		fmt.Printf("  [%s] wrote per-token target ranks to %s\n", cfg.Name, ranksOut)
+	if exports.RanksOut != "" {
+		fmt.Printf("  [%s] wrote per-token target ranks to %s\n", cfg.Name, exports.RanksOut)
 	}
-	if uncertaintyOut != "" {
-		fmt.Printf("  [%s] wrote per-token uncertainty metrics to %s\n", cfg.Name, uncertaintyOut)
+	if exports.UncertaintyOut != "" {
+		fmt.Printf("  [%s] wrote per-token uncertainty metrics to %s\n", cfg.Name, exports.UncertaintyOut)
+	}
+	if exports.LogitsOut != "" {
+		fmt.Printf("  [%s] wrote per-token logits (dtype=%s form=%s) to %s\n",
+			cfg.Name, exports.LogitsDType, exports.LogitsForm, exports.LogitsOut)
 	}
 	return nil
+}
+
+// runEvalLogprobs is the legacy three-output entry point kept for backwards
+// compatibility; it forwards to runEvalExports.
+func runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut, uncertaintyOut string) error {
+	return runEvalExports(configPath, trainPattern, safetensorsLoad, lutDir, EvalExportOptions{
+		LogprobsOut:    logprobsOut,
+		RanksOut:       ranksOut,
+		UncertaintyOut: uncertaintyOut,
+	})
 }
 
 // evalExportWriters bundles the optional writers for per-token export files so
@@ -64,9 +124,10 @@ type evalExportWriters struct {
 	logprobs    *logprobs.Writer
 	ranks       *ranks.Writer
 	uncertainty *uncertainty.Writer
+	logits      *logits.Writer
 }
 
-func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobsOut, ranksOut, uncertaintyOut string) error {
+func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir string, exports EvalExportOptions) error {
 	cfg := session.Config()
 	seqLen := cfg.SeqLen
 	batchTokens := cfg.Training.BatchTokens
@@ -97,16 +158,16 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 		return fmt.Errorf("validation set has no complete sequences")
 	}
 
-	writers, closeWriters, err := openExportWriters(cfg.VocabSize, totalTokens, logprobsOut, ranksOut, uncertaintyOut)
+	writers, closeWriters, err := openExportWriters(cfg.VocabSize, totalTokens, exports)
 	if err != nil {
 		return err
 	}
 	defer closeWriters()
 
-	// When ranks or uncertainty are requested we read logits once per batch and
-	// derive all requested metrics on the CPU; this avoids a second GPU pass for
-	// the same data.
-	deriveFromLogits := ranksOut != "" || uncertaintyOut != ""
+	// When ranks, uncertainty, or full logits are requested we read logits once
+	// per batch and derive all requested outputs on the CPU; this avoids a
+	// second GPU pass for the same data.
+	deriveFromLogits := exports.RanksOut != "" || exports.UncertaintyOut != "" || exports.LogitsOut != ""
 
 	totalLossNats := 0.0
 	totalBytes := 0.0
@@ -123,6 +184,12 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 	top1Buf := make([]float32, batchTokens)
 	entropyBuf := make([]float32, batchTokens)
 	marginBuf := make([]float32, batchTokens)
+	// logitsRowScratch holds a single converted row when -logits-out form is
+	// "logprobs"; for "raw" form we write the model logits row in place.
+	var logitsRowScratch []float32
+	if writers.logits != nil && exports.LogitsForm == logits.FormLogprobs {
+		logitsRowScratch = make([]float32, cfg.VocabSize)
+	}
 
 	for rawStart < totalTokens {
 		chunkTokens := min(batchTokens, totalTokens-rawStart)
@@ -150,16 +217,16 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 		}
 
 		if deriveFromLogits {
-			logits, err := session.evalLogitsBatch(local)
+			logitsBatch, err := session.evalLogitsBatch(local)
 			if err != nil {
 				return fmt.Errorf("eval failed at token offset %d: %w", rawStart, err)
 			}
 			vocab := cfg.VocabSize
-			if len(logits) != chunkTokens*vocab {
-				return fmt.Errorf("logits length mismatch at offset %d: got=%d want=%d", rawStart, len(logits), chunkTokens*vocab)
+			if len(logitsBatch) != chunkTokens*vocab {
+				return fmt.Errorf("logits length mismatch at offset %d: got=%d want=%d", rawStart, len(logitsBatch), chunkTokens*vocab)
 			}
 			for i := range chunkTokens {
-				row := logits[i*vocab : (i+1)*vocab]
+				row := logitsBatch[i*vocab : (i+1)*vocab]
 				nll, rk, top1, entropy, margin, err := evalMetricsFromLogits(row, vocab, yIDs[i], writers.ranks != nil, writers.uncertainty != nil)
 				if err != nil {
 					return fmt.Errorf("metric derivation failed at token offset %d: %w", rawStart+i, err)
@@ -173,6 +240,16 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 					top1Buf[i] = top1
 					entropyBuf[i] = entropy
 					marginBuf[i] = margin
+				}
+				if writers.logits != nil {
+					writeRow := row
+					if exports.LogitsForm == logits.FormLogprobs {
+						logSoftmaxRow(row, vocab, logitsRowScratch)
+						writeRow = logitsRowScratch
+					}
+					if err := writers.logits.Append(yIDs[i], writeRow); err != nil {
+						return fmt.Errorf("write logits at token offset %d: %w", rawStart+i, err)
+					}
 				}
 			}
 		} else {
@@ -263,6 +340,11 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 			return fmt.Errorf("finalize uncertainty output: %w", err)
 		}
 	}
+	if writers.logits != nil {
+		if err := writers.logits.Close(); err != nil {
+			return fmt.Errorf("finalize logits output: %w", err)
+		}
+	}
 	if writtenTokens != totalTokens {
 		return fmt.Errorf("written token count mismatch: wrote=%d total=%d", writtenTokens, totalTokens)
 	}
@@ -272,12 +354,15 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 
 	avgNLL := totalLossNats / float64(writtenTokens)
 	bpb := (totalLossNats / math.Log(2.0)) / totalBytes
-	outputLabel := logprobsOut
+	outputLabel := exports.LogprobsOut
 	if outputLabel == "" {
-		outputLabel = ranksOut
+		outputLabel = exports.RanksOut
 	}
 	if outputLabel == "" {
-		outputLabel = uncertaintyOut
+		outputLabel = exports.UncertaintyOut
+	}
+	if outputLabel == "" {
+		outputLabel = exports.LogitsOut
 	}
 	fmt.Printf("  [%s] full_val+exports nll=%.6f bpb=%.6f tokens=%d bytes=%.0f output=%s\n", cfg.Name, avgNLL, bpb, writtenTokens, totalBytes, outputLabel)
 	return nil
@@ -286,20 +371,20 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir, logprobs
 // openExportWriters creates the optional per-token export writers. The
 // returned closer must always be called (it best-effort-closes the underlying
 // files on early return paths).
-func openExportWriters(vocabSize, totalTokens int, logprobsOut, ranksOut, uncertaintyOut string) (evalExportWriters, func(), error) {
+func openExportWriters(vocabSize, totalTokens int, exports EvalExportOptions) (evalExportWriters, func(), error) {
 	var w evalExportWriters
-	closers := make([]func() error, 0, 3)
+	closers := make([]func() error, 0, 4)
 	cleanup := func() {
 		for i := len(closers) - 1; i >= 0; i-- {
 			_ = closers[i]()
 		}
 	}
 
-	if logprobsOut != "" {
-		f, err := os.Create(logprobsOut)
+	if exports.LogprobsOut != "" {
+		f, err := os.Create(exports.LogprobsOut)
 		if err != nil {
 			cleanup()
-			return evalExportWriters{}, func() {}, fmt.Errorf("create logprob output %q: %w", logprobsOut, err)
+			return evalExportWriters{}, func() {}, fmt.Errorf("create logprob output %q: %w", exports.LogprobsOut, err)
 		}
 		closers = append(closers, f.Close)
 		lw, err := logprobs.NewWriter(f, uint32(vocabSize), uint32(totalTokens))
@@ -309,11 +394,11 @@ func openExportWriters(vocabSize, totalTokens int, logprobsOut, ranksOut, uncert
 		}
 		w.logprobs = lw
 	}
-	if ranksOut != "" {
-		f, err := os.Create(ranksOut)
+	if exports.RanksOut != "" {
+		f, err := os.Create(exports.RanksOut)
 		if err != nil {
 			cleanup()
-			return evalExportWriters{}, func() {}, fmt.Errorf("create ranks output %q: %w", ranksOut, err)
+			return evalExportWriters{}, func() {}, fmt.Errorf("create ranks output %q: %w", exports.RanksOut, err)
 		}
 		closers = append(closers, f.Close)
 		rw, err := ranks.NewWriter(f, uint32(vocabSize), uint32(totalTokens))
@@ -323,11 +408,11 @@ func openExportWriters(vocabSize, totalTokens int, logprobsOut, ranksOut, uncert
 		}
 		w.ranks = rw
 	}
-	if uncertaintyOut != "" {
-		f, err := os.Create(uncertaintyOut)
+	if exports.UncertaintyOut != "" {
+		f, err := os.Create(exports.UncertaintyOut)
 		if err != nil {
 			cleanup()
-			return evalExportWriters{}, func() {}, fmt.Errorf("create uncertainty output %q: %w", uncertaintyOut, err)
+			return evalExportWriters{}, func() {}, fmt.Errorf("create uncertainty output %q: %w", exports.UncertaintyOut, err)
 		}
 		closers = append(closers, f.Close)
 		uw, err := uncertainty.NewWriter(f, uint32(vocabSize), uint32(totalTokens))
@@ -337,5 +422,38 @@ func openExportWriters(vocabSize, totalTokens int, logprobsOut, ranksOut, uncert
 		}
 		w.uncertainty = uw
 	}
+	if exports.LogitsOut != "" {
+		f, err := os.Create(exports.LogitsOut)
+		if err != nil {
+			cleanup()
+			return evalExportWriters{}, func() {}, fmt.Errorf("create logits output %q: %w", exports.LogitsOut, err)
+		}
+		closers = append(closers, f.Close)
+		lw, err := logits.NewWriter(f, uint32(vocabSize), uint32(totalTokens), exports.LogitsDType, exports.LogitsForm)
+		if err != nil {
+			cleanup()
+			return evalExportWriters{}, func() {}, fmt.Errorf("initialize logits writer: %w", err)
+		}
+		w.logits = lw
+	}
 	return w, cleanup, nil
+}
+
+// logSoftmaxRow writes log_softmax(row) into dst (must have len >= vocab). Uses
+// max-shifted log-sum-exp in float64 for numerical stability.
+func logSoftmaxRow(row []float32, vocab int, dst []float32) {
+	maxLogit := row[0]
+	for j := 1; j < vocab; j++ {
+		if row[j] > maxLogit {
+			maxLogit = row[j]
+		}
+	}
+	sumExp := 0.0
+	for j := range vocab {
+		sumExp += math.Exp(float64(row[j] - maxLogit))
+	}
+	logNorm := float64(maxLogit) + math.Log(sumExp)
+	for j := range vocab {
+		dst[j] = float32(float64(row[j]) - logNorm)
+	}
 }

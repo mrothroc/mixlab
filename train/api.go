@@ -75,6 +75,15 @@ func RunEvalLogprobsRanksAndUncertainty(configPath, trainPattern, safetensorsLoa
 	return runEvalLogprobs(configPath, trainPattern, safetensorsLoad, lutDir, logprobsOut, ranksOut, uncertaintyOut)
 }
 
+// RunEvalExports is the general per-token export entry point. It runs eval
+// mode and writes any combination of -logprobs-out, -ranks-out,
+// -uncertainty-out, and -logits-out from a single GPU pass. At least one
+// output path on exports must be non-empty. Records align position-by-position
+// across files.
+func RunEvalExports(configPath, trainPattern, safetensorsLoad, lutDir string, exports EvalExportOptions) error {
+	return runEvalExports(configPath, trainPattern, safetensorsLoad, lutDir, exports)
+}
+
 func RunGenerate(configPath, safetensorsLoad string, maxTokens int, temperature float32, topK int, prompt string) error {
 	return runGenerate(configPath, safetensorsLoad, maxTokens, temperature, topK, prompt)
 }

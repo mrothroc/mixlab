@@ -219,6 +219,7 @@ Per-token export flags (all optional, can be combined in a single eval pass):
 | `-logprobs-out PATH` | Binary file of per-token NLLs (`logprobs.Record{TokenID, NLL}`); enables BPB / perplexity post-processing. |
 | `-ranks-out PATH` | Binary file of per-token target ranks (`ranks.Record{TokenID, Rank}`); enables Hit@K, MRR, and rank-conditional calibration. Rank is 0-indexed; rank 0 means the target was the model's argmax. |
 | `-uncertainty-out PATH` | Binary file of per-token candidate uncertainty (`uncertainty.Record{TokenID, Top1Prob, Entropy, Margin}`); enables selective prediction, abstention, calibration, and decoding diagnostics without using the gold token. |
+| `-logits-out PATH` | Binary file of per-token full-vocab outputs (`logits.Record{TokenID, Values[vocab]}`); enables vocabulary masking, log-prob composition (e.g. product-of-experts), routing-signal sweeps, ensembling, distillation, and any analysis requiring `p(v \| context)` for arbitrary `v`. Use `-logits-dtype float16` (default) or `float32`, and `-logits-form raw` (default) or `logprobs` (stores `log_softmax(logits)`). |
 
 When multiple export flags are supplied, the records are aligned
 position-by-position (same `TokenID` at each index) and are derived from a
@@ -258,6 +259,41 @@ abstain_mask = arr["top1_prob"] < threshold
 print(f"mean top1_prob={mean_top1:.4f} entropy={mean_entropy:.4f} margin={mean_margin:.4f}")
 print(f"abstaining on bottom 10% by top1_prob: threshold={threshold:.4f} positions={abstain_mask.sum()}")
 ```
+
+Example reading logits.bin from Python (the 20-byte header carries the dtype
+and form, so a single reader handles both float16/float32 and raw/logprobs
+variants):
+
+```python
+import struct, numpy as np
+
+header = struct.Struct("<IIIIBB2s")  # magic, version, vocab, total, dtype, form, reserved
+DTYPE = {0: np.float16, 1: np.float32}
+FORM  = {0: "raw",      1: "logprobs"}
+
+with open("logits.bin", "rb") as f:
+    magic, version, vocab, n, dtype_id, form_id, _ = header.unpack(f.read(20))
+    if magic != 0x4C4F4754 or version != 1:
+        raise ValueError(f"unexpected logits header: magic={magic:#x} version={version}")
+    dt = DTYPE[dtype_id]
+    record = np.dtype([("token_id", "<u2"), ("logits", dt, (vocab,))])
+    arr = np.fromfile(f, dtype=record, count=n)
+print(f"loaded {n} positions @ vocab={vocab} dtype={dt.__name__} form={FORM[form_id]}")
+
+# Example 1: recover the model's top-1 prediction at each position.
+top1 = arr["logits"].argmax(axis=1)
+
+# Example 2: re-derive per-token NLLs from raw logits.
+if FORM[form_id] == "raw":
+    row = arr["logits"].astype(np.float32)
+    logZ = np.log(np.exp(row - row.max(axis=1, keepdims=True)).sum(axis=1)) + row.max(axis=1)
+    nll  = logZ - row[np.arange(n), arr["token_id"]]
+    print(f"mean NLL = {nll.mean():.6f}")
+```
+
+When `-logits-out` is combined with `-logprobs-out`, the recovered NLLs match
+the values in `logprobs.bin` to float32/float16 tolerance (this is enforced
+by the eval-mode parity tests).
 
 ### hiddenstats
 

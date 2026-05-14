@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"runtime/pprof"
 
+	"github.com/mrothroc/mixlab/logits"
 	"github.com/mrothroc/mixlab/train"
 )
 
@@ -35,6 +36,9 @@ func main() {
 	logprobsOut := flag.String("logprobs-out", "", "write per-token eval NLLs to a binary file (eval mode)")
 	ranksOut := flag.String("ranks-out", "", "write per-token target ranks to a binary file (eval mode); can be combined with -logprobs-out for a single eval pass")
 	uncertaintyOut := flag.String("uncertainty-out", "", "write per-token uncertainty metrics (top-1 prob, entropy, margin) to a binary file (eval mode); can be combined with -logprobs-out and -ranks-out for a single eval pass")
+	logitsOut := flag.String("logits-out", "", "write per-token full-vocab logits to a binary file (eval mode); can be combined with -logprobs-out, -ranks-out, -uncertainty-out for a single eval pass")
+	logitsDType := flag.String("logits-dtype", "float16", "on-disk dtype for -logits-out: float16 (default) or float32")
+	logitsForm := flag.String("logits-form", "raw", "encoding for -logits-out rows: raw (default) or logprobs (log_softmax)")
 
 	// profiling flags
 	cpuProfile := flag.String("cpuprofile", "", "write CPU profile to file")
@@ -147,8 +151,23 @@ func main() {
 		must(train.RunArchRace(*configsDir, *trainPattern, opts))
 	case "eval":
 		switch {
-		case *logprobsOut != "" || *ranksOut != "" || *uncertaintyOut != "":
-			must(train.RunEvalLogprobsRanksAndUncertainty(*configPath, *trainPattern, *safetensorsLoad, *lutDir, *logprobsOut, *ranksOut, *uncertaintyOut))
+		case *logprobsOut != "" || *ranksOut != "" || *uncertaintyOut != "" || *logitsOut != "":
+			dtype, err := logits.ParseDType(*logitsDType)
+			if err != nil {
+				must(err)
+			}
+			form, err := logits.ParseForm(*logitsForm)
+			if err != nil {
+				must(err)
+			}
+			must(train.RunEvalExports(*configPath, *trainPattern, *safetensorsLoad, *lutDir, train.EvalExportOptions{
+				LogprobsOut:    *logprobsOut,
+				RanksOut:       *ranksOut,
+				UncertaintyOut: *uncertaintyOut,
+				LogitsOut:      *logitsOut,
+				LogitsDType:    dtype,
+				LogitsForm:     form,
+			}))
 		default:
 			must(train.RunEvalModeWithLUT(*configPath, *trainPattern, *safetensorsLoad, *lutDir))
 		}
