@@ -4,12 +4,16 @@ package gpu
 
 import (
 	"math"
+	"runtime"
 	"testing"
 
 	ir "github.com/mrothroc/mixlab/arch"
 )
 
 func TestTrainerMuonEqRRowNormalizesMatrixUpdate(t *testing.T) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
