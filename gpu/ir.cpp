@@ -2033,7 +2033,11 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         break;
       }
       case OP_DIV: {
-        set_out(op, 0, get(op, 0) / get(op, 1));
+        auto denom = get(op, 1);
+        if (op.n_float_params > 0) {
+          denom = denom + op.float_params[0];
+        }
+        set_out(op, 0, get(op, 0) / denom);
         break;
       }
       case OP_CUMSUM: {

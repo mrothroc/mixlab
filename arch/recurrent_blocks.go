@@ -694,7 +694,7 @@ func emitPerceiverIR(prog *Program, x string, wi, H, L, D, T, B, idx int) (int, 
 }
 
 // emitRetNetIR emits a RetNet retention block with multi-scale exponential
-// decay, replacing the causal mask + softmax with a learned decay mask.
+// decay folded into the causal attention logits.
 //
 // Weight layout (8 weights per block):
 //
@@ -772,7 +772,9 @@ func emitRetNetIR(prog *Program, x string, wi, H, D, T, B, idx int) (int, error)
 	prog.ScalarMul(scores, scale, scaled)
 
 	// Retention approximation built from existing ops:
-	// exp(scores) * exp(-sigmoid(decay_h) * (i-j)) for j<=i, then row-normalize.
+	// softmax(scores - sigmoid(decay_h) * (i-j)) for j<=i. This is
+	// equivalent to the former exp(...) / row-sum decomposition, but lets the
+	// backend use its numerically stable softmax implementation.
 	decaySig := prefix + "_decay_sig"
 	pos := prefix + "_pos"
 	ones := prefix + "_ones"
@@ -783,13 +785,8 @@ func emitRetNetIR(prog *Program, x string, wi, H, D, T, B, idx int) (int, error)
 	decay4 := prefix + "_decay4"
 	decayScaled := prefix + "_decay_scaled"
 	decayNeg := prefix + "_decay_neg"
-	decayMasked := prefix + "_decay_masked"
-	decayWeights := prefix + "_decay_weights"
-	expScores := prefix + "_exp_scores"
-	weighted := prefix + "_weighted"
-	rowMean := prefix + "_row_mean"
-	rowSum := prefix + "_row_sum"
-	rowSum4 := prefix + "_row_sum4"
+	retentionLogits := prefix + "_retention_logits"
+	maskedLogits := prefix + "_masked_logits"
 
 	prog.Sigmoid(weightName(wi), decaySig)
 	prog.Arange(0, T, pos)
@@ -801,15 +798,9 @@ func emitRetNetIR(prog *Program, x string, wi, H, D, T, B, idx int) (int, error)
 	prog.Reshape(decaySig, []int{1, H, 1, 1}, decay4)
 	prog.Mul(decay4, delta4, decayScaled)
 	prog.ScalarMul(decayScaled, -1.0, decayNeg)
-	prog.CausalMask(decayNeg, T, 0, decayMasked)
-	prog.Exp(decayMasked, decayWeights)
-
-	prog.Exp(scaled, expScores)
-	prog.Mul(expScores, decayWeights, weighted)
-	prog.MeanAxis(weighted, 3, rowMean)
-	prog.ScalarMul(rowMean, float32(T), rowSum)
-	prog.Reshape(rowSum, []int{B, H, T, 1}, rowSum4)
-	prog.DivSafe(weighted, rowSum4, 1e-6, attn)
+	prog.Add(scaled, decayNeg, retentionLogits)
+	prog.CausalMask(retentionLogits, T, 0, maskedLogits)
+	prog.Softmax(maskedLogits, -1, attn)
 	wi++
 
 	// Attention output: attn @ V, then transpose back

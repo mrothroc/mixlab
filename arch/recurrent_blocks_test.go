@@ -264,14 +264,17 @@ func TestEmitRetNetIR(t *testing.T) {
 	}
 	hasRMSNorm := false
 	hasRetentionMask := false
+	hasSoftmax := false
 	hasSiLU := false
 	hasMatMul := false
 	for _, op := range p.Ops {
 		switch op.Code {
 		case OpRMSNorm:
 			hasRMSNorm = true
-		case OpArange, OpOuter, OpMeanAxis, OpExp:
+		case OpArange, OpOuter:
 			hasRetentionMask = true
+		case OpSoftmax:
+			hasSoftmax = true
 		case OpSiLU:
 			hasSiLU = true
 		case OpMatMul:
@@ -284,6 +287,9 @@ func TestEmitRetNetIR(t *testing.T) {
 	if !hasRetentionMask {
 		t.Error("missing retention decomposition ops")
 	}
+	if !hasSoftmax {
+		t.Error("missing stable retention softmax")
+	}
 	if !hasSiLU {
 		t.Error("missing SiLU op (feed-forward tail)")
 	}
@@ -292,23 +298,30 @@ func TestEmitRetNetIR(t *testing.T) {
 	}
 }
 
-func TestEmitRetNetIR_NoCausalMask(t *testing.T) {
+func TestEmitRetNetIR_StableRetentionMask(t *testing.T) {
 	p := NewProgram(8)
 	_, err := emitRetNetIR(p, "x", 0, 4, 128, 64, 2, 0)
 	if err != nil {
 		t.Fatalf("emitRetNetIR: %v", err)
 	}
 	hasCausalMask := false
+	hasSoftmax := false
 	for _, op := range p.Ops {
 		if op.Code == OpCausalMask {
 			hasCausalMask = true
 		}
 		if op.Code == OpSoftmax {
-			t.Error("RetNet should not use Softmax")
+			hasSoftmax = true
+		}
+		if op.Code == OpExp || op.Code == OpDiv {
+			t.Error("RetNet retention should use stable softmax, not raw exp/div normalization")
 		}
 	}
 	if !hasCausalMask {
 		t.Error("RetNet should use CausalMask to zero future retention weights")
+	}
+	if !hasSoftmax {
+		t.Error("RetNet should use Softmax for stable row normalization")
 	}
 }
 
