@@ -354,6 +354,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	targetValLoss := cfg.Training.TargetValLoss
 	shuffleChunkTokens := effectiveShuffleChunkTokens(cfg)
 	flops := arch.EstimateFLOPs(cfg)
+	recurrencePhaseStarts := cfg.PhaseStartSteps()
+	recurrencePhasesScheduled := len(recurrencePhaseStarts) > 0
 
 	// Build IR program
 	prog, err := BuildIRProgramFromConfig(cfg)
@@ -362,8 +364,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 	fmt.Printf("  [%s] IR program: %d ops, %d weights\n", name, len(prog.Ops), prog.NumWeights)
 	recurrenceActivationStep := cfg.Training.EffectiveRecurrenceActivationStep()
-	recurrenceScheduled := recurrenceActivationStep > 0 && len(cfg.Recurrence) > 0
+	recurrenceScheduled := !recurrencePhasesScheduled && recurrenceActivationStep > 0 && len(cfg.Recurrence) > 0
 	recurrenceActive := !recurrenceScheduled
+	currentRecurrencePhase := initialRecurrencePhase(recurrencePhasesScheduled)
 	mtpUntieScheduled := cfg.MTPUntieEnabled()
 	mtpUntieStep := cfg.EffectiveMTPUntieStep()
 	headUntied := mtpUntieScheduled && mtpUntieStep <= 0
@@ -371,18 +374,26 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	mtpAuxActivateStep := cfg.EffectiveMTPActivateStep()
 	mtpAuxActive := !mtpAuxActivationScheduled || mtpAuxActivateStep <= 0
 	initialProg := prog
-	if recurrenceScheduled || (mtpUntieScheduled && !headUntied) || (mtpAuxActivationScheduled && !mtpAuxActive) {
-		initialProg, err = BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+	if recurrencePhasesScheduled || recurrenceScheduled || (mtpUntieScheduled && !headUntied) || (mtpAuxActivationScheduled && !mtpAuxActive) {
+		state := TrainingProgramState{
 			RecurrenceActive: recurrenceActive,
 			HeadUntied:       headUntied,
 			MTPAuxInactive:   !mtpAuxActive,
-		})
+		}
+		if recurrencePhasesScheduled {
+			initialProg, err = arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, currentRecurrencePhase, state)
+		} else {
+			initialProg, err = BuildTrainingIRProgramFromConfig(cfg, state)
+		}
 		if err != nil {
 			return TrainResult{}, fmt.Errorf("build initial training IR program: %w", err)
 		}
 		if initialProg.NumWeights != prog.NumWeights {
 			return TrainResult{}, fmt.Errorf("initial training weight count mismatch: initial=%d final=%d", initialProg.NumWeights, prog.NumWeights)
 		}
+	}
+	if recurrencePhasesScheduled {
+		logRecurrencePhasesSchedule(name, cfg, recurrencePhaseStarts, initialProg)
 	}
 	if recurrenceScheduled {
 		fmt.Printf("  [%s] recurrence activates at step %d: pre-activation IR program: %d ops, %d weights\n",
@@ -516,9 +527,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 			}
 			nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)
+			nextRecurrencePhase := currentRecurrencePhase
+			if recurrencePhasesScheduled {
+				nextRecurrencePhase = recurrencePhaseIndexForStep(recurrencePhaseStarts, nextStep)
+			}
 			nextHeadUntied := headUntied || (mtpUntieScheduled && nextStep >= mtpUntieStep)
 			nextMTPAuxActive := mtpAuxActive || (mtpAuxActivationScheduled && nextStep >= mtpAuxActivateStep)
-			if nextRecurrenceActive != recurrenceActive || nextHeadUntied != headUntied || nextMTPAuxActive != mtpAuxActive {
+			if nextRecurrencePhase != currentRecurrencePhase || nextRecurrenceActive != recurrenceActive || nextHeadUntied != headUntied || nextMTPAuxActive != mtpAuxActive {
 				switcher, ok := trainer.(gpuProgramSwitcher)
 				if !ok {
 					return 0, fmt.Errorf("trainer does not support scheduled program switching")
@@ -532,11 +547,17 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 						return 0, fmt.Errorf("untie LM head at step %d: %w", nextStep, err)
 					}
 				}
-				nextProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+				state := TrainingProgramState{
 					RecurrenceActive: nextRecurrenceActive,
 					HeadUntied:       nextHeadUntied,
 					MTPAuxInactive:   !nextMTPAuxActive,
-				})
+				}
+				var nextProg *arch.Program
+				if recurrencePhasesScheduled {
+					nextProg, err = arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, nextRecurrencePhase, state)
+				} else {
+					nextProg, err = BuildTrainingIRProgramFromConfig(cfg, state)
+				}
 				if err != nil {
 					return 0, fmt.Errorf("build scheduled IR program at step %d: %w", nextStep, err)
 				}
@@ -549,12 +570,16 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				if nextRecurrenceActive && !recurrenceActive {
 					fmt.Printf("  [%s] recurrence activated at step %d\n", name, nextStep)
 				}
+				if nextRecurrencePhase != currentRecurrencePhase {
+					logRecurrencePhaseTransition(name, cfg, currentRecurrencePhase, nextRecurrencePhase, nextStep)
+				}
 				if nextHeadUntied && !headUntied {
 					fmt.Printf("  [%s] LM head untied from embedding at step %d\n", name, nextStep)
 				}
 				if nextMTPAuxActive && !mtpAuxActive {
 					fmt.Printf("  [%s] MTP auxiliary loss activated at step %d\n", name, nextStep)
 				}
+				currentRecurrencePhase = nextRecurrencePhase
 				recurrenceActive = nextRecurrenceActive
 				headUntied = nextHeadUntied
 				mtpAuxActive = nextMTPAuxActive
@@ -581,9 +606,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				return false
 			}
 			nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)
+			nextRecurrencePhase := currentRecurrencePhase
+			if recurrencePhasesScheduled {
+				nextRecurrencePhase = recurrencePhaseIndexForStep(recurrencePhaseStarts, nextStep)
+			}
 			nextHeadUntied := headUntied || (mtpUntieScheduled && nextStep >= mtpUntieStep)
 			nextMTPAuxActive := mtpAuxActive || (mtpAuxActivationScheduled && nextStep >= mtpAuxActivateStep)
-			return nextRecurrenceActive == recurrenceActive &&
+			return nextRecurrencePhase == currentRecurrencePhase &&
+				nextRecurrenceActive == recurrenceActive &&
 				nextHeadUntied == headUntied &&
 				nextMTPAuxActive == mtpAuxActive
 		}

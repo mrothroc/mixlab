@@ -76,3 +76,32 @@ func TestBuildPreActivationIRProgramFromConfig_BackwardCompatWithoutRecurrence(t
 		t.Fatalf("pre changed non-recurrent program: weights %d/%d ops %d/%d", pre.NumWeights, full.NumWeights, len(pre.Ops), len(full.Ops))
 	}
 }
+
+func TestBuildTrainingIRProgramForRecurrencePhaseFromConfig(t *testing.T) {
+	cfg := recurrenceActivationProgramConfig()
+	cfg.RecurrencePhases = []RecurrencePhaseSpec{
+		{Frac: 0, Order: []int{0, 1, 2, 3}},
+		{Frac: 0.5, Order: []int{0, 1, 2, 3, 4, 5}},
+	}
+	phase0, err := BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, 0, TrainingProgramState{RecurrenceActive: true})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramForRecurrencePhaseFromConfig phase0: %v", err)
+	}
+	phase1, err := BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, 1, TrainingProgramState{RecurrenceActive: true})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramForRecurrencePhaseFromConfig phase1: %v", err)
+	}
+	if phase0.NumWeights != phase1.NumWeights {
+		t.Fatalf("phase weights mismatch: phase0=%d phase1=%d", phase0.NumWeights, phase1.NumWeights)
+	}
+	if len(phase0.Ops) >= len(phase1.Ops) {
+		t.Fatalf("phase0 ops=%d want less than phase1 ops=%d", len(phase0.Ops), len(phase1.Ops))
+	}
+	full, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	if len(full.Ops) != len(phase1.Ops) {
+		t.Fatalf("full ops=%d want max-cost phase ops=%d", len(full.Ops), len(phase1.Ops))
+	}
+}

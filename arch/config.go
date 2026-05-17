@@ -39,12 +39,26 @@ type ArchConfig struct {
 	MTP                      *MTPSpec     `json:"mtp,omitempty"`
 	Backout                  *BackoutSpec `json:"backout,omitempty"`
 
-	Blocks     []BlockSpec `json:"blocks"`
-	Recurrence []int       `json:"recurrence,omitempty"`
+	Blocks           []BlockSpec           `json:"blocks"`
+	Recurrence       []int                 `json:"recurrence,omitempty"`
+	RecurrencePhases []RecurrencePhaseSpec `json:"recurrence_phases,omitempty"`
+
+	// Schema-2 recurrence phase fields are reserved for a possible future API.
+	// They are parsed so validation can reject them explicitly instead of failing
+	// with a generic unknown-field error.
+	ExecutionOrder             []int                           `json:"execution_order,omitempty"`
+	RecurrencePhaseActivations []RecurrencePhaseActivationSpec `json:"recurrence_phase_activations,omitempty"`
 
 	Training TrainingSpec `json:"training"`
 	Eval     *EvalSpec    `json:"eval,omitempty"`
+
+	recurrencePhasesSet           bool
+	executionOrderSet             bool
+	recurrencePhaseActivationsSet bool
 }
+
+// Types and validation helpers for recurrence_phases live in
+// arch/config_recurrence_phases.go.
 
 // EffectiveBigramDim returns the configured bigram embedding dimension,
 // defaulting to model_dim when bigram embeddings are enabled but bigram_dim is unset.
@@ -645,6 +659,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if len(cfg.Training.Phases) > 0 {
 		cfg.Training.Steps = cfg.Training.TotalSteps()
 	}
+	if err := validateRecurrencePhases(cfg, source); err != nil {
+		return nil, err
+	}
 	if cfg.Training.TargetValLoss < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.target_val_loss=%g (must be >= 0)", source, cfg.Training.TargetValLoss)
 	}
@@ -717,6 +734,9 @@ func validateRecurrence(cfg *ArchConfig, source string) error {
 	}
 	return nil
 }
+
+// validateRecurrencePhases and validateRecurrencePhaseOrder live in
+// arch/config_recurrence_phases.go.
 
 func validateWeightGroups(cfg *ArchConfig, source string) error {
 	type weightGroupInfo struct {

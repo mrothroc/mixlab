@@ -8,6 +8,17 @@ func BuildIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
+	if len(cfg.RecurrencePhases) > 0 {
+		phaseIdx := MaxCostRecurrencePhaseIndex(cfg)
+		if phaseIdx < 0 {
+			return nil, fmt.Errorf("recurrence_phases configured but no max-cost phase found")
+		}
+		return BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, phaseIdx, TrainingProgramState{
+			RecurrenceActive: true,
+			HeadUntied:       cfg.MTPUntieEnabled(),
+			MTPAuxInactive:   false,
+		})
+	}
 
 	return BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
 		RecurrenceActive: true,
@@ -22,6 +33,12 @@ func BuildIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
+	}
+	if len(cfg.RecurrencePhases) > 0 {
+		return buildIRProgramFromConfigWithStateAndOrder(cfg, TrainingProgramState{
+			RecurrenceActive: true,
+			HeadUntied:       cfg.MTPUntieEnabled(),
+		}, nil, cfg.RecurrencePhases[len(cfg.RecurrencePhases)-1].Order)
 	}
 	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
 		RecurrenceActive: true,
@@ -46,6 +63,18 @@ func BuildTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingProgramStat
 	return buildIRProgramFromConfigWithState(cfg, state, cfg.MTP)
 }
 
+// BuildTrainingIRProgramForRecurrencePhaseFromConfig constructs a training
+// program for one explicit recurrence_phases entry.
+func BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg *ArchConfig, phaseIdx int, state TrainingProgramState) (*Program, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil config")
+	}
+	if phaseIdx < 0 || phaseIdx >= len(cfg.RecurrencePhases) {
+		return nil, fmt.Errorf("recurrence phase index %d out of range [0,%d)", phaseIdx, len(cfg.RecurrencePhases))
+	}
+	return buildIRProgramFromConfigWithStateAndOrder(cfg, state, cfg.MTP, cfg.RecurrencePhases[phaseIdx].Order)
+}
+
 // BuildPreActivationIRProgramFromConfig constructs the recurrence-inactive
 // training program for configs that delay recurrence activation. The program
 // keeps the full recurrence weight layout, but emits only the first occurrence
@@ -53,6 +82,13 @@ func BuildTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingProgramStat
 func BuildPreActivationIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
+	}
+	if len(cfg.RecurrencePhases) > 0 {
+		return BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, 0, TrainingProgramState{
+			RecurrenceActive: true,
+			HeadUntied:       cfg.MTPUntieEnabled(),
+			MTPAuxInactive:   false,
+		})
 	}
 	return BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
 		RecurrenceActive: false,
@@ -62,6 +98,10 @@ func BuildPreActivationIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 }
 
 func buildIRProgramFromConfigWithState(cfg *ArchConfig, state TrainingProgramState, mtp *MTPSpec) (*Program, error) {
+	return buildIRProgramFromConfigWithStateAndOrder(cfg, state, mtp, nil)
+}
+
+func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingProgramState, mtp *MTPSpec, phaseOrder []int) (*Program, error) {
 	batchSize := 1
 	if cfg.Training.BatchTokens > 0 && cfg.SeqLen > 0 {
 		batchSize = cfg.Training.BatchTokens / cfg.SeqLen
@@ -71,7 +111,12 @@ func buildIRProgramFromConfigWithState(cfg *ArchConfig, state TrainingProgramSta
 	}
 
 	var executionOrder []int
-	if !state.RecurrenceActive {
+	if phaseOrder != nil {
+		if len(phaseOrder) == 0 {
+			return nil, fmt.Errorf("recurrence phase order must not be empty")
+		}
+		executionOrder = phaseOrder
+	} else if !state.RecurrenceActive {
 		order, err := uniqueRecurrenceExecutionOrder(cfg.Blocks, cfg.Recurrence)
 		if err != nil {
 			return nil, err

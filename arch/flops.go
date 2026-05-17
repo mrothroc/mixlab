@@ -24,7 +24,43 @@ func EstimateFLOPs(cfg *ArchConfig) FLOPsEstimate {
 	if err != nil {
 		return FLOPsEstimate{}
 	}
+	if len(cfg.RecurrencePhases) > 0 {
+		best := FLOPsEstimate{}
+		for i, phase := range cfg.RecurrencePhases {
+			est := estimateFLOPsForOrder(cfg, phase.Order, paramCount, expandedParamCount)
+			if i == 0 || est.ForwardFLOPs > best.ForwardFLOPs {
+				best = est
+			}
+		}
+		return best
+	}
 
+	return estimateFLOPsForOrder(cfg, nil, paramCount, expandedParamCount)
+}
+
+// MaxCostRecurrencePhaseIndex returns the recurrence phase with the highest
+// estimated forward FLOPs. It returns -1 when recurrence_phases is absent.
+func MaxCostRecurrencePhaseIndex(cfg *ArchConfig) int {
+	if cfg == nil || len(cfg.RecurrencePhases) == 0 {
+		return -1
+	}
+	bestIdx := 0
+	bestForward := int64(-1)
+	paramCount, expandedParamCount, err := ParameterCountsFromConfig(cfg)
+	if err != nil {
+		return bestIdx
+	}
+	for i, phase := range cfg.RecurrencePhases {
+		est := estimateFLOPsForOrder(cfg, phase.Order, paramCount, expandedParamCount)
+		if est.ForwardFLOPs > bestForward {
+			bestForward = est.ForwardFLOPs
+			bestIdx = i
+		}
+	}
+	return bestIdx
+}
+
+func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedParamCount int64) FLOPsEstimate {
 	B := cfg.Training.BatchTokens / cfg.SeqLen
 	if B <= 0 {
 		return FLOPsEstimate{}
@@ -35,8 +71,17 @@ func EstimateFLOPs(cfg *ArchConfig) FLOPsEstimate {
 	ffn := ffnDim(D, cfg.MLPMult)
 
 	forward := int64(0)
-	for _, block := range cfg.Blocks {
-		forward += estimateBlockFLOPs(block, B, T, D, V, ffn, cfg.MLPMult, cfg.BlockScales, cfg.ResidMix)
+	if order == nil {
+		for _, block := range cfg.Blocks {
+			forward += estimateBlockFLOPs(block, B, T, D, V, ffn, cfg.MLPMult, cfg.BlockScales, cfg.ResidMix)
+		}
+	} else {
+		for _, idx := range order {
+			if idx < 0 || idx >= len(cfg.Blocks) {
+				return FLOPsEstimate{}
+			}
+			forward += estimateBlockFLOPs(cfg.Blocks[idx], B, T, D, V, ffn, cfg.MLPMult, cfg.BlockScales, cfg.ResidMix)
+		}
 	}
 
 	// Embedding lookup is indexing only; LM head projection produces logits.
