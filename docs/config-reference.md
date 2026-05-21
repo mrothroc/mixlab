@@ -33,7 +33,7 @@ These fields live at the root of the config object.
 | `backout` | object | No | Disabled | Enables final-latent residual subtraction before the final RMSNorm. See [Backout section](#backout). |
 | `blocks` | array | Yes | None | Ordered block list. Must contain at least one block. |
 | `recurrence` | integer array | No | Disabled | Weight-sharing map for `blocks`; length must equal `blocks`, references must point to the same or earlier block with the same type. |
-| `recurrence_phases` | array | No | Disabled | Explicit multi-phase recurrence execution schedule. Each entry has `frac` and `order`; `frac: 0.0` is required for the first phase. Orders contain block positions from `blocks` and must preserve weight roots, `kv_source`, and parallel-residual pair dependencies. Mutually exclusive with `training.recurrence_activation_frac` and `training.recurrence_activation_step`. |
+| `recurrence_phases` | array | No | Disabled | Explicit multi-phase block-execution schedule. See [Recurrence phases section](#recurrence-phases). |
 | `data` | object | No | Defaults applied per field | Data-loader behavior. See [Data section](#data). |
 | `training` | object | No | Defaults applied per field | Training hyperparameters. See [Training section](#training). |
 | `eval` | object | No | Disabled | Optional evaluation-only behavior. See [Eval section](#eval). |
@@ -118,6 +118,61 @@ The smear gate weights are routed through the scalar/Adam optimizer group, not t
 | `lambda_init` | number | No | `-1.0` | Initial value for learned scalar weight `backout_lambda`. Must be finite. |
 
 `backout_lambda` has shape `[1]`, is initialized from `lambda_init`, and is routed through the scalar optimizer group with no weight decay. `backout` composes with recurrence, parallel residual, tied or untied heads, and MTP. It is not supported with `unet`.
+
+## Recurrence phases
+
+`recurrence_phases` defines an explicit multi-phase block-execution schedule. Each phase declares a training-progress threshold (`frac`) at which it activates and an `order` array listing which block positions execute during that phase. Weight sharing remains controlled by the top-level [`recurrence`](#top-level-model-fields) array; phases only change *which* blocks run at each point in training, not the weight layout.
+
+Use this to faithfully reproduce recipes like "warm up on the first two blocks for the first half of training, then add the rest" without resorting to the simpler single-frac legacy fields.
+
+```json
+{
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+  "recurrence": [0, 1, 0, 1],
+  "recurrence_phases": [
+    {"frac": 0.0, "order": [0, 1]},
+    {"frac": 0.5, "order": [0, 1, 2, 3]}
+  ],
+  "training": {"steps": 1000}
+}
+```
+
+In the example above, steps `0..499` execute only blocks 0 and 1; steps `500..999` execute all four. Blocks 2 and 3 share weights with blocks 0 and 1 respectively (per `recurrence`), so the weight layout is identical across phases.
+
+### Phase fields
+
+| Field | Type | Required | Default | Notes |
+|------|------|----------|---------|-------|
+| `frac` | number | Yes | None | Training-progress threshold in `[0,1)` at which this phase begins. The first phase's `frac` must be exactly `0.0`. Subsequent entries must be strictly ascending and map to distinct integer start steps (`floor(frac * total_steps)`). |
+| `order` | integer array | Yes | None | Block positions (zero-indexed into `blocks`) executed during this phase, in execution order. Must be non-empty and contain no duplicate positions within the phase. Positions not listed do not execute. |
+
+### Validation rules
+
+Phase-level:
+- The first phase must have `frac: 0.0`.
+- `frac` values are strictly ascending and must map to distinct integer start steps. Two phases that round to the same step (because `total_steps` is small) are rejected.
+- Every phase's `order` must be non-empty.
+
+Per-phase order:
+- Each entry must be a valid block index `[0, len(blocks))` and must not repeat within the phase.
+- When the global `recurrence` array shares weights, the **root** block (the position that owns the weights) must appear earlier in the same phase than any block that points at it. Phases that activate a sharer without its root are rejected.
+- For `plain` blocks with `kv_source > 0`, the referenced source block must appear earlier in the same phase.
+- `parallel_residual` pairs `[i, i+1]` must remain contiguous within any phase that includes either side.
+- If `backout` is configured, every phase's `order` must include the `backout.save_layer` index.
+
+### Composition and limits
+
+- Mutually exclusive with `training.recurrence_activation_frac` and `training.recurrence_activation_step`. Setting either alongside `recurrence_phases` is rejected.
+- The placeholder `execution_order` and `recurrence_phase_activations` schemas are not implemented; configs using them are rejected explicitly.
+- Not supported with `unet`.
+- Requires positive total training steps (set via `training.steps` or `training.phases`).
+- The trainer rebuilds the IR program at each phase boundary; weight tensors are unchanged across transitions, so the same per-block weight indices apply in every phase.
+- `mode count` and `EstimateFLOPs` report the **max-cost phase** (the phase with the most expensive order). Per-phase cost reporting is not currently exposed.
 
 ## Block types
 
