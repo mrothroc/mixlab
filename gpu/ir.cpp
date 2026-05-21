@@ -105,6 +105,26 @@ mx::array cross_entropy_per_token(const mx::array& logits, const mx::array& targ
   return -mx::reshape(chosen, {targets.shape(0)});
 }
 
+mx::array first_byte_masked_cross_entropy_mean(
+    const mx::array& logits,
+    const mx::array& targets,
+    const mx::array& first_byte_valid) {
+  if (first_byte_valid.ndim() != 1 || first_byte_valid.shape(0) != logits.shape(1)) {
+    throw std::runtime_error("first-byte mask must be a rank-1 vector matching vocab size");
+  }
+  auto valid_i32 = mx::astype(first_byte_valid, mx::int32);
+  auto valid = mx::greater(valid_i32, mx::array(0, mx::int32));
+  auto target_valid = mx::greater(
+      mx::take(valid_i32, targets, 0),
+      mx::array(0, mx::int32));
+  auto masked_logits = mx::where(
+      mx::expand_dims(valid, 0),
+      logits,
+      mx::full_like(logits, -1e9f));
+  auto effective_logits = mx::where(mx::expand_dims(target_valid, 1), masked_logits, logits);
+  return cross_entropy_mean(effective_logits, targets);
+}
+
 mx::array as_float32(const mx::array& x) {
   return mx::astype(x, mx::float32);
 }
@@ -2000,6 +2020,13 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
       }
       case OP_CROSS_ENTROPY_PER_TOKEN: {
         set_out(op, 0, cross_entropy_per_token(get(op, 0), mx::astype(get(op, 1), mx::int32)));
+        break;
+      }
+      case OP_FIRST_BYTE_MASKED_CROSS_ENTROPY: {
+        set_out(op, 0, first_byte_masked_cross_entropy_mean(
+            get(op, 0),
+            mx::astype(get(op, 1), mx::int32),
+            get(op, 2)));
         break;
       }
       case OP_DROPOUT: {

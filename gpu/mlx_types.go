@@ -52,6 +52,7 @@ const (
 	OpMamba3SelectiveScan  = 63
 	OpMamba3CanonicalBlock = 64
 	OpRandomNormal         = 65
+	OpFirstByteMaskedCE    = 66
 )
 
 const (

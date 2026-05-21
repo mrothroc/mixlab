@@ -51,6 +51,7 @@ const (
 	OpMamba3SelectiveScan  = 63 // OP_MAMBA3_SELECTIVE_SCAN
 	OpMamba3CanonicalBlock = 64 // OP_MAMBA3_CANONICAL_BLOCK
 	OpRandomNormal         = 65 // OP_RANDOM_NORMAL
+	OpFirstByteMaskedCE    = 66 // OP_FIRST_BYTE_MASKED_CROSS_ENTROPY
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -185,6 +186,13 @@ func (p *Program) CausalMask(scores string, T, windowSize int, output string) {
 // CrossEntropy emits a cross-entropy loss computation.
 func (p *Program) CrossEntropy(logits, targets, output string) {
 	p.AddOp(OpCrossEntropy, []string{logits, targets}, []string{output}, nil, nil)
+}
+
+// FirstByteMaskedCrossEntropy emits mean cross-entropy using a masked softmax
+// for rows whose target token starts a UTF-8 codepoint. firstByteValid is a
+// length-vocab int32 vector where nonzero entries are valid first-byte tokens.
+func (p *Program) FirstByteMaskedCrossEntropy(logits, targets, firstByteValid, output string) {
+	p.AddOp(OpFirstByteMaskedCE, []string{logits, targets, firstByteValid}, []string{output}, nil, nil)
 }
 
 // CrossEntropyPerToken emits per-token negative log-likelihoods.

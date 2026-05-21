@@ -38,12 +38,12 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		return buildIRProgramFromConfigWithStateAndOrder(cfg, TrainingProgramState{
 			RecurrenceActive: true,
 			HeadUntied:       cfg.MTPUntieEnabled(),
-		}, nil, cfg.RecurrencePhases[len(cfg.RecurrencePhases)-1].Order)
+		}, nil, cfg.RecurrencePhases[len(cfg.RecurrencePhases)-1].Order, false)
 	}
 	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
 		RecurrenceActive: true,
 		HeadUntied:       cfg.MTPUntieEnabled(),
-	}, nil)
+	}, nil, false)
 }
 
 // TrainingProgramState selects training-time graph schedules that can switch
@@ -60,7 +60,7 @@ func BuildTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingProgramStat
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
-	return buildIRProgramFromConfigWithState(cfg, state, cfg.MTP)
+	return buildIRProgramFromConfigWithState(cfg, state, cfg.MTP, cfg.Training.FirstByteMask)
 }
 
 // BuildTrainingIRProgramForRecurrencePhaseFromConfig constructs a training
@@ -72,7 +72,7 @@ func BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg *ArchConfig, phaseId
 	if phaseIdx < 0 || phaseIdx >= len(cfg.RecurrencePhases) {
 		return nil, fmt.Errorf("recurrence phase index %d out of range [0,%d)", phaseIdx, len(cfg.RecurrencePhases))
 	}
-	return buildIRProgramFromConfigWithStateAndOrder(cfg, state, cfg.MTP, cfg.RecurrencePhases[phaseIdx].Order)
+	return buildIRProgramFromConfigWithStateAndOrder(cfg, state, cfg.MTP, cfg.RecurrencePhases[phaseIdx].Order, cfg.Training.FirstByteMask)
 }
 
 // BuildPreActivationIRProgramFromConfig constructs the recurrence-inactive
@@ -97,11 +97,11 @@ func BuildPreActivationIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	})
 }
 
-func buildIRProgramFromConfigWithState(cfg *ArchConfig, state TrainingProgramState, mtp *MTPSpec) (*Program, error) {
-	return buildIRProgramFromConfigWithStateAndOrder(cfg, state, mtp, nil)
+func buildIRProgramFromConfigWithState(cfg *ArchConfig, state TrainingProgramState, mtp *MTPSpec, firstByteMask bool) (*Program, error) {
+	return buildIRProgramFromConfigWithStateAndOrder(cfg, state, mtp, nil, firstByteMask)
 }
 
-func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingProgramState, mtp *MTPSpec, phaseOrder []int) (*Program, error) {
+func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingProgramState, mtp *MTPSpec, phaseOrder []int, firstByteMask bool) (*Program, error) {
 	batchSize := 1
 	if cfg.Training.BatchTokens > 0 && cfg.SeqLen > 0 {
 		batchSize = cfg.Training.BatchTokens / cfg.SeqLen
@@ -153,6 +153,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		activeMTP,
 		reserveHead,
 		useTiedHead,
+		firstByteMask,
 		cfg.smearEmbeddingOptions(),
 		cfg.Backout,
 	)

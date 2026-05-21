@@ -19,14 +19,17 @@ type mlxGPUTrainer struct {
 	shapes             []WeightShape
 	baseLR             float32
 	evalLossOutputName string
+	vocabSize          int
 	bigramVocabSize    int
 	trigramVocabSize   int
 	declaredTargetSize int
+	firstByteMaskInput bool
 	// Pre-allocated input buffers to avoid per-step allocation.
-	tokBuf     []int32
-	tgtBuf     []int32
-	bigramBuf  []int32
-	trigramBuf []int32
+	tokBuf         []int32
+	tgtBuf         []int32
+	bigramBuf      []int32
+	trigramBuf     []int32
+	firstByteValid []int32
 	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
 	lockedOSThread bool
 }
@@ -140,11 +143,28 @@ func initMLXGPUTrainer(
 
 	batchElems := cfg.Training.BatchTokens
 	declaredTargetSize := 0
+	firstByteMaskInput := false
 	for _, inp := range irProg.Inputs {
 		if inp.Name == "targets" && len(inp.Shape) == 1 {
 			declaredTargetSize = inp.Shape[0]
-			break
 		}
+		if inp.Name == "first_byte_valid" {
+			firstByteMaskInput = true
+		}
+	}
+	firstByteValid := []int32(nil)
+	if firstByteMaskInput {
+		firstByteValid = cfg.Training.FirstByteMaskValid
+		if len(firstByteValid) == 0 {
+			firstByteValid = identityFirstByteMaskValid(cfg.VocabSize)
+		}
+		if len(firstByteValid) != cfg.VocabSize {
+			gpu.TrainerDestroy(trainerHandle)
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, fmt.Errorf("first-byte mask size=%d does not match vocab_size=%d", len(firstByteValid), cfg.VocabSize)
+		}
+		firstByteValid = append([]int32(nil), firstByteValid...)
 	}
 	trainer := &mlxGPUTrainer{
 		handle:             trainerHandle,
@@ -153,13 +173,16 @@ func initMLXGPUTrainer(
 		shapes:             shapes,
 		baseLR:             optimizerSpec.DefaultBaseLR,
 		evalLossOutputName: preferredEvalLossOutputName(irProg),
+		vocabSize:          cfg.VocabSize,
 		bigramVocabSize:    cfg.BigramVocabSize,
 		trigramVocabSize:   cfg.TrigramVocabSize,
 		declaredTargetSize: declaredTargetSize,
+		firstByteMaskInput: firstByteMaskInput,
 		tokBuf:             make([]int32, batchElems),
 		tgtBuf:             make([]int32, batchElems),
 		bigramBuf:          make([]int32, batchElems),
 		trigramBuf:         make([]int32, batchElems),
+		firstByteValid:     firstByteValid,
 		lockedOSThread:     true,
 	}
 	releaseOSThread = false
@@ -236,6 +259,14 @@ func (t *mlxGPUTrainer) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([]g
 	inputs := []gpu.TensorInput{
 		{Name: "tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.tokBuf[:need]},
 		{Name: "targets", DType: gpu.TensorInt32, Shape: targetShape, Data: targetData},
+	}
+	if t.firstByteMaskInput {
+		if len(t.firstByteValid) != t.vocabSize {
+			return nil, fmt.Errorf("first-byte mask size=%d does not match vocab_size=%d", len(t.firstByteValid), t.vocabSize)
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "first_byte_valid", DType: gpu.TensorInt32, Shape: []int{t.vocabSize}, Data: t.firstByteValid,
+		})
 	}
 	if t.bigramVocabSize > 0 {
 		bigramIDs, err := ComputeBigramIDs(t.tokBuf[:need], need, t.bigramVocabSize)
@@ -400,6 +431,10 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	}
 	t.prog = gpuProg
 	t.evalLossOutputName = preferredEvalLossOutputName(irProg)
+	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
+	if t.firstByteMaskInput && len(t.firstByteValid) == 0 {
+		t.firstByteValid = identityFirstByteMaskValid(t.vocabSize)
+	}
 	return nil
 }
 
@@ -557,6 +592,18 @@ func preferredEvalLossOutputName(prog *ir.Program) string {
 		}
 	}
 	return "loss"
+}
+
+func programDeclaresInput(prog *ir.Program, name string) bool {
+	if prog == nil {
+		return false
+	}
+	for _, in := range prog.Inputs {
+		if in.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.TrainerOptimizerSpec, error) {

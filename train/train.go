@@ -356,6 +356,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	flops := arch.EstimateFLOPs(cfg)
 	recurrencePhaseStarts := cfg.PhaseStartSteps()
 	recurrencePhasesScheduled := len(recurrencePhaseStarts) > 0
+	if cfg.Training.FirstByteMask {
+		source, err := configureFirstByteMaskForTraining(cfg, trainPattern)
+		if err != nil {
+			return TrainResult{}, err
+		}
+		fmt.Printf("  [%s] first-byte mask enabled (%s)\n", name, source)
+	}
 
 	// Build IR program
 	prog, err := BuildIRProgramFromConfig(cfg)
@@ -900,45 +907,11 @@ func meanValidationLossWithTTT(
 	return sum / float64(count), nil
 }
 
-func shouldUpdateSWA(step, start, interval int) bool {
-	return start > 0 && interval > 0 && step >= start && (step-start)%interval == 0
-}
-
-func hasSWAWeights(ema [][]float32) bool {
-	for _, weight := range ema {
-		if len(weight) != 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func updateEMAWeights(ema, current [][]float32, decay float32) {
-	oneMinusDecay := 1 - decay
-	for i, weight := range current {
-		if len(ema[i]) == 0 {
-			ema[i] = append([]float32(nil), weight...)
-			continue
-		}
-		for j, value := range weight {
-			ema[i][j] = decay*ema[i][j] + oneMinusDecay*value
-		}
-	}
-}
-
 func exportWeightsForTrainer(trainer GPUTrainer, swaEMA [][]float32) ([][]float32, error) {
 	if hasSWAWeights(swaEMA) {
 		return cloneWeights(swaEMA), nil
 	}
 	return readTrainerWeights(trainer)
-}
-
-func cloneWeights(weights [][]float32) [][]float32 {
-	cloned := make([][]float32, len(weights))
-	for i, weight := range weights {
-		cloned[i] = append([]float32(nil), weight...)
-	}
-	return cloned
 }
 
 // readTrainerWeights reads weights from a trainer via the weight-reading interface.

@@ -55,6 +55,7 @@ var irToGPUOp = map[int]int{
 	ir.OpMamba3SelectiveScan:  OpMamba3SelectiveScan,
 	ir.OpMamba3CanonicalBlock: OpMamba3CanonicalBlock,
 	ir.OpRandomNormal:         OpRandomNormal,
+	ir.OpFirstByteMaskedCE:    OpFirstByteMaskedCE,
 }
 
 // irToGPUDType maps ir tensor dtype codes to gpu dtype codes.
