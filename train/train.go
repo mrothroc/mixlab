@@ -214,15 +214,16 @@ func phaseDisplayLabel(phase TrainingPhase, index int) string {
 
 // TrainResult holds the outcome of a training run.
 type TrainResult struct {
-	Name        string
-	FirstLoss   float64
-	LastLoss    float64
-	LastValLoss float64
-	HasValLoss  bool
-	Delta       float64
-	Elapsed     time.Duration
-	StepFLOPs   int64
-	FLOPsPerTok int64
+	Name             string
+	FirstLoss        float64
+	LastLoss         float64
+	LastUnmaskedLoss float64
+	LastValLoss      float64
+	HasValLoss       bool
+	Delta            float64
+	Elapsed          time.Duration
+	StepFLOPs        int64
+	FLOPsPerTok      int64
 }
 
 // formatSummary returns a one-line summary of the training result.
@@ -467,6 +468,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	phaseSched, hasPhases := sched.(phaseSchedule)
 
 	var firstLoss, lastLoss float64
+	lastUnmaskedLoss := math.NaN()
 	lastValLoss := math.NaN()
 	hasValLoss := false
 	logEvery := effectiveTrainEvery(opts.LogEvery, "MIXLAB_LOG_EVERY", 100)
@@ -515,6 +517,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		if batch.err != nil {
 			return TrainResult{}, fmt.Errorf("load initial batch: %w", batch.err)
 		}
+		lastTrainBatch := batch
 		initialSubmitStart := time.Now()
 		stopInitialSubmit := startSlowTrainingPhaseLogger(name, 0, "submit_step")
 		if err := trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, sched.At(0)); err != nil {
@@ -598,6 +601,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				return 0, fmt.Errorf("submit step %d: %w", nextStep, err)
 			}
 			stopSubmit()
+			lastTrainBatch = batch
 			return time.Since(submitStart), nil
 		}
 		canSubmitNextBeforeCollect := func(step int) bool {
@@ -782,6 +786,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 			}
 		}
+		evalLoss, err := trainer.EvaluateGPU(lastTrainBatch.x, lastTrainBatch.y, batchSize, seqLen)
+		if err != nil {
+			return TrainResult{}, fmt.Errorf("evaluate final unmasked training loss: %w", err)
+		}
+		lastUnmaskedLoss = float64(evalLoss)
 	}
 
 	// Export safetensors if requested (before closing trainer)
@@ -825,15 +834,16 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 	elapsed := time.Since(start)
 	result := TrainResult{
-		Name:        name,
-		FirstLoss:   firstLoss,
-		LastLoss:    lastLoss,
-		LastValLoss: lastValLoss,
-		HasValLoss:  hasValLoss,
-		Delta:       lastLoss - firstLoss,
-		Elapsed:     elapsed,
-		StepFLOPs:   flops.TrainingFLOPs,
-		FLOPsPerTok: flops.FLOPsPerToken,
+		Name:             name,
+		FirstLoss:        firstLoss,
+		LastLoss:         lastLoss,
+		LastUnmaskedLoss: lastUnmaskedLoss,
+		LastValLoss:      lastValLoss,
+		HasValLoss:       hasValLoss,
+		Delta:            lastLoss - firstLoss,
+		Elapsed:          elapsed,
+		StepFLOPs:        flops.TrainingFLOPs,
+		FLOPsPerTok:      flops.FLOPsPerToken,
 	}
 	fmt.Println(result.formatSummary())
 

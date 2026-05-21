@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestFirstByteMaskTrainingSmokeImprovesObjectiveBPB(t *testing.T) {
+func TestFirstByteMaskTrainingSmokeImprovesUnmaskedBPB(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping 100-step MLX training smoke in short mode")
 	}
@@ -23,7 +23,9 @@ func TestFirstByteMaskTrainingSmokeImprovesObjectiveBPB(t *testing.T) {
 		t.Fatalf("MkdirAll(data): %v", err)
 	}
 	tokens := make([]uint16, 4096)
-	pattern := []byte("the quick brown fox jumps over the lazy dog. ")
+	// Include continuation-byte targets so unmasked eval catches regressions
+	// outside the first-byte denominator.
+	pattern := []byte{0xf0, 0x9f, 0x98, 0x80, 0x9f, 0x98, 0x80, 0x80}
 	for i := range tokens {
 		tokens[i] = uint16(pattern[i%len(pattern)])
 	}
@@ -42,16 +44,17 @@ func TestFirstByteMaskTrainingSmokeImprovesObjectiveBPB(t *testing.T) {
 		t.Fatalf("runTrain masked: %v", err)
 	}
 
-	baseBPB := baseResult.LastLoss / math.Log(2)
-	maskedBPB := maskedResult.LastLoss / math.Log(2)
+	baseBPB := baseResult.LastUnmaskedLoss / math.Log(2)
+	maskedBPB := maskedResult.LastUnmaskedLoss / math.Log(2)
 	improvement := (baseBPB - maskedBPB) / baseBPB
-	t.Logf("baseline objective BPB=%.6f masked objective BPB=%.6f improvement=%.2f%%", baseBPB, maskedBPB, improvement*100)
-	if improvement <= 0.05 {
-		t.Fatalf("masked objective BPB improvement %.2f%%, want >5%%", improvement*100)
+	t.Logf("baseline unmasked BPB=%.6f masked unmasked BPB=%.6f improvement=%.2f%%", baseBPB, maskedBPB, improvement*100)
+	if improvement <= 0.0005 {
+		t.Fatalf("masked unmasked-BPB improvement %.2f%%, want >0.05%%", improvement*100)
 	}
 }
 
 func firstByteMaskSmokeConfig(enabled bool) *ArchConfig {
+	const lr = 3e-3
 	cfg := &ArchConfig{
 		Name:      "first_byte_mask_smoke",
 		ModelDim:  16,
@@ -63,7 +66,11 @@ func firstByteMaskSmokeConfig(enabled bool) *ArchConfig {
 		Training: DefaultTrainingSpec(),
 	}
 	cfg.Training.Steps = 100
-	cfg.Training.LR = 2e-3
+	cfg.Training.LR = lr
+	cfg.Training.EmbedLR = lr
+	cfg.Training.MatrixLR = lr
+	cfg.Training.ScalarLR = lr
+	cfg.Training.HeadLR = lr
 	cfg.Training.Seed = 11
 	cfg.Training.BatchTokens = 32
 	cfg.Training.WeightDecay = 0
