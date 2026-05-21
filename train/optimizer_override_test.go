@@ -153,6 +153,7 @@ func newOptimizerOverrideFixture(t *testing.T) optimizerOverrideFixture {
 	cfg.Training.LR = 1e-3
 	cfg.Training.Seed = 7
 	cfg.Training.BatchTokens = 8
+	cfg.Training.ApplyDefaults()
 
 	configPath := filepath.Join(dir, "config.json")
 	configBlob, err := json.MarshalIndent(cfg, "", "  ")

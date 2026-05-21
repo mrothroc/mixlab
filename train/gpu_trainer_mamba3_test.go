@@ -283,6 +283,15 @@ func TestMamba3CanonicalSmokeLossDecreases(t *testing.T) {
 		t.Skip("MLX backend not available")
 	}
 	useConv := true
+	training := TrainingSpec{
+		Optimizer:   "adamw",
+		Steps:       10,
+		LR:          3e-3,
+		BatchTokens: 16,
+		Seed:        7,
+		GradClip:    1,
+	}
+	training.ApplyDefaults()
 	cfg := &ArchConfig{
 		Name:          "mamba3_canonical_smoketest",
 		ModelDim:      16,
@@ -298,27 +307,7 @@ func TestMamba3CanonicalSmokeLossDecreases(t *testing.T) {
 			ConvKernel: 4,
 			UseConv:    &useConv,
 		}},
-		Training: TrainingSpec{
-			Optimizer:         "adamw",
-			Steps:             10,
-			LR:                3e-3,
-			EmbedLR:           3e-3,
-			MatrixLR:          3e-3,
-			ScalarLR:          3e-3,
-			HeadLR:            3e-3,
-			Beta1:             0.9,
-			Beta2:             0.95,
-			Epsilon:           1e-8,
-			BatchTokens:       16,
-			Seed:              7,
-			GradClip:          1,
-			MuonMomentum:      0.9,
-			MuonBackendSteps:  5,
-			EmbedWeightDecay:  0,
-			MatrixWeightDecay: 0,
-			ScalarWeightDecay: 0,
-			HeadWeightDecay:   0,
-		},
+		Training: training,
 	}
 	prog, err := BuildIRProgramFromConfig(cfg)
 	if err != nil {

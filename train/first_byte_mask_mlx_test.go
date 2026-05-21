@@ -63,17 +63,14 @@ func firstByteMaskSmokeConfig(enabled bool) *ArchConfig {
 		Blocks: []BlockSpec{
 			{Type: "mlp", Activation: "gelu"},
 		},
-		Training: DefaultTrainingSpec(),
+		Training: TrainingSpec{
+			Steps:         100,
+			LR:            lr,
+			Seed:          11,
+			BatchTokens:   32,
+			FirstByteMask: enabled,
+		},
 	}
-	cfg.Training.Steps = 100
-	cfg.Training.LR = lr
-	cfg.Training.EmbedLR = lr
-	cfg.Training.MatrixLR = lr
-	cfg.Training.ScalarLR = lr
-	cfg.Training.HeadLR = lr
-	cfg.Training.Seed = 11
-	cfg.Training.BatchTokens = 32
-	cfg.Training.WeightDecay = 0
-	cfg.Training.FirstByteMask = enabled
+	cfg.Training.ApplyDefaults()
 	return cfg
 }

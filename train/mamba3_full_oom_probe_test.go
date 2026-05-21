@@ -30,6 +30,17 @@ func TestMamba3CanonicalFullStepOOMProbe(t *testing.T) {
 		blocks = append(blocks, BlockSpec{Type: "mamba3-canonical", ScanChunkSize: &chunkSize})
 		blocks = append(blocks, BlockSpec{Type: "swiglu"})
 	}
+	training := TrainingSpec{
+		Steps:         1,
+		LR:            3e-4,
+		BatchTokens:   seqLen,
+		Seed:          7,
+		GradClip:      1,
+		WeightDecay:   0.02,
+		WeightInit:    "normal",
+		WeightInitStd: 0.02,
+	}
+	training.ApplyDefaults()
 	cfg := &ArchConfig{
 		Name:          "mamba3_full_oom_probe",
 		ModelDim:      d,
@@ -37,29 +48,7 @@ func TestMamba3CanonicalFullStepOOMProbe(t *testing.T) {
 		SeqLen:        seqLen,
 		TieEmbeddings: false,
 		Blocks:        blocks,
-		Training: TrainingSpec{
-			Steps:             1,
-			LR:                3e-4,
-			EmbedLR:           3e-4,
-			MatrixLR:          3e-4,
-			ScalarLR:          3e-4,
-			HeadLR:            3e-4,
-			Beta1:             0.9,
-			Beta2:             0.95,
-			Epsilon:           1e-8,
-			BatchTokens:       seqLen,
-			Seed:              7,
-			GradClip:          1,
-			WeightDecay:       0.02,
-			MuonMomentum:      0.9,
-			MuonBackendSteps:  5,
-			WeightInit:        "normal",
-			WeightInitStd:     0.02,
-			EmbedWeightDecay:  0.02,
-			MatrixWeightDecay: 0.02,
-			ScalarWeightDecay: 0.02,
-			HeadWeightDecay:   0.02,
-		},
+		Training:      training,
 	}
 
 	prog, err := BuildIRProgramFromConfig(cfg)

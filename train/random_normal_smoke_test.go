@@ -21,25 +21,21 @@ func TestRandomNormalForwardBackwardSmoke(t *testing.T) {
 		vocab    = modelDim
 	)
 
+	training := TrainingSpec{
+		Steps:       1,
+		LR:          1e-2,
+		Seed:        7,
+		BatchTokens: seqLen,
+		GradClip:    0,
+	}
+	training.ApplyDefaults()
 	cfg := &ArchConfig{
 		Name:          "random_normal_smoke",
 		ModelDim:      modelDim,
 		VocabSize:     vocab,
 		SeqLen:        seqLen,
 		TieEmbeddings: true,
-		Training: TrainingSpec{
-			Steps:       1,
-			LR:          1e-2,
-			EmbedLR:     1e-2,
-			ScalarLR:    1e-2,
-			Beta1:       0.9,
-			Beta2:       0.95,
-			Epsilon:     1e-8,
-			Seed:        7,
-			BatchTokens: seqLen,
-			GradClip:    0,
-			WeightDecay: 0,
-		},
+		Training:      training,
 	}
 
 	prog := buildRandomNormalSmokeProgram(modelDim, seqLen, vocab)

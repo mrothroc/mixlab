@@ -119,6 +119,7 @@ func TestBuildTrainerOptimizerSpec_MuonEqR(t *testing.T) {
 		Training: DefaultTrainingSpec(),
 	}
 	cfg.Training.Optimizer = "muon_eq_r"
+	cfg.Training.ApplyDefaults()
 	shapes, err := computeWeightShapes(cfg)
 	if err != nil {
 		t.Fatalf("computeWeightShapes: %v", err)
@@ -159,6 +160,7 @@ func TestBuildTrainerOptimizerSpec_NorMuon(t *testing.T) {
 		Training: DefaultTrainingSpec(),
 	}
 	cfg.Training.Optimizer = "normuon"
+	cfg.Training.ApplyDefaults()
 	shapes, err := computeWeightShapes(cfg)
 	if err != nil {
 		t.Fatalf("computeWeightShapes: %v", err)
@@ -201,6 +203,7 @@ func TestBuildTrainerOptimizerSpec_CautiousWeightDecay(t *testing.T) {
 	cfg.Training.Steps = 20
 	cfg.Training.CautiousWeightDecay = true
 	cfg.Training.CautiousWeightDecayActivationFrac = 0.25
+	cfg.Training.ApplyDefaults()
 
 	shapes, err := computeWeightShapes(cfg)
 	if err != nil {

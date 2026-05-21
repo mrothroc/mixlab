@@ -296,6 +296,7 @@ func DefaultTrainingSpec() TrainingSpec {
 		TTTLR:             1e-5,
 		TTTRank:           4,
 		QAT:               "none",
+		MuonMomentum:      0.9,
 		MuonBackendSteps:  5,
 		EmbedWeightDecay:  0.01,
 		MatrixWeightDecay: 0.01,
@@ -303,6 +304,90 @@ func DefaultTrainingSpec() TrainingSpec {
 		HeadWeightDecay:   0.01,
 		SWADecay:          0.999,
 		SWAInterval:       10,
+	}
+}
+
+// ApplyDefaults fills omitted zero-valued training fields using the same
+// defaults applied when parsing a JSON architecture config.
+func (t *TrainingSpec) ApplyDefaults() {
+	if t == nil {
+		return
+	}
+	d := DefaultTrainingSpec()
+	if t.Steps <= 0 {
+		t.Steps = d.Steps
+	}
+	if t.LR <= 0 {
+		t.LR = d.LR
+	}
+	// Note: seed=0 in JSON is indistinguishable from omitted; defaults to 42.
+	if t.Seed <= 0 {
+		t.Seed = d.Seed
+	}
+	if t.BatchTokens <= 0 {
+		t.BatchTokens = d.BatchTokens
+	}
+	if t.WeightDecay == 0 {
+		t.WeightDecay = d.WeightDecay
+	}
+	if t.Beta1 == 0 {
+		t.Beta1 = d.Beta1
+	}
+	if t.Beta2 == 0 {
+		t.Beta2 = d.Beta2
+	}
+	if t.Epsilon == 0 {
+		t.Epsilon = d.Epsilon
+	}
+	if t.EmbedLR == 0 {
+		t.EmbedLR = float32(t.LR)
+	}
+	if t.MatrixLR == 0 {
+		t.MatrixLR = float32(t.LR)
+	}
+	if t.ScalarLR == 0 {
+		t.ScalarLR = float32(t.LR)
+	}
+	if t.HeadLR == 0 {
+		t.HeadLR = float32(t.LR)
+	}
+	if t.TTTLR == 0 {
+		t.TTTLR = d.TTTLR
+	}
+	if t.TTTMode == "" {
+		t.TTTMode = d.TTTMode
+	}
+	t.QAT = strings.ToLower(strings.TrimSpace(t.QAT))
+	if t.QAT == "" {
+		t.QAT = d.QAT
+	}
+	if t.TTTRank == 0 {
+		t.TTTRank = d.TTTRank
+	}
+	if t.MuonMomentum == 0 {
+		t.MuonMomentum = t.Beta1
+	}
+	if t.MuonBackendSteps <= 0 {
+		t.MuonBackendSteps = d.MuonBackendSteps
+	}
+	t.Optimizer = strings.ToLower(strings.TrimSpace(t.Optimizer))
+	if t.EmbedWeightDecay == 0 {
+		t.EmbedWeightDecay = t.WeightDecay
+	}
+	if t.MatrixWeightDecay == 0 {
+		t.MatrixWeightDecay = t.WeightDecay
+	}
+	if t.ScalarWeightDecay == 0 {
+		t.ScalarWeightDecay = t.WeightDecay
+	}
+	if t.HeadWeightDecay == 0 {
+		t.HeadWeightDecay = t.WeightDecay
+	}
+	if t.SWADecay == 0 {
+		t.SWADecay = d.SWADecay
+	}
+	if t.SWAInterval <= 0 {
+		t.SWAInterval = d.SWAInterval
 	}
 }
 
@@ -520,83 +605,7 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 
-	// Apply training defaults.
-	d := DefaultTrainingSpec()
-	if cfg.Training.Steps <= 0 {
-		cfg.Training.Steps = d.Steps
-	}
-	if cfg.Training.LR <= 0 {
-		cfg.Training.LR = d.LR
-	}
-	// Note: seed=0 in JSON is indistinguishable from omitted; defaults to 42.
-	if cfg.Training.Seed <= 0 {
-		cfg.Training.Seed = d.Seed
-	}
-	if cfg.Training.BatchTokens <= 0 {
-		cfg.Training.BatchTokens = d.BatchTokens
-	}
-	if cfg.Training.WeightDecay == 0 {
-		cfg.Training.WeightDecay = d.WeightDecay
-	}
-	if cfg.Training.Beta1 == 0 {
-		cfg.Training.Beta1 = d.Beta1
-	}
-	if cfg.Training.Beta2 == 0 {
-		cfg.Training.Beta2 = d.Beta2
-	}
-	if cfg.Training.Epsilon == 0 {
-		cfg.Training.Epsilon = d.Epsilon
-	}
-	if cfg.Training.EmbedLR == 0 {
-		cfg.Training.EmbedLR = float32(cfg.Training.LR)
-	}
-	if cfg.Training.MatrixLR == 0 {
-		cfg.Training.MatrixLR = float32(cfg.Training.LR)
-	}
-	if cfg.Training.ScalarLR == 0 {
-		cfg.Training.ScalarLR = float32(cfg.Training.LR)
-	}
-	if cfg.Training.HeadLR == 0 {
-		cfg.Training.HeadLR = float32(cfg.Training.LR)
-	}
-	if cfg.Training.TTTLR == 0 {
-		cfg.Training.TTTLR = d.TTTLR
-	}
-	if cfg.Training.TTTMode == "" {
-		cfg.Training.TTTMode = d.TTTMode
-	}
-	cfg.Training.QAT = strings.ToLower(strings.TrimSpace(cfg.Training.QAT))
-	if cfg.Training.QAT == "" {
-		cfg.Training.QAT = d.QAT
-	}
-	if cfg.Training.TTTRank == 0 {
-		cfg.Training.TTTRank = d.TTTRank
-	}
-	if cfg.Training.MuonMomentum == 0 {
-		cfg.Training.MuonMomentum = cfg.Training.Beta1
-	}
-	if cfg.Training.MuonBackendSteps <= 0 {
-		cfg.Training.MuonBackendSteps = d.MuonBackendSteps
-	}
-	cfg.Training.Optimizer = strings.ToLower(strings.TrimSpace(cfg.Training.Optimizer))
-	if cfg.Training.EmbedWeightDecay == 0 {
-		cfg.Training.EmbedWeightDecay = cfg.Training.WeightDecay
-	}
-	if cfg.Training.MatrixWeightDecay == 0 {
-		cfg.Training.MatrixWeightDecay = cfg.Training.WeightDecay
-	}
-	if cfg.Training.ScalarWeightDecay == 0 {
-		cfg.Training.ScalarWeightDecay = cfg.Training.WeightDecay
-	}
-	if cfg.Training.HeadWeightDecay == 0 {
-		cfg.Training.HeadWeightDecay = cfg.Training.WeightDecay
-	}
-	if cfg.Training.SWADecay == 0 {
-		cfg.Training.SWADecay = d.SWADecay
-	}
-	if cfg.Training.SWAInterval <= 0 {
-		cfg.Training.SWAInterval = d.SWAInterval
-	}
+	cfg.Training.ApplyDefaults()
 	if cfg.Training.WeightDecay < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.weight_decay=%g (must be >= 0)", source, cfg.Training.WeightDecay)
 	}
