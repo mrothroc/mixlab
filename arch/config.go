@@ -38,6 +38,7 @@ type ArchConfig struct {
 	Dropout                  float32      `json:"dropout,omitempty"`
 	MTP                      *MTPSpec     `json:"mtp,omitempty"`
 	Backout                  *BackoutSpec `json:"backout,omitempty"`
+	Data                     DataSpec     `json:"data,omitempty"`
 
 	Blocks           []BlockSpec           `json:"blocks"`
 	Recurrence       []int                 `json:"recurrence,omitempty"`
@@ -55,6 +56,11 @@ type ArchConfig struct {
 	recurrencePhasesSet           bool
 	executionOrderSet             bool
 	recurrencePhaseActivationsSet bool
+}
+
+// DataSpec holds data-loader behavior.
+type DataSpec struct {
+	NoShardShuffle bool `json:"no_shard_shuffle,omitempty"`
 }
 
 // Types and validation helpers for recurrence_phases live in

@@ -57,7 +57,7 @@ func runHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath string
 	}
 	batchSize := batchTokens / seqLen
 
-	loader, err := data.NewLoader(trainPattern, cfg.Training.Seed, effectiveShuffleChunkTokens(cfg))
+	loader, err := data.NewLoaderWithOptions(trainPattern, cfg.Training.Seed, effectiveLoaderOptions(cfg))
 	if err != nil {
 		return err
 	}

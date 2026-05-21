@@ -6,6 +6,8 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"testing"
 )
 
@@ -194,6 +196,81 @@ func TestTake_SpansShards(t *testing.T) {
 	}
 }
 
+func TestTokenStreamNoShardShufflePreservesManifestOrderAcrossEpochs(t *testing.T) {
+	dir := t.TempDir()
+	pattern := writeSentinelShards(t, dir)
+
+	stream, err := newTokenStreamWithOptions(pattern, 123, LoaderOptions{
+		ChunkSize:      1,
+		NoShardShuffle: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := stream.Take(9)
+	if err != nil {
+		t.Fatalf("Take: %v", err)
+	}
+	want := []uint16{11, 22, 33, 11, 22, 33, 11, 22, 33}
+	if !slices.Equal(got, want) {
+		t.Fatalf("tokens = %v, want %v", got, want)
+	}
+}
+
+func TestTokenStreamShardShuffleDefaultPreservesSeededPermutation(t *testing.T) {
+	dir := t.TempDir()
+	pattern := writeSentinelShards(t, dir)
+	sortedNames := []string{"shard_A.bin", "shard_B.bin", "shard_C.bin"}
+	seed, expectedNames := shuffledSentinelOrder(t, pattern, sortedNames)
+
+	stream, err := newTokenStreamWithOptions(pattern, seed, LoaderOptions{ChunkSize: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotNames := baseNames(stream.files)
+	if !slices.Equal(gotNames, expectedNames) {
+		t.Fatalf("files = %v, want seeded permutation %v", gotNames, expectedNames)
+	}
+	if slices.Equal(gotNames, sortedNames) {
+		t.Fatalf("default shard order was not shuffled for seed %d: %v", seed, gotNames)
+	}
+}
+
+func TestTokenStreamNoShardShuffleResumeKeepsManifestOrder(t *testing.T) {
+	dir := t.TempDir()
+	pattern := writeSentinelShards(t, dir)
+	opts := LoaderOptions{ChunkSize: 1, NoShardShuffle: true}
+
+	stream, err := newTokenStreamWithOptions(pattern, 123, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix, err := stream.Take(4)
+	if err != nil {
+		t.Fatalf("Take prefix: %v", err)
+	}
+	if want := []uint16{11, 22, 33, 11}; !slices.Equal(prefix, want) {
+		t.Fatalf("prefix = %v, want %v", prefix, want)
+	}
+
+	restored, err := newTokenStreamWithOptions(pattern, 123, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored.idx = stream.idx
+	restored.pos = stream.pos
+	restored.tok = append([]uint16(nil), stream.tok...)
+
+	got, err := restored.Take(5)
+	if err != nil {
+		t.Fatalf("Take after restore: %v", err)
+	}
+	want := []uint16{22, 33, 11, 22, 33}
+	if !slices.Equal(got, want) {
+		t.Fatalf("tokens after restore = %v, want %v", got, want)
+	}
+}
+
 func TestTake_LargeStreamRandomStart(t *testing.T) {
 	dir := t.TempDir()
 	// >10000 tokens triggers the random start position.
@@ -214,6 +291,41 @@ func TestTake_LargeStreamRandomStart(t *testing.T) {
 	if len(got) != 100 {
 		t.Fatalf("got %d tokens, want 100", len(got))
 	}
+}
+
+func writeSentinelShards(t *testing.T, dir string) string {
+	t.Helper()
+	writeShard(t, dir, "shard_A.bin", []uint16{11})
+	writeShard(t, dir, "shard_B.bin", []uint16{22})
+	writeShard(t, dir, "shard_C.bin", []uint16{33})
+	return filepath.Join(dir, "shard_*.bin")
+}
+
+func shuffledSentinelOrder(t *testing.T, pattern string, sortedNames []string) (int64, []string) {
+	t.Helper()
+	for seed := int64(1); seed < 100; seed++ {
+		files, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sort.Strings(files)
+		rng := rand.New(rand.NewSource(seed))
+		rng.Shuffle(len(files), func(i, j int) { files[i], files[j] = files[j], files[i] })
+		names := baseNames(files)
+		if !slices.Equal(names, sortedNames) {
+			return seed, names
+		}
+	}
+	t.Fatal("failed to find non-identity seeded shard permutation")
+	return 0, nil
+}
+
+func baseNames(files []string) []string {
+	names := make([]string, len(files))
+	for i, file := range files {
+		names[i] = filepath.Base(file)
+	}
+	return names
 }
 
 func TestShuffleChunks(t *testing.T) {

@@ -17,7 +17,13 @@ const (
 	legacyShuffleChunkTokens = 2048
 )
 
-// tokenStream reads tokens sequentially from shuffled binary shards.
+// LoaderOptions controls training/eval shard traversal.
+type LoaderOptions struct {
+	ChunkSize      int
+	NoShardShuffle bool
+}
+
+// tokenStream reads tokens sequentially from binary shards.
 type tokenStream struct {
 	files     []string
 	idx       int
@@ -27,12 +33,14 @@ type tokenStream struct {
 	chunkSize int
 }
 
-// newTokenStream opens shards matching pattern, shuffles them, and loads the first.
-func newTokenStream(pattern string, seed int64, chunkSizeOpt ...int) (*tokenStream, error) {
-	chunkSize := legacyShuffleChunkTokens
-	if len(chunkSizeOpt) > 0 && chunkSizeOpt[0] > 0 {
-		chunkSize = chunkSizeOpt[0]
-	}
+// newTokenStream opens shards matching pattern, applies default shard shuffling,
+// and loads the first shard.
+func newTokenStream(pattern string, seed int64) (*tokenStream, error) {
+	return newTokenStreamWithOptions(pattern, seed, loaderOptionsFromChunkSize())
+}
+
+func newTokenStreamWithOptions(pattern string, seed int64, opts LoaderOptions) (*tokenStream, error) {
+	opts = normalizeLoaderOptions(opts, legacyShuffleChunkTokens)
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return nil, err
@@ -42,14 +50,16 @@ func newTokenStream(pattern string, seed int64, chunkSizeOpt ...int) (*tokenStre
 		return nil, fmt.Errorf("no shard files matched %q; check the --train/--val glob and that prepare wrote .bin shards", pattern)
 	}
 	rng := rand.New(rand.NewSource(seed))
-	rng.Shuffle(len(files), func(i, j int) { files[i], files[j] = files[j], files[i] })
+	if !opts.NoShardShuffle {
+		rng.Shuffle(len(files), func(i, j int) { files[i], files[j] = files[j], files[i] })
+	}
 
 	toks, err := LoadDataShard(files[0])
 	if err != nil {
 		return nil, err
 	}
-	shuffleChunks(toks, chunkSize, rng)
-	s := &tokenStream{files: files, tok: toks, rng: rng, chunkSize: chunkSize}
+	shuffleChunks(toks, opts.ChunkSize, rng)
+	s := &tokenStream{files: files, tok: toks, rng: rng, chunkSize: opts.ChunkSize}
 	if len(toks) > 10000 {
 		s.pos = rng.Intn(len(toks) / 2)
 	}
@@ -118,11 +128,28 @@ type Loader struct {
 // pass a nonpositive chunkSize keep the historical 2048-token shuffle blocks;
 // config-driven callers should pass seq_len when no explicit override is set.
 func NewLoader(pattern string, seed int64, chunkSizeOpt ...int) (*Loader, error) {
-	chunkSize := legacyShuffleChunkTokens
+	return NewLoaderWithOptions(pattern, seed, loaderOptionsFromChunkSize(chunkSizeOpt...))
+}
+
+func loaderOptionsFromChunkSize(chunkSizeOpt ...int) LoaderOptions {
+	opts := LoaderOptions{ChunkSize: legacyShuffleChunkTokens}
 	if len(chunkSizeOpt) > 0 && chunkSizeOpt[0] > 0 {
-		chunkSize = chunkSizeOpt[0]
+		opts.ChunkSize = chunkSizeOpt[0]
 	}
-	s, err := newTokenStream(pattern, seed, chunkSize)
+	return opts
+}
+
+func normalizeLoaderOptions(opts LoaderOptions, defaultChunkSize int) LoaderOptions {
+	if opts.ChunkSize <= 0 {
+		opts.ChunkSize = defaultChunkSize
+	}
+	return opts
+}
+
+// NewLoaderWithOptions creates a Loader from a glob pattern for binary shard
+// files with explicit data-loader options.
+func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Loader, error) {
+	s, err := newTokenStreamWithOptions(pattern, seed, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -161,11 +188,18 @@ type ValSet struct {
 
 // NewValSet loads nBatches fixed batches from a validation shard.
 func NewValSet(pattern string, seed int64, nBatches, batchTokens, seqLen int, chunkSizeOpt ...int) (*ValSet, error) {
-	chunkSize := seqLen
+	opts := LoaderOptions{ChunkSize: seqLen}
 	if len(chunkSizeOpt) > 0 && chunkSizeOpt[0] > 0 {
-		chunkSize = chunkSizeOpt[0]
+		opts.ChunkSize = chunkSizeOpt[0]
 	}
-	loader, err := NewLoader(pattern, seed, chunkSize)
+	return NewValSetWithOptions(pattern, seed, nBatches, batchTokens, seqLen, opts)
+}
+
+// NewValSetWithOptions loads nBatches fixed validation batches using explicit
+// loader options.
+func NewValSetWithOptions(pattern string, seed int64, nBatches, batchTokens, seqLen int, opts LoaderOptions) (*ValSet, error) {
+	opts = normalizeLoaderOptions(opts, seqLen)
+	loader, err := NewLoaderWithOptions(pattern, seed, opts)
 	if err != nil {
 		return nil, err
 	}

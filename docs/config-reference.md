@@ -34,6 +34,7 @@ These fields live at the root of the config object.
 | `blocks` | array | Yes | None | Ordered block list. Must contain at least one block. |
 | `recurrence` | integer array | No | Disabled | Weight-sharing map for `blocks`; length must equal `blocks`, references must point to the same or earlier block with the same type. |
 | `recurrence_phases` | array | No | Disabled | Explicit multi-phase recurrence execution schedule. Each entry has `frac` and `order`; `frac: 0.0` is required for the first phase. Orders contain block positions from `blocks` and must preserve weight roots, `kv_source`, and parallel-residual pair dependencies. Mutually exclusive with `training.recurrence_activation_frac` and `training.recurrence_activation_step`. |
+| `data` | object | No | Defaults applied per field | Data-loader behavior. See [Data section](#data). |
 | `training` | object | No | Defaults applied per field | Training hyperparameters. See [Training section](#training). |
 | `eval` | object | No | Disabled | Optional evaluation-only behavior. See [Eval section](#eval). |
 
@@ -569,6 +570,14 @@ The custom-op decoder recognizes these `params` keys:
   ]
 }
 ```
+
+## Data
+
+The `data` object controls loader-level corpus traversal.
+
+| Field | Type | Required | Default | Notes |
+|------|------|----------|---------|-------|
+| `no_shard_shuffle` | boolean | No | `false` | When false, loaders keep the historical seeded whole-shard file shuffle. When true, loaders skip whole-shard file-order shuffling and consume shards in sorted glob order while still shuffling token chunks within each shard. |
 
 ## Training
 

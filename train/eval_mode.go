@@ -65,7 +65,7 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error
 	batchSize := batchTokens / seqLen
 
 	const defaultValBatchCount = 10
-	valSet, err := data.NewValSet(valPattern, cfg.Training.Seed, defaultValBatchCount, batchTokens, seqLen, effectiveShuffleChunkTokens(cfg))
+	valSet, err := data.NewValSetWithOptions(valPattern, cfg.Training.Seed, defaultValBatchCount, batchTokens, seqLen, effectiveLoaderOptions(cfg))
 	if err != nil {
 		return fmt.Errorf("load val set %q: %w", valPattern, err)
 	}

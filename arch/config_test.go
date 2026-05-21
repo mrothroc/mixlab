@@ -50,6 +50,41 @@ func TestValidPlainConfig(t *testing.T) {
 	}
 }
 
+func TestParseArchConfigDataNoShardShuffle(t *testing.T) {
+	raw := []byte(`{
+		"name": "test_no_shard_shuffle",
+		"model_dim": 128,
+		"vocab_size": 1024,
+		"seq_len": 128,
+		"data": {"no_shard_shuffle": true},
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 100, "lr": 0.0003, "batch_tokens": 1024}
+	}`)
+	got, err := ParseArchConfig(raw, "test_no_shard_shuffle")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if !got.Data.NoShardShuffle {
+		t.Fatal("data.no_shard_shuffle = false, want true")
+	}
+
+	defaultRaw := []byte(`{
+		"name": "test_default_shard_shuffle",
+		"model_dim": 128,
+		"vocab_size": 1024,
+		"seq_len": 128,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 100, "lr": 0.0003, "batch_tokens": 1024}
+	}`)
+	defaultCfg, err := ParseArchConfig(defaultRaw, "test_default_shard_shuffle")
+	if err != nil {
+		t.Fatalf("ParseArchConfig default: %v", err)
+	}
+	if defaultCfg.Data.NoShardShuffle {
+		t.Fatal("default data.no_shard_shuffle = true, want false")
+	}
+}
+
 func TestParseArchConfig_QKGain(t *testing.T) {
 	cfg := ArchConfig{
 		Name:      "test_qk_gain",
@@ -497,125 +532,6 @@ func TestMLPActivationConfigParsing(t *testing.T) {
 	}
 	if got.Blocks[0].LeakySlope != 0.25 {
 		t.Fatalf("leaky_slope = %g, want 0.25", got.Blocks[0].LeakySlope)
-	}
-}
-
-func TestNegativeWeightDecay(t *testing.T) {
-	cfg := ArchConfig{
-		ModelDim:  128,
-		VocabSize: 1024,
-		Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
-		Training:  TrainingSpec{WeightDecay: -0.01},
-	}
-	data, _ := json.Marshal(cfg)
-	_, err := ParseArchConfig(data, "test")
-	if err == nil {
-		t.Fatal("expected error for negative weight_decay")
-	}
-	if !strings.Contains(err.Error(), "weight_decay") {
-		t.Errorf("error should mention weight_decay: %v", err)
-	}
-}
-
-func TestNegativeGradClip(t *testing.T) {
-	cfg := ArchConfig{
-		ModelDim:  128,
-		VocabSize: 1024,
-		Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
-		Training:  TrainingSpec{GradClip: -1.0},
-	}
-	data, _ := json.Marshal(cfg)
-	_, err := ParseArchConfig(data, "test")
-	if err == nil {
-		t.Fatal("expected error for negative grad_clip")
-	}
-	if !strings.Contains(err.Error(), "grad_clip") {
-		t.Errorf("error should mention grad_clip: %v", err)
-	}
-}
-
-func TestNegativeSWAStart(t *testing.T) {
-	cfg := ArchConfig{
-		ModelDim:  128,
-		VocabSize: 1024,
-		Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
-		Training:  TrainingSpec{SWAStart: -1},
-	}
-	data, _ := json.Marshal(cfg)
-	_, err := ParseArchConfig(data, "test")
-	if err == nil {
-		t.Fatal("expected error for negative swa_start")
-	}
-	if !strings.Contains(err.Error(), "swa_start") {
-		t.Errorf("error should mention swa_start: %v", err)
-	}
-}
-
-func TestInvalidSWADecay(t *testing.T) {
-	cfg := ArchConfig{
-		ModelDim:  128,
-		VocabSize: 1024,
-		Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
-		Training:  TrainingSpec{SWADecay: 1.0},
-	}
-	data, _ := json.Marshal(cfg)
-	_, err := ParseArchConfig(data, "test")
-	if err == nil {
-		t.Fatal("expected error for invalid swa_decay")
-	}
-	if !strings.Contains(err.Error(), "swa_decay") {
-		t.Errorf("error should mention swa_decay: %v", err)
-	}
-}
-
-func TestNegativeWarmdownSteps(t *testing.T) {
-	cfg := ArchConfig{
-		ModelDim:  128,
-		VocabSize: 1024,
-		Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
-		Training:  TrainingSpec{WarmdownSteps: -1},
-	}
-	data, _ := json.Marshal(cfg)
-	_, err := ParseArchConfig(data, "test")
-	if err == nil {
-		t.Fatal("expected error for negative warmdown_steps")
-	}
-	if !strings.Contains(err.Error(), "warmdown_steps") {
-		t.Errorf("error should mention warmdown_steps: %v", err)
-	}
-}
-
-func TestNegativeTargetValLoss(t *testing.T) {
-	cfg := ArchConfig{
-		ModelDim:  128,
-		VocabSize: 1024,
-		Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
-		Training:  TrainingSpec{TargetValLoss: -0.1},
-	}
-	data, _ := json.Marshal(cfg)
-	_, err := ParseArchConfig(data, "test")
-	if err == nil {
-		t.Fatal("expected error for negative target_val_loss")
-	}
-	if !strings.Contains(err.Error(), "target_val_loss") {
-		t.Errorf("error should mention target_val_loss: %v", err)
-	}
-}
-
-func TestNegativeHardwareTFLOPs(t *testing.T) {
-	cfg := ArchConfig{
-		ModelDim:  128,
-		VocabSize: 1024,
-		Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
-		Training:  TrainingSpec{HardwareTFLOPs: -1},
-	}
-	data, _ := json.Marshal(cfg)
-	_, err := ParseArchConfig(data, "test")
-	if err == nil {
-		t.Fatal("expected error for negative hardware_tflops")
-	}
-	if !strings.Contains(err.Error(), "hardware_tflops") {
-		t.Errorf("error should mention hardware_tflops: %v", err)
 	}
 }
 

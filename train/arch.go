@@ -2,6 +2,7 @@ package train
 
 import (
 	"github.com/mrothroc/mixlab/arch"
+	"github.com/mrothroc/mixlab/data"
 )
 
 type ArchConfig = arch.ArchConfig
@@ -43,4 +44,11 @@ func effectiveShuffleChunkTokens(cfg *ArchConfig) int {
 		return cfg.Training.ShuffleChunkTokens
 	}
 	return cfg.SeqLen
+}
+
+func effectiveLoaderOptions(cfg *ArchConfig) data.LoaderOptions {
+	return data.LoaderOptions{
+		ChunkSize:      effectiveShuffleChunkTokens(cfg),
+		NoShardShuffle: cfg.Data.NoShardShuffle,
+	}
 }

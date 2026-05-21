@@ -30,7 +30,7 @@ func TestSWAWindow128Smoke(t *testing.T) {
 	defer trainer.CloseTrainer()
 
 	trainPattern := filepath.Join("..", "data", "example", "train_*.bin")
-	loader, err := data.NewLoader(trainPattern, cfg.Training.Seed, effectiveShuffleChunkTokens(cfg))
+	loader, err := data.NewLoaderWithOptions(trainPattern, cfg.Training.Seed, effectiveLoaderOptions(cfg))
 	if err != nil {
 		t.Fatalf("data.NewLoader: %v", err)
 	}

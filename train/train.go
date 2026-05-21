@@ -364,7 +364,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	seed := cfg.Training.Seed
 	name := cfg.Name
 	targetValLoss := cfg.Training.TargetValLoss
-	shuffleChunkTokens := effectiveShuffleChunkTokens(cfg)
 	flops := arch.EstimateFLOPs(cfg)
 	recurrencePhaseStarts := cfg.PhaseStartSteps()
 	recurrencePhasesScheduled := len(recurrencePhaseStarts) > 0
@@ -462,7 +461,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 
 	// Create data loader
-	loader, err := data.NewLoader(trainPattern, seed, shuffleChunkTokens)
+	loader, err := data.NewLoaderWithOptions(trainPattern, seed, effectiveLoaderOptions(cfg))
 	if err != nil {
 		return TrainResult{}, err
 	}
@@ -470,7 +469,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	// Load validation set
 	const defaultValBatchCount = 10
 	valPattern := strings.Replace(trainPattern, "train", "val", 1)
-	valSet, valErr := data.NewValSet(valPattern, seed, defaultValBatchCount, batchTokens, seqLen, shuffleChunkTokens)
+	valSet, valErr := data.NewValSetWithOptions(valPattern, seed, defaultValBatchCount, batchTokens, seqLen, effectiveLoaderOptions(cfg))
 	if valErr != nil {
 		fmt.Printf("  [%s] no val set: %v\n", name, valErr)
 	}
