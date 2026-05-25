@@ -18,6 +18,10 @@ func FromData(data []float32, rows, cols int) (int64, error) {
 	return 0, errNotBuilt
 }
 
+func FromDataShape(data []float32, shape []int) (int64, error) {
+	return 0, errNotBuilt
+}
+
 func FreeHandle(handle int64)     {}
 func FreeHandles(handles []int64) {}
 

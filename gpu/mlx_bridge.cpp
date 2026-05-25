@@ -399,6 +399,40 @@ int64_t mlx_from_data(const float* data, int rows, int cols) {
   }
 }
 
+int64_t mlx_from_data_shape(const float* data, const int* shape, int ndim) {
+  if (!data || !shape || ndim <= 0) {
+    return 0;
+  }
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return 0;
+    }
+    mx::Shape mx_shape;
+    mx_shape.reserve(static_cast<size_t>(ndim));
+    size_t total = 1;
+    for (int i = 0; i < ndim; ++i) {
+      if (shape[i] <= 0) {
+        return 0;
+      }
+      mx_shape.push_back(static_cast<mx::ShapeElem>(shape[i]));
+      total *= static_cast<size_t>(shape[i]);
+    }
+    auto* owned = new float[total];
+    std::memcpy(owned, data, total * sizeof(float));
+
+    auto arr = mx::array(
+        owned,
+        mx_shape,
+        mx::float32,
+        [](void* p) {
+          delete[] static_cast<float*>(p);
+        });
+    return alloc_handle(std::move(arr));
+  } catch (...) {
+    return 0;
+  }
+}
+
 int64_t mlx_from_data_nocopy(const float* data, int rows, int cols) {
   if (!data || rows <= 0 || cols <= 0) {
     return 0;

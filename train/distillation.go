@@ -14,6 +14,7 @@ type distillationEnsemble struct {
 	strategy    string
 	vocabSize   int
 	batchTokens int
+	probBuf     []float32
 }
 
 type distillationTeacher struct {
@@ -109,12 +110,7 @@ func uploadWeightHandles(shapes []WeightShape, weights [][]float32) ([]int64, er
 	}
 	handles := make([]int64, len(weights))
 	for i, data := range weights {
-		rows, cols := 1, len(data)
-		if len(shapes[i].Shape) == 2 {
-			rows = shapes[i].Shape[0]
-			cols = shapes[i].Shape[1]
-		}
-		h, err := gpu.FromData(data, rows, cols)
+		h, err := gpu.FromDataShape(data, shapes[i].Shape)
 		if err != nil {
 			gpu.FreeHandles(handles[:i])
 			return nil, fmt.Errorf("upload teacher weight %d (%s): %w", i, shapes[i].Name, err)
@@ -153,7 +149,7 @@ func (e *distillationEnsemble) TeacherProbs(batch objectiveBatch, batchSize, seq
 		return nil, nil
 	}
 	need := batchSize * seqLen
-	out := make([]float32, need*e.vocabSize)
+	out := e.teacherProbBuffer(need)
 	for i, teacher := range e.teachers {
 		logits, err := teacher.Logits(batch.x, batch.y, batchSize, seqLen)
 		if err != nil {
@@ -183,6 +179,19 @@ func (e *distillationEnsemble) TeacherProbs(batch objectiveBatch, batchSize, seq
 		softmaxRowsInPlace(out, e.vocabSize)
 	}
 	return out, nil
+}
+
+func (e *distillationEnsemble) teacherProbBuffer(tokens int) []float32 {
+	if e == nil || tokens <= 0 || e.vocabSize <= 0 {
+		return nil
+	}
+	need := tokens * e.vocabSize
+	if len(e.probBuf) < need {
+		e.probBuf = make([]float32, need)
+	}
+	out := e.probBuf[:need]
+	clear(out)
+	return out
 }
 
 func attachDistillationTeacherProbs(e *distillationEnsemble, batch objectiveBatch, batchSize, seqLen int) (objectiveBatch, error) {

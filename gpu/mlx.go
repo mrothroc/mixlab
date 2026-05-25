@@ -46,6 +46,23 @@ func mlxFromData(data []float32, rows, cols int) int64 {
 	return int64(h)
 }
 
+func mlxFromDataShape(data []float32, shape []int) int64 {
+	cShape := make([]C.int, len(shape))
+	for i, dim := range shape {
+		cShape[i] = C.int(dim)
+	}
+	var pinner runtime.Pinner
+	pinner.Pin(&data[0])
+	pinner.Pin(&cShape[0])
+	defer pinner.Unpin()
+	h := C.mlx_from_data_shape(
+		(*C.float)(unsafe.Pointer(&data[0])),
+		(*C.int)(unsafe.Pointer(&cShape[0])),
+		C.int(len(cShape)),
+	)
+	return int64(h)
+}
+
 func mlxFreeHandle(handle int64) {
 	C.mlx_free_handle(C.int64_t(handle))
 }

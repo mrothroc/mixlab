@@ -23,14 +23,22 @@ func FromData(data []float32, rows, cols int) (int64, error) {
 	if rows <= 0 || cols <= 0 {
 		return 0, fmt.Errorf("invalid tensor shape rows=%d cols=%d; pass positive dimensions to gpu.FromData", rows, cols)
 	}
-	if len(data) < rows*cols {
-		return 0, fmt.Errorf("tensor data too small: have=%d need=%d float32 values; provide one element per matrix entry", len(data), rows*cols)
+	return FromDataShape(data, []int{rows, cols})
+}
+
+func FromDataShape(data []float32, shape []int) (int64, error) {
+	total, err := shapeElemCount(shape)
+	if err != nil {
+		return 0, fmt.Errorf("invalid tensor shape %v: %w", shape, err)
 	}
-	h := mlxFromData(data, rows, cols)
+	if len(data) < total {
+		return 0, fmt.Errorf("tensor data too small: have=%d need=%d float32 values; provide one element per tensor entry", len(data), total)
+	}
+	h := mlxFromDataShape(data, shape)
 	if h == 0 {
-		return 0, fmt.Errorf("mlx_from_data failed; verify the MLX runtime is installed and the process can access the selected device")
+		return 0, fmt.Errorf("mlx tensor upload failed; verify the MLX runtime is installed and the process can access the selected device")
 	}
-	setHandleSize(h, rows*cols)
+	setHandleSize(h, total)
 	return h, nil
 }
 

@@ -542,7 +542,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	hasValLoss := false
 	logEvery := effectiveTrainEvery(opts.LogEvery, "MIXLAB_LOG_EVERY", 100)
 	valEvery := effectiveTrainEvery(opts.ValEvery, "MIXLAB_VAL_EVERY", 100)
-	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD") && distiller == nil
+	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
 	// steadyStart is set after step 0 completes — excludes one-time
 	// compile/warmup costs from tok/s and ETA estimates.

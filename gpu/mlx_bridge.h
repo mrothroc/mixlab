@@ -25,6 +25,7 @@ int mlx_sgemm_transB(const float* A, const float* B, float* C, int m, int k, int
 
 // Handle-based lazy MLX graph API.
 int64_t mlx_from_data(const float* data, int rows, int cols);
+int64_t mlx_from_data_shape(const float* data, const int* shape, int ndim);
 int64_t mlx_from_data_nocopy(const float* data, int rows, int cols);
 int64_t mlx_lazy_matmul(int64_t A, int64_t B);
 int64_t mlx_lazy_add(int64_t A, int64_t B);
