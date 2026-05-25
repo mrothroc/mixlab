@@ -171,7 +171,7 @@ func estimateBlockFLOPs(block BlockSpec, B, T, D, V, ffn int, mlpMult float64, b
 	switch strings.ToLower(strings.TrimSpace(block.Type)) {
 	case "plain":
 		return estimatePlainBlockFLOPs(block, B, T, D, ffn)
-	case "swiglu":
+	case "swiglu", "geglu":
 		return estimateSwiGLUBlockFLOPs(B, T, D, ffn)
 	case "mamba":
 		inner := block.InnerDim

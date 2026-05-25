@@ -19,6 +19,7 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 		{Type: "plain", Heads: 4, QKGain: 5.25},
 		{Type: "plain", Heads: 8, SparseAttnGate: true},
 		{Type: "swiglu"},
+		{Type: "geglu"},
 		{Type: "mlp"},
 		{Type: "mamba", InnerDim: 32},
 		{Type: "mamba"}, // default inner = D
@@ -115,6 +116,23 @@ func TestBlockWeightShapes_MLP(t *testing.T) {
 	}
 	if !reflect.DeepEqual(metas, want) {
 		t.Fatalf("mlp weight shapes = %+v, want %+v", metas, want)
+	}
+}
+
+func TestBlockWeightShapes_GEGLU(t *testing.T) {
+	metas, err := blockWeightShapes(BlockSpec{Type: "geglu"}, 64, 32, 1, 256, 2.0, true, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes: %v", err)
+	}
+	want := []WeightMeta{
+		{Name: "ffn_norm_scale", Shape: []int{64}, IsNormScale: true, InitOne: true},
+		{Name: "w_gate", Shape: []int{64, 128}},
+		{Name: "w_up", Shape: []int{64, 128}},
+		{Name: "w_down", Shape: []int{128, 64}},
+		{Name: "mlp_scale", Shape: []int{64}, InitOne: true},
+	}
+	if !reflect.DeepEqual(metas, want) {
+		t.Fatalf("geglu weight shapes = %+v, want %+v", metas, want)
 	}
 }
 

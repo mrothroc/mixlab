@@ -16,6 +16,7 @@ func TestBlockWeightCount(t *testing.T) {
 		{BlockSpec{Type: "plain", Heads: 4, QKGain: 5.25}, 8},
 		{BlockSpec{Type: "plain", Heads: 8, SparseAttnGate: true}, 8},
 		{BlockSpec{Type: "swiglu"}, 4},
+		{BlockSpec{Type: "geglu"}, 4},
 		{BlockSpec{Type: "mlp"}, 3},
 		{BlockSpec{Type: "mamba"}, 4},
 		{BlockSpec{Type: "token_blend"}, 1},
@@ -45,6 +46,13 @@ func TestBlockWeightCount_WithBlockScalesAndResidMix(t *testing.T) {
 	}
 	if swiglu != 5 {
 		t.Fatalf("swiglu count = %d, want 5", swiglu)
+	}
+	geglu, err := BlockWeightCount(BlockSpec{Type: "geglu"}, true, false)
+	if err != nil {
+		t.Fatalf("BlockWeightCount(geglu scaled): %v", err)
+	}
+	if geglu != 5 {
+		t.Fatalf("geglu count = %d, want 5", geglu)
 	}
 }
 
@@ -666,6 +674,39 @@ func TestEmitSwiGLUIR_WithBlockScales(t *testing.T) {
 	}
 }
 
+func TestEmitGEGLUIR(t *testing.T) {
+	p := NewProgram(4)
+	wi, err := emitGEGLUIR(p, "x", 0, 0, DefaultFFNMultiplier, false)
+	if err != nil {
+		t.Fatalf("emitGEGLUIR: %v", err)
+	}
+	if wi != 4 {
+		t.Fatalf("expected wi=4, got %d", wi)
+	}
+	hasGELU := false
+	hasSigmoid := false
+	hasMul := false
+	for _, op := range p.Ops {
+		switch op.Code {
+		case OpGELU:
+			hasGELU = true
+		case OpSigmoid:
+			hasSigmoid = true
+		case OpMul:
+			hasMul = true
+		}
+	}
+	if !hasGELU {
+		t.Error("missing GELU op in GEGLU")
+	}
+	if hasSigmoid {
+		t.Error("GEGLU should not use Sigmoid")
+	}
+	if !hasMul {
+		t.Error("missing Mul op in GEGLU (gate * up)")
+	}
+}
+
 // --- Block dispatch ---
 
 func TestEmitBlockIR_Dispatch(t *testing.T) {
@@ -675,6 +716,7 @@ func TestEmitBlockIR_Dispatch(t *testing.T) {
 	}{
 		{BlockSpec{Type: "plain", Heads: 4}, 7},
 		{BlockSpec{Type: "swiglu"}, 4},
+		{BlockSpec{Type: "geglu"}, 4},
 		{BlockSpec{Type: "mlp"}, 3},
 	}
 	for _, tt := range tests {

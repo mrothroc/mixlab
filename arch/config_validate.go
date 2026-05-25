@@ -131,7 +131,7 @@ func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, c
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	switch b.Type {
-	case "plain", "swiglu", "mlp", "mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
+	case "plain", "swiglu", "geglu", "mlp", "mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
 		// valid
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)

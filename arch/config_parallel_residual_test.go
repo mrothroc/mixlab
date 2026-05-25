@@ -94,12 +94,12 @@ func TestParseArchConfig_ParallelResidualValidation(t *testing.T) {
 			wantErrSub: "blocks[0].type=plain",
 		},
 		{
-			name: "second not swiglu",
+			name: "second not GLU",
 			cfg: parallelResidualTestConfig([]BlockSpec{
 				{Type: "plain", Heads: 4},
 				{Type: "plain", Heads: 4},
 			}),
-			wantErrSub: "blocks[1].type=swiglu",
+			wantErrSub: "blocks[1].type=swiglu or geglu",
 		},
 		{
 			name: "unet unsupported",
@@ -129,6 +129,20 @@ func TestParseArchConfig_ParallelResidualValidation(t *testing.T) {
 	}
 }
 
+func TestParseArchConfig_ParallelResidualAcceptsGEGLUFollower(t *testing.T) {
+	cfg := parallelResidualTestConfig([]BlockSpec{
+		{Type: "plain", Heads: 4},
+		{Type: "geglu"},
+	})
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, err := ParseArchConfig(data, "parallel_geglu"); err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+}
+
 func TestParseArchConfig_BlockScopedParallelResidualValidation(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -144,11 +158,11 @@ func TestParseArchConfig_BlockScopedParallelResidualValidation(t *testing.T) {
 			wantErrSub: "blocks[0].type=plain or gated_deltanet",
 		},
 		{
-			name: "missing swiglu follower",
+			name: "missing GLU follower",
 			blocks: []BlockSpec{
 				{Type: "gated_deltanet", Heads: 4, DK: 8, ParallelResidual: boolPtr(true)},
 			},
-			wantErrSub: "followed by swiglu",
+			wantErrSub: "followed by swiglu or geglu",
 		},
 		{
 			name: "second block cannot start overlapping pair",

@@ -123,6 +123,18 @@ func init() {
 			return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
 		},
 	})
+	RegisterBlock("geglu", blockRegistration{
+		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
+			return emitGEGLUIRWithDropout(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout)
+		},
+		WeightCount: swigluWeightCount,
+		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
+			return builtinBlockWeightShapes(spec, D, T, B, V, DefaultFFNMultiplier, false, false)
+		},
+		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
+			return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
+		},
+	})
 	RegisterBlock("mlp", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
 			return emitMLPIR(prog, stream, wi, idx, spec.Activation, spec.LeakySlope)
@@ -195,7 +207,7 @@ func builtinBlockWeightCount(spec BlockSpec, blockScales, residMix bool) (int, e
 	switch blockTypeName(spec.Type) {
 	case "plain":
 		return plainWeightCount(spec, blockScales, residMix)
-	case "swiglu":
+	case "swiglu", "geglu":
 		return swigluWeightCount(spec, blockScales, residMix)
 	case "mlp":
 		return mlpWeightCount(spec, blockScales, residMix)

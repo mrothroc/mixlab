@@ -6,7 +6,7 @@ The `custom` block type lets you define feed-forward blocks in JSON without
 writing Go code. A custom block declares its own weight tensors (with
 symbolic shape dimensions) and a sequence of IR operations that compose them.
 
-This example defines a compact gated feed-forward block using a SiLU gate.
+This example defines a compact gated feed-forward block using a GELU gate.
 
 ## Config structure
 
@@ -21,7 +21,7 @@ This example defines a compact gated feed-forward block using a SiLU gate.
   ],
   "ops": [
     {"op": "matmul",  "inputs": ["x", "w_gate"], "output": "gate"},
-    {"op": "silu",    "inputs": ["gate"],         "output": "gate_act"},
+    {"op": "gelu",    "inputs": ["gate"],         "output": "gate_act"},
     {"op": "matmul",  "inputs": ["x", "w_up"],   "output": "up"},
     {"op": "mul",     "inputs": ["gate_act", "up"], "output": "ff"},
     {"op": "matmul",  "inputs": ["ff", "w_down"], "output": "ff_out"},
@@ -130,7 +130,7 @@ Block input ("x")
     |
     v
   matmul(x, w_gate) -> gate
-  silu(gate)         -> gate_act
+  gelu(gate)         -> gate_act
   matmul(x, w_up)   -> up
   mul(gate_act, up)  -> ff
   matmul(ff, w_down) -> ff_out

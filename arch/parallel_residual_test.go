@@ -137,6 +137,38 @@ func TestBuildIRProgramWithParallelResidual_GatedDeltaNetPair(t *testing.T) {
 	}
 }
 
+func TestBuildIRProgramWithParallelResidual_GEGLUPair(t *testing.T) {
+	blocks := []BlockSpec{
+		{Type: "plain", Heads: 4},
+		{Type: "geglu"},
+	}
+	prog, err := BuildIRProgramWithBigramRecurrenceAndParallel(64, 256, 32, 1, DefaultFFNMultiplier, false, false, false, false, true, 0, 0, 0, blocks, nil)
+	if err != nil {
+		t.Fatalf("BuildIRProgramWithBigramRecurrenceAndParallel: %v", err)
+	}
+	if prog.NumWeights != 13 {
+		t.Fatalf("NumWeights=%d want 13", prog.NumWeights)
+	}
+	if got := countOps(prog, OpGELU); got != 1 {
+		t.Fatalf("GELU ops=%d want 1", got)
+	}
+	gegluGate := weightInputForOutput(t, prog, OpMatMul, "x_parallel_0_x_norm_parallel_geglu_0_gate")
+	if gegluGate != "w10" {
+		t.Fatalf("geglu gate weight=%q want w10", gegluGate)
+	}
+
+	metas, err := CollectWeightShapesWithBigramRecurrenceAndParallel(64, 256, 32, DefaultFFNMultiplier, false, false, false, false, true, 0, 0, blocks, nil)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesWithBigramRecurrenceAndParallel: %v", err)
+	}
+	if len(metas) != 13 {
+		t.Fatalf("len(metas)=%d want 13", len(metas))
+	}
+	if metas[10].Name != "w_gate" {
+		t.Fatalf("parallel geglu first weight=%q want w_gate", metas[10].Name)
+	}
+}
+
 func TestBuildIRProgramWithParallelResidual_GlobalAllowsGatedDeltaNetPair(t *testing.T) {
 	blocks := []BlockSpec{
 		{Type: "gated_deltanet", Heads: 4, DK: 8},

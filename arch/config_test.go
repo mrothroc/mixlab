@@ -677,6 +677,20 @@ func TestSwigluBlockNoHeadsRequired(t *testing.T) {
 	}
 }
 
+func TestGegluBlockNoHeadsRequired(t *testing.T) {
+	cfg := ArchConfig{
+		ModelDim:  128,
+		VocabSize: 1024,
+		SeqLen:    128,
+		Blocks:    []BlockSpec{{Type: "geglu"}},
+	}
+	data, _ := json.Marshal(cfg)
+	_, err := ParseArchConfig(data, "test")
+	if err != nil {
+		t.Fatalf("geglu should not require heads: %v", err)
+	}
+}
+
 func TestExampleConfigsParse(t *testing.T) {
 	examples := []string{
 		"examples/plain_3L.json",

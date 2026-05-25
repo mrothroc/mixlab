@@ -18,16 +18,16 @@ These fields live at the root of the config object.
 | `model_dim` | integer | Yes | None | Hidden size `D`. Must be `> 0`. |
 | `vocab_size` | integer | Yes | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` (tokens are stored as uint16 in binary shards). |
 | `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
-| `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `mlp`, and `cross_attention` FFN tails. Must be `> 0`. |
+| `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `geglu`, `mlp`, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
 | `smear_embeddings` | boolean | No | `false` | Enables 1-token-lookback smearing on token embeddings before the first block. |
 | `smear_embeddings_gate_shape` | string | No | `"pr130"` when smearing is enabled | Gate variant for `smear_embeddings`: `"pr130"`, `"per_channel"`, or `"per_position_per_channel"`. |
 | `bigram_vocab_size` | integer | No | Disabled | Enables model-level hashed bigram embeddings when `> 1`. `0` disables. `1` is invalid. |
 | `bigram_dim` | integer | No | `model_dim` when bigrams enabled | Bigram embedding dimension. `0` inherits `model_dim`. Ignored when `bigram_vocab_size == 0`. |
 | `tie_embeddings` | boolean | No | `false` | Shares token embedding and output head weights. |
-| `block_scales` | boolean | No | `false` | Adds learned per-channel scales to `plain` attention and MLP residual branches, plus the MLP branch in `swiglu`. |
+| `block_scales` | boolean | No | `false` | Adds learned per-channel scales to `plain` attention and MLP residual branches, plus the MLP branch in `swiglu` and `geglu`. |
 | `resid_mix` | boolean | No | `false` | Adds learned mixing of the current state and original input on `plain` blocks. |
-| `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Cannot be combined with `unet`. |
+| `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu or geglu)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Cannot be combined with `unet`. |
 | `unet` | boolean | No | `false` | Splits the `blocks` list into encoder/decoder halves with learned skip connections. |
 | `mtp` | object | No | Disabled | Enables parameter-free multi-token prediction during training. See [MTP section](#multi-token-prediction-mtp). |
 | `backout` | object | No | Disabled | Enables final-latent residual subtraction before the final RMSNorm. See [Backout section](#backout). |
@@ -227,6 +227,25 @@ Example:
 
 ```json
 {"type": "swiglu"}
+```
+
+### `geglu`
+
+Feed-forward-only block with RMSNorm, GEGLU gating, and residual connection.
+It has the same weight layout as `swiglu`, but gates with `GELU(x @ w_gate)` instead of `sigmoid(x @ w_gate)`.
+
+Required fields:
+
+- `type: "geglu"`
+
+Optional fields:
+
+- None
+
+Example:
+
+```json
+{"type": "geglu"}
 ```
 
 ### `mlp`
@@ -502,7 +521,7 @@ Example:
   ],
   "ops": [
     {"op": "matmul", "inputs": ["x", "w_gate"], "output": "gate"},
-    {"op": "silu", "inputs": ["gate"], "output": "gate_act"},
+    {"op": "gelu", "inputs": ["gate"], "output": "gate_act"},
     {"op": "matmul", "inputs": ["x", "w_up"], "output": "up"},
     {"op": "mul", "inputs": ["gate_act", "up"], "output": "ff"},
     {"op": "matmul", "inputs": ["ff", "w_down"], "output": "ff_out"},
@@ -857,7 +876,7 @@ Effect:
 
 ### `parallel_residual`
 
-Fuses a `(plain or gated_deltanet, swiglu)` pair into a parallel residual: both branches read the same pre-norm input and their outputs sum into the residual together (instead of the SwiGLU branch reading the post-attention residual).
+Fuses a `(plain or gated_deltanet, swiglu or geglu)` pair into a parallel residual: both branches read the same pre-norm input and their outputs sum into the residual together (instead of the GLU branch reading the post-attention residual).
 
 Two forms are supported:
 
@@ -875,7 +894,7 @@ Two forms are supported:
 }
 ```
 
-When the top-level flag is `true`, every consecutive pair must be `(plain or gated_deltanet, swiglu)`.
+When the top-level flag is `true`, every consecutive pair must be `(plain or gated_deltanet, swiglu or geglu)`.
 
 **Per-block (scoped).** Set `parallel_residual: true` on individual pair-start blocks; the top-level flag stays `false` (default). Pairs not marked stay sequential. This lets you mix paired and unpaired layers in the same model — e.g., the leaderboard pattern where only late attention layers use parallel residual:
 
@@ -896,11 +915,11 @@ When the top-level flag is `true`, every consecutive pair must be `(plain or gat
 
 Effect:
 
-- A pair start must be `plain` or `gated_deltanet`; the next block must be `swiglu`.
-- Each paired SwiGLU drops its `ffn_norm_scale` weight (the pair shares the start block's RMSNorm).
+- A pair start must be `plain` or `gated_deltanet`; the next block must be `swiglu` or `geglu`.
+- Each paired GLU block drops its `ffn_norm_scale` weight (the pair shares the start block's RMSNorm).
 - `kv_source` is not supported on a paired `plain` block.
 - Cannot be combined with `unet`.
-- **Weight sharing:** when using `recurrence` (or `weight_group`) to share weights between blocks, paired and unpaired SwiGLUs cannot share weights with each other — they have different shapes (paired blocks lack `ffn_norm_scale`). Use distinct group names for paired vs. unpaired roles.
+- **Weight sharing:** when using `recurrence` (or `weight_group`) to share weights between blocks, paired and unpaired GLU blocks cannot share weights with each other — they have different shapes (paired blocks lack `ffn_norm_scale`). Use distinct group names for paired vs. unpaired roles.
 
 ### `tie_embeddings`
 
@@ -941,7 +960,7 @@ Example:
 
 Effect:
 
-- `plain`, `swiglu`, `mlp`, and `cross_attention` expand to `round(model_dim * mlp_mult)`, clamped to at least `model_dim`.
+- `plain`, `swiglu`, `geglu`, `mlp`, and `cross_attention` expand to `round(model_dim * mlp_mult)`, clamped to at least `model_dim`.
 
 ## Full example: `recurrent_parallel.json`
 

@@ -364,8 +364,28 @@ func emitSwiGLUIR(prog *Program, x string, wi, idx int, mlpMult float64, blockSc
 }
 
 func emitSwiGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
+	return emitGatedGLUIRWithDropout(prog, x, wi, idx, mlpMult, blockScales, dropout, "swiglu", "sigmoid")
+}
+
+// emitGEGLUIR emits a GEGLU feed-forward block.
+//
+// Weight layout matches SwiGLU:
+//
+//	w[wi+0] = RMSNorm scale
+//	w[wi+1] = gate projection
+//	w[wi+2] = up projection
+//	w[wi+3] = down projection
+func emitGEGLUIR(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool) (int, error) {
+	return emitGEGLUIRWithDropout(prog, x, wi, idx, mlpMult, blockScales, 0)
+}
+
+func emitGEGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
+	return emitGatedGLUIRWithDropout(prog, x, wi, idx, mlpMult, blockScales, dropout, "geglu", "gelu")
+}
+
+func emitGatedGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool, dropout float32, blockName, gateActivation string) (int, error) {
 	_ = mlpMult
-	prefix := tmpName(x+"_swiglu", idx)
+	prefix := tmpName(x+"_"+blockName, idx)
 	xNorm := prefix + "_x_norm"
 	gate := prefix + "_gate"
 	gateAct := gate + "_act"
@@ -379,10 +399,17 @@ func emitSwiGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float
 	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
 	wi++
 
-	// SwiGLU: sigmoid(gate_proj(x)) * up_proj(x), then down_proj
+	// Gated GLU: activation(gate_proj(x)) * up_proj(x), then down_proj.
 	prog.MatMul(xNorm, weightName(wi), gate)
 	wi++
-	prog.Sigmoid(gate, gateAct)
+	switch gateActivation {
+	case "sigmoid":
+		prog.Sigmoid(gate, gateAct)
+	case "gelu":
+		prog.GELU(gate, gateAct)
+	default:
+		return wi, fmt.Errorf("unsupported gated GLU activation %q", gateActivation)
+	}
 	prog.MatMul(xNorm, weightName(wi), up)
 	wi++
 	prog.Mul(gateAct, up, ff)
@@ -605,8 +632,16 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 }
 
 func emitSwiGLUParallelDeltaIRWithDropout(prog *Program, xNorm string, wi, idx int, mlpMult float64, blockScales bool, dropout float32) (string, int) {
+	return emitGatedGLUParallelDeltaIRWithDropout(prog, xNorm, wi, idx, mlpMult, blockScales, dropout, "swiglu", "sigmoid")
+}
+
+func emitGEGLUParallelDeltaIRWithDropout(prog *Program, xNorm string, wi, idx int, mlpMult float64, blockScales bool, dropout float32) (string, int) {
+	return emitGatedGLUParallelDeltaIRWithDropout(prog, xNorm, wi, idx, mlpMult, blockScales, dropout, "geglu", "gelu")
+}
+
+func emitGatedGLUParallelDeltaIRWithDropout(prog *Program, xNorm string, wi, idx int, mlpMult float64, blockScales bool, dropout float32, blockName, gateActivation string) (string, int) {
 	_ = mlpMult
-	prefix := tmpName(xNorm+"_parallel_swiglu", idx)
+	prefix := tmpName(xNorm+"_parallel_"+blockName, idx)
 	gate := prefix + "_gate"
 	gateAct := gate + "_act"
 	up := prefix + "_up"
@@ -617,7 +652,12 @@ func emitSwiGLUParallelDeltaIRWithDropout(prog *Program, xNorm string, wi, idx i
 
 	prog.MatMul(xNorm, weightName(wi), gate)
 	wi++
-	prog.Sigmoid(gate, gateAct)
+	switch gateActivation {
+	case "sigmoid":
+		prog.Sigmoid(gate, gateAct)
+	case "gelu":
+		prog.GELU(gate, gateAct)
+	}
 	prog.MatMul(xNorm, weightName(wi), up)
 	wi++
 	prog.Mul(gateAct, up, ff)

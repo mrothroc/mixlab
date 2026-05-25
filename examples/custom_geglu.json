@@ -16,9 +16,9 @@
       {"name": "w_up",   "shape": ["D", "FFN"]},
       {"name": "w_down", "shape": ["FFN", "D"]}
     ], "ops": [
-      // Ops implement a SiLU-gated FFN and return to residual state x.
+      // Ops implement a GELU-gated FFN and return to residual state x.
       {"op": "matmul",  "inputs": ["x", "w_gate"], "output": "gate"},
-      {"op": "silu",    "inputs": ["gate"],         "output": "gate_act"},
+      {"op": "gelu",    "inputs": ["gate"],         "output": "gate_act"},
       {"op": "matmul",  "inputs": ["x", "w_up"],   "output": "up"},
       {"op": "mul",     "inputs": ["gate_act", "up"], "output": "ff"},
       {"op": "matmul",  "inputs": ["ff", "w_down"], "output": "ff_out"},
@@ -31,7 +31,7 @@
       {"name": "w_down", "shape": ["FFN", "D"]}
     ], "ops": [
       {"op": "matmul",  "inputs": ["x", "w_gate"], "output": "gate"},
-      {"op": "silu",    "inputs": ["gate"],         "output": "gate_act"},
+      {"op": "gelu",    "inputs": ["gate"],         "output": "gate_act"},
       {"op": "matmul",  "inputs": ["x", "w_up"],   "output": "up"},
       {"op": "mul",     "inputs": ["gate_act", "up"], "output": "ff"},
       {"op": "matmul",  "inputs": ["ff", "w_down"], "output": "ff_out"},

@@ -6,7 +6,7 @@ import (
 )
 
 // DefaultFFNMultiplier is the default FFN hidden dimension as a multiple of
-// model dim. Used by plain attention and swiglu blocks when no override is set.
+// model dim. Used by plain attention, GLU, and MLP blocks when no override is set.
 const DefaultFFNMultiplier = 2.67
 
 // WeightMeta describes a single weight tensor's shape and initialization hint.
@@ -115,7 +115,7 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 		}
 		return metas, nil
 
-	case "swiglu":
+	case "swiglu", "geglu":
 		ffn := ffnDim(D, mlpMult)
 		metas := []WeightMeta{
 			{Name: "ffn_norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
@@ -353,9 +353,9 @@ func parallelBlockWeightShapes(spec BlockSpec, pairedSecond bool, D, T, B, V int
 	if err != nil {
 		return nil, err
 	}
-	if pairedSecond && blockTypeKey(spec) == "swiglu" {
+	if pairedSecond && isParallelResidualGLUSecond(spec) {
 		if len(metas) == 0 || metas[0].Name != "ffn_norm_scale" {
-			return nil, fmt.Errorf("parallel_residual swiglu block has unexpected weight layout")
+			return nil, fmt.Errorf("parallel_residual GLU block has unexpected weight layout")
 		}
 		metas = metas[1:]
 	}

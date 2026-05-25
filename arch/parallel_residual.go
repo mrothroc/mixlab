@@ -79,7 +79,7 @@ func (p parallelResidualPlan) anyInRange(start, end int) bool {
 
 func validateParallelResidualPair(specs []BlockSpec, start int) error {
 	if start+1 >= len(specs) {
-		return fmt.Errorf("parallel_residual requires blocks[%d] to be followed by swiglu", start)
+		return fmt.Errorf("parallel_residual requires blocks[%d] to be followed by swiglu or geglu", start)
 	}
 	firstType := blockTypeKey(specs[start])
 	if firstType != "plain" && firstType != "gated_deltanet" {
@@ -88,10 +88,19 @@ func validateParallelResidualPair(specs []BlockSpec, start int) error {
 	if firstType == "plain" && specs[start].KVSource > 0 {
 		return fmt.Errorf("parallel_residual does not support blocks[%d].kv_source=%d", start, specs[start].KVSource)
 	}
-	if blockTypeKey(specs[start+1]) != "swiglu" {
-		return fmt.Errorf("parallel_residual requires blocks[%d].type=swiglu (got %q)", start+1, specs[start+1].Type)
+	if !isParallelResidualGLUSecond(specs[start+1]) {
+		return fmt.Errorf("parallel_residual requires blocks[%d].type=swiglu or geglu (got %q)", start+1, specs[start+1].Type)
 	}
 	return nil
+}
+
+func isParallelResidualGLUSecond(spec BlockSpec) bool {
+	switch blockTypeKey(spec) {
+	case "swiglu", "geglu":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateParallelResidualRefs(plan parallelResidualPlan, refs []int) error {
@@ -100,7 +109,7 @@ func validateParallelResidualRefs(plan parallelResidualPlan, refs []int) error {
 			continue
 		}
 		if plan.secondAt(i) != plan.secondAt(ref) {
-			return fmt.Errorf("parallel_residual block[%d] cannot share weights with block[%d] because their swiglu norm layout differs", i, ref)
+			return fmt.Errorf("parallel_residual block[%d] cannot share weights with block[%d] because their GLU norm layout differs", i, ref)
 		}
 	}
 	return nil
@@ -111,7 +120,7 @@ func parallelBlockWeightCount(spec BlockSpec, pairedSecond bool, blockScales, re
 	if err != nil {
 		return 0, err
 	}
-	if pairedSecond && blockTypeKey(spec) == "swiglu" {
+	if pairedSecond && isParallelResidualGLUSecond(spec) {
 		n--
 	}
 	return n, nil
@@ -188,7 +197,7 @@ func countBlockRangeWeightsWithRecurrenceAndParallel(specs []BlockSpec, rec []in
 
 func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, blockIdx int, stream, original string, wi, D, T, B int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout float32, backout *backoutBuildPlan) (int, error) {
 	firstSpec := specs[blockIdx]
-	swigluSpec := specs[blockIdx+1]
+	gluSpec := specs[blockIdx+1]
 
 	firstWI := wi
 	firstOriginal := refs[blockIdx] == blockIdx
@@ -207,17 +216,17 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 		wi += n
 	}
 
-	swigluWI := wi
-	swigluOriginal := refs[blockIdx+1] == blockIdx+1
-	if !swigluOriginal {
-		swigluWI = weightStarts[refs[blockIdx+1]]
-		if swigluWI < 0 {
+	gluWI := wi
+	gluOriginal := refs[blockIdx+1] == blockIdx+1
+	if !gluOriginal {
+		gluWI = weightStarts[refs[blockIdx+1]]
+		if gluWI < 0 {
 			return wi, fmt.Errorf("weight sharing for block[%d] references block without emitted weights", blockIdx+1)
 		}
 	}
-	if swigluOriginal {
-		weightStarts[blockIdx+1] = swigluWI
-		n, err := parallelBlockWeightCount(swigluSpec, true, blockScales, residMix)
+	if gluOriginal {
+		weightStarts[blockIdx+1] = gluWI
+		n, err := parallelBlockWeightCount(gluSpec, true, blockScales, residMix)
 		if err != nil {
 			return wi, err
 		}
@@ -254,7 +263,15 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 	default:
 		return wi, fmt.Errorf("parallel_residual requires blocks[%d].type=plain or gated_deltanet (got %q)", blockIdx, firstSpec.Type)
 	}
-	mlpDelta, _ := emitSwiGLUParallelDeltaIRWithDropout(prog, xNorm, swigluWI, *opIdx, mlpMult, blockScales, dropout)
+	var mlpDelta string
+	switch blockTypeKey(gluSpec) {
+	case "swiglu":
+		mlpDelta, _ = emitSwiGLUParallelDeltaIRWithDropout(prog, xNorm, gluWI, *opIdx, mlpMult, blockScales, dropout)
+	case "geglu":
+		mlpDelta, _ = emitGEGLUParallelDeltaIRWithDropout(prog, xNorm, gluWI, *opIdx, mlpMult, blockScales, dropout)
+	default:
+		return wi, fmt.Errorf("parallel_residual requires blocks[%d].type=swiglu or geglu (got %q)", blockIdx+1, gluSpec.Type)
+	}
 	prog.Add(firstState, mlpDelta, stream)
 	if backout != nil {
 		backout.captureAfterBlock(prog, blockIdx, stream)
