@@ -1,6 +1,9 @@
 package arch
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // BuildIRProgramFromConfig constructs an IR forward-pass program from an
 // ArchConfig. The batchSize is derived from config (batch_tokens / seq_len).
@@ -38,11 +41,13 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		return buildIRProgramFromConfigWithStateAndOrder(cfg, TrainingProgramState{
 			RecurrenceActive: true,
 			HeadUntied:       cfg.MTPUntieEnabled(),
+			Objective:        ObjectiveCausal,
 		}, nil, cfg.RecurrencePhases[len(cfg.RecurrencePhases)-1].Order, false)
 	}
 	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
 		RecurrenceActive: true,
 		HeadUntied:       cfg.MTPUntieEnabled(),
+		Objective:        ObjectiveCausal,
 	}, nil, false)
 }
 
@@ -52,6 +57,7 @@ type TrainingProgramState struct {
 	RecurrenceActive bool
 	HeadUntied       bool
 	MTPAuxInactive   bool
+	Objective        string
 }
 
 // BuildTrainingIRProgramFromConfig constructs a training program with MTP
@@ -129,6 +135,10 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	if state.MTPAuxInactive {
 		activeMTP = nil
 	}
+	objective := normalizeTrainingObjective(state.Objective)
+	if objective == ObjectiveCausal && strings.TrimSpace(state.Objective) == "" {
+		objective = cfg.Training.DefaultConcreteObjective()
+	}
 
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		cfg.ModelDim,
@@ -153,6 +163,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		activeMTP,
 		reserveHead,
 		useTiedHead,
+		objective,
 		firstByteMask,
 		cfg.smearEmbeddingOptions(),
 		cfg.Backout,

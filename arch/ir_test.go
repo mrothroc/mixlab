@@ -103,6 +103,26 @@ func TestCrossEntropyPerToken(t *testing.T) {
 	}
 }
 
+func TestMaskedCrossEntropyOps(t *testing.T) {
+	p := NewProgram(0)
+	p.MaskedCrossEntropy("logits", "targets", "loss_mask", "loss")
+	p.MaskedCrossEntropyPerToken("logits", "targets", "loss_mask", "per_token_nll")
+	if len(p.Ops) != 2 {
+		t.Fatalf("expected 2 ops, got %d", len(p.Ops))
+	}
+	if p.Ops[0].Code != OpMaskedCrossEntropy {
+		t.Fatalf("op0 code = %d, want %d", p.Ops[0].Code, OpMaskedCrossEntropy)
+	}
+	if p.Ops[1].Code != OpMaskedCEPerToken {
+		t.Fatalf("op1 code = %d, want %d", p.Ops[1].Code, OpMaskedCEPerToken)
+	}
+	for i, op := range p.Ops {
+		if len(op.Inputs) != 3 || op.Inputs[2] != "loss_mask" {
+			t.Fatalf("op%d inputs = %v, want third input loss_mask", i, op.Inputs)
+		}
+	}
+}
+
 func TestRoPE(t *testing.T) {
 	p := NewProgram(0)
 	p.RoPE("q", "k", "qr", "kr", 128, 32, 16, 10000.0)

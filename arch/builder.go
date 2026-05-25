@@ -659,6 +659,7 @@ func buildIRProgramWithDropoutAndNgrams(
 		modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix,
 		unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
 		logitSoftcap, dropout, blocks, recurrence, nil, nil, !tieEmbeddings, tieEmbeddings,
+		ObjectiveCausal,
 	)
 }
 
@@ -679,11 +680,13 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 	mtp *MTPSpec,
 	reserveHead bool,
 	useTiedHead bool,
+	objective string,
 ) (*Program, error) {
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix,
 		unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
 		logitSoftcap, dropout, blocks, recurrence, executionOrder, mtp, reserveHead, useTiedHead,
+		objective,
 		false,
 		disabledSmearEmbeddingOptions(),
 		nil,
@@ -707,6 +710,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	mtp *MTPSpec,
 	reserveHead bool,
 	useTiedHead bool,
+	objective string,
 	firstByteMask bool,
 	smearOpts smearEmbeddingOptions,
 	backoutSpec *BackoutSpec,
@@ -719,6 +723,8 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	T := seqLen
 	D := modelDim
 	V := vocabSize
+	objective = normalizeTrainingObjective(objective)
+	blocks = resolveBlockAttentionMasksForObjective(blocks, objective)
 
 	if B <= 0 || T <= 0 {
 		return nil, fmt.Errorf("invalid shape B=%d T=%d", B, T)
@@ -781,8 +787,12 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	nWeights += len(backoutWeightShapes(backoutSpec))
 
 	prog := NewProgram(nWeights)
+	maskedObjective := isMaskedTrainingObjective(objective)
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
+	if maskedObjective {
+		prog.DeclareInput("loss_mask", TensorFloat32, []int{B * T})
+	}
 	if firstByteMask {
 		prog.DeclareInput("first_byte_valid", TensorInt32, []int{V})
 	}
@@ -911,11 +921,15 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		prog.ScalarMul(logitsState, 1.0, "logits")
 	}
 
-	if err := emitLanguageModelLossIR(prog, logitsState, "targets", B, T, V, mtp, firstByteMask); err != nil {
-		return nil, err
+	if maskedObjective {
+		emitMaskedLanguageModelLossIR(prog, logitsState, "targets", "loss_mask")
+	} else {
+		if err := emitLanguageModelLossIR(prog, logitsState, "targets", B, T, V, mtp, firstByteMask); err != nil {
+			return nil, err
+		}
 	}
 	prog.DeclareOutput("loss", TensorFloat32, []int{1})
-	if firstByteMask || (mtp != nil && mtp.EffectiveN() > 1) {
+	if maskedObjective || firstByteMask || (mtp != nil && mtp.EffectiveN() > 1) {
 		prog.DeclareOutput("eval_loss", TensorFloat32, []int{1})
 	}
 	prog.DeclareOutput("per_token_nll", TensorFloat32, []int{B * T})

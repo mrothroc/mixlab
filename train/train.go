@@ -270,6 +270,21 @@ type gpuWeightCopier interface {
 	CopyWeightGPU(dstName, srcName string) error
 }
 
+type gpuObjectiveStepSubmitter interface {
+	SubmitObjectiveStepGPU(batch objectiveBatch, batchSize, seqLen int, lr float32) error
+}
+
+func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, lr float32) error {
+	if batch.lossMask == nil {
+		return trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, lr)
+	}
+	submitter, ok := trainer.(gpuObjectiveStepSubmitter)
+	if !ok {
+		return fmt.Errorf("trainer does not support masked objective batches")
+	}
+	return submitter.SubmitObjectiveStepGPU(batch, batchSize, seqLen, lr)
+}
+
 // TrainOptions holds optional parameters for runTrain.
 type TrainOptions struct {
 	SafetensorsPath string // If set, export weights after training
@@ -391,12 +406,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	mtpAuxActivationScheduled := cfg.MTPActivateAuxLossEnabled()
 	mtpAuxActivateStep := cfg.EffectiveMTPActivateStep()
 	mtpAuxActive := !mtpAuxActivationScheduled || mtpAuxActivateStep <= 0
+	currentObjective := objectiveForStep(cfg.Training, 0)
 	initialProg := prog
-	if recurrencePhasesScheduled || recurrenceScheduled || (mtpUntieScheduled && !headUntied) || (mtpAuxActivationScheduled && !mtpAuxActive) {
+	if recurrencePhasesScheduled || recurrenceScheduled || (mtpUntieScheduled && !headUntied) || (mtpAuxActivationScheduled && !mtpAuxActive) || currentObjective != cfg.Training.DefaultConcreteObjective() {
 		state := TrainingProgramState{
 			RecurrenceActive: recurrenceActive,
 			HeadUntied:       headUntied,
 			MTPAuxInactive:   !mtpAuxActive,
+			Objective:        currentObjective,
 		}
 		if recurrencePhasesScheduled {
 			initialProg, err = arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, currentRecurrencePhase, state)
@@ -422,6 +439,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 	if mtpAuxActivationScheduled {
 		fmt.Printf("  [%s] MTP auxiliary loss activates at step %d\n", name, mtpAuxActivateStep)
+	}
+	switch cfg.Training.EffectiveObjective() {
+	case arch.ObjectiveMLM, arch.ObjectiveMNTP:
+		fmt.Printf("  [%s] training objective: %s\n", name, cfg.Training.EffectiveObjective())
+	case arch.ObjectiveHybrid:
+		fmt.Printf("  [%s] training objective: hybrid causal=%.2f secondary=%s\n",
+			name, cfg.Training.HybridCLMFraction, cfg.Training.EffectiveHybridSecondaryObjective())
 	}
 
 	var shapes []WeightShape
@@ -530,7 +554,12 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		lastTrainBatch := batch
 		initialSubmitStart := time.Now()
 		stopInitialSubmit := startSlowTrainingPhaseLogger(name, 0, "submit_step")
-		if err := trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, sched.At(0)); err != nil {
+		prepared, err := prepareObjectiveBatch(cfg, batch, 0, currentObjective)
+		if err != nil {
+			stopInitialSubmit()
+			return TrainResult{}, fmt.Errorf("prepare step 0 objective batch: %w", err)
+		}
+		if err := submitPreparedStepGPU(trainer, prepared, batchSize, seqLen, sched.At(0)); err != nil {
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("submit step 0: %w", err)
 		}
@@ -553,7 +582,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 			nextHeadUntied := headUntied || (mtpUntieScheduled && nextStep >= mtpUntieStep)
 			nextMTPAuxActive := mtpAuxActive || (mtpAuxActivationScheduled && nextStep >= mtpAuxActivateStep)
-			if nextRecurrencePhase != currentRecurrencePhase || nextRecurrenceActive != recurrenceActive || nextHeadUntied != headUntied || nextMTPAuxActive != mtpAuxActive {
+			nextObjective := objectiveForStep(cfg.Training, nextStep)
+			if nextRecurrencePhase != currentRecurrencePhase || nextRecurrenceActive != recurrenceActive || nextHeadUntied != headUntied || nextMTPAuxActive != mtpAuxActive || nextObjective != currentObjective {
 				switcher, ok := trainer.(gpuProgramSwitcher)
 				if !ok {
 					return 0, fmt.Errorf("trainer does not support scheduled program switching")
@@ -571,6 +601,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					RecurrenceActive: nextRecurrenceActive,
 					HeadUntied:       nextHeadUntied,
 					MTPAuxInactive:   !nextMTPAuxActive,
+					Objective:        nextObjective,
 				}
 				var nextProg *arch.Program
 				if recurrencePhasesScheduled {
@@ -603,10 +634,16 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				recurrenceActive = nextRecurrenceActive
 				headUntied = nextHeadUntied
 				mtpAuxActive = nextMTPAuxActive
+				currentObjective = nextObjective
 			}
 			submitStart := time.Now()
 			stopSubmit := startSlowTrainingPhaseLogger(name, nextStep, "submit_step")
-			if err := trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, sched.At(nextStep)); err != nil {
+			prepared, err := prepareObjectiveBatch(cfg, batch, nextStep, nextObjective)
+			if err != nil {
+				stopSubmit()
+				return 0, fmt.Errorf("prepare step %d objective batch: %w", nextStep, err)
+			}
+			if err := submitPreparedStepGPU(trainer, prepared, batchSize, seqLen, sched.At(nextStep)); err != nil {
 				stopSubmit()
 				return 0, fmt.Errorf("submit step %d: %w", nextStep, err)
 			}
@@ -624,6 +661,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 			nextStep := step + 1
 			if qatModeForStep(cfg.Training, nextStep) != qatModeForStep(cfg.Training, step) {
+				return false
+			}
+			if objectiveForStep(cfg.Training, nextStep) != currentObjective {
 				return false
 			}
 			nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)
@@ -858,73 +898,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	fmt.Println(result.formatSummary())
 
 	return result, nil
-}
-
-// meanValidationLoss computes the mean loss across validation batches.
-func meanValidationLoss(valSet *data.ValSet, trainer GPUTrainer, batchSize, seqLen int) (float64, error) {
-	return meanValidationLossWithTTT(valSet, trainer, batchSize, seqLen, "full", 0, 0, 0)
-}
-
-// meanValidationLossWithTTT computes score-first validation loss and, when
-// tttSteps > 0, adapts weights after each scored batch.
-func meanValidationLossWithTTT(
-	valSet *data.ValSet,
-	trainer GPUTrainer,
-	batchSize, seqLen int,
-	tttMode string,
-	tttSteps int,
-	tttLR float32,
-	tttRank int,
-) (float64, error) {
-	if valSet == nil || len(valSet.Batches) == 0 {
-		return 0, fmt.Errorf("no validation batches")
-	}
-	if tttSteps < 0 {
-		return 0, fmt.Errorf("ttt_steps must be >= 0")
-	}
-	if tttMode == "" {
-		tttMode = "full"
-	}
-	if tttMode != "full" && tttMode != "lora" {
-		return 0, fmt.Errorf("ttt_mode must be \"full\" or \"lora\"")
-	}
-	if tttMode == "lora" && tttRank <= 0 {
-		return 0, fmt.Errorf("ttt_rank must be > 0")
-	}
-	sum := 0.0
-	count := 0
-	failures := 0
-	for _, vb := range valSet.Batches {
-		var (
-			loss float32
-			err  error
-		)
-		if tttMode == "lora" && tttSteps > 0 {
-			loss, err = trainer.EvaluateLoRATTTGPU(vb.X, vb.Y, batchSize, seqLen, tttSteps, tttLR, tttRank)
-		} else {
-			loss, err = trainer.EvaluateGPU(vb.X, vb.Y, batchSize, seqLen)
-		}
-		if err != nil {
-			failures++
-			continue
-		}
-		sum += float64(loss)
-		count++
-		if tttMode == "full" {
-			for step := 0; step < tttSteps; step++ {
-				if _, err := trainer.TrainStepGPU(vb.X, vb.Y, batchSize, seqLen, tttLR); err != nil {
-					return 0, fmt.Errorf("ttt step %d after val batch %d: %w", step+1, count, err)
-				}
-			}
-		}
-	}
-	if count == 0 {
-		return 0, fmt.Errorf("validation evaluation failed for all %d batches", len(valSet.Batches))
-	}
-	if failures > 0 {
-		fmt.Printf("  warning: %d/%d val batches failed, using %d successful\n", failures, len(valSet.Batches), count)
-	}
-	return sum / float64(count), nil
 }
 
 func exportWeightsForTrainer(trainer GPUTrainer, swaEMA [][]float32) ([][]float32, error) {

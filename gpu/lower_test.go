@@ -29,6 +29,8 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"CausalMask", ir.OpCausalMask, OpCausalMask},
 		{"CrossEntropy", ir.OpCrossEntropy, OpCrossEntropy},
 		{"CrossEntropyPerToken", ir.OpCrossEntropyPerToken, OpCrossEntropyPerToken},
+		{"MaskedCrossEntropy", ir.OpMaskedCrossEntropy, OpMaskedCrossEntropy},
+		{"MaskedCrossEntropyPerToken", ir.OpMaskedCEPerToken, OpMaskedCEPerToken},
 		{"Dropout", ir.OpDropout, OpDropout},
 		{"Square", ir.OpSquare, OpSquare},
 		{"Sub", ir.OpSub, OpSub},

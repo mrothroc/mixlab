@@ -24,9 +24,11 @@ type mlxGPUTrainer struct {
 	trigramVocabSize   int
 	declaredTargetSize int
 	firstByteMaskInput bool
+	lossMaskInput      bool
 	// Pre-allocated input buffers to avoid per-step allocation.
 	tokBuf         []int32
 	tgtBuf         []int32
+	lossMaskBuf    []float32
 	bigramBuf      []int32
 	trigramBuf     []int32
 	firstByteValid []int32
@@ -144,12 +146,16 @@ func initMLXGPUTrainer(
 	batchElems := cfg.Training.BatchTokens
 	declaredTargetSize := 0
 	firstByteMaskInput := false
+	lossMaskInput := false
 	for _, inp := range irProg.Inputs {
 		if inp.Name == "targets" && len(inp.Shape) == 1 {
 			declaredTargetSize = inp.Shape[0]
 		}
 		if inp.Name == "first_byte_valid" {
 			firstByteMaskInput = true
+		}
+		if inp.Name == "loss_mask" {
+			lossMaskInput = true
 		}
 	}
 	firstByteValid := []int32(nil)
@@ -178,8 +184,10 @@ func initMLXGPUTrainer(
 		trigramVocabSize:   cfg.TrigramVocabSize,
 		declaredTargetSize: declaredTargetSize,
 		firstByteMaskInput: firstByteMaskInput,
+		lossMaskInput:      lossMaskInput,
 		tokBuf:             make([]int32, batchElems),
 		tgtBuf:             make([]int32, batchElems),
+		lossMaskBuf:        make([]float32, batchElems),
 		bigramBuf:          make([]int32, batchElems),
 		trigramBuf:         make([]int32, batchElems),
 		firstByteValid:     firstByteValid,
@@ -237,20 +245,25 @@ func copyWeightData(dst []float32, dstShape []int, src []float32, srcShape []int
 
 // makeInputs creates GPU tensor inputs from token arrays, reusing pre-allocated buffers.
 func (t *mlxGPUTrainer) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([]gpu.TensorInput, error) {
+	return t.makeObjectiveInputs(objectiveBatch{x: xTok, y: yTok}, batchSize, seqLen)
+}
+
+func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seqLen int) ([]gpu.TensorInput, error) {
 	need := batchSize * seqLen
-	if len(xTok) < need || len(yTok) < need {
-		return nil, fmt.Errorf("input size mismatch: tokens=%d targets=%d need=%d", len(xTok), len(yTok), need)
+	if len(batch.x) < need || len(batch.y) < need {
+		return nil, fmt.Errorf("input size mismatch: tokens=%d targets=%d need=%d", len(batch.x), len(batch.y), need)
 	}
 	// Grow buffers if needed (shouldn't happen with consistent batch size).
 	if len(t.tokBuf) < need {
 		t.tokBuf = make([]int32, need)
 		t.tgtBuf = make([]int32, need)
+		t.lossMaskBuf = make([]float32, need)
 		t.bigramBuf = make([]int32, need)
 		t.trigramBuf = make([]int32, need)
 	}
 	for i := 0; i < need; i++ {
-		t.tokBuf[i] = int32(xTok[i])
-		t.tgtBuf[i] = int32(yTok[i])
+		t.tokBuf[i] = int32(batch.x[i])
+		t.tgtBuf[i] = int32(batch.y[i])
 	}
 	targetData, targetShape, err := t.prepareTargets(batchSize, seqLen, need)
 	if err != nil {
@@ -259,6 +272,18 @@ func (t *mlxGPUTrainer) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([]g
 	inputs := []gpu.TensorInput{
 		{Name: "tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.tokBuf[:need]},
 		{Name: "targets", DType: gpu.TensorInt32, Shape: targetShape, Data: targetData},
+	}
+	if t.lossMaskInput {
+		if len(batch.lossMask) >= need {
+			copy(t.lossMaskBuf[:need], batch.lossMask[:need])
+		} else {
+			for i := 0; i < need; i++ {
+				t.lossMaskBuf[i] = 1
+			}
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.lossMaskBuf[:need],
+		})
 	}
 	if t.firstByteMaskInput {
 		if len(t.firstByteValid) != t.vocabSize {
@@ -344,10 +369,28 @@ func (t *mlxGPUTrainer) TrainStepGPU(xTok, yTok []int, batchSize, seqLen int, lr
 	return gpu.TrainerStep(t.handle, inputs)
 }
 
+func (t *mlxGPUTrainer) TrainObjectiveStepGPU(batch objectiveBatch, batchSize, seqLen int, lr float32) (float32, error) {
+	t.setLRScale(lr)
+	inputs, err := t.makeObjectiveInputs(batch, batchSize, seqLen)
+	if err != nil {
+		return 0, err
+	}
+	return gpu.TrainerStep(t.handle, inputs)
+}
+
 // SubmitStepGPU submits one training step without blocking on loss readback.
 func (t *mlxGPUTrainer) SubmitStepGPU(xTok, yTok []int, batchSize, seqLen int, lr float32) error {
 	t.setLRScale(lr)
 	inputs, err := t.makeInputs(xTok, yTok, batchSize, seqLen)
+	if err != nil {
+		return err
+	}
+	return gpu.TrainerSubmitStep(t.handle, inputs)
+}
+
+func (t *mlxGPUTrainer) SubmitObjectiveStepGPU(batch objectiveBatch, batchSize, seqLen int, lr float32) error {
+	t.setLRScale(lr)
+	inputs, err := t.makeObjectiveInputs(batch, batchSize, seqLen)
 	if err != nil {
 		return err
 	}
@@ -432,6 +475,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.prog = gpuProg
 	t.evalLossOutputName = preferredEvalLossOutputName(irProg)
 	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
+	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")
 	if t.firstByteMaskInput && len(t.firstByteValid) == 0 {
 		t.firstByteValid = identityFirstByteMaskValid(t.vocabSize)
 	}

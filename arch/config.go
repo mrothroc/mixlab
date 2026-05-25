@@ -137,6 +137,7 @@ type BlockSpec struct {
 	QKGain           float64      `json:"qk_gain,omitempty"`          // per-head learnable QK scaling; 0 disables
 	XSA              bool         `json:"xsa,omitempty"`              // enable V-orthogonal projection after attention
 	WindowSize       int          `json:"window_size,omitempty"`      // plain: sliding causal attention width; 0 = full causal attention
+	AttentionMask    string       `json:"attention_mask,omitempty"`   // plain: "causal", "bidirectional", or "none"; empty resolves from training objective.
 	SkipAttention    bool         `json:"skip_attention,omitempty"`   // plain: bypass attention while preserving weight layout.
 	SparseAttnGate   bool         `json:"sparse_attn_gate,omitempty"` // plain: narrow per-head output gate over the first gate_window head channels.
 	InnerDim         int          `json:"inner_dim,omitempty"`        // Mamba inner dimension; defaults to model_dim.
@@ -172,6 +173,14 @@ type TrainingSpec struct {
 	Steps                             int             `json:"steps"`
 	LR                                float64         `json:"lr"`
 	Phases                            []TrainingPhase `json:"phases,omitempty"`
+	Objective                         string          `json:"objective,omitempty"`
+	MLMMaskProb                       float64         `json:"mlm_mask_prob,omitempty"`
+	MLMMaskTokenID                    int             `json:"mlm_mask_token_id,omitempty"`
+	MLMMaskTokenProb                  float64         `json:"mlm_mask_token_prob,omitempty"`
+	MLMRandomTokenProb                float64         `json:"mlm_random_token_prob,omitempty"`
+	MLMKeptUnchangedProb              float64         `json:"mlm_kept_unchanged_prob,omitempty"`
+	HybridCLMFraction                 float64         `json:"hybrid_clm_fraction,omitempty"`
+	HybridSecondaryObjective          string          `json:"hybrid_secondary_objective,omitempty"`
 	WarmdownSteps                     int             `json:"warmdown_steps,omitempty"`
 	TargetValLoss                     float64         `json:"target_val_loss,omitempty"`
 	FirstByteMask                     bool            `json:"first_byte_mask,omitempty"`
@@ -222,6 +231,33 @@ type TrainingSpec struct {
 	SWAStart      int     `json:"swa_start,omitempty"`
 	SWADecay      float32 `json:"swa_decay,omitempty"`
 	SWAInterval   int     `json:"swa_interval,omitempty"`
+
+	mlmMaskProbSet        bool
+	mlmMaskTokenIDSet     bool
+	mlmReplacementProbSet bool
+	hybridCLMFractionSet  bool
+}
+
+func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
+	type alias TrainingSpec
+	var raw alias
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*t = TrainingSpec(raw)
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, t.mlmMaskProbSet = fields["mlm_mask_prob"]
+	_, t.mlmMaskTokenIDSet = fields["mlm_mask_token_id"]
+	_, maskProbSet := fields["mlm_mask_token_prob"]
+	_, randomProbSet := fields["mlm_random_token_prob"]
+	_, keptProbSet := fields["mlm_kept_unchanged_prob"]
+	t.mlmReplacementProbSet = maskProbSet || randomProbSet || keptProbSet
+	_, t.hybridCLMFractionSet = fields["hybrid_clm_fraction"]
+	return nil
 }
 
 // EvalSpec holds optional evaluation-only behavior. When omitted, or when
@@ -332,6 +368,23 @@ func (t *TrainingSpec) ApplyDefaults() {
 	}
 	if t.BatchTokens <= 0 {
 		t.BatchTokens = d.BatchTokens
+	}
+	t.Objective = normalizeTrainingObjective(t.Objective)
+	if !t.mlmMaskProbSet && t.MLMMaskProb == 0 {
+		t.MLMMaskProb = 0.15
+	}
+	if !t.mlmReplacementProbSet && t.MLMMaskTokenProb == 0 && t.MLMRandomTokenProb == 0 && t.MLMKeptUnchangedProb == 0 {
+		t.MLMMaskTokenProb = 0.8
+		t.MLMRandomTokenProb = 0.1
+		t.MLMKeptUnchangedProb = 0.1
+	}
+	if !t.hybridCLMFractionSet && t.HybridCLMFraction == 0 {
+		t.HybridCLMFraction = 0.5
+	}
+	if strings.TrimSpace(t.HybridSecondaryObjective) == "" {
+		t.HybridSecondaryObjective = ObjectiveMNTP
+	} else {
+		t.HybridSecondaryObjective = normalizeTrainingObjective(t.HybridSecondaryObjective)
 	}
 	if t.WeightDecay == 0 {
 		t.WeightDecay = d.WeightDecay
@@ -612,6 +665,14 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 
 	cfg.Training.ApplyDefaults()
+	if err := validateTrainingObjective(cfg, source); err != nil {
+		return nil, err
+	}
+	for i, b := range cfg.Blocks {
+		if err := validatePlainAttentionMask(cfg, source, b, "blocks", i); err != nil {
+			return nil, err
+		}
+	}
 	if cfg.Training.WeightDecay < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.weight_decay=%g (must be >= 0)", source, cfg.Training.WeightDecay)
 	}

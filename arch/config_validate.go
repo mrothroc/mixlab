@@ -149,6 +149,13 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	if b.Type == "plain" && b.WindowSize < 0 {
 		return fmt.Errorf("config %q %s[%d] type=plain has invalid window_size=%d (must be >= 0)", source, groupName, idx, b.WindowSize)
 	}
+	if b.Type == "plain" {
+		switch normalizeAttentionMask(b.AttentionMask) {
+		case "", AttentionMaskCausal, AttentionMaskBidirectional, AttentionMaskNone:
+		default:
+			return fmt.Errorf("config %q %s[%d] type=plain has invalid attention_mask=%q (must be \"causal\", \"bidirectional\", or \"none\")", source, groupName, idx, b.AttentionMask)
+		}
+	}
 	if b.Type == "plain" && b.KVHeads != 0 {
 		if b.KVHeads < 0 {
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid kv_heads=%d (must be > 0 when set)", source, groupName, idx, b.KVHeads)

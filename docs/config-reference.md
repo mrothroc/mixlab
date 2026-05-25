@@ -179,7 +179,7 @@ Per-phase order:
 
 ### `plain`
 
-Standard causal self-attention block with RMSNorm, RoPE, grouped-query support via `kv_heads`, SiLU FFN tail, and residual connections.
+Self-attention block with RMSNorm, RoPE, grouped-query support via `kv_heads`, SiLU FFN tail, and residual connections. It defaults to causal attention for causal training objectives and bidirectional attention for masked objectives.
 
 Required fields:
 
@@ -192,6 +192,8 @@ Optional fields:
 - `qk_gain` — learnable per-head QK scaling. When set, allocates one trainable scalar per head initialized to this value, applied as `scores = qk_gain * (Q @ K^T / sqrt(d_k))`. Omit or set to `0` for standard scaling.
 - `rope_dims` — partial RoPE: apply rotary embeddings to only the first `rope_dims` dimensions per head, leaving the rest position-invariant. Must be even and `<= head_dim`. Omit or set to `0` for full RoPE.
 - `xsa` — eXplicit Subspace Attention: after computing `y = softmax(QK^T)V`, projects `y` orthogonal to `V` at each position. Forces attention to contribute information that V doesn't already provide. Zero additional parameters. Compatible with GQA.
+- `attention_mask` — `"causal"`, `"bidirectional"`, or `"none"`. Omit to resolve from `training.objective`: causal objectives use `"causal"` and masked objectives use `"bidirectional"`. `"bidirectional"` and `"none"` both use dense softmax with no triangular mask.
+- `window_size` — sliding causal attention width. `0` means full causal attention. Valid only when the resolved `attention_mask` is `"causal"`.
 - `kv_source` — reuse K/V projections from an earlier block (1-indexed). Saves 2 weight matrices per shared block. Source must be an earlier `plain` block with matching `heads` and `kv_heads`. Not supported with `parallel_residual`.
 - `parallel_residual` — when `true`, fuses this block with the immediately following `swiglu` block into a parallel residual pair. See [`parallel_residual`](#parallel_residual) for the full description.
 
@@ -661,6 +663,14 @@ The `training` object controls optimization, batching, and stochastic settings.
 |------|------|----------|---------|-------|
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
 | `lr` | number | No | `3e-4` | Base learning rate. Must be `> 0`. |
+| `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, or `"hybrid"`. Existing configs default to causal next-token training. |
+| `mlm_mask_prob` | number | No | `0.15` | Probability of selecting each eligible token for masked-objective loss. Must be in `[0,1]`. |
+| `mlm_mask_token_id` | integer | Required for `mlm`, `mntp`, `hybrid` | None | Token id used as the mask replacement. Must be in `[0, vocab_size)`. |
+| `mlm_mask_token_prob` | number | No | `0.8` | Probability that a selected MLM token is replaced with `mlm_mask_token_id`. |
+| `mlm_random_token_prob` | number | No | `0.1` | Probability that a selected MLM token is replaced with a random token id. |
+| `mlm_kept_unchanged_prob` | number | No | `0.1` | Probability that a selected MLM token is kept unchanged. The three replacement probabilities must sum to `1.0`. |
+| `hybrid_clm_fraction` | number | No | `0.5` | For `objective: "hybrid"`, deterministic per-batch probability of using causal next-token training. Must be in `[0,1]`. |
+| `hybrid_secondary_objective` | string | No | `"mntp"` | Secondary objective for hybrid training: `"mlm"` or `"mntp"`. |
 | `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
 | `warmdown_steps` | integer | No | `0` | Cosine warmdown length at the end of training. Must be `>= 0`; values above `steps` are clamped by the scheduler. |
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
@@ -700,6 +710,31 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `swa_start` | integer | No | `0` | Step at which SWA/EMA accumulation starts. Must be `>= 0`. |
 | `swa_decay` | number | No | `0.999` | EMA decay for SWA weights. Must be in `[0, 1)`. |
 | `swa_interval` | integer | No | `10` | Update frequency for SWA accumulation. |
+
+### Training objectives
+
+`objective: "causal"` preserves the existing shifted next-token objective. `objective: "mlm"` masks selected input positions and trains only those positions to predict the original token. `objective: "mntp"` predicts next tokens from bidirectional context while masking the corresponding next-token input position so the answer is not visible. `objective: "hybrid"` deterministically chooses causal or the configured secondary objective once per batch from `training.seed` and the step index.
+
+Masked objectives emit a training loss averaged only over rows where `loss_mask > 0`; the dense `eval_loss` and `per_token_nll` outputs remain available for evaluation/export paths. Top-level `mtp` and `training.first_byte_mask` are not supported with non-causal objectives in this version.
+
+```json
+{
+  "blocks": [
+    {"type": "plain", "heads": 8, "attention_mask": "bidirectional"},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "hybrid",
+    "mlm_mask_prob": 0.15,
+    "mlm_mask_token_id": 103,
+    "mlm_mask_token_prob": 0.8,
+    "mlm_random_token_prob": 0.1,
+    "mlm_kept_unchanged_prob": 0.1,
+    "hybrid_clm_fraction": 0.5,
+    "hybrid_secondary_objective": "mntp"
+  }
+}
+```
 
 ### Optimizer groups
 

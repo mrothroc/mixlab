@@ -89,3 +89,13 @@ func emitLanguageModelLossIR(prog *Program, logits, targets string, B, T, V int,
 	prog.ScalarMul(accum, 1.0, "loss")
 	return nil
 }
+
+// emitMaskedLanguageModelLossIR emits the masked-objective loss stack used by
+// MLM and MNTP. The training loss is averaged over rows where loss_mask > 0;
+// eval_loss remains the dense cross-entropy for callers that need an unmasked
+// scalar, and per_token_nll is zeroed for ignored rows.
+func emitMaskedLanguageModelLossIR(prog *Program, logits, targets, lossMask string) {
+	prog.CrossEntropy(logits, targets, "eval_loss")
+	prog.MaskedCrossEntropy(logits, targets, lossMask, "loss")
+	prog.MaskedCrossEntropyPerToken(logits, targets, lossMask, "per_token_nll")
+}

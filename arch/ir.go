@@ -52,6 +52,8 @@ const (
 	OpMamba3CanonicalBlock = 64 // OP_MAMBA3_CANONICAL_BLOCK
 	OpRandomNormal         = 65 // OP_RANDOM_NORMAL
 	OpFirstByteMaskedCE    = 66 // OP_FIRST_BYTE_MASKED_CROSS_ENTROPY
+	OpMaskedCrossEntropy   = 67 // OP_MASKED_CROSS_ENTROPY
+	OpMaskedCEPerToken     = 68 // OP_MASKED_CROSS_ENTROPY_PER_TOKEN
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -195,9 +197,19 @@ func (p *Program) FirstByteMaskedCrossEntropy(logits, targets, firstByteValid, o
 	p.AddOp(OpFirstByteMaskedCE, []string{logits, targets, firstByteValid}, []string{output}, nil, nil)
 }
 
+// MaskedCrossEntropy emits mean cross-entropy over rows where lossMask > 0.
+func (p *Program) MaskedCrossEntropy(logits, targets, lossMask, output string) {
+	p.AddOp(OpMaskedCrossEntropy, []string{logits, targets, lossMask}, []string{output}, nil, nil)
+}
+
 // CrossEntropyPerToken emits per-token negative log-likelihoods.
 func (p *Program) CrossEntropyPerToken(logits, targets, output string) {
 	p.AddOp(OpCrossEntropyPerToken, []string{logits, targets}, []string{output}, nil, nil)
+}
+
+// MaskedCrossEntropyPerToken emits per-token NLLs zeroed where lossMask <= 0.
+func (p *Program) MaskedCrossEntropyPerToken(logits, targets, lossMask, output string) {
+	p.AddOp(OpMaskedCEPerToken, []string{logits, targets, lossMask}, []string{output}, nil, nil)
 }
 
 // RMSNorm emits RMS normalization with a learned scale parameter.

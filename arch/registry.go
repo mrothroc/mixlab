@@ -101,7 +101,7 @@ func init() {
 			if heads <= 0 {
 				heads = 4
 			}
-			return emitPlainAttentionIRWithKVOptions(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, spec.SkipAttention, spec.QKGain, spec.RopeDims, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.KVSource, opts.KVCache, opts.BlockIndex)
+			return emitPlainAttentionIRWithKVOptions(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, spec.SkipAttention, spec.QKGain, spec.RopeDims, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.KVSource, opts.KVCache, opts.BlockIndex)
 		},
 		WeightCount: plainWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {

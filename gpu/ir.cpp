@@ -105,6 +105,35 @@ mx::array cross_entropy_per_token(const mx::array& logits, const mx::array& targ
   return -mx::reshape(chosen, {targets.shape(0)});
 }
 
+mx::array masked_cross_entropy_mean(
+    const mx::array& logits,
+    const mx::array& targets,
+    const mx::array& loss_mask) {
+  if (loss_mask.ndim() != 1 || loss_mask.shape(0) != targets.shape(0)) {
+    throw std::runtime_error("loss_mask must be a rank-1 vector matching targets");
+  }
+  auto nll = cross_entropy_per_token(logits, targets);
+  auto mask = mx::astype(
+      mx::greater(mx::astype(loss_mask, mx::float32), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto denom = mx::maximum(mx::sum(mask), mx::array(1.0f, mx::float32));
+  return mx::sum(nll * mask) / denom;
+}
+
+mx::array masked_cross_entropy_per_token(
+    const mx::array& logits,
+    const mx::array& targets,
+    const mx::array& loss_mask) {
+  if (loss_mask.ndim() != 1 || loss_mask.shape(0) != targets.shape(0)) {
+    throw std::runtime_error("loss_mask must be a rank-1 vector matching targets");
+  }
+  auto nll = cross_entropy_per_token(logits, targets);
+  auto mask = mx::astype(
+      mx::greater(mx::astype(loss_mask, mx::float32), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  return nll * mask;
+}
+
 mx::array first_byte_masked_cross_entropy_mean(
     const mx::array& logits,
     const mx::array& targets,
@@ -2020,6 +2049,20 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
       }
       case OP_CROSS_ENTROPY_PER_TOKEN: {
         set_out(op, 0, cross_entropy_per_token(get(op, 0), mx::astype(get(op, 1), mx::int32)));
+        break;
+      }
+      case OP_MASKED_CROSS_ENTROPY: {
+        set_out(op, 0, masked_cross_entropy_mean(
+            get(op, 0),
+            mx::astype(get(op, 1), mx::int32),
+            get(op, 2)));
+        break;
+      }
+      case OP_MASKED_CROSS_ENTROPY_PER_TOKEN: {
+        set_out(op, 0, masked_cross_entropy_per_token(
+            get(op, 0),
+            mx::astype(get(op, 1), mx::int32),
+            get(op, 2)));
         break;
       }
       case OP_FIRST_BYTE_MASKED_CROSS_ENTROPY: {

@@ -34,10 +34,10 @@ func emitPlainAttentionIRWithDropout(prog *Program, x string, wi, H, kvH, D, T, 
 }
 
 func emitPlainAttentionIRWithOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int) (int, error) {
-	return emitPlainAttentionIRWithKVOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, skipAttention, qkGain, ropeDims, xsa, sparseAttnGate, windowSize, 0, nil, -1)
+	return emitPlainAttentionIRWithKVOptions(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, skipAttention, qkGain, ropeDims, xsa, sparseAttnGate, windowSize, AttentionMaskCausal, 0, nil, -1)
 }
 
-func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
+func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int, attentionMask string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -47,6 +47,13 @@ func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T
 	}
 	if windowSize < 0 {
 		return wi, fmt.Errorf("invalid window_size=%d", windowSize)
+	}
+	attentionMask = normalizeAttentionMask(attentionMask)
+	if attentionMask == "" {
+		attentionMask = AttentionMaskCausal
+	}
+	if windowSize > 0 && attentionMask != AttentionMaskCausal {
+		return wi, fmt.Errorf("window_size requires causal attention mask")
 	}
 	kvH, err := normalizePlainKVHeads(H, kvH)
 	if err != nil {
@@ -179,9 +186,16 @@ func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T
 			scaled = gained
 		}
 
-		// Causal mask + softmax
-		prog.CausalMask(scaled, T, windowSize, masked)
-		prog.Softmax(masked, -1, attn)
+		// Attention mask + softmax
+		switch attentionMask {
+		case AttentionMaskCausal:
+			prog.CausalMask(scaled, T, windowSize, masked)
+			prog.Softmax(masked, -1, attn)
+		case AttentionMaskBidirectional, AttentionMaskNone:
+			prog.Softmax(scaled, -1, attn)
+		default:
+			return wi, fmt.Errorf("invalid attention_mask=%q", attentionMask)
+		}
 
 		// Attention output: attn @ V, then transpose back
 		prog.MatMul(attn, vh, ctx)
@@ -475,7 +489,7 @@ func emitMLPIR(prog *Program, x string, wi, idx int, activation string, leakySlo
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int, attentionMask string) (string, int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return "", wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -485,6 +499,13 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 	}
 	if windowSize < 0 {
 		return "", wi, fmt.Errorf("invalid window_size=%d", windowSize)
+	}
+	attentionMask = normalizeAttentionMask(attentionMask)
+	if attentionMask == "" {
+		attentionMask = AttentionMaskCausal
+	}
+	if windowSize > 0 && attentionMask != AttentionMaskCausal {
+		return "", wi, fmt.Errorf("window_size requires causal attention mask")
 	}
 	kvH, err := normalizePlainKVHeads(H, kvH)
 	if err != nil {
@@ -571,8 +592,15 @@ func emitPlainAttentionParallelDeltaIRWithDropout(prog *Program, x, xNorm string
 		prog.Mul(scaled, gain, gained)
 		scaled = gained
 	}
-	prog.CausalMask(scaled, T, windowSize, masked)
-	prog.Softmax(masked, -1, attn)
+	switch attentionMask {
+	case AttentionMaskCausal:
+		prog.CausalMask(scaled, T, windowSize, masked)
+		prog.Softmax(masked, -1, attn)
+	case AttentionMaskBidirectional, AttentionMaskNone:
+		prog.Softmax(scaled, -1, attn)
+	default:
+		return "", wi, fmt.Errorf("invalid attention_mask=%q", attentionMask)
+	}
 	prog.MatMul(attn, vh, ctx)
 	if xsa {
 		prog.XSAProject(ctx, vh, ctxXSA)

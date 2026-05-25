@@ -53,6 +53,8 @@ const (
 	OpMamba3CanonicalBlock = 64
 	OpRandomNormal         = 65
 	OpFirstByteMaskedCE    = 66
+	OpMaskedCrossEntropy   = 67
+	OpMaskedCEPerToken     = 68
 )
 
 const (
