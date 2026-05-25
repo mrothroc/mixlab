@@ -157,6 +157,26 @@ func init() {
 			return gatedDeltaNetWeightShapes(spec, D, T, B, V)
 		},
 	})
+	RegisterBlock("hgrn2", blockRegistration{
+		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, _ EmitOptions) (int, error) {
+			return emitHGRN2IR(prog, spec, stream, wi, D, T, B, idx)
+		},
+		WeightCount:  hgrn2WeightCount,
+		WeightShapes: hgrn2WeightShapes,
+		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, _ EmitOptions) ([]WeightMeta, error) {
+			return hgrn2WeightShapes(spec, D, T, B, V)
+		},
+	})
+	RegisterBlock("mlstm", blockRegistration{
+		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, _, T, B, _, idx int, _ EmitOptions) (int, error) {
+			return emitMLSTMIR(prog, spec, stream, wi, T, B, idx)
+		},
+		WeightCount:  mlstmWeightCount,
+		WeightShapes: mlstmWeightShapes,
+		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, _ EmitOptions) ([]WeightMeta, error) {
+			return mlstmWeightShapes(spec, D, T, B, V)
+		},
+	})
 	for _, name := range []string{"mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
 		RegisterBlock(name, blockRegistration{
 			Emitter:     builtinBlockEmitter,

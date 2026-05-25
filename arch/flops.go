@@ -179,6 +179,10 @@ func estimateBlockFLOPs(block BlockSpec, B, T, D, V, ffn int, mlpMult float64, b
 			inner = D
 		}
 		return 2 * i64(B) * i64(T) * i64(D) * i64(inner) * 4
+	case "hgrn2":
+		return estimateHGRN2BlockFLOPs(block, B, T, D)
+	case "mlstm":
+		return estimateMLSTMBlockFLOPs(block, B, T, D)
 	default:
 		return estimateWeightShapeFLOPs(block, B, T, D, V, mlpMult, blockScales, residMix)
 	}

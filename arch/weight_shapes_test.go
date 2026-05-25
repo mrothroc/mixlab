@@ -27,6 +27,8 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 		{Type: "gated_linear_ssm"}, // default inner = D
 		{Type: "mamba3"},           // deprecated alias for gated_linear_ssm
 		{Type: "mamba3-canonical", InnerDim: 64, StateSize: 16, NGroups: 4, DTRank: 4},
+		{Type: "hgrn2", Heads: 4},
+		{Type: "mlstm", Heads: 4, DK: 8, DV: 16},
 		{Type: "rwkv"},
 		{Type: "token_blend"},
 		{Type: "perceiver", Heads: 4, NumLatents: 16},

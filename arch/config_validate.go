@@ -88,7 +88,7 @@ func validateWeightGroups(cfg *ArchConfig, source string) error {
 
 func weightGroupHeadCount(spec BlockSpec) (int, bool) {
 	switch blockTypeKey(spec) {
-	case "plain", "retnet", "perceiver", "bottleneck", "cross_attention", "gated_deltanet":
+	case "plain", "retnet", "perceiver", "bottleneck", "cross_attention", "gated_deltanet", "hgrn2", "mlstm":
 		return spec.Heads, true
 	case "custom":
 		if spec.Heads <= 0 {
@@ -131,7 +131,7 @@ func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, c
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	switch b.Type {
-	case "plain", "swiglu", "geglu", "mlp", "mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
+	case "plain", "swiglu", "geglu", "mlp", "mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "hgrn2", "mlstm", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
 		// valid
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)
@@ -186,6 +186,25 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if b.ScanChunkSize != nil && *b.ScanChunkSize < 0 {
 			return fmt.Errorf("config %q %s[%d] type=gated_deltanet has invalid scan_chunk_size=%d (must be >= 0)", source, groupName, idx, *b.ScanChunkSize)
+		}
+	}
+	if b.Type == "hgrn2" {
+		if b.Heads <= 0 {
+			return fmt.Errorf("config %q %s[%d] type=hgrn2 requires heads > 0", source, groupName, idx)
+		}
+		if b.DState < 0 {
+			return fmt.Errorf("config %q %s[%d] type=hgrn2 has invalid d_state=%d (must be > 0 when set)", source, groupName, idx, b.DState)
+		}
+	}
+	if b.Type == "mlstm" {
+		if b.Heads <= 0 {
+			return fmt.Errorf("config %q %s[%d] type=mlstm requires heads > 0", source, groupName, idx)
+		}
+		if b.DK <= 0 {
+			return fmt.Errorf("config %q %s[%d] type=mlstm requires d_k > 0", source, groupName, idx)
+		}
+		if b.DV <= 0 {
+			return fmt.Errorf("config %q %s[%d] type=mlstm requires d_v > 0", source, groupName, idx)
 		}
 	}
 	if b.Type == "mamba3-canonical" {
@@ -281,6 +300,22 @@ func validateBlockRopeDims(b BlockSpec, modelDim int, source, groupName string, 
 	headDim := modelDim / b.Heads
 	if b.RopeDims > headDim {
 		return fmt.Errorf("config %q %s[%d] has invalid rope_dims=%d (must be <= head_dim=%d)", source, groupName, idx, b.RopeDims, headDim)
+	}
+	return nil
+}
+
+func validateRecurrentMixerDims(b BlockSpec, modelDim int, source, groupName string, idx int) error {
+	switch blockTypeKey(b) {
+	case "hgrn2":
+		if b.Heads <= 0 {
+			return nil
+		}
+		if modelDim%b.Heads != 0 {
+			return fmt.Errorf("config %q %s[%d] type=hgrn2 requires model_dim=%d divisible by heads=%d", source, groupName, idx, modelDim, b.Heads)
+		}
+	case "mlstm":
+		// mLSTM projects to heads*d_k and heads*d_v, so model_dim does not need
+		// to divide evenly by heads.
 	}
 	return nil
 }

@@ -56,6 +56,8 @@ const (
 	OpMaskedCrossEntropy   = 67
 	OpMaskedCEPerToken     = 68
 	OpDistillationKL       = 69
+	OpHGRN2Scan            = 70
+	OpMLSTMScan            = 71
 )
 
 const (

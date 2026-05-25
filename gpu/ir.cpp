@@ -1560,6 +1560,89 @@ mx::array gated_delta_scan_chunked(
   return mx::reshape(out_seq, {B * T * H, Dv});
 }
 
+mx::array hgrn2_scan_naive(
+    const mx::array& q,
+    const mx::array& k,
+    const mx::array& v,
+    const mx::array& gate,
+    int B,
+    int T,
+    int H,
+    int Ds,
+    int Dv) {
+  auto state = mx::zeros({B, H, Ds, Dv}, mx::float32);
+  auto out = mx::zeros({B, T, H, Dv}, mx::float32);
+  for (int t = 0; t < T; ++t) {
+    auto qt = mx::reshape(mx::slice(q, {0, t, 0, 0}, {B, t + 1, H, Ds}), {B, H, Ds});
+    auto kt = mx::reshape(mx::slice(k, {0, t, 0, 0}, {B, t + 1, H, Ds}), {B, H, Ds});
+    auto vt = mx::reshape(mx::slice(v, {0, t, 0, 0}, {B, t + 1, H, Dv}), {B, H, Dv});
+    auto gatet = mx::reshape(mx::slice(gate, {0, t, 0, 0}, {B, t + 1, H, Ds}), {B, H, Ds, 1});
+
+    auto update = mx::reshape(kt, {B, H, Ds, 1}) * mx::reshape(vt, {B, H, 1, Dv});
+    state = as_float32(gatet * state + update);
+    auto yt = mx::reshape(
+        mx::matmul(mx::reshape(qt, {B, H, 1, Ds}), state),
+        {B, H, Dv});
+    out = mx::slice_update(
+        out,
+        mx::reshape(yt, {B, 1, H, Dv}),
+        mx::Shape{0, t, 0, 0},
+        mx::Shape{B, t + 1, H, Dv});
+  }
+  return mx::reshape(out, {B * T * H, Dv});
+}
+
+mx::array mlstm_scan_naive(
+    const mx::array& q,
+    const mx::array& k,
+    const mx::array& v,
+    const mx::array& input_gate,
+    const mx::array& forget_gate,
+    int B,
+    int T,
+    int H,
+    int Dk,
+    int Dv) {
+  auto C = mx::zeros({B, H, Dk, Dv}, mx::float32);
+  auto n = mx::zeros({B, H, Dk}, mx::float32);
+  auto m = mx::zeros({B, H}, mx::float32);
+  auto out = mx::zeros({B, T, H, Dv}, mx::float32);
+  const float q_scale = 1.0f / std::sqrt(static_cast<float>(Dk));
+
+  for (int t = 0; t < T; ++t) {
+    auto qt = mx::reshape(mx::slice(q, {0, t, 0, 0}, {B, t + 1, H, Dk}), {B, H, Dk});
+    auto kt = mx::reshape(mx::slice(k, {0, t, 0, 0}, {B, t + 1, H, Dk}), {B, H, Dk});
+    auto vt = mx::reshape(mx::slice(v, {0, t, 0, 0}, {B, t + 1, H, Dv}), {B, H, Dv});
+    auto it = mx::reshape(mx::slice(input_gate, {0, t, 0}, {B, t + 1, H}), {B, H});
+    auto ft = mx::reshape(mx::slice(forget_gate, {0, t, 0}, {B, t + 1, H}), {B, H});
+
+    auto m_next = mx::maximum(ft + m, it);
+    auto i_gate = mx::exp(it - m_next);
+    auto f_gate = mx::exp(ft + m - m_next);
+
+    auto i4 = mx::reshape(i_gate, {B, H, 1, 1});
+    auto f4 = mx::reshape(f_gate, {B, H, 1, 1});
+    auto update = mx::reshape(kt, {B, H, Dk, 1}) * mx::reshape(vt, {B, H, 1, Dv});
+    C = as_float32(f4 * C + i4 * update);
+    n = as_float32(mx::reshape(f_gate, {B, H, 1}) * n + mx::reshape(i_gate, {B, H, 1}) * kt);
+
+    auto q_scaled = qt * q_scale;
+    auto numerator = mx::reshape(
+        mx::matmul(mx::reshape(q_scaled, {B, H, 1, Dk}), C),
+        {B, H, Dv});
+    auto denom_raw = mx::sum(q_scaled * n, -1);
+    auto denom = mx::maximum(mx::abs(denom_raw), mx::array(1.0f, mx::float32));
+    auto yt = numerator / mx::reshape(denom, {B, H, 1});
+    out = mx::slice_update(
+        out,
+        mx::reshape(yt, {B, 1, H, Dv}),
+        mx::Shape{0, t, 0, 0},
+        mx::Shape{B, t + 1, H, Dv});
+    m = m_next;
+  }
+  return mx::reshape(out, {B * T * H, Dv});
+}
+
 mx::array tensor_desc_to_array(const mlx_ir::TensorDesc& desc) {
   mx::Shape shape;
   shape.reserve(desc.shape.size());
@@ -2334,6 +2417,39 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         } else {
           set_out(op, 0, gated_delta_scan_chunked(q, k, v, beta, gate, B, T, H, Dk, Dv, chunk_size));
         }
+        break;
+      }
+      case OP_HGRN2_SCAN: {
+        if (op.n_int_params < 5) {
+          throw std::runtime_error("OP_HGRN2_SCAN requires B,T,H,Ds,Dv");
+        }
+        int B = op.int_params[0];
+        int T = op.int_params[1];
+        int H = op.int_params[2];
+        int Ds = op.int_params[3];
+        int Dv = op.int_params[4];
+        auto q = mx::reshape(get(op, 0), {B, T, H, Ds});
+        auto k = mx::reshape(get(op, 1), {B, T, H, Ds});
+        auto v = mx::reshape(get(op, 2), {B, T, H, Dv});
+        auto gate = mx::reshape(get(op, 3), {B, T, H, Ds});
+        set_out(op, 0, hgrn2_scan_naive(q, k, v, gate, B, T, H, Ds, Dv));
+        break;
+      }
+      case OP_MLSTM_SCAN: {
+        if (op.n_int_params < 5) {
+          throw std::runtime_error("OP_MLSTM_SCAN requires B,T,H,Dk,Dv");
+        }
+        int B = op.int_params[0];
+        int T = op.int_params[1];
+        int H = op.int_params[2];
+        int Dk = op.int_params[3];
+        int Dv = op.int_params[4];
+        auto q = mx::reshape(get(op, 0), {B, T, H, Dk});
+        auto k = mx::reshape(get(op, 1), {B, T, H, Dk});
+        auto v = mx::reshape(get(op, 2), {B, T, H, Dv});
+        auto input_gate = mx::reshape(get(op, 3), {B, T, H});
+        auto forget_gate = mx::reshape(get(op, 4), {B, T, H});
+        set_out(op, 0, mlstm_scan_naive(q, k, v, input_gate, forget_gate, B, T, H, Dk, Dv));
         break;
       }
       case OP_DEPTHWISE_CONV1D: {

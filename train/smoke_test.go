@@ -106,6 +106,16 @@ var exampleConfigs = []exampleConfigCase{
 		minOps:      8,
 	},
 	{
+		filename:    "hgrn2_2L.json",
+		wantWeights: 23, // 3 base + 2*(6 hgrn2 + 4 swiglu)
+		minOps:      8,
+	},
+	{
+		filename:    "mlstm_2L.json",
+		wantWeights: 33, // 3 base + 2*(11 mlstm + 4 swiglu)
+		minOps:      8,
+	},
+	{
 		filename:    "perceiver_2L.json",
 		wantWeights: 41, // 3 base + perceiver+swiglu blocks
 		minOps:      8,

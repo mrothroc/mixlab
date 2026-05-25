@@ -54,6 +54,9 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"MatrixScan", ir.OpMatrixScan, OpMatrixScan},
 		{"ScanTV", ir.OpScanTV, OpScanTV},
 		{"Softplus", ir.OpSoftplus, OpSoftplus},
+		{"GatedDeltaScan", ir.OpGatedDeltaScan, OpGatedDeltaScan},
+		{"HGRN2Scan", ir.OpHGRN2Scan, OpHGRN2Scan},
+		{"MLSTMScan", ir.OpMLSTMScan, OpMLSTMScan},
 		{"StopGradient", ir.OpStopGradient, OpStopGradient},
 		{"FirstByteMaskedCrossEntropy", ir.OpFirstByteMaskedCE, OpFirstByteMaskedCE},
 	}

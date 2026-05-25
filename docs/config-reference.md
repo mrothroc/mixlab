@@ -412,6 +412,56 @@ GLA-pair stacked with parallel residual:
 ]}
 ```
 
+### `hgrn2`
+
+HGRN2 token-mixer block with pre-norm RMSNorm, value/query/forget projections, an output-only matrix-state recurrence, per-head output normalization, output projection, and residual add. This block is a sequence mixer only; pair it with `swiglu` or `geglu` blocks for channel mixing.
+
+Required fields:
+
+- `type: "hgrn2"`
+- `heads` — number of recurrent heads. `model_dim` must be divisible by `heads`.
+
+Optional fields:
+
+- `d_state` — key/query state dimension per head. Defaults to `model_dim / heads`.
+
+Implementation notes:
+
+- The recurrent state has shape `d_state × (model_dim / heads)` per head.
+- The scan is lowered to composed MLX array operations and autodiff; no custom kernel or custom backward path is used.
+
+Example:
+
+```json
+{"type": "hgrn2", "heads": 6, "d_state": 128}
+```
+
+### `mlstm`
+
+mLSTM token-mixer block with pre-norm RMSNorm, Q/K/V projections, input and forget gate preactivations, stabilized matrix-memory recurrence, per-head output normalization, output gate, output projection, and residual add. This block is a sequence mixer only; pair it with `swiglu` or `geglu` blocks for channel mixing.
+
+Required fields:
+
+- `type: "mlstm"`
+- `heads` — number of recurrent heads.
+- `d_k` — key/query dimension per head.
+- `d_v` — value dimension per head.
+
+Optional fields:
+
+- None
+
+Implementation notes:
+
+- The recurrent state has shape `d_k × d_v` per head, plus the stabilized normalizer state.
+- The v1 implementation does not include short convolution, sliding-window variants, inference-state caching, custom kernels, or a custom backward path.
+
+Example:
+
+```json
+{"type": "mlstm", "heads": 8, "d_k": 64, "d_v": 128}
+```
+
 ### `perceiver`
 
 Latent bottleneck block: cross-attend input into learned latents, self-attend latents, then broadcast back to the sequence.

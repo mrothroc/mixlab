@@ -55,6 +55,8 @@ const (
 	OpMaskedCrossEntropy   = 67 // OP_MASKED_CROSS_ENTROPY
 	OpMaskedCEPerToken     = 68 // OP_MASKED_CROSS_ENTROPY_PER_TOKEN
 	OpDistillationKL       = 69 // OP_DISTILLATION_KL
+	OpHGRN2Scan            = 70 // OP_HGRN2_SCAN
+	OpMLSTMScan            = 71 // OP_MLSTM_SCAN
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -343,6 +345,41 @@ func (p *Program) ScanTV(x, gate, out string, B, T, D int) {
 // chunkSize <= 0 keeps the legacy naive recurrence for parity/debugging.
 func (p *Program) GatedDeltaScan(q, k, v, beta, gate, out string, B, T, H, Dk, Dv, chunkSize int) {
 	p.AddOp(OpGatedDeltaScan, []string{q, k, v, beta, gate}, []string{out}, nil, []int{B, T, H, Dk, Dv, chunkSize})
+}
+
+// HGRN2Scan emits the HGRN2 matrix-state recurrence over a sequence.
+// Inputs:
+//
+//	q:    [B,T,H,Ds]
+//	k:    [B,T,H,Ds]
+//	v:    [B,T,H,Dv]
+//	gate: [B,T,H,Ds] forget gate in [0, 1]
+//
+// Output:
+//
+//	out: [B*T*H,Dv]
+//
+// IntParams layout: [B, T, H, Ds, Dv].
+func (p *Program) HGRN2Scan(q, k, v, gate, out string, B, T, H, Ds, Dv int) {
+	p.AddOp(OpHGRN2Scan, []string{q, k, v, gate}, []string{out}, nil, []int{B, T, H, Ds, Dv})
+}
+
+// MLSTMScan emits the stabilized mLSTM matrix-memory recurrence.
+// Inputs:
+//
+//	q:          [B,T,H,Dk]
+//	k:          [B,T,H,Dk]
+//	v:          [B,T,H,Dv]
+//	inputGate:  [B,T,H] input-gate preactivation
+//	forgetGate: [B,T,H] forget-gate preactivation
+//
+// Output:
+//
+//	out: [B*T*H,Dv]
+//
+// IntParams layout: [B, T, H, Dk, Dv].
+func (p *Program) MLSTMScan(q, k, v, inputGate, forgetGate, out string, B, T, H, Dk, Dv int) {
+	p.AddOp(OpMLSTMScan, []string{q, k, v, inputGate, forgetGate}, []string{out}, nil, []int{B, T, H, Dk, Dv})
 }
 
 // GatherPositions selects K entries from the position axis of a [B,T,D] tensor.

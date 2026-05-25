@@ -28,6 +28,8 @@ make build
 | [mamba_2L.json](mamba_2L.json) | Mamba SSM | Gated recurrence, no attention |
 | [retnet_2L.json](retnet_2L.json) | RetNet | Exponential decay retention |
 | [rwkv_2L.json](rwkv_2L.json) | RWKV | Linear attention with time decay |
+| [hgrn2_2L.json](hgrn2_2L.json) | HGRN2 mixer | Matrix-state recurrence token mixer |
+| [mlstm_2L.json](mlstm_2L.json) | mLSTM mixer | Stabilized matrix-memory token mixer |
 | [perceiver_2L.json](perceiver_2L.json) | Perceiver | Latent bottleneck cross-attention |
 | [custom_geglu.json](custom_geglu.json) | Custom block | Gated feed-forward block defined in pure JSON |
 | [unet_transformer.json](unet_transformer.json) | U-Net transformer | Skip connections, block scales, residual mixing |
@@ -38,7 +40,7 @@ make build
 - **Learning mixlab**: Start with `plain_3L.json` — it trains in seconds.
 - **Masked objectives**: Use `mlm_tiny.json` as the smallest bidirectional MLM starting point.
 - **Internal distillation**: Use `distillation_tiny.json` after training teacher checkpoints with matching `vocab_size` and `seq_len`.
-- **Exploring block types**: Try `mamba_2L.json`, `retnet_2L.json`, or `rwkv_2L.json`.
+- **Exploring block types**: Try `mamba_2L.json`, `retnet_2L.json`, `rwkv_2L.json`, `hgrn2_2L.json`, or `mlstm_2L.json`.
 - **Custom architectures**: See `custom_geglu.json` and [custom_geglu.md](custom_geglu.md).
 - **Advanced features**: `unet_transformer.json` and `recurrent_parallel.json` cover U-Net skips, recurrence, parallel residuals, block scales, residual mixing, tied embeddings, and TTT.
 

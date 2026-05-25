@@ -143,6 +143,7 @@ type BlockSpec struct {
 	InnerDim         int          `json:"inner_dim,omitempty"`        // Mamba inner dimension; defaults to model_dim.
 	DK               int          `json:"d_k,omitempty"`              // gated_deltanet: key/query dim per head.
 	DV               int          `json:"d_v,omitempty"`              // gated_deltanet: value dim per head; defaults to 2*d_k.
+	DState           int          `json:"d_state,omitempty"`          // hgrn2: matrix-state key/query dim per head; defaults to model_dim/heads.
 	KVShare          *bool        `json:"kv_share,omitempty"`         // gated_deltanet: share the K/V projection when true (default).
 	ScanChunkSize    *int         `json:"scan_chunk_size,omitempty"`  // gated_deltanet/mamba3-canonical: chunk size for chunked scan; 0 keeps the naive/full scan.
 	StateSize        int          `json:"state_size,omitempty"`       // Mamba-3 canonical state expansion; defaults to 16.
@@ -651,6 +652,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 			return nil, err
 		}
 		if err := validateBlockRopeDims(b, cfg.ModelDim, source, "blocks", i); err != nil {
+			return nil, err
+		}
+		if err := validateRecurrentMixerDims(b, cfg.ModelDim, source, "blocks", i); err != nil {
 			return nil, err
 		}
 	}
