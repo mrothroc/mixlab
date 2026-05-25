@@ -336,6 +336,22 @@ func TrainerReadOutput(t TrainerHandle, name string, shape []int) ([]float32, er
 	return out, nil
 }
 
+func EvalProgramOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) ([]float32, error) {
+	if program == nil || program.handle == 0 {
+		return nil, fmt.Errorf("invalid GPU program; create and populate a gpu.Program before evaluating outputs")
+	}
+	if len(weightHandles) == 0 {
+		return nil, fmt.Errorf("no weight handles; upload weights with gpu.FromData before evaluating outputs")
+	}
+	if program.nWeights != len(weightHandles) {
+		return nil, fmt.Errorf("program weight mismatch: program=%d weights=%d", program.nWeights, len(weightHandles))
+	}
+	if outputName == "" {
+		return nil, fmt.Errorf("output name is required")
+	}
+	return evalProgramOutput(program, weightHandles, inputs, outputName)
+}
+
 func EvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) (float32, [][]float32, error) {
 	if program == nil || program.handle == 0 {
 		return 0, nil, fmt.Errorf("invalid GPU program; create and populate a gpu.Program before evaluating gradients")

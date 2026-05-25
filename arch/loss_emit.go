@@ -99,3 +99,29 @@ func emitMaskedLanguageModelLossIR(prog *Program, logits, targets, lossMask stri
 	prog.MaskedCrossEntropy(logits, targets, lossMask, "loss")
 	prog.MaskedCrossEntropyPerToken(logits, targets, lossMask, "per_token_nll")
 }
+
+func emitDistillationLanguageModelLossIR(prog *Program, logits, targets, teacherProbs string, ceWeight, klWeight float64) error {
+	if ceWeight < 0 || klWeight < 0 || ceWeight+klWeight <= 0 {
+		return fmt.Errorf("distillation loss weights must be non-negative and sum to > 0")
+	}
+	prog.CrossEntropy(logits, targets, "eval_loss")
+	prog.CrossEntropyPerToken(logits, targets, "per_token_nll")
+	prog.DistillationKL(logits, teacherProbs, "distill_kl_loss")
+
+	accum := ""
+	if ceWeight != 0 {
+		prog.ScalarMul("eval_loss", float32(ceWeight), "distill_ce_weighted")
+		accum = "distill_ce_weighted"
+	}
+	if klWeight != 0 {
+		prog.ScalarMul("distill_kl_loss", float32(klWeight), "distill_kl_weighted")
+		if accum == "" {
+			accum = "distill_kl_weighted"
+		} else {
+			prog.Add(accum, "distill_kl_weighted", "distill_loss_sum")
+			accum = "distill_loss_sum"
+		}
+	}
+	prog.ScalarMul(accum, 1.0, "loss")
+	return nil
+}

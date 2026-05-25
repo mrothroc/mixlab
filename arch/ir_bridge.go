@@ -39,25 +39,28 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	}
 	if len(cfg.RecurrencePhases) > 0 {
 		return buildIRProgramFromConfigWithStateAndOrder(cfg, TrainingProgramState{
-			RecurrenceActive: true,
-			HeadUntied:       cfg.MTPUntieEnabled(),
-			Objective:        ObjectiveCausal,
+			RecurrenceActive:     true,
+			HeadUntied:           cfg.MTPUntieEnabled(),
+			Objective:            ObjectiveCausal,
+			DistillationInactive: true,
 		}, nil, cfg.RecurrencePhases[len(cfg.RecurrencePhases)-1].Order, false)
 	}
 	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
-		RecurrenceActive: true,
-		HeadUntied:       cfg.MTPUntieEnabled(),
-		Objective:        ObjectiveCausal,
+		RecurrenceActive:     true,
+		HeadUntied:           cfg.MTPUntieEnabled(),
+		Objective:            ObjectiveCausal,
+		DistillationInactive: true,
 	}, nil, false)
 }
 
 // TrainingProgramState selects training-time graph schedules that can switch
 // without changing the weight layout.
 type TrainingProgramState struct {
-	RecurrenceActive bool
-	HeadUntied       bool
-	MTPAuxInactive   bool
-	Objective        string
+	RecurrenceActive     bool
+	HeadUntied           bool
+	MTPAuxInactive       bool
+	DistillationInactive bool
+	Objective            string
 }
 
 // BuildTrainingIRProgramFromConfig constructs a training program with MTP
@@ -135,6 +138,10 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	if state.MTPAuxInactive {
 		activeMTP = nil
 	}
+	distillation := cfg.Training.Distillation
+	if state.DistillationInactive {
+		distillation = nil
+	}
 	objective := normalizeTrainingObjective(state.Objective)
 	if objective == ObjectiveCausal && strings.TrimSpace(state.Objective) == "" {
 		objective = cfg.Training.DefaultConcreteObjective()
@@ -167,6 +174,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		firstByteMask,
 		cfg.smearEmbeddingOptions(),
 		cfg.Backout,
+		distillation,
 	)
 }
 

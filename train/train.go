@@ -3,8 +3,6 @@ package train
 import (
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -498,6 +496,17 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		fmt.Printf("  [%s] loaded %d weights from %s\n", name, len(loadedWeights), opts.SafetensorsLoad)
 	}
 
+	distiller, err := newDistillationEnsemble(cfg)
+	if err != nil {
+		return TrainResult{}, fmt.Errorf("init distillation teachers: %w", err)
+	}
+	if distiller != nil {
+		defer distiller.Close()
+		fmt.Printf("  [%s] distillation: teachers=%d strategy=%s ce=%.3g kl=%.3g\n",
+			name, len(distiller.teachers), distiller.strategy,
+			cfg.Training.Distillation.LossWeightCE, cfg.Training.Distillation.LossWeightKL)
+	}
+
 	// Initialize GPU trainer
 	trainer, err := initGPUTrainer(initialProg, cfg, loadedWeights, opts.OptimizerOverride)
 	if err != nil {
@@ -533,7 +542,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	hasValLoss := false
 	logEvery := effectiveTrainEvery(opts.LogEvery, "MIXLAB_LOG_EVERY", 100)
 	valEvery := effectiveTrainEvery(opts.ValEvery, "MIXLAB_VAL_EVERY", 100)
-	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
+	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD") && distiller == nil
 	start := time.Now()
 	// steadyStart is set after step 0 completes — excludes one-time
 	// compile/warmup costs from tok/s and ETA estimates.
@@ -584,6 +593,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		if err != nil {
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("prepare step 0 objective batch: %w", err)
+		}
+		prepared, err = attachDistillationTeacherProbs(distiller, prepared, batchSize, seqLen)
+		if err != nil {
+			stopInitialSubmit()
+			return TrainResult{}, fmt.Errorf("prepare step 0 distillation batch: %w", err)
 		}
 		if err := submitPreparedStepGPU(trainer, prepared, batchSize, seqLen, sched.At(0)); err != nil {
 			stopInitialSubmit()
@@ -665,6 +679,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if err != nil {
 				stopSubmit()
 				return 0, fmt.Errorf("prepare step %d objective batch: %w", nextStep, err)
+			}
+			prepared, err = attachDistillationTeacherProbs(distiller, prepared, batchSize, seqLen)
+			if err != nil {
+				stopSubmit()
+				return 0, fmt.Errorf("prepare step %d distillation batch: %w", nextStep, err)
 			}
 			if err := submitPreparedStepGPU(trainer, prepared, batchSize, seqLen, sched.At(nextStep)); err != nil {
 				stopSubmit()
@@ -950,25 +969,6 @@ func readTrainerOutput(trainer GPUTrainer, name string, shape []int) ([]float32,
 		return or.ReadOutput(name, shape)
 	}
 	return nil, fmt.Errorf("trainer does not support reading named outputs; ensure you are using the MLX backend")
-}
-
-func checkpointPath(dir string, step int) string {
-	return filepath.Join(dir, fmt.Sprintf("step_%06d.st", step))
-}
-
-func writeCheckpoint(cfg *ArchConfig, trainer GPUTrainer, shapes []WeightShape, dir string, step int) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create checkpoint dir %q: %w", dir, err)
-	}
-	weights, err := readTrainerWeights(trainer)
-	if err != nil {
-		return fmt.Errorf("read trainer weights: %w", err)
-	}
-	path := checkpointPath(dir, step)
-	if err := exportSafetensors(path, cfg, shapes, weights); err != nil {
-		return fmt.Errorf("export safetensors %q: %w", path, err)
-	}
-	return nil
 }
 
 func formatProgressTiming(elapsed, steadyElapsed time.Duration, stepsForRate, step, totalSteps int) string {

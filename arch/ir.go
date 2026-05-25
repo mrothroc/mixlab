@@ -54,6 +54,7 @@ const (
 	OpFirstByteMaskedCE    = 66 // OP_FIRST_BYTE_MASKED_CROSS_ENTROPY
 	OpMaskedCrossEntropy   = 67 // OP_MASKED_CROSS_ENTROPY
 	OpMaskedCEPerToken     = 68 // OP_MASKED_CROSS_ENTROPY_PER_TOKEN
+	OpDistillationKL       = 69 // OP_DISTILLATION_KL
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -210,6 +211,12 @@ func (p *Program) CrossEntropyPerToken(logits, targets, output string) {
 // MaskedCrossEntropyPerToken emits per-token NLLs zeroed where lossMask <= 0.
 func (p *Program) MaskedCrossEntropyPerToken(logits, targets, lossMask, output string) {
 	p.AddOp(OpMaskedCEPerToken, []string{logits, targets, lossMask}, []string{output}, nil, nil)
+}
+
+// DistillationKL emits mean KL(P_teacher || P_student) from teacher
+// probabilities and student logits.
+func (p *Program) DistillationKL(logits, teacherProbs, output string) {
+	p.AddOp(OpDistillationKL, []string{logits, teacherProbs}, []string{output}, nil, nil)
 }
 
 // RMSNorm emits RMS normalization with a learned scale parameter.

@@ -168,46 +168,56 @@ type TrainingPhase struct {
 	Label string  `json:"label,omitempty"`
 }
 
+// DistillationSpec configures optional in-training teacher distillation.
+type DistillationSpec struct {
+	TeacherCheckpoints []string `json:"teacher_checkpoints,omitempty"`
+	TeacherConfigs     []string `json:"teacher_configs,omitempty"`
+	LossWeightKL       float64  `json:"loss_weight_kl,omitempty"`
+	LossWeightCE       float64  `json:"loss_weight_ce,omitempty"`
+	EnsembleStrategy   string   `json:"ensemble_strategy,omitempty"`
+}
+
 // TrainingSpec holds training hyperparameters.
 type TrainingSpec struct {
-	Steps                             int             `json:"steps"`
-	LR                                float64         `json:"lr"`
-	Phases                            []TrainingPhase `json:"phases,omitempty"`
-	Objective                         string          `json:"objective,omitempty"`
-	MLMMaskProb                       float64         `json:"mlm_mask_prob,omitempty"`
-	MLMMaskTokenID                    int             `json:"mlm_mask_token_id,omitempty"`
-	MLMMaskTokenProb                  float64         `json:"mlm_mask_token_prob,omitempty"`
-	MLMRandomTokenProb                float64         `json:"mlm_random_token_prob,omitempty"`
-	MLMKeptUnchangedProb              float64         `json:"mlm_kept_unchanged_prob,omitempty"`
-	HybridCLMFraction                 float64         `json:"hybrid_clm_fraction,omitempty"`
-	HybridSecondaryObjective          string          `json:"hybrid_secondary_objective,omitempty"`
-	WarmdownSteps                     int             `json:"warmdown_steps,omitempty"`
-	TargetValLoss                     float64         `json:"target_val_loss,omitempty"`
-	FirstByteMask                     bool            `json:"first_byte_mask,omitempty"`
-	FirstByteMaskValid                []int32         `json:"-"`
-	RecurrenceActivationFrac          float64         `json:"recurrence_activation_frac,omitempty"`
-	RecurrenceActivationStep          int             `json:"recurrence_activation_step,omitempty"`
-	TTTSteps                          int             `json:"ttt_steps,omitempty"`
-	TTTMode                           string          `json:"ttt_mode,omitempty"`
-	TTTLR                             float64         `json:"ttt_lr,omitempty"`
-	TTTRank                           int             `json:"ttt_rank,omitempty"`
-	HardwareTFLOPs                    float64         `json:"hardware_tflops,omitempty"` // peak hardware TFLOPS (e.g., 400 for M1 Max, 312 for A100)
-	GradClip                          float32         `json:"grad_clip"`
-	WeightDecay                       float32         `json:"weight_decay"`
-	CautiousWeightDecay               bool            `json:"cautious_weight_decay,omitempty"`
-	CautiousWeightDecayActivationFrac float64         `json:"cautious_weight_decay_activation_frac,omitempty"`
-	Beta1                             float32         `json:"beta1"`
-	Beta2                             float32         `json:"beta2"`
-	Epsilon                           float32         `json:"epsilon"`
-	Seed                              int64           `json:"seed"`
-	BatchTokens                       int             `json:"batch_tokens"`
-	ShuffleChunkTokens                int             `json:"shuffle_chunk_tokens,omitempty"`
-	EmbedLR                           float32         `json:"embed_lr,omitempty"`
-	MatrixLR                          float32         `json:"matrix_lr,omitempty"`
-	ScalarLR                          float32         `json:"scalar_lr,omitempty"`
-	HeadLR                            float32         `json:"head_lr,omitempty"`
-	MuonMomentum                      float32         `json:"muon_momentum,omitempty"`
-	MuonBackendSteps                  int             `json:"muon_backend_steps,omitempty"`
+	Steps                             int               `json:"steps"`
+	LR                                float64           `json:"lr"`
+	Phases                            []TrainingPhase   `json:"phases,omitempty"`
+	Objective                         string            `json:"objective,omitempty"`
+	MLMMaskProb                       float64           `json:"mlm_mask_prob,omitempty"`
+	MLMMaskTokenID                    int               `json:"mlm_mask_token_id,omitempty"`
+	MLMMaskTokenProb                  float64           `json:"mlm_mask_token_prob,omitempty"`
+	MLMRandomTokenProb                float64           `json:"mlm_random_token_prob,omitempty"`
+	MLMKeptUnchangedProb              float64           `json:"mlm_kept_unchanged_prob,omitempty"`
+	HybridCLMFraction                 float64           `json:"hybrid_clm_fraction,omitempty"`
+	HybridSecondaryObjective          string            `json:"hybrid_secondary_objective,omitempty"`
+	Distillation                      *DistillationSpec `json:"distillation,omitempty"`
+	WarmdownSteps                     int               `json:"warmdown_steps,omitempty"`
+	TargetValLoss                     float64           `json:"target_val_loss,omitempty"`
+	FirstByteMask                     bool              `json:"first_byte_mask,omitempty"`
+	FirstByteMaskValid                []int32           `json:"-"`
+	RecurrenceActivationFrac          float64           `json:"recurrence_activation_frac,omitempty"`
+	RecurrenceActivationStep          int               `json:"recurrence_activation_step,omitempty"`
+	TTTSteps                          int               `json:"ttt_steps,omitempty"`
+	TTTMode                           string            `json:"ttt_mode,omitempty"`
+	TTTLR                             float64           `json:"ttt_lr,omitempty"`
+	TTTRank                           int               `json:"ttt_rank,omitempty"`
+	HardwareTFLOPs                    float64           `json:"hardware_tflops,omitempty"` // peak hardware TFLOPS (e.g., 400 for M1 Max, 312 for A100)
+	GradClip                          float32           `json:"grad_clip"`
+	WeightDecay                       float32           `json:"weight_decay"`
+	CautiousWeightDecay               bool              `json:"cautious_weight_decay,omitempty"`
+	CautiousWeightDecayActivationFrac float64           `json:"cautious_weight_decay_activation_frac,omitempty"`
+	Beta1                             float32           `json:"beta1"`
+	Beta2                             float32           `json:"beta2"`
+	Epsilon                           float32           `json:"epsilon"`
+	Seed                              int64             `json:"seed"`
+	BatchTokens                       int               `json:"batch_tokens"`
+	ShuffleChunkTokens                int               `json:"shuffle_chunk_tokens,omitempty"`
+	EmbedLR                           float32           `json:"embed_lr,omitempty"`
+	MatrixLR                          float32           `json:"matrix_lr,omitempty"`
+	ScalarLR                          float32           `json:"scalar_lr,omitempty"`
+	HeadLR                            float32           `json:"head_lr,omitempty"`
+	MuonMomentum                      float32           `json:"muon_momentum,omitempty"`
+	MuonBackendSteps                  int               `json:"muon_backend_steps,omitempty"`
 	// NewtonSchulzVariant controls Muon's Newton-Schulz coefficient choice.
 	// "" or "fixed" = canonical (3.4445, -4.7750, 2.0315) per iteration.
 	// "polar_express" = per-iteration Chebyshev minimax-optimal tuples
@@ -666,6 +676,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 
 	cfg.Training.ApplyDefaults()
 	if err := validateTrainingObjective(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateTrainingDistillation(cfg, source); err != nil {
 		return nil, err
 	}
 	for i, b := range cfg.Blocks {

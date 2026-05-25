@@ -55,6 +55,7 @@ const (
 	OpFirstByteMaskedCE    = 66
 	OpMaskedCrossEntropy   = 67
 	OpMaskedCEPerToken     = 68
+	OpDistillationKL       = 69
 )
 
 const (

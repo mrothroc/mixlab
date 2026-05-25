@@ -671,6 +671,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `mlm_kept_unchanged_prob` | number | No | `0.1` | Probability that a selected MLM token is kept unchanged. The three replacement probabilities must sum to `1.0`. |
 | `hybrid_clm_fraction` | number | No | `0.5` | For `objective: "hybrid"`, deterministic per-batch probability of using causal next-token training. Must be in `[0,1]`. |
 | `hybrid_secondary_objective` | string | No | `"mntp"` | Secondary objective for hybrid training: `"mlm"` or `"mntp"`. |
+| `distillation` | object | No | Disabled | Optional internal-teacher distillation block for causal LM training. |
 | `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
 | `warmdown_steps` | integer | No | `0` | Cosine warmdown length at the end of training. Must be `>= 0`; values above `steps` are clamped by the scheduler. |
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
@@ -735,6 +736,45 @@ Masked objectives emit a training loss averaged only over rows where `loss_mask 
   }
 }
 ```
+
+### Training distillation
+
+`training.distillation` enables same-corpus internal teacher distillation during causal LM training. For each student batch, Mixlab evaluates all teacher checkpoints without gradients, ensembles their token distributions, and trains the student with:
+
+`loss_weight_ce * hard_target_cross_entropy + loss_weight_kl * KL(P_teacher || P_student)`
+
+Validation, per-token NLL export, checkpoints, SWA, and full evaluation remain student-only and continue to use standard hard-target next-token scoring.
+
+```json
+{
+  "training": {
+    "objective": "causal",
+    "distillation": {
+      "teacher_checkpoints": [
+        "runs/teacher_a.safetensors",
+        "runs/teacher_b.safetensors"
+      ],
+      "teacher_configs": [
+        "configs/teacher_a.json",
+        "configs/teacher_b.json"
+      ],
+      "loss_weight_ce": 0.5,
+      "loss_weight_kl": 0.5,
+      "ensemble_strategy": "mean_logits"
+    }
+  }
+}
+```
+
+| Field | Type | Required | Default | Notes |
+|------|------|----------|---------|-------|
+| `teacher_checkpoints` | string array | Yes | None | Mixlab safetensors files using the existing `w{index}_{name}` tensor naming. Must match `teacher_configs` length. |
+| `teacher_configs` | string array | Yes | None | Teacher architecture configs. Teacher `vocab_size` and `seq_len` must match the student; runtime `batch_tokens` is forced to the student batch size. |
+| `loss_weight_ce` | number | Yes | None | Weight for the normal hard-target cross-entropy term. Must be finite and `>= 0`. |
+| `loss_weight_kl` | number | Yes | None | Weight for teacher-target KL. Must be finite and `>= 0`; the CE and KL weights must sum to `> 0`. |
+| `ensemble_strategy` | string | No | `"mean_logits"` | `"mean_logits"` averages raw teacher logits before softmax. `"mean_logprobs"` averages teacher log-probabilities geometrically, then renormalizes. |
+
+V1 supports distillation only with `objective: "causal"`. It rejects masked objectives, `hybrid`, top-level `mtp`, and `training.first_byte_mask` because those combinations need explicit loss semantics.
 
 ### Optimizer groups
 

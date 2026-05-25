@@ -154,6 +154,24 @@ mx::array first_byte_masked_cross_entropy_mean(
   return cross_entropy_mean(effective_logits, targets);
 }
 
+mx::array distillation_kl_mean(
+    const mx::array& student_logits,
+    const mx::array& teacher_probs) {
+  if (student_logits.ndim() != 2 || teacher_probs.ndim() != 2 ||
+      student_logits.shape(0) != teacher_probs.shape(0) ||
+      student_logits.shape(1) != teacher_probs.shape(1)) {
+    throw std::runtime_error("teacher_probs must match student logits shape [rows, vocab]");
+  }
+  auto row_max = mx::max(student_logits, 1, true);
+  auto shifted = student_logits - row_max;
+  auto log_norm = mx::log(mx::sum(mx::exp(shifted), 1, true));
+  auto student_log_probs = shifted - log_norm;
+  auto p = mx::astype(teacher_probs, mx::float32);
+  auto safe_p = mx::maximum(p, mx::array(1e-20f, mx::float32));
+  auto row_kl = mx::sum(p * (mx::log(safe_p) - student_log_probs), 1);
+  return mx::mean(row_kl);
+}
+
 mx::array as_float32(const mx::array& x) {
   return mx::astype(x, mx::float32);
 }
@@ -2070,6 +2088,10 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
             get(op, 0),
             mx::astype(get(op, 1), mx::int32),
             get(op, 2)));
+        break;
+      }
+      case OP_DISTILLATION_KL: {
+        set_out(op, 0, distillation_kl_mean(get(op, 0), get(op, 1)));
         break;
       }
       case OP_DROPOUT: {

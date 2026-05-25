@@ -27,10 +27,12 @@ type mlxGPUTrainer struct {
 	declaredTargetSize int
 	firstByteMaskInput bool
 	lossMaskInput      bool
+	teacherProbsInput  bool
 	// Pre-allocated input buffers to avoid per-step allocation.
 	tokBuf         []int32
 	tgtBuf         []int32
 	lossMaskBuf    []float32
+	teacherProbBuf []float32
 	bigramBuf      []int32
 	trigramBuf     []int32
 	firstByteValid []int32
@@ -149,6 +151,7 @@ func initMLXGPUTrainer(
 	declaredTargetSize := 0
 	firstByteMaskInput := false
 	lossMaskInput := false
+	teacherProbsInput := false
 	for _, inp := range irProg.Inputs {
 		if inp.Name == "targets" && len(inp.Shape) == 1 {
 			declaredTargetSize = inp.Shape[0]
@@ -158,6 +161,9 @@ func initMLXGPUTrainer(
 		}
 		if inp.Name == "loss_mask" {
 			lossMaskInput = true
+		}
+		if inp.Name == "teacher_probs" {
+			teacherProbsInput = true
 		}
 	}
 	firstByteValid := []int32(nil)
@@ -189,9 +195,11 @@ func initMLXGPUTrainer(
 		declaredTargetSize: declaredTargetSize,
 		firstByteMaskInput: firstByteMaskInput,
 		lossMaskInput:      lossMaskInput,
+		teacherProbsInput:  teacherProbsInput,
 		tokBuf:             make([]int32, batchElems),
 		tgtBuf:             make([]int32, batchElems),
 		lossMaskBuf:        make([]float32, batchElems),
+		teacherProbBuf:     make([]float32, batchElems*cfg.VocabSize),
 		bigramBuf:          make([]int32, batchElems),
 		trigramBuf:         make([]int32, batchElems),
 		firstByteValid:     firstByteValid,
@@ -265,6 +273,10 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		t.bigramBuf = make([]int32, need)
 		t.trigramBuf = make([]int32, need)
 	}
+	needTeacherProbs := need * t.vocabSize
+	if t.teacherProbsInput && len(t.teacherProbBuf) < needTeacherProbs {
+		t.teacherProbBuf = make([]float32, needTeacherProbs)
+	}
 	for i := 0; i < need; i++ {
 		t.tokBuf[i] = int32(batch.x[i])
 		t.tgtBuf[i] = int32(batch.y[i])
@@ -287,6 +299,19 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		}
 		inputs = append(inputs, gpu.TensorInput{
 			Name: "loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.lossMaskBuf[:need],
+		})
+	}
+	if t.teacherProbsInput {
+		if t.vocabSize <= 0 {
+			return nil, fmt.Errorf("invalid vocab size=%d", t.vocabSize)
+		}
+		if len(batch.teacherProbs) >= needTeacherProbs {
+			copy(t.teacherProbBuf[:needTeacherProbs], batch.teacherProbs[:needTeacherProbs])
+		} else {
+			fillUniformTeacherProbs(t.teacherProbBuf[:needTeacherProbs], t.vocabSize)
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "teacher_probs", DType: gpu.TensorFloat32, Shape: []int{need, t.vocabSize}, Data: t.teacherProbBuf[:needTeacherProbs],
 		})
 	}
 	if t.firstByteMaskInput {
@@ -497,6 +522,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.evalLossOutputName = preferredEvalLossOutputName(irProg)
 	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
 	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")
+	t.teacherProbsInput = programDeclaresInput(irProg, "teacher_probs")
 	if t.firstByteMaskInput && len(t.firstByteValid) == 0 {
 		t.firstByteValid = identityFirstByteMaskValid(t.vocabSize)
 	}

@@ -9,9 +9,10 @@ import (
 )
 
 type objectiveBatch struct {
-	x        []int
-	y        []int
-	lossMask []float32
+	x            []int
+	y            []int
+	lossMask     []float32
+	teacherProbs []float32
 }
 
 func objectiveForStep(spec TrainingSpec, step int) string {

@@ -84,6 +84,11 @@ var exampleConfigs = []exampleConfigCase{
 		wantWeights: 36,
 		minOps:      10,
 	},
+	{
+		filename:    "distillation_tiny.json",
+		wantWeights: 25,
+		minOps:      10,
+	},
 	// --- New block types (needs block impl) ---
 	{
 		filename:    "mamba_2L.json",
@@ -162,7 +167,10 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 			// Check inputs: plain configs use tokens+targets, bigram configs add bigram_ids.
 			wantInputs := 2
 			if cfg.BigramVocabSize > 0 {
-				wantInputs = 3
+				wantInputs++
+			}
+			if cfg.Training.Distillation != nil {
+				wantInputs++
 			}
 			if len(prog.Inputs) != wantInputs {
 				t.Fatalf("expected %d inputs, got %d", wantInputs, len(prog.Inputs))
@@ -173,25 +181,29 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 			if prog.Inputs[1].Name != "targets" {
 				t.Errorf("input[1].Name = %q, want \"targets\"", prog.Inputs[1].Name)
 			}
-			if cfg.BigramVocabSize > 0 && prog.Inputs[2].Name != "bigram_ids" {
-				t.Errorf("input[2].Name = %q, want \"bigram_ids\"", prog.Inputs[2].Name)
+			inputIdx := 2
+			if cfg.BigramVocabSize > 0 {
+				if prog.Inputs[inputIdx].Name != "bigram_ids" {
+					t.Errorf("input[%d].Name = %q, want \"bigram_ids\"", inputIdx, prog.Inputs[inputIdx].Name)
+				}
+				inputIdx++
+			}
+			if cfg.Training.Distillation != nil && prog.Inputs[inputIdx].Name != "teacher_probs" {
+				t.Errorf("input[%d].Name = %q, want \"teacher_probs\"", inputIdx, prog.Inputs[inputIdx].Name)
 			}
 
 			// Check outputs: scalar loss, per-token NLLs, plus hidden-state/logit exports.
-			if len(prog.Outputs) != 4 {
-				t.Fatalf("expected 4 outputs, got %d", len(prog.Outputs))
+			wantOutputs := []string{"loss", "per_token_nll", "x_hidden", "logits"}
+			if cfg.Training.Distillation != nil {
+				wantOutputs = []string{"loss", "eval_loss", "per_token_nll", "x_hidden", "logits"}
 			}
-			if prog.Outputs[0].Name != "loss" {
-				t.Errorf("output[0].Name = %q, want \"loss\"", prog.Outputs[0].Name)
+			if len(prog.Outputs) != len(wantOutputs) {
+				t.Fatalf("expected %d outputs, got %d", len(wantOutputs), len(prog.Outputs))
 			}
-			if prog.Outputs[1].Name != "per_token_nll" {
-				t.Errorf("output[1].Name = %q, want \"per_token_nll\"", prog.Outputs[1].Name)
-			}
-			if prog.Outputs[2].Name != "x_hidden" {
-				t.Errorf("output[2].Name = %q, want \"x_hidden\"", prog.Outputs[2].Name)
-			}
-			if prog.Outputs[3].Name != "logits" {
-				t.Errorf("output[3].Name = %q, want \"logits\"", prog.Outputs[3].Name)
+			for i, want := range wantOutputs {
+				if prog.Outputs[i].Name != want {
+					t.Errorf("output[%d].Name = %q, want %q", i, prog.Outputs[i].Name, want)
+				}
 			}
 		})
 	}

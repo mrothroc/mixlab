@@ -690,6 +690,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		false,
 		disabledSmearEmbeddingOptions(),
 		nil,
+		nil,
 	)
 }
 
@@ -714,6 +715,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	firstByteMask bool,
 	smearOpts smearEmbeddingOptions,
 	backoutSpec *BackoutSpec,
+	distillation *DistillationSpec,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -788,10 +790,14 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 
 	prog := NewProgram(nWeights)
 	maskedObjective := isMaskedTrainingObjective(objective)
+	distillationEnabled := distillation != nil
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
 	if maskedObjective {
 		prog.DeclareInput("loss_mask", TensorFloat32, []int{B * T})
+	}
+	if distillationEnabled {
+		prog.DeclareInput("teacher_probs", TensorFloat32, []int{B * T, V})
 	}
 	if firstByteMask {
 		prog.DeclareInput("first_byte_valid", TensorInt32, []int{V})
@@ -921,15 +927,20 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		prog.ScalarMul(logitsState, 1.0, "logits")
 	}
 
-	if maskedObjective {
+	switch {
+	case maskedObjective:
 		emitMaskedLanguageModelLossIR(prog, logitsState, "targets", "loss_mask")
-	} else {
+	case distillationEnabled:
+		if err := emitDistillationLanguageModelLossIR(prog, logitsState, "targets", "teacher_probs", distillation.LossWeightCE, distillation.LossWeightKL); err != nil {
+			return nil, err
+		}
+	default:
 		if err := emitLanguageModelLossIR(prog, logitsState, "targets", B, T, V, mtp, firstByteMask); err != nil {
 			return nil, err
 		}
 	}
 	prog.DeclareOutput("loss", TensorFloat32, []int{1})
-	if maskedObjective || firstByteMask || (mtp != nil && mtp.EffectiveN() > 1) {
+	if maskedObjective || distillationEnabled || firstByteMask || (mtp != nil && mtp.EffectiveN() > 1) {
 		prog.DeclareOutput("eval_loss", TensorFloat32, []int{1})
 	}
 	prog.DeclareOutput("per_token_nll", TensorFloat32, []int{B * T})
