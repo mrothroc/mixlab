@@ -15,6 +15,8 @@ import (
 type mlxGPUTrainer struct {
 	handle             gpu.TrainerHandle
 	prog               *gpu.Program
+	activeIRProg       *ir.Program
+	programCache       map[*ir.Program]*gpu.Program
 	handles            []int64 // GPU weight array handles
 	shapes             []WeightShape
 	baseLR             float32
@@ -175,6 +177,8 @@ func initMLXGPUTrainer(
 	trainer := &mlxGPUTrainer{
 		handle:             trainerHandle,
 		prog:               gpuProg,
+		activeIRProg:       irProg,
+		programCache:       map[*ir.Program]*gpu.Program{irProg: gpuProg},
 		handles:            handles,
 		shapes:             shapes,
 		baseLR:             optimizerSpec.DefaultBaseLR,
@@ -461,18 +465,35 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	if irProg.NumWeights != len(t.shapes) {
 		return fmt.Errorf("program weight count mismatch: program=%d expected=%d", irProg.NumWeights, len(t.shapes))
 	}
-	gpuProg, err := lowerIRToGPU(irProg)
-	if err != nil {
-		return fmt.Errorf("lower IR to GPU: %w", err)
+	if t.activeIRProg == irProg {
+		return nil
+	}
+	if t.programCache == nil {
+		t.programCache = make(map[*ir.Program]*gpu.Program)
+		if t.activeIRProg != nil && t.prog != nil {
+			t.programCache[t.activeIRProg] = t.prog
+		}
+	}
+	gpuProg := t.programCache[irProg]
+	newlyLowered := false
+	if gpuProg == nil {
+		var err error
+		gpuProg, err = lowerIRToGPU(irProg)
+		if err != nil {
+			return fmt.Errorf("lower IR to GPU: %w", err)
+		}
+		t.programCache[irProg] = gpuProg
+		newlyLowered = true
 	}
 	if err := gpu.TrainerSetProgram(t.handle, gpuProg); err != nil {
-		gpuProg.Destroy()
+		if newlyLowered {
+			delete(t.programCache, irProg)
+			gpuProg.Destroy()
+		}
 		return err
 	}
-	if t.prog != nil {
-		t.prog.Destroy()
-	}
 	t.prog = gpuProg
+	t.activeIRProg = irProg
 	t.evalLossOutputName = preferredEvalLossOutputName(irProg)
 	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
 	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")
@@ -537,9 +558,26 @@ func (t *mlxGPUTrainer) CloseTrainer() {
 		t.handle = 0
 	}
 	if t.prog != nil {
-		t.prog.Destroy()
+		if len(t.programCache) == 0 {
+			t.prog.Destroy()
+		}
 		t.prog = nil
 	}
+	if len(t.programCache) > 0 {
+		seen := make(map[*gpu.Program]struct{}, len(t.programCache))
+		for _, prog := range t.programCache {
+			if prog == nil {
+				continue
+			}
+			if _, ok := seen[prog]; ok {
+				continue
+			}
+			seen[prog] = struct{}{}
+			prog.Destroy()
+		}
+		t.programCache = nil
+	}
+	t.activeIRProg = nil
 	if len(t.handles) > 0 {
 		gpu.FreeHandles(t.handles)
 		t.handles = nil

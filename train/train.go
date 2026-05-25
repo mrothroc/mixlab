@@ -334,6 +334,14 @@ type trainBatch struct {
 	err  error
 }
 
+type trainingProgramCacheKey struct {
+	recurrencePhase int
+	recurrenceOn    bool
+	headUntied      bool
+	mtpAuxOn        bool
+	objective       string
+}
+
 func qatModeForStep(spec TrainingSpec, step int) string {
 	mode := strings.TrimSpace(strings.ToLower(spec.QAT))
 	if mode == "" {
@@ -407,25 +415,43 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	mtpAuxActivateStep := cfg.EffectiveMTPActivateStep()
 	mtpAuxActive := !mtpAuxActivationScheduled || mtpAuxActivateStep <= 0
 	currentObjective := objectiveForStep(cfg.Training, 0)
-	initialProg := prog
-	if recurrencePhasesScheduled || recurrenceScheduled || (mtpUntieScheduled && !headUntied) || (mtpAuxActivationScheduled && !mtpAuxActive) || currentObjective != cfg.Training.DefaultConcreteObjective() {
+	programCache := make(map[trainingProgramCacheKey]*arch.Program)
+	trainingProgramForKey := func(key trainingProgramCacheKey) (*arch.Program, error) {
+		if cached := programCache[key]; cached != nil {
+			return cached, nil
+		}
 		state := TrainingProgramState{
-			RecurrenceActive: recurrenceActive,
-			HeadUntied:       headUntied,
-			MTPAuxInactive:   !mtpAuxActive,
-			Objective:        currentObjective,
+			RecurrenceActive: key.recurrenceOn,
+			HeadUntied:       key.headUntied,
+			MTPAuxInactive:   !key.mtpAuxOn,
+			Objective:        key.objective,
 		}
+		var built *arch.Program
+		var buildErr error
 		if recurrencePhasesScheduled {
-			initialProg, err = arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, currentRecurrencePhase, state)
+			built, buildErr = arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, key.recurrencePhase, state)
 		} else {
-			initialProg, err = BuildTrainingIRProgramFromConfig(cfg, state)
+			built, buildErr = BuildTrainingIRProgramFromConfig(cfg, state)
 		}
-		if err != nil {
-			return TrainResult{}, fmt.Errorf("build initial training IR program: %w", err)
+		if buildErr != nil {
+			return nil, buildErr
 		}
-		if initialProg.NumWeights != prog.NumWeights {
-			return TrainResult{}, fmt.Errorf("initial training weight count mismatch: initial=%d final=%d", initialProg.NumWeights, prog.NumWeights)
-		}
+		programCache[key] = built
+		return built, nil
+	}
+	currentProgramKey := trainingProgramCacheKey{
+		recurrencePhase: currentRecurrencePhase,
+		recurrenceOn:    recurrenceActive,
+		headUntied:      headUntied,
+		mtpAuxOn:        mtpAuxActive,
+		objective:       currentObjective,
+	}
+	initialProg, err := trainingProgramForKey(currentProgramKey)
+	if err != nil {
+		return TrainResult{}, fmt.Errorf("build initial training IR program: %w", err)
+	}
+	if initialProg.NumWeights != prog.NumWeights {
+		return TrainResult{}, fmt.Errorf("initial training weight count mismatch: initial=%d final=%d", initialProg.NumWeights, prog.NumWeights)
 	}
 	if recurrencePhasesScheduled {
 		logRecurrencePhasesSchedule(name, cfg, recurrencePhaseStarts, initialProg)
@@ -583,7 +609,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			nextHeadUntied := headUntied || (mtpUntieScheduled && nextStep >= mtpUntieStep)
 			nextMTPAuxActive := mtpAuxActive || (mtpAuxActivationScheduled && nextStep >= mtpAuxActivateStep)
 			nextObjective := objectiveForStep(cfg.Training, nextStep)
-			if nextRecurrencePhase != currentRecurrencePhase || nextRecurrenceActive != recurrenceActive || nextHeadUntied != headUntied || nextMTPAuxActive != mtpAuxActive || nextObjective != currentObjective {
+			nextProgramKey := trainingProgramCacheKey{
+				recurrencePhase: nextRecurrencePhase,
+				recurrenceOn:    nextRecurrenceActive,
+				headUntied:      nextHeadUntied,
+				mtpAuxOn:        nextMTPAuxActive,
+				objective:       nextObjective,
+			}
+			if nextProgramKey != currentProgramKey {
 				switcher, ok := trainer.(gpuProgramSwitcher)
 				if !ok {
 					return 0, fmt.Errorf("trainer does not support scheduled program switching")
@@ -597,18 +630,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 						return 0, fmt.Errorf("untie LM head at step %d: %w", nextStep, err)
 					}
 				}
-				state := TrainingProgramState{
-					RecurrenceActive: nextRecurrenceActive,
-					HeadUntied:       nextHeadUntied,
-					MTPAuxInactive:   !nextMTPAuxActive,
-					Objective:        nextObjective,
-				}
-				var nextProg *arch.Program
-				if recurrencePhasesScheduled {
-					nextProg, err = arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, nextRecurrencePhase, state)
-				} else {
-					nextProg, err = BuildTrainingIRProgramFromConfig(cfg, state)
-				}
+				nextProg, err := trainingProgramForKey(nextProgramKey)
 				if err != nil {
 					return 0, fmt.Errorf("build scheduled IR program at step %d: %w", nextStep, err)
 				}
@@ -635,6 +657,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				headUntied = nextHeadUntied
 				mtpAuxActive = nextMTPAuxActive
 				currentObjective = nextObjective
+				currentProgramKey = nextProgramKey
 			}
 			submitStart := time.Now()
 			stopSubmit := startSlowTrainingPhaseLogger(name, nextStep, "submit_step")
