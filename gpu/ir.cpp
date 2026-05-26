@@ -186,6 +186,57 @@ mx::array stable_exp_nonpos(const mx::array& x) {
   return mx::exp(clamp_float32(x, kGatedDeltaExpClampMin, kGatedDeltaExpClampMax));
 }
 
+mx::array deberta_relative_bias(
+    const mx::array& q,
+    const mx::array& k,
+    const mx::array& pos_key,
+    const mx::array& pos_query,
+    int B,
+    int T,
+    int H,
+    int D,
+    int window) {
+  if (window <= 0) {
+    throw std::runtime_error("OP_DEBERTA_RELATIVE_BIAS requires relative window > 0");
+  }
+  const int R = 2 * window;
+  if (q.ndim() != 4 || k.ndim() != 4 || q.shape(0) != B || k.shape(0) != B ||
+      q.shape(1) != H || k.shape(1) != H || q.shape(2) != T || k.shape(2) != T ||
+      q.shape(3) != D || k.shape(3) != D) {
+    throw std::runtime_error("OP_DEBERTA_RELATIVE_BIAS expects q/k shape [B,H,T,D]");
+  }
+  if (pos_key.ndim() != 3 || pos_query.ndim() != 3 ||
+      pos_key.shape(0) != H || pos_query.shape(0) != H ||
+      pos_key.shape(1) != R || pos_query.shape(1) != R ||
+      pos_key.shape(2) != D || pos_query.shape(2) != D) {
+    throw std::runtime_error("OP_DEBERTA_RELATIVE_BIAS expects position tensors shape [H,2*window,D]");
+  }
+
+  auto pos = mx::astype(mx::arange(T), mx::int32);
+  auto query_pos = mx::expand_dims(pos, 1);
+  auto key_pos = mx::expand_dims(pos, 0);
+  auto rel = query_pos - key_pos;
+  auto lo = mx::array(0, mx::int32);
+  auto hi = mx::array(R - 1, mx::int32);
+  auto offset = mx::array(window, mx::int32);
+  auto c2p_idx2 = mx::minimum(mx::maximum(rel + offset, lo), hi);
+  auto p2c_idx2 = mx::minimum(mx::maximum((mx::array(0, mx::int32) - rel) + offset, lo), hi);
+  auto c2p_idx = mx::broadcast_to(mx::reshape(c2p_idx2, {1, 1, T, T}), {B, H, T, T});
+  auto p2c_idx = mx::broadcast_to(mx::reshape(p2c_idx2, {1, 1, T, T}), {B, H, T, T});
+
+  auto pos_key_t = mx::expand_dims(mx::transpose(pos_key, {0, 2, 1}), 0);     // [1,H,D,R]
+  auto pos_query_t = mx::expand_dims(mx::transpose(pos_query, {0, 2, 1}), 0); // [1,H,D,R]
+
+  auto c2p_all = mx::matmul(q, pos_key_t); // [B,H,T,R]
+  auto c2p = mx::take_along_axis(c2p_all, c2p_idx, 3);
+
+  auto p2c_all = mx::matmul(k, pos_query_t);                  // [B,H,T,R]
+  auto p2c_by_rel = mx::transpose(p2c_all, {0, 1, 3, 2});      // [B,H,R,T]
+  auto p2c = mx::take_along_axis(p2c_by_rel, p2c_idx, 2);      // [B,H,T,T]
+
+  return as_float32(c2p + p2c);
+}
+
 bool use_chunked_gated_delta_scan_cuda_fast_path() {
   const char* override = std::getenv("MIXLAB_GATED_DELTA_ALLOW_CUDA_CHUNKED");
   if (override != nullptr && std::string(override) == "1") {
@@ -2450,6 +2501,18 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         auto input_gate = mx::reshape(get(op, 3), {B, T, H});
         auto forget_gate = mx::reshape(get(op, 4), {B, T, H});
         set_out(op, 0, mlstm_scan_naive(q, k, v, input_gate, forget_gate, B, T, H, Dk, Dv));
+        break;
+      }
+      case OP_DEBERTA_RELATIVE_BIAS: {
+        if (op.n_int_params < 5) {
+          throw std::runtime_error("OP_DEBERTA_RELATIVE_BIAS requires B,T,H,D,window");
+        }
+        int B = op.int_params[0];
+        int T = op.int_params[1];
+        int H = op.int_params[2];
+        int D = op.int_params[3];
+        int window = op.int_params[4];
+        set_out(op, 0, deberta_relative_bias(get(op, 0), get(op, 1), get(op, 2), get(op, 3), B, T, H, D, window));
         break;
       }
       case OP_DEPTHWISE_CONV1D: {

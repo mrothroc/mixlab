@@ -61,6 +61,7 @@ var irToGPUOp = map[int]int{
 	ir.OpDistillationKL:       OpDistillationKL,
 	ir.OpHGRN2Scan:            OpHGRN2Scan,
 	ir.OpMLSTMScan:            OpMLSTMScan,
+	ir.OpDebertaRelativeBias:  OpDebertaRelativeBias,
 }
 
 // irToGPUDType maps ir tensor dtype codes to gpu dtype codes.

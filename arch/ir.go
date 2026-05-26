@@ -57,6 +57,7 @@ const (
 	OpDistillationKL       = 69 // OP_DISTILLATION_KL
 	OpHGRN2Scan            = 70 // OP_HGRN2_SCAN
 	OpMLSTMScan            = 71 // OP_MLSTM_SCAN
+	OpDebertaRelativeBias  = 72 // OP_DEBERTA_RELATIVE_BIAS
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -380,6 +381,13 @@ func (p *Program) HGRN2Scan(q, k, v, gate, out string, B, T, H, Ds, Dv int) {
 // IntParams layout: [B, T, H, Dk, Dv].
 func (p *Program) MLSTMScan(q, k, v, inputGate, forgetGate, out string, B, T, H, Dk, Dv int) {
 	p.AddOp(OpMLSTMScan, []string{q, k, v, inputGate, forgetGate}, []string{out}, nil, []int{B, T, H, Dk, Dv})
+}
+
+// DebertaRelativeBias emits DeBERTa-style C2P+P2C disentangled relative
+// attention bias. Inputs are q/k [B,H,T,D] and projected position tensors
+// [H,2*window,D]. Output is [B,H,T,T].
+func (p *Program) DebertaRelativeBias(q, k, posKey, posQuery, out string, B, T, H, D, window int) {
+	p.AddOp(OpDebertaRelativeBias, []string{q, k, posKey, posQuery}, []string{out}, nil, []int{B, T, H, D, window})
 }
 
 // GatherPositions selects K entries from the position axis of a [B,T,D] tensor.

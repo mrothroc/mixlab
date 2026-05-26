@@ -191,6 +191,8 @@ Optional fields:
 - `kv_heads` — grouped-query attention (must divide `heads` evenly)
 - `qk_gain` — learnable per-head QK scaling. When set, allocates one trainable scalar per head initialized to this value, applied as `scores = qk_gain * (Q @ K^T / sqrt(d_k))`. Omit or set to `0` for standard scaling.
 - `rope_dims` — partial RoPE: apply rotary embeddings to only the first `rope_dims` dimensions per head, leaving the rest position-invariant. Must be even and `<= head_dim`. Omit or set to `0` for full RoPE.
+- `relative_attention` — `"deberta_p2c_c2p"` enables DeBERTa-style disentangled content-to-position and position-to-content relative attention bias. Omit, set to `""`, or set to `"none"` for standard RoPE attention.
+- `relative_attention_window` — max clipped relative offset for DeBERTa relative attention. Defaults to `128` when `relative_attention` is enabled. The learned table has `2 * relative_attention_window` rows.
 - `xsa` — eXplicit Subspace Attention: after computing `y = softmax(QK^T)V`, projects `y` orthogonal to `V` at each position. Forces attention to contribute information that V doesn't already provide. Zero additional parameters. Compatible with GQA.
 - `attention_mask` — `"causal"`, `"bidirectional"`, or `"none"`. Omit to resolve from `training.objective`: causal objectives use `"causal"` and masked objectives use `"bidirectional"`. `"bidirectional"` and `"none"` both use dense softmax with no triangular mask.
 - `window_size` — sliding causal attention width. `0` means full causal attention. Valid only when the resolved `attention_mask` is `"causal"`.
@@ -203,6 +205,12 @@ Example:
 {"type": "plain", "heads": 8, "kv_heads": 4, "qk_gain": 5.25, "rope_dims": 16, "xsa": true}
 ```
 
+DeBERTa relative attention example:
+
+```json
+{"type": "plain", "heads": 8, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 128}
+```
+
 KV sharing example:
 
 ```json
@@ -212,6 +220,11 @@ KV sharing example:
   {"type": "plain", "heads": 8, "kv_heads": 4, "kv_source": 1}
 ]}
 ```
+
+Notes:
+
+- DeBERTa relative attention is mutually exclusive with `rope_dims` in v1.
+- `kv_source` cannot be used by a relative-attention block, and a relative-attention block cannot be used as a KV source.
 
 ### `swiglu`
 

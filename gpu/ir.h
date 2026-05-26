@@ -76,6 +76,7 @@ enum OpType {
   OP_DISTILLATION_KL = 69,
   OP_HGRN2_SCAN = 70,
   OP_MLSTM_SCAN = 71,
+  OP_DEBERTA_RELATIVE_BIAS = 72,
 };
 
 struct IRop {

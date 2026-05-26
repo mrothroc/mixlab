@@ -89,6 +89,11 @@ var exampleConfigs = []exampleConfigCase{
 		wantWeights: 25,
 		minOps:      10,
 	},
+	{
+		filename:    "deberta_relative_tiny.json",
+		wantWeights: 31, // 3 base + 2*(10 relative plain + 4 swiglu)
+		minOps:      10,
+	},
 	// --- New block types (needs block impl) ---
 	{
 		filename:    "mamba_2L.json",

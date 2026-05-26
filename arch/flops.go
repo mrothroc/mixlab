@@ -218,6 +218,12 @@ func estimatePlainBlockFLOPs(block BlockSpec, B, T, D, ffn int) int64 {
 		}
 		total += 2 * i64(B) * i64(heads) * i64(T) * i64(attnWindow) * i64(headDim)
 		total += 2 * i64(B) * i64(heads) * i64(T) * i64(attnWindow) * i64(headDim)
+		if relativeAttentionEnabled(block) {
+			relWindow := effectiveRelativeAttentionWindow(block)
+			relRows := 2 * relWindow
+			total += 2 * 2 * i64(relRows) * i64(D) * i64(D) // relative key/query projections
+			total += 2 * 2 * i64(B) * i64(heads) * i64(T) * i64(relRows) * i64(headDim)
+		}
 		total += 2 * i64(B) * i64(T) * i64(D) * i64(D)
 	}
 

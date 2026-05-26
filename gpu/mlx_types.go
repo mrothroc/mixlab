@@ -58,6 +58,7 @@ const (
 	OpDistillationKL       = 69
 	OpHGRN2Scan            = 70
 	OpMLSTMScan            = 71
+	OpDebertaRelativeBias  = 72
 )
 
 const (

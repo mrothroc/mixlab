@@ -155,6 +155,22 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		default:
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid attention_mask=%q (must be \"causal\", \"bidirectional\", or \"none\")", source, groupName, idx, b.AttentionMask)
 		}
+		switch normalizeRelativeAttention(b.RelativeAttention) {
+		case "", RelativeAttentionNone, RelativeAttentionDebertaP2CC2P:
+		default:
+			return fmt.Errorf("config %q %s[%d] type=plain has invalid relative_attention=%q (must be \"deberta_p2c_c2p\" or \"none\")", source, groupName, idx, b.RelativeAttention)
+		}
+		if b.RelativeAttentionWindow < 0 {
+			return fmt.Errorf("config %q %s[%d] type=plain has invalid relative_attention_window=%d (must be >= 0)", source, groupName, idx, b.RelativeAttentionWindow)
+		}
+		if relativeAttentionEnabled(b) {
+			if b.RopeDims != 0 {
+				return fmt.Errorf("config %q %s[%d] type=plain cannot combine relative_attention with rope_dims", source, groupName, idx)
+			}
+			if b.KVSource > 0 {
+				return fmt.Errorf("config %q %s[%d] type=plain cannot combine relative_attention with kv_source", source, groupName, idx)
+			}
+		}
 	}
 	if b.Type == "plain" && b.KVHeads != 0 {
 		if b.KVHeads < 0 {
@@ -262,6 +278,9 @@ func validateKVSources(cfg *ArchConfig, source string) error {
 		if blockTypeKey(src) != "plain" {
 			return fmt.Errorf("config %q blocks[%d] type=plain has invalid kv_source=%d (blocks[%d] is type=%q, want plain)", source, i, b.KVSource, srcIdx, src.Type)
 		}
+		if relativeAttentionEnabled(src) {
+			return fmt.Errorf("config %q blocks[%d] type=plain has invalid kv_source=%d (source block uses relative_attention)", source, i, b.KVSource)
+		}
 
 		wantKVHeads, err := normalizePlainKVHeads(b.Heads, b.KVHeads)
 		if err != nil {
@@ -282,6 +301,14 @@ func validateKVSources(cfg *ArchConfig, source string) error {
 }
 
 func validateBlockRopeDims(b BlockSpec, modelDim int, source, groupName string, idx int) error {
+	if blockTypeKey(b) == "plain" && relativeAttentionEnabled(b) {
+		if b.Heads <= 0 {
+			return nil
+		}
+		if modelDim%b.Heads != 0 {
+			return fmt.Errorf("config %q %s[%d] type=plain with relative_attention requires model_dim=%d divisible by heads=%d", source, groupName, idx, modelDim, b.Heads)
+		}
+	}
 	if b.RopeDims == 0 {
 		return nil
 	}
