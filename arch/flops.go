@@ -168,6 +168,60 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 	return countWeightMetaElements(uniqueShapes), countWeightMetaElements(expandedShapes), nil
 }
 
+// ActiveParameterCountFromConfig returns the per-token active parameter count
+// for sparse MoE models. Dense models return hasMoE=false.
+func ActiveParameterCountFromConfig(cfg *ArchConfig) (active int64, hasMoE bool, err error) {
+	if cfg == nil {
+		return 0, false, fmt.Errorf("nil config")
+	}
+	uniqueParams, _, err := ParameterCountsFromConfig(cfg)
+	if err != nil {
+		return 0, false, err
+	}
+	refs, err := normalizeWeightRefs(cfg.Blocks, cfg.Recurrence)
+	if err != nil {
+		return 0, false, err
+	}
+	plan, err := newParallelResidualPlan(cfg.Blocks, cfg.ParallelResidual)
+	if err != nil {
+		return 0, false, err
+	}
+	if plan.any {
+		if err := validateParallelResidualRefs(plan, refs); err != nil {
+			return 0, false, err
+		}
+	}
+
+	var moeTotal int64
+	var moeActive int64
+	for i, block := range cfg.Blocks {
+		if refs[i] != i || blockTypeKey(block) != "moe" {
+			continue
+		}
+		hasMoE = true
+		metas, err := parallelBlockWeightShapes(block, plan.secondAt(i), cfg.ModelDim, cfg.SeqLen, cfg.Training.BatchTokens/cfg.SeqLen, cfg.VocabSize, cfg.EffectiveMLPMult(), cfg.BlockScales, cfg.ResidMix)
+		if err != nil {
+			return 0, false, err
+		}
+		moeTotal += countWeightMetaElements(metas)
+		var nonExpert int64
+		var firstExpert int64
+		for _, meta := range metas {
+			n := countWeightMetaElements([]WeightMeta{meta})
+			if strings.HasPrefix(meta.Name, "expert_0_") {
+				firstExpert += n
+			} else if !strings.HasPrefix(meta.Name, "expert_") {
+				nonExpert += n
+			}
+		}
+		moeActive += nonExpert + int64(effectiveMoETopK(block))*firstExpert
+	}
+	if !hasMoE {
+		return 0, false, nil
+	}
+	return uniqueParams - moeTotal + moeActive, true, nil
+}
+
 func countWeightMetaElements(metas []WeightMeta) int64 {
 	total := int64(0)
 	for _, meta := range metas {
@@ -186,6 +240,8 @@ func estimateBlockFLOPs(block BlockSpec, B, T, D, V, ffn int, mlpMult float64, b
 		return estimatePlainBlockFLOPs(block, B, T, D, ffn)
 	case "swiglu", "geglu":
 		return estimateSwiGLUBlockFLOPs(B, T, D, ffn)
+	case "moe":
+		return estimateMoEBlockFLOPs(block, B, T, D, mlpMult)
 	case "mamba":
 		inner := block.InnerDim
 		if inner <= 0 {

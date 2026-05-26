@@ -131,7 +131,7 @@ func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, c
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	switch b.Type {
-	case "plain", "swiglu", "geglu", "mlp", "mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "hgrn2", "mlstm", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
+	case "plain", "swiglu", "geglu", "mlp", "moe", "mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "hgrn2", "mlstm", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
 		// valid
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)
@@ -257,6 +257,44 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if b.LeakySlope < 0 {
 			return fmt.Errorf("config %q %s[%d] type=mlp has invalid leaky_slope=%g (must be >= 0)", source, groupName, idx, b.LeakySlope)
+		}
+	}
+	if blockTypeKey(b) == "moe" {
+		if b.NumExperts <= 0 {
+			return fmt.Errorf("config %q %s[%d] type=moe requires num_experts > 0", source, groupName, idx)
+		}
+		topK := effectiveMoETopK(b)
+		if topK < 1 || topK > b.NumExperts {
+			return fmt.Errorf("config %q %s[%d] type=moe has invalid top_k=%d (must be in [1,num_experts=%d])", source, groupName, idx, topK, b.NumExperts)
+		}
+		if moeRouter(b) != "linear" {
+			return fmt.Errorf("config %q %s[%d] type=moe has invalid router=%q (v1 supports \"linear\")", source, groupName, idx, b.Router)
+		}
+		if effectiveMoELoadBalanceLossWeight(b) < 0 {
+			return fmt.Errorf("config %q %s[%d] type=moe has invalid load_balance_loss_weight=%g (must be >= 0)", source, groupName, idx, effectiveMoELoadBalanceLossWeight(b))
+		}
+		expert := effectiveMoEExpertBlock(b)
+		if expert.WeightGroup != "" {
+			return fmt.Errorf("config %q %s[%d] type=moe expert_block cannot set weight_group", source, groupName, idx)
+		}
+		if expert.ParallelResidual != nil {
+			return fmt.Errorf("config %q %s[%d] type=moe expert_block cannot set parallel_residual", source, groupName, idx)
+		}
+		switch blockTypeKey(expert) {
+		case "swiglu", "geglu":
+			// valid
+		case "mlp":
+			switch strings.ToLower(strings.TrimSpace(expert.Activation)) {
+			case "", "silu", "gelu", "relu", "leaky_relu_sq":
+				// valid
+			default:
+				return fmt.Errorf("config %q %s[%d] type=moe expert_block has invalid activation %q", source, groupName, idx, expert.Activation)
+			}
+			if expert.LeakySlope < 0 {
+				return fmt.Errorf("config %q %s[%d] type=moe expert_block has invalid leaky_slope=%g (must be >= 0)", source, groupName, idx, expert.LeakySlope)
+			}
+		default:
+			return fmt.Errorf("config %q %s[%d] type=moe expert_block.type must be swiglu, geglu, or mlp (got %q)", source, groupName, idx, expert.Type)
 		}
 	}
 	return nil

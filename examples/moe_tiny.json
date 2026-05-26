@@ -1,0 +1,32 @@
+{
+  "name": "moe-tiny",
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 128,
+  "mlp_mult": 2.0,
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {
+      "type": "moe",
+      "num_experts": 4,
+      "top_k": 2,
+      "expert_block": {"type": "swiglu"},
+      "router": "linear",
+      "load_balance_loss_weight": 0.01
+    },
+    {"type": "plain", "heads": 4},
+    {
+      "type": "moe",
+      "num_experts": 4,
+      "top_k": 2,
+      "expert_block": {"type": "swiglu"}
+    }
+  ],
+  "training": {
+    "steps": 200,
+    "lr": 0.0003,
+    "batch_tokens": 1024,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01
+  }
+}

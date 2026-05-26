@@ -60,6 +60,7 @@ const (
 	OpMLSTMScan            = 71
 	OpDebertaRelativeBias  = 72
 	OpCharFeatureBag       = 73
+	OpMoEFeedForward       = 74
 )
 
 const (

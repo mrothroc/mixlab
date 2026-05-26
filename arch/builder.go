@@ -905,9 +905,15 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			return nil, err
 		}
 	}
+	taskLossHasEvalLoss := maskedObjective || distillationEnabled || firstByteMask || (mtp != nil && mtp.EffectiveN() > 1)
+	moeEnabled := emitMoEAuxiliaryAggregatesIR(prog, taskLossHasEvalLoss)
 	prog.DeclareOutput("loss", TensorFloat32, []int{1})
-	if maskedObjective || distillationEnabled || firstByteMask || (mtp != nil && mtp.EffectiveN() > 1) {
+	if taskLossHasEvalLoss || moeEnabled {
 		prog.DeclareOutput("eval_loss", TensorFloat32, []int{1})
+	}
+	if moeEnabled {
+		prog.DeclareOutput("moe_aux_loss", TensorFloat32, []int{1})
+		prog.DeclareOutput("moe_router_entropy", TensorFloat32, []int{1})
 	}
 	prog.DeclareOutput("per_token_nll", TensorFloat32, []int{B * T})
 	prog.DeclareOutput("x_hidden", TensorFloat32, []int{B, T, D})

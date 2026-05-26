@@ -35,6 +35,11 @@ func runCount(configPath string) error {
 	} else {
 		fmt.Printf("Total parameters: %d\n", uniqueParams)
 	}
+	if activeParams, hasMoE, err := arch.ActiveParameterCountFromConfig(cfg); err != nil {
+		return fmt.Errorf("compute active parameter count: %w", err)
+	} else if hasMoE {
+		fmt.Printf("Active parameters per token: %d\n", activeParams)
+	}
 	fmt.Printf("Total size (float32, in MB): %.2f\n", float32MiB)
 	fmt.Printf("Total size (int8 quantized, in MB): %.2f\n", int8MiB)
 	fmt.Printf("Number of blocks: %d\n", countConfigBlocks(cfg))

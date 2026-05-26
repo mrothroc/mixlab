@@ -361,9 +361,9 @@ func parallelBlockWeightShapes(spec BlockSpec, pairedSecond bool, D, T, B, V int
 	if err != nil {
 		return nil, err
 	}
-	if pairedSecond && isParallelResidualGLUSecond(spec) {
-		if len(metas) == 0 || metas[0].Name != "ffn_norm_scale" {
-			return nil, fmt.Errorf("parallel_residual GLU block has unexpected weight layout")
+	if pairedSecond && isParallelResidualFFNSecond(spec) {
+		if len(metas) == 0 || (metas[0].Name != "ffn_norm_scale" && metas[0].Name != "moe_norm_scale") {
+			return nil, fmt.Errorf("parallel_residual FFN block has unexpected weight layout")
 		}
 		metas = metas[1:]
 	}

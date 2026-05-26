@@ -1457,6 +1457,8 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program, c
   bool capture_x_hidden = false;
   bool capture_logits = false;
   bool capture_qr = false;
+  bool capture_moe_aux = false;
+  bool capture_moe_entropy = false;
   for (const auto& op : program.ops) {
     for (int i = 0; i < op.n_outputs; ++i) {
       if (op.outputs[i] == "magnitudes") {
@@ -1470,6 +1472,12 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program, c
       }
       if (op.outputs[i] == "qr") {
         capture_qr = true;
+      }
+      if (op.outputs[i] == "moe_aux_loss") {
+        capture_moe_aux = true;
+      }
+      if (op.outputs[i] == "moe_router_entropy") {
+        capture_moe_entropy = true;
       }
     }
   }
@@ -1486,6 +1494,12 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program, c
   }
   if (capture_qr) {
     output_names.push_back("qr");
+  }
+  if (capture_moe_aux) {
+    output_names.push_back("moe_aux_loss");
+  }
+  if (capture_moe_entropy) {
+    output_names.push_back("moe_router_entropy");
   }
   return output_names;
 }

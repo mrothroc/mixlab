@@ -18,7 +18,7 @@ These fields live at the root of the config object.
 | `model_dim` | integer | Yes | None | Hidden size `D`. Must be `> 0`. |
 | `vocab_size` | integer | Yes | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` (tokens are stored as uint16 in binary shards). |
 | `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
-| `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `geglu`, `mlp`, and `cross_attention` FFN tails. Must be `> 0`. |
+| `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `geglu`, `mlp`, `moe` experts, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
 | `smear_embeddings` | boolean | No | `false` | Enables 1-token-lookback smearing on token embeddings before the first block. |
 | `smear_embeddings_gate_shape` | string | No | `"pr130"` when smearing is enabled | Gate variant for `smear_embeddings`: `"pr130"`, `"per_channel"`, or `"per_position_per_channel"`. |
@@ -28,9 +28,9 @@ These fields live at the root of the config object.
 | `bigram_vocab_size` | integer | No | Disabled | Enables model-level hashed bigram embeddings when `> 1`. `0` disables. `1` is invalid. |
 | `bigram_dim` | integer | No | `model_dim` when bigrams enabled | Bigram embedding dimension. `0` inherits `model_dim`. Ignored when `bigram_vocab_size == 0`. |
 | `tie_embeddings` | boolean | No | `false` | Shares token embedding and output head weights. |
-| `block_scales` | boolean | No | `false` | Adds learned per-channel scales to `plain` attention and MLP residual branches, plus the MLP branch in `swiglu` and `geglu`. |
+| `block_scales` | boolean | No | `false` | Adds learned per-channel scales to `plain` attention and MLP residual branches, plus the MLP branch in `swiglu`, `geglu`, and `moe`. |
 | `resid_mix` | boolean | No | `false` | Adds learned mixing of the current state and original input on `plain` blocks. |
-| `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu or geglu)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Cannot be combined with `unet`. |
+| `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu/geglu/moe)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Cannot be combined with `unet`. |
 | `unet` | boolean | No | `false` | Splits the `blocks` list into encoder/decoder halves with learned skip connections. |
 | `mtp` | object | No | Disabled | Enables parameter-free multi-token prediction during training. See [MTP section](#multi-token-prediction-mtp). |
 | `backout` | object | No | Disabled | Enables final-latent residual subtraction before the final RMSNorm. See [Backout section](#backout). |
@@ -319,6 +319,41 @@ Example:
 
 ```json
 {"type": "mlp", "activation": "leaky_relu_sq", "leaky_slope": 0.5}
+```
+
+### `moe`
+
+Sparse feed-forward block with one RMSNorm, a bias-free linear router, top-k token routing, per-expert FFN weights, residual add, and an auxiliary load-balancing loss. V1 experts are feed-forward blocks only: `swiglu`, `geglu`, or `mlp`.
+
+Required fields:
+
+- `type: "moe"`
+- `num_experts`
+
+Optional fields:
+
+- `top_k` — number of experts selected per token. Defaults to `min(2, num_experts)`.
+- `expert_block` — expert FFN spec. Defaults to `{"type": "swiglu"}`. Supported types are `swiglu`, `geglu`, and `mlp`.
+- `router` — router type. Omitted/`"linear"` is supported.
+- `load_balance_loss_weight` — coefficient for the auxiliary load-balancing loss. Defaults to `0.01`; set `0.0` to report routing stats without adding the aux loss to training loss.
+
+Weight layout:
+
+- `moe_norm_scale`: `[D]`
+- `router_w`: `[D, num_experts]`
+- per-expert FFN weights in expert index order
+- optional `moe_scale`: `[D]` when `block_scales` is enabled
+
+Routing uses softmax over all router logits, selects the top-k experts per token, renormalizes selected probabilities to sum to `1`, combines selected expert outputs by those probabilities, and drops no tokens. The emitted training `loss` adds the weighted MoE auxiliary loss; `eval_loss` and `per_token_nll` remain task-loss values. `mode count` reports total parameters and active parameters per token for MoE configs, and FLOP estimates count router cost plus top-k active experts.
+
+Examples:
+
+```json
+{"type": "moe", "num_experts": 4, "top_k": 2, "expert_block": {"type": "swiglu"}}
+```
+
+```json
+{"type": "moe", "num_experts": 4, "top_k": 1, "expert_block": {"type": "mlp", "activation": "relu"}}
 ```
 
 ### `mamba`
@@ -1048,7 +1083,7 @@ Effect:
 
 ### `parallel_residual`
 
-Fuses a `(plain or gated_deltanet, swiglu or geglu)` pair into a parallel residual: both branches read the same pre-norm input and their outputs sum into the residual together (instead of the GLU branch reading the post-attention residual).
+Fuses a `(plain or gated_deltanet, swiglu/geglu/moe)` pair into a parallel residual: both branches read the same pre-norm input and their outputs sum into the residual together (instead of the FFN branch reading the post-attention residual).
 
 Two forms are supported:
 
@@ -1066,7 +1101,7 @@ Two forms are supported:
 }
 ```
 
-When the top-level flag is `true`, every consecutive pair must be `(plain or gated_deltanet, swiglu or geglu)`.
+When the top-level flag is `true`, every consecutive pair must be `(plain or gated_deltanet, swiglu/geglu/moe)`.
 
 **Per-block (scoped).** Set `parallel_residual: true` on individual pair-start blocks; the top-level flag stays `false` (default). Pairs not marked stay sequential. This lets you mix paired and unpaired layers in the same model — e.g., the leaderboard pattern where only late attention layers use parallel residual:
 
@@ -1087,11 +1122,11 @@ When the top-level flag is `true`, every consecutive pair must be `(plain or gat
 
 Effect:
 
-- A pair start must be `plain` or `gated_deltanet`; the next block must be `swiglu` or `geglu`.
-- Each paired GLU block drops its `ffn_norm_scale` weight (the pair shares the start block's RMSNorm).
+- A pair start must be `plain` or `gated_deltanet`; the next block must be `swiglu`, `geglu`, or `moe`.
+- Each paired FFN block drops its `ffn_norm_scale` or `moe_norm_scale` weight (the pair shares the start block's RMSNorm).
 - `kv_source` is not supported on a paired `plain` block.
 - Cannot be combined with `unet`.
-- **Weight sharing:** when using `recurrence` (or `weight_group`) to share weights between blocks, paired and unpaired GLU blocks cannot share weights with each other — they have different shapes (paired blocks lack `ffn_norm_scale`). Use distinct group names for paired vs. unpaired roles.
+- **Weight sharing:** when using `recurrence` (or `weight_group`) to share weights between blocks, paired and unpaired FFN blocks cannot share weights with each other — they have different shapes (paired blocks lack their own norm scale). Use distinct group names for paired vs. unpaired roles.
 
 ### `tie_embeddings`
 
@@ -1132,7 +1167,7 @@ Example:
 
 Effect:
 
-- `plain`, `swiglu`, `geglu`, `mlp`, and `cross_attention` expand to `round(model_dim * mlp_mult)`, clamped to at least `model_dim`.
+- `plain`, `swiglu`, `geglu`, `mlp`, `moe` experts, and `cross_attention` expand to `round(model_dim * mlp_mult)`, clamped to at least `model_dim`.
 
 ## Full example: `recurrent_parallel.json`
 

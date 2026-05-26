@@ -147,6 +147,16 @@ func init() {
 			return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
 		},
 	})
+	RegisterBlock("moe", blockRegistration{
+		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
+			return emitMoEIR(prog, spec, stream, wi, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout)
+		},
+		WeightCount:  moeWeightCount,
+		WeightShapes: moeWeightShapes,
+		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
+			return moeWeightShapesWithOptions(spec, D, opts.MLPMult, opts.BlockScales)
+		},
+	})
 	RegisterBlock("gated_deltanet", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, _ EmitOptions) (int, error) {
 			return emitGatedDeltaNetIR(prog, spec, stream, wi, D, T, B, idx)
@@ -234,6 +244,8 @@ func builtinBlockWeightCount(spec BlockSpec, blockScales, residMix bool) (int, e
 		return swigluWeightCount(spec, blockScales, residMix)
 	case "mlp":
 		return mlpWeightCount(spec, blockScales, residMix)
+	case "moe":
+		return moeWeightCount(spec, blockScales, residMix)
 	case "mamba":
 		return 4, nil
 	case "gated_linear_ssm":

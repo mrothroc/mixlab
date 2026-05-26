@@ -161,6 +161,11 @@ type BlockSpec struct {
 	Name                    string       `json:"name,omitempty"` // custom block name (required for type=custom)
 	WeightGroup             string       `json:"weight_group,omitempty"`
 	ParallelResidual        *bool        `json:"parallel_residual,omitempty"` // enable/disable parallel residual for this block pair start
+	NumExperts              int          `json:"num_experts,omitempty"`       // moe: number of routed FFN experts.
+	TopK                    int          `json:"top_k,omitempty"`             // moe: number of experts selected per token; defaults to min(2,num_experts).
+	ExpertBlock             *BlockSpec   `json:"expert_block,omitempty"`      // moe: FFN expert block spec (swiglu/geglu/mlp).
+	Router                  string       `json:"router,omitempty"`            // moe: router type; v1 supports "linear".
+	LoadBalanceLossWeight   float64      `json:"load_balance_loss_weight,omitempty"`
 	Heads                   int          `json:"heads"`
 	KVHeads                 int          `json:"kv_heads,omitempty"`
 	KVSource                int          `json:"kv_source,omitempty"`                 // -1 or 0 = compute own KV; positive = reuse KV from block N (1-indexed)
@@ -193,6 +198,26 @@ type BlockSpec struct {
 	LeakySlope              float64      `json:"leaky_slope,omitempty"`               // mlp leaky_relu_sq negative slope; defaults to 0.5.
 	Weights                 []WeightSpec `json:"weights,omitempty"`                   // custom block weight declarations
 	Ops                     []OpSpec     `json:"ops,omitempty"`                       // custom block operation sequence
+
+	loadBalanceLossWeightSet bool
+}
+
+// UnmarshalJSON records MoE scalar field presence so an explicit
+// load_balance_loss_weight: 0 can disable the auxiliary loss while an omitted
+// field still receives the default.
+func (b *BlockSpec) UnmarshalJSON(data []byte) error {
+	type Alias BlockSpec
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var alias Alias
+	if err := json.Unmarshal(data, &alias); err != nil {
+		return err
+	}
+	*b = BlockSpec(alias)
+	_, b.loadBalanceLossWeightSet = raw["load_balance_loss_weight"]
+	return nil
 }
 
 // TrainingPhase defines one contiguous training phase with a fixed LR.

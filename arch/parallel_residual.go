@@ -79,7 +79,7 @@ func (p parallelResidualPlan) anyInRange(start, end int) bool {
 
 func validateParallelResidualPair(specs []BlockSpec, start int) error {
 	if start+1 >= len(specs) {
-		return fmt.Errorf("parallel_residual requires blocks[%d] to be followed by swiglu or geglu", start)
+		return fmt.Errorf("parallel_residual requires blocks[%d] to be followed by swiglu or geglu, or moe", start)
 	}
 	firstType := blockTypeKey(specs[start])
 	if firstType != "plain" && firstType != "gated_deltanet" {
@@ -88,15 +88,15 @@ func validateParallelResidualPair(specs []BlockSpec, start int) error {
 	if firstType == "plain" && specs[start].KVSource > 0 {
 		return fmt.Errorf("parallel_residual does not support blocks[%d].kv_source=%d", start, specs[start].KVSource)
 	}
-	if !isParallelResidualGLUSecond(specs[start+1]) {
-		return fmt.Errorf("parallel_residual requires blocks[%d].type=swiglu or geglu (got %q)", start+1, specs[start+1].Type)
+	if !isParallelResidualFFNSecond(specs[start+1]) {
+		return fmt.Errorf("parallel_residual requires blocks[%d].type=swiglu or geglu, or moe (got %q)", start+1, specs[start+1].Type)
 	}
 	return nil
 }
 
-func isParallelResidualGLUSecond(spec BlockSpec) bool {
+func isParallelResidualFFNSecond(spec BlockSpec) bool {
 	switch blockTypeKey(spec) {
-	case "swiglu", "geglu":
+	case "swiglu", "geglu", "moe":
 		return true
 	default:
 		return false
@@ -120,7 +120,7 @@ func parallelBlockWeightCount(spec BlockSpec, pairedSecond bool, blockScales, re
 	if err != nil {
 		return 0, err
 	}
-	if pairedSecond && isParallelResidualGLUSecond(spec) {
+	if pairedSecond && isParallelResidualFFNSecond(spec) {
 		n--
 	}
 	return n, nil
@@ -269,8 +269,14 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 		mlpDelta, _ = emitSwiGLUParallelDeltaIRWithDropout(prog, xNorm, gluWI, *opIdx, mlpMult, blockScales, dropout)
 	case "geglu":
 		mlpDelta, _ = emitGEGLUParallelDeltaIRWithDropout(prog, xNorm, gluWI, *opIdx, mlpMult, blockScales, dropout)
+	case "moe":
+		var err error
+		mlpDelta, _, err = emitMoEParallelDeltaIRWithDropout(prog, gluSpec, xNorm, gluWI, D, T, B, *opIdx, mlpMult, blockScales, dropout)
+		if err != nil {
+			return wi, err
+		}
 	default:
-		return wi, fmt.Errorf("parallel_residual requires blocks[%d].type=swiglu or geglu (got %q)", blockIdx+1, gluSpec.Type)
+		return wi, fmt.Errorf("parallel_residual requires blocks[%d].type=swiglu or geglu, or moe (got %q)", blockIdx+1, gluSpec.Type)
 	}
 	prog.Add(firstState, mlpDelta, stream)
 	if backout != nil {

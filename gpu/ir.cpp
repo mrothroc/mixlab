@@ -13,9 +13,11 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <stdexcept>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -260,6 +262,132 @@ mx::array char_feature_bag(
   auto mask = mx::expand_dims(mx::greater(id_rows, mx::array(0, mx::int32)), 2);
   auto masked = mx::where(mask, gathered, mx::zeros_like(gathered));
   return as_float32(mx::sum(masked, 1));
+}
+
+enum MoEExpertType {
+  MOE_EXPERT_SWIGLU = 0,
+  MOE_EXPERT_GEGLU = 1,
+  MOE_EXPERT_MLP = 2,
+};
+
+enum MoEActivationType {
+  MOE_ACT_SILU = 0,
+  MOE_ACT_GELU = 1,
+  MOE_ACT_RELU = 2,
+  MOE_ACT_LEAKY_RELU_SQ = 3,
+};
+
+mx::array moe_activation(const mx::array& x, int activation, float leaky_slope) {
+  auto gelu_tanh = [](const mx::array& v) {
+    return 0.5f * v * (1.0f + mx::tanh(0.7978845608f * (v + 0.044715f * v * mx::square(v))));
+  };
+  switch (activation) {
+    case MOE_ACT_SILU:
+      return x * mx::sigmoid(x);
+    case MOE_ACT_GELU:
+      return gelu_tanh(x);
+    case MOE_ACT_RELU:
+      return mx::maximum(x, mx::zeros_like(x));
+    case MOE_ACT_LEAKY_RELU_SQ: {
+      auto y = mx::where(mx::greater(x, mx::array(0.0f)), x, x * mx::array(leaky_slope));
+      return mx::square(y);
+    }
+    default:
+      throw std::runtime_error("OP_MOE_FEED_FORWARD unsupported activation");
+  }
+}
+
+std::tuple<mx::array, mx::array, mx::array> moe_feed_forward(
+    const mlx_ir::IRop& op,
+    const std::function<const mx::array&(int)>& input_at) {
+  if (op.n_int_params < 8) {
+    throw std::runtime_error("OP_MOE_FEED_FORWARD requires B,T,D,E,topK,expertType,ffn,activation");
+  }
+  const int B = op.int_params[0];
+  const int T = op.int_params[1];
+  const int D = op.int_params[2];
+  const int E = op.int_params[3];
+  const int top_k = op.int_params[4];
+  const int expert_type = op.int_params[5];
+  const int ffn = op.int_params[6];
+  const int activation = op.int_params[7];
+  const float leaky_slope = (op.n_float_params > 0) ? op.float_params[0] : 0.0f;
+  if (B <= 0 || T <= 0 || D <= 0 || E <= 0 || top_k <= 0 || top_k > E || ffn <= 0) {
+    throw std::runtime_error("OP_MOE_FEED_FORWARD invalid dimensions");
+  }
+  const int N = B * T;
+  const auto& x = input_at(0);
+  const auto& router_w = input_at(1);
+  if (x.ndim() != 2 || x.shape(0) != N || x.shape(1) != D) {
+    throw std::runtime_error("OP_MOE_FEED_FORWARD expects x shape [B*T,D]");
+  }
+  if (router_w.ndim() != 2 || router_w.shape(0) != D || router_w.shape(1) != E) {
+    throw std::runtime_error("OP_MOE_FEED_FORWARD expects router_w shape [D,num_experts]");
+  }
+
+  const int weights_per_expert = (expert_type == MOE_EXPERT_MLP) ? 2 : 3;
+  if (op.n_inputs != 2 + E * weights_per_expert) {
+    throw std::runtime_error("OP_MOE_FEED_FORWARD unexpected expert weight input count");
+  }
+
+  auto logits = mx::matmul(x, router_w);
+  auto probs = mx::softmax(logits, -1);
+  auto sorted = mx::argsort(-probs, -1);
+  auto top_idx = mx::slice(sorted, {0, 0}, {N, top_k});
+  auto top_probs = mx::take_along_axis(probs, top_idx, 1);
+  auto top_norm = top_probs / mx::maximum(mx::sum(top_probs, 1, true), mx::array(1e-12f, mx::float32));
+
+  auto out = mx::zeros({N, D}, mx::float32);
+  std::vector<mx::array> aux_terms;
+  aux_terms.reserve(static_cast<size_t>(E));
+
+  int input_idx = 2;
+  for (int e = 0; e < E; ++e) {
+    auto selected_bool = top_idx == mx::array(e, mx::int32);
+    auto selected_f = mx::astype(selected_bool, mx::float32);
+    auto gate = mx::reshape(mx::sum(mx::where(selected_bool, top_norm, mx::zeros_like(top_norm)), 1), {N, 1});
+    mx::array expert_out = mx::zeros({N, D}, mx::float32);
+    if (expert_type == MOE_EXPERT_SWIGLU || expert_type == MOE_EXPERT_GEGLU) {
+      const auto& w_gate = input_at(input_idx++);
+      const auto& w_up = input_at(input_idx++);
+      const auto& w_down = input_at(input_idx++);
+      if (w_gate.ndim() != 2 || w_gate.shape(0) != D || w_gate.shape(1) != ffn ||
+          w_up.ndim() != 2 || w_up.shape(0) != D || w_up.shape(1) != ffn ||
+          w_down.ndim() != 2 || w_down.shape(0) != ffn || w_down.shape(1) != D) {
+        throw std::runtime_error("OP_MOE_FEED_FORWARD expert GLU weights have invalid shapes");
+      }
+      auto gate_proj = mx::matmul(x, w_gate);
+      auto gate_act = (expert_type == MOE_EXPERT_SWIGLU)
+          ? mx::sigmoid(gate_proj)
+          : moe_activation(gate_proj, MOE_ACT_GELU, 0.0f);
+      expert_out = mx::matmul(gate_act * mx::matmul(x, w_up), w_down);
+    } else if (expert_type == MOE_EXPERT_MLP) {
+      const auto& w_up = input_at(input_idx++);
+      const auto& w_down = input_at(input_idx++);
+      if (w_up.ndim() != 2 || w_up.shape(0) != D || w_up.shape(1) != ffn ||
+          w_down.ndim() != 2 || w_down.shape(0) != ffn || w_down.shape(1) != D) {
+        throw std::runtime_error("OP_MOE_FEED_FORWARD expert MLP weights have invalid shapes");
+      }
+      expert_out = mx::matmul(moe_activation(mx::matmul(x, w_up), activation, leaky_slope), w_down);
+    } else {
+      throw std::runtime_error("OP_MOE_FEED_FORWARD unsupported expert type");
+    }
+    out = out + expert_out * gate;
+
+    auto prob_mean = mx::mean(mx::slice(probs, {0, e}, {N, e + 1}));
+    auto selected_fraction = mx::mean(mx::sum(selected_f, 1) / mx::array(static_cast<float>(top_k), mx::float32));
+    aux_terms.push_back(prob_mean * selected_fraction);
+  }
+
+  auto aux = aux_terms.empty() ? mx::array(0.0f, mx::float32) : aux_terms[0];
+  for (size_t i = 1; i < aux_terms.size(); ++i) {
+    aux = aux + aux_terms[i];
+  }
+  aux = aux * mx::array(static_cast<float>(E), mx::float32);
+
+  auto safe_probs = mx::maximum(probs, mx::array(1e-12f, mx::float32));
+  auto entropy = -mx::mean(mx::sum(probs * mx::log(safe_probs), 1));
+  return {as_float32(out), as_float32(aux), as_float32(entropy)};
 }
 
 bool use_chunked_gated_delta_scan_cuda_fast_path() {
@@ -2549,6 +2677,15 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         int K = op.int_params[2];
         int D = op.int_params[3];
         set_out(op, 0, char_feature_bag(get(op, 0), get(op, 1), B, T, K, D));
+        break;
+      }
+      case OP_MOE_FEED_FORWARD: {
+        auto result = moe_feed_forward(op, [&](int idx) -> const mx::array& {
+          return get(op, idx);
+        });
+        set_out(op, 0, std::get<0>(result));
+        set_out(op, 1, std::get<1>(result));
+        set_out(op, 2, std::get<2>(result));
         break;
       }
       case OP_DEPTHWISE_CONV1D: {

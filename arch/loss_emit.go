@@ -1,6 +1,9 @@
 package arch
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // emitLanguageModelLossIR emits the IR ops that materialise the next-token
 // language-model loss. When mtp is enabled it produces the weighted multi-token
@@ -124,4 +127,65 @@ func emitDistillationLanguageModelLossIR(prog *Program, logits, targets, teacher
 	}
 	prog.ScalarMul(accum, 1.0, "loss")
 	return nil
+}
+
+func collectMoEAuxiliaryOutputs(prog *Program) (auxLosses []string, entropies []string) {
+	for _, op := range prog.Ops {
+		for _, out := range op.Outputs {
+			switch {
+			case strings.HasSuffix(out, "_moe_aux_loss") && out != "moe_aux_loss":
+				auxLosses = append(auxLosses, out)
+			case strings.HasSuffix(out, "_moe_router_entropy") && out != "moe_router_entropy":
+				entropies = append(entropies, out)
+			}
+		}
+	}
+	return auxLosses, entropies
+}
+
+func emitMoEAuxiliaryLossIR(prog *Program, auxLosses []string) {
+	if len(auxLosses) == 0 {
+		return
+	}
+	accum := auxLosses[0]
+	if len(auxLosses) == 1 {
+		prog.ScalarMul(accum, 1.0, "moe_aux_loss")
+		return
+	}
+	for i := 1; i < len(auxLosses); i++ {
+		next := fmt.Sprintf("moe_aux_accum_%d", i)
+		prog.Add(accum, auxLosses[i], next)
+		accum = next
+	}
+	prog.ScalarMul(accum, 1.0, "moe_aux_loss")
+}
+
+func emitMoERouterEntropyIR(prog *Program, entropies []string) {
+	if len(entropies) == 0 {
+		return
+	}
+	accum := entropies[0]
+	if len(entropies) > 1 {
+		for i := 1; i < len(entropies); i++ {
+			next := fmt.Sprintf("moe_entropy_accum_%d", i)
+			prog.Add(accum, entropies[i], next)
+			accum = next
+		}
+	}
+	prog.ScalarMul(accum, 1.0/float32(len(entropies)), "moe_router_entropy")
+}
+
+func emitMoEAuxiliaryAggregatesIR(prog *Program, taskLossHasEvalLoss bool) bool {
+	auxLosses, entropies := collectMoEAuxiliaryOutputs(prog)
+	if len(auxLosses) == 0 {
+		return false
+	}
+	if !taskLossHasEvalLoss {
+		prog.ScalarMul("loss", 1.0, "eval_loss")
+	}
+	prog.ScalarMul("loss", 1.0, "task_loss")
+	emitMoEAuxiliaryLossIR(prog, auxLosses)
+	emitMoERouterEntropyIR(prog, entropies)
+	prog.Add("task_loss", "moe_aux_loss", "loss")
+	return true
 }

@@ -78,13 +78,14 @@ enum OpType {
   OP_MLSTM_SCAN = 71,
   OP_DEBERTA_RELATIVE_BIAS = 72,
   OP_CHAR_FEATURE_BAG = 73,
+  OP_MOE_FEED_FORWARD = 74,
 };
 
 struct IRop {
   int type = 0;
-  std::string inputs[24];
+  std::string inputs[256];
   int n_inputs = 0;
-  std::string outputs[2];
+  std::string outputs[3];
   int n_outputs = 0;
 
   float float_params[4] = {0.0f, 0.0f, 0.0f, 0.0f};

@@ -59,6 +59,7 @@ const (
 	OpMLSTMScan            = 71 // OP_MLSTM_SCAN
 	OpDebertaRelativeBias  = 72 // OP_DEBERTA_RELATIVE_BIAS
 	OpCharFeatureBag       = 73 // OP_CHAR_FEATURE_BAG
+	OpMoEFeedForward       = 74 // OP_MOE_FEED_FORWARD
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -396,6 +397,14 @@ func (p *Program) DebertaRelativeBias(q, k, posKey, posQuery, out string, B, T, 
 // Padding id 0 contributes exactly zero.
 func (p *Program) CharFeatureBag(table, ids, out string, B, T, K, D int) {
 	p.AddOp(OpCharFeatureBag, []string{table, ids}, []string{out}, nil, []int{B, T, K, D})
+}
+
+// MoEFeedForward emits a routed feed-forward Mixture-of-Experts block. Inputs
+// are x [B*T,D], router_w [D,E], followed by per-expert FFN weights in expert
+// index order. Outputs are delta [B*T,D], unweighted load-balance loss [1],
+// and router entropy [1]. IntParams layout: [B,T,D,E,topK,expertType,ffn,activation].
+func (p *Program) MoEFeedForward(inputs []string, delta, auxLoss, entropy string, B, T, D, experts, topK, expertType, ffn, activation int, leakySlope float32) {
+	p.AddOp(OpMoEFeedForward, inputs, []string{delta, auxLoss, entropy}, []float32{leakySlope}, []int{B, T, D, experts, topK, expertType, ffn, activation})
 }
 
 // GatherPositions selects K entries from the position axis of a [B,T,D] tensor.
