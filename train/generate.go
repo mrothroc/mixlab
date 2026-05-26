@@ -37,6 +37,9 @@ func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 	}
 	genCfg := *cfg
 	genCfg.Training.BatchTokens = genCfg.SeqLen
+	if err := configureCharFeaturesForConfigPath(&genCfg, configPath, safetensorsLoad); err != nil {
+		return err
+	}
 
 	prog, err := BuildEvalIRProgramFromConfig(&genCfg)
 	if err != nil {

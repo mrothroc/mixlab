@@ -30,6 +30,9 @@ type ArchConfig struct {
 	// SmearEmbeddingsGateShape selects the learned gate used by embedding smearing.
 	// Empty defaults to "pr130" when smear_embeddings is enabled.
 	SmearEmbeddingsGateShape string       `json:"smear_embeddings_gate_shape,omitempty"`
+	CharVocabSize            int          `json:"char_vocab_size,omitempty"`
+	CharDim                  int          `json:"char_dim,omitempty"`
+	CharMaxPerToken          int          `json:"char_max_per_token,omitempty"`
 	BigramVocabSize          int          `json:"bigram_vocab_size,omitempty"`
 	BigramDim                int          `json:"bigram_dim,omitempty"`
 	TrigramVocabSize         int          `json:"trigram_vocab_size,omitempty"`
@@ -56,6 +59,9 @@ type ArchConfig struct {
 	recurrencePhasesSet           bool
 	executionOrderSet             bool
 	recurrencePhaseActivationsSet bool
+
+	CharFeatureIDs    []int32 `json:"-"`
+	CharFeatureSource string  `json:"-"`
 }
 
 // DataSpec holds data-loader behavior.
@@ -76,6 +82,31 @@ func (c *ArchConfig) EffectiveBigramDim() int {
 		return c.ModelDim
 	}
 	return c.BigramDim
+}
+
+// EffectiveCharDim returns the configured character feature embedding
+// dimension, defaulting to model_dim when char features are enabled but
+// char_dim is unset.
+func (c *ArchConfig) EffectiveCharDim() int {
+	if c == nil || c.CharVocabSize <= 0 {
+		return 0
+	}
+	if c.CharDim <= 0 {
+		return c.ModelDim
+	}
+	return c.CharDim
+}
+
+// EffectiveCharMaxPerToken returns the fixed sparse char-slot count used for
+// each token id, defaulting to 16 when char features are enabled.
+func (c *ArchConfig) EffectiveCharMaxPerToken() int {
+	if c == nil || c.CharVocabSize <= 0 {
+		return 0
+	}
+	if c.CharMaxPerToken <= 0 {
+		return 16
+	}
+	return c.CharMaxPerToken
 }
 
 // EffectiveTrigramDim returns the configured trigram embedding dimension,
@@ -586,6 +617,15 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.SeqLen <= 0 {
 		cfg.SeqLen = 128
 	}
+	if cfg.CharVocabSize < 0 {
+		return nil, fmt.Errorf("config %q has invalid char_vocab_size=%d (must be >= 0)", source, cfg.CharVocabSize)
+	}
+	if cfg.CharDim < 0 {
+		return nil, fmt.Errorf("config %q has invalid char_dim=%d (must be >= 0)", source, cfg.CharDim)
+	}
+	if cfg.CharMaxPerToken < 0 {
+		return nil, fmt.Errorf("config %q has invalid char_max_per_token=%d (must be >= 0)", source, cfg.CharMaxPerToken)
+	}
 	if cfg.BigramVocabSize < 0 {
 		return nil, fmt.Errorf("config %q has invalid bigram_vocab_size=%d (must be >= 0)", source, cfg.BigramVocabSize)
 	}
@@ -597,6 +637,25 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.TrigramDim < 0 {
 		return nil, fmt.Errorf("config %q has invalid trigram_dim=%d (must be >= 0)", source, cfg.TrigramDim)
+	}
+	if cfg.CharVocabSize > 0 {
+		if cfg.CharVocabSize < 257 {
+			return nil, fmt.Errorf("config %q has invalid char_vocab_size=%d (must be 0 to disable or >= 257 when enabled)", source, cfg.CharVocabSize)
+		}
+		if cfg.CharDim == 0 {
+			cfg.CharDim = cfg.ModelDim
+		}
+		if cfg.CharMaxPerToken == 0 {
+			cfg.CharMaxPerToken = 16
+		}
+		if cfg.CharMaxPerToken <= 0 {
+			return nil, fmt.Errorf("config %q has invalid char_max_per_token=%d (must be > 0 when char features are enabled)", source, cfg.CharMaxPerToken)
+		}
+	} else {
+		cfg.CharDim = 0
+		cfg.CharMaxPerToken = 0
+		cfg.CharFeatureIDs = nil
+		cfg.CharFeatureSource = ""
 	}
 	if cfg.BigramVocabSize > 0 {
 		if cfg.BigramVocabSize <= 1 {

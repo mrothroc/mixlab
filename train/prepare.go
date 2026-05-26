@@ -10,12 +10,14 @@ import (
 
 // PrepareOptions holds flags for the prepare command.
 type PrepareOptions struct {
-	Input         string
-	Output        string
-	VocabSize     int
-	ValSplit      float64
-	TokenizerPath string
-	TextFieldName string
+	Input           string
+	Output          string
+	VocabSize       int
+	ValSplit        float64
+	TokenizerPath   string
+	TextFieldName   string
+	CharVocabSize   int
+	CharMaxPerToken int
 }
 
 // runPrepare shells out to scripts/prepare.py to tokenize raw text into binary shards.
@@ -44,6 +46,12 @@ func runPrepare(opts PrepareOptions) error {
 	}
 	if opts.TextFieldName != "" && opts.TextFieldName != "text" {
 		args = append(args, "--text-field", opts.TextFieldName)
+	}
+	if opts.CharVocabSize > 0 {
+		args = append(args, "--char-vocab-size", fmt.Sprintf("%d", opts.CharVocabSize))
+	}
+	if opts.CharMaxPerToken > 0 {
+		args = append(args, "--char-max-per-token", fmt.Sprintf("%d", opts.CharMaxPerToken))
 	}
 
 	fmt.Printf("Running: python3 %s\n", strings.Join(args, " "))

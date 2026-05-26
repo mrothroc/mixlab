@@ -23,12 +23,15 @@ type distillationTeacher struct {
 	prog             *gpu.Program
 	handles          []int64
 	vocabSize        int
+	charMaxPerToken  int
 	bigramVocabSize  int
 	trigramVocabSize int
 	tokBuf           []int32
 	tgtBuf           []int32
+	charBuf          []int32
 	bigramBuf        []int32
 	trigramBuf       []int32
+	charFeatures     []int32
 }
 
 func newDistillationEnsemble(student *ArchConfig) (*distillationEnsemble, error) {
@@ -66,6 +69,9 @@ func newDistillationTeacher(configPath, checkpointPath string, student *ArchConf
 		return nil, fmt.Errorf("teacher seq_len=%d must match student seq_len=%d", cfg.SeqLen, student.SeqLen)
 	}
 	cfg.Training.BatchTokens = student.Training.BatchTokens
+	if err := configureCharFeaturesForConfigPath(cfg, configPath, checkpointPath); err != nil {
+		return nil, err
+	}
 	prog, err := BuildEvalIRProgramFromConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("build teacher eval IR: %w", err)
@@ -95,12 +101,15 @@ func newDistillationTeacher(configPath, checkpointPath string, student *ArchConf
 		prog:             gpuProg,
 		handles:          handles,
 		vocabSize:        cfg.VocabSize,
+		charMaxPerToken:  cfg.CharMaxPerToken,
 		bigramVocabSize:  cfg.BigramVocabSize,
 		trigramVocabSize: cfg.TrigramVocabSize,
 		tokBuf:           make([]int32, student.Training.BatchTokens),
 		tgtBuf:           make([]int32, student.Training.BatchTokens),
+		charBuf:          make([]int32, student.Training.BatchTokens*cfg.CharMaxPerToken),
 		bigramBuf:        make([]int32, student.Training.BatchTokens),
 		trigramBuf:       make([]int32, student.Training.BatchTokens),
+		charFeatures:     append([]int32(nil), cfg.CharFeatureIDs...),
 	}, nil
 }
 
@@ -225,6 +234,7 @@ func (t *distillationTeacher) makeInputs(xTok, yTok []int, batchSize, seqLen int
 	if len(t.tokBuf) < need {
 		t.tokBuf = make([]int32, need)
 		t.tgtBuf = make([]int32, need)
+		t.charBuf = make([]int32, need*t.charMaxPerToken)
 		t.bigramBuf = make([]int32, need)
 		t.trigramBuf = make([]int32, need)
 	}
@@ -235,6 +245,25 @@ func (t *distillationTeacher) makeInputs(xTok, yTok []int, batchSize, seqLen int
 	inputs := []gpu.TensorInput{
 		{Name: "tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.tokBuf[:need]},
 		{Name: "targets", DType: gpu.TensorInt32, Shape: []int{need}, Data: t.tgtBuf[:need]},
+	}
+	if t.charMaxPerToken > 0 {
+		want := t.vocabSize * t.charMaxPerToken
+		if len(t.charFeatures) != want {
+			return nil, fmt.Errorf("char feature lookup size=%d does not match vocab_size*char_max_per_token=%d", len(t.charFeatures), want)
+		}
+		if len(t.charBuf) < need*t.charMaxPerToken {
+			t.charBuf = make([]int32, need*t.charMaxPerToken)
+		}
+		for i := 0; i < need; i++ {
+			tok := int(t.tokBuf[i])
+			if tok < 0 || tok >= t.vocabSize {
+				return nil, fmt.Errorf("token id %d at position %d outside vocab_size=%d", tok, i, t.vocabSize)
+			}
+			copy(t.charBuf[i*t.charMaxPerToken:(i+1)*t.charMaxPerToken], t.charFeatures[tok*t.charMaxPerToken:(tok+1)*t.charMaxPerToken])
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "char_ids", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen, t.charMaxPerToken}, Data: t.charBuf[:need*t.charMaxPerToken],
+		})
 	}
 	if t.bigramVocabSize > 0 {
 		bigramIDs, err := ComputeBigramIDs(t.tokBuf[:need], need, t.bigramVocabSize)

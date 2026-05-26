@@ -1,0 +1,32 @@
+{
+  "name": "char_features_plain",
+
+  // Tiny transformer with tokenizer-level ByteLevel char feature embeddings.
+  "model_dim": 128,
+  "vocab_size": 1024,
+  "seq_len": 128,
+
+  // Requires data prepared with:
+  // mixlab -mode prepare ... -char-vocab-size 257 -char-max-per-token 16
+  "char_vocab_size": 257,
+  "char_dim": 64,
+  "char_max_per_token": 16,
+
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+
+  "training": {
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 1024
+  }
+}

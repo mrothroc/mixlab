@@ -70,6 +70,52 @@ func TestParseArchConfig_BigramDisabledZerosDim(t *testing.T) {
 	}
 }
 
+func TestParseArchConfig_CharDefaultsAndDisabled(t *testing.T) {
+	enabled := ArchConfig{
+		Name:          "char",
+		ModelDim:      64,
+		VocabSize:     512,
+		SeqLen:        32,
+		CharVocabSize: 257,
+		Blocks:        []BlockSpec{{Type: "plain", Heads: 4}},
+	}
+	data, err := json.Marshal(enabled)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	got, err := ParseArchConfig(data, "test_char")
+	if err != nil {
+		t.Fatalf("ParseArchConfig enabled: %v", err)
+	}
+	if got.CharDim != 64 {
+		t.Fatalf("CharDim=%d want 64", got.CharDim)
+	}
+	if got.CharMaxPerToken != 16 {
+		t.Fatalf("CharMaxPerToken=%d want 16", got.CharMaxPerToken)
+	}
+
+	disabled := ArchConfig{
+		Name:            "no_char",
+		ModelDim:        64,
+		VocabSize:       512,
+		SeqLen:          32,
+		CharDim:         13,
+		CharMaxPerToken: 8,
+		Blocks:          []BlockSpec{{Type: "plain", Heads: 4}},
+	}
+	data, err = json.Marshal(disabled)
+	if err != nil {
+		t.Fatalf("Marshal disabled: %v", err)
+	}
+	got, err = ParseArchConfig(data, "test_char_disabled")
+	if err != nil {
+		t.Fatalf("ParseArchConfig disabled: %v", err)
+	}
+	if got.CharDim != 0 || got.CharMaxPerToken != 0 {
+		t.Fatalf("disabled char dims=(%d,%d), want zeros", got.CharDim, got.CharMaxPerToken)
+	}
+}
+
 func TestParseArchConfig_TrigramDefaultsAndTrainingKnobs(t *testing.T) {
 	cfg := ArchConfig{
 		Name:             "trigram",
@@ -110,6 +156,41 @@ func TestParseArchConfig_RejectsInvalidTrigramAndTrainingKnobs(t *testing.T) {
 		cfg  ArchConfig
 		want string
 	}{
+		{
+			name: "bad_char_vocab",
+			cfg: ArchConfig{
+				ModelDim:      64,
+				VocabSize:     256,
+				SeqLen:        32,
+				CharVocabSize: 256,
+				Blocks:        []BlockSpec{{Type: "plain", Heads: 4}},
+			},
+			want: "char_vocab_size",
+		},
+		{
+			name: "bad_char_dim",
+			cfg: ArchConfig{
+				ModelDim:      64,
+				VocabSize:     256,
+				SeqLen:        32,
+				CharVocabSize: 257,
+				CharDim:       -1,
+				Blocks:        []BlockSpec{{Type: "plain", Heads: 4}},
+			},
+			want: "char_dim",
+		},
+		{
+			name: "bad_char_slots",
+			cfg: ArchConfig{
+				ModelDim:        64,
+				VocabSize:       256,
+				SeqLen:          32,
+				CharVocabSize:   257,
+				CharMaxPerToken: -1,
+				Blocks:          []BlockSpec{{Type: "plain", Heads: 4}},
+			},
+			want: "char_max_per_token",
+		},
 		{
 			name: "bad_trigram_vocab",
 			cfg: ArchConfig{

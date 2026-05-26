@@ -237,6 +237,31 @@ mx::array deberta_relative_bias(
   return as_float32(c2p + p2c);
 }
 
+mx::array char_feature_bag(
+    const mx::array& table,
+    const mx::array& ids,
+    int B,
+    int T,
+    int K,
+    int D) {
+  if (B <= 0 || T <= 0 || K <= 0 || D <= 0) {
+    throw std::runtime_error("OP_CHAR_FEATURE_BAG requires positive B,T,K,D");
+  }
+  if (table.ndim() != 2 || table.shape(1) != D) {
+    throw std::runtime_error("OP_CHAR_FEATURE_BAG expects table shape [char_vocab_size,D]");
+  }
+  if (ids.ndim() != 3 || ids.shape(0) != B || ids.shape(1) != T || ids.shape(2) != K) {
+    throw std::runtime_error("OP_CHAR_FEATURE_BAG expects ids shape [B,T,K]");
+  }
+  auto ids_i32 = mx::astype(ids, mx::int32);
+  auto flat_ids = mx::reshape(ids_i32, {B * T * K});
+  auto gathered = mx::reshape(mx::take(table, flat_ids, 0), {B * T, K, D});
+  auto id_rows = mx::reshape(ids_i32, {B * T, K});
+  auto mask = mx::expand_dims(mx::greater(id_rows, mx::array(0, mx::int32)), 2);
+  auto masked = mx::where(mask, gathered, mx::zeros_like(gathered));
+  return as_float32(mx::sum(masked, 1));
+}
+
 bool use_chunked_gated_delta_scan_cuda_fast_path() {
   const char* override = std::getenv("MIXLAB_GATED_DELTA_ALLOW_CUDA_CHUNKED");
   if (override != nullptr && std::string(override) == "1") {
@@ -2513,6 +2538,17 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         int D = op.int_params[3];
         int window = op.int_params[4];
         set_out(op, 0, deberta_relative_bias(get(op, 0), get(op, 1), get(op, 2), get(op, 3), B, T, H, D, window));
+        break;
+      }
+      case OP_CHAR_FEATURE_BAG: {
+        if (op.n_int_params < 4) {
+          throw std::runtime_error("OP_CHAR_FEATURE_BAG requires B,T,K,D");
+        }
+        int B = op.int_params[0];
+        int T = op.int_params[1];
+        int K = op.int_params[2];
+        int D = op.int_params[3];
+        set_out(op, 0, char_feature_bag(get(op, 0), get(op, 1), B, T, K, D));
         break;
       }
       case OP_DEPTHWISE_CONV1D: {

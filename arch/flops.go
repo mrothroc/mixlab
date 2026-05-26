@@ -85,6 +85,15 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 	}
 
 	// Embedding lookup is indexing only; LM head projection produces logits.
+	if cfg.CharVocabSize > 0 {
+		charDim := cfg.EffectiveCharDim()
+		charSlots := cfg.EffectiveCharMaxPerToken()
+		forward += i64(B) * i64(T) * i64(charSlots) * i64(charDim)
+		if charDim != D {
+			forward += 2 * i64(B) * i64(T) * i64(charDim) * i64(D)
+		}
+		forward += 2 * i64(B) * i64(T) * i64(D) // learned scale + residual add
+	}
 	forward += 2 * i64(B) * i64(T) * i64(D) * i64(V)
 
 	training := 3 * forward
@@ -110,16 +119,18 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	uniqueShapes, err := collectWeightShapesWithRefs(
+	uniqueShapes, err := collectWeightShapesWithRefsHeadLayoutFeatures(
 		cfg.ModelDim,
 		cfg.VocabSize,
 		cfg.SeqLen,
 		cfg.EffectiveMLPMult(),
-		cfg.TieEmbeddings,
+		cfg.ReservesUntiedHeadWeight(),
 		cfg.BlockScales,
 		cfg.ResidMix,
 		cfg.UNet,
 		cfg.ParallelResidual,
+		cfg.CharVocabSize,
+		cfg.EffectiveCharDim(),
 		cfg.BigramVocabSize,
 		cfg.EffectiveBigramDim(),
 		cfg.TrigramVocabSize,
@@ -131,16 +142,18 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 		return 0, 0, err
 	}
 
-	expandedShapes, err := collectWeightShapesWithRefs(
+	expandedShapes, err := collectWeightShapesWithRefsHeadLayoutFeatures(
 		cfg.ModelDim,
 		cfg.VocabSize,
 		cfg.SeqLen,
 		cfg.EffectiveMLPMult(),
-		cfg.TieEmbeddings,
+		cfg.ReservesUntiedHeadWeight(),
 		cfg.BlockScales,
 		cfg.ResidMix,
 		cfg.UNet,
 		cfg.ParallelResidual,
+		cfg.CharVocabSize,
+		cfg.EffectiveCharDim(),
 		cfg.BigramVocabSize,
 		cfg.EffectiveBigramDim(),
 		cfg.TrigramVocabSize,

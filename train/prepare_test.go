@@ -1,6 +1,7 @@
 package train
 
 import (
+	"encoding/binary"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -57,6 +58,8 @@ func TestPrepareScript(t *testing.T) {
 		"--vocab-size", "256",
 		"--val-split", "0.1",
 		"--tokens-per-shard", "500",
+		"--char-vocab-size", "257",
+		"--char-max-per-token", "8",
 	)
 	prepCmd.Stdout = os.Stdout
 	prepCmd.Stderr = os.Stderr
@@ -121,6 +124,23 @@ func TestPrepareScript(t *testing.T) {
 	tokenizerPath := filepath.Join(outputDir, "tokenizer.json")
 	if _, err := os.Stat(tokenizerPath); err != nil {
 		t.Errorf("tokenizer.json not found: %v", err)
+	}
+	charPath := filepath.Join(outputDir, "char_features.bin")
+	charBlob, err := os.ReadFile(charPath)
+	if err != nil {
+		t.Fatalf("char_features.bin not found: %v", err)
+	}
+	if len(charBlob) < charFeatureHeaderInts*4 {
+		t.Fatalf("char_features.bin too small: %d bytes", len(charBlob))
+	}
+	header := func(i int) int32 {
+		return int32(binary.LittleEndian.Uint32(charBlob[i*4 : i*4+4]))
+	}
+	if header(0) != charFeatureMagic || header(1) != charFeatureVersion {
+		t.Fatalf("bad char feature header magic/version: %d/%d", header(0), header(1))
+	}
+	if header(3) != 257 || header(4) != 8 {
+		t.Fatalf("bad char feature config: char_vocab=%d max=%d", header(3), header(4))
 	}
 
 	// Verify the Loader can read the shards end-to-end.

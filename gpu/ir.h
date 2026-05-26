@@ -77,6 +77,7 @@ enum OpType {
   OP_HGRN2_SCAN = 70,
   OP_MLSTM_SCAN = 71,
   OP_DEBERTA_RELATIVE_BIAS = 72,
+  OP_CHAR_FEATURE_BAG = 73,
 };
 
 struct IRop {

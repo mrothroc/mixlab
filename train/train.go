@@ -395,6 +395,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		}
 		fmt.Printf("  [%s] first-byte mask enabled (%s)\n", name, source)
 	}
+	if cfg.CharVocabSize > 0 {
+		source, err := configureCharFeaturesForTraining(cfg, trainPattern)
+		if err != nil {
+			return TrainResult{}, err
+		}
+		fmt.Printf("  [%s] char features enabled (%s)\n", name, source)
+	}
 
 	// Build IR program
 	prog, err := BuildIRProgramFromConfig(cfg)

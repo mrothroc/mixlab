@@ -59,6 +59,7 @@ const (
 	OpHGRN2Scan            = 70
 	OpMLSTMScan            = 71
 	OpDebertaRelativeBias  = 72
+	OpCharFeatureBag       = 73
 )
 
 const (

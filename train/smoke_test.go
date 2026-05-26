@@ -80,6 +80,11 @@ var exampleConfigs = []exampleConfigCase{
 		minOps:      12,
 	},
 	{
+		filename:    "char_features_plain.json",
+		wantWeights: 39,
+		minOps:      12,
+	},
+	{
 		filename:    "softcap_plain.json",
 		wantWeights: 36,
 		minOps:      10,
@@ -184,12 +189,18 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 				t.Errorf("len(Ops) = %d, want >= %d", len(prog.Ops), tc.minOps)
 			}
 
-			// Check inputs: plain configs use tokens+targets, bigram configs add bigram_ids.
+			// Check inputs: feature configs append their runtime feature ids.
 			wantInputs := 2
+			if cfg.Training.Distillation != nil {
+				wantInputs++
+			}
+			if cfg.CharVocabSize > 0 {
+				wantInputs++
+			}
 			if cfg.BigramVocabSize > 0 {
 				wantInputs++
 			}
-			if cfg.Training.Distillation != nil {
+			if cfg.TrigramVocabSize > 0 {
 				wantInputs++
 			}
 			if len(prog.Inputs) != wantInputs {
@@ -202,14 +213,28 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 				t.Errorf("input[1].Name = %q, want \"targets\"", prog.Inputs[1].Name)
 			}
 			inputIdx := 2
+			if cfg.Training.Distillation != nil {
+				if prog.Inputs[inputIdx].Name != "teacher_probs" {
+					t.Errorf("input[%d].Name = %q, want \"teacher_probs\"", inputIdx, prog.Inputs[inputIdx].Name)
+				}
+				inputIdx++
+			}
+			if cfg.CharVocabSize > 0 {
+				if prog.Inputs[inputIdx].Name != "char_ids" {
+					t.Errorf("input[%d].Name = %q, want \"char_ids\"", inputIdx, prog.Inputs[inputIdx].Name)
+				}
+				inputIdx++
+			}
 			if cfg.BigramVocabSize > 0 {
 				if prog.Inputs[inputIdx].Name != "bigram_ids" {
 					t.Errorf("input[%d].Name = %q, want \"bigram_ids\"", inputIdx, prog.Inputs[inputIdx].Name)
 				}
 				inputIdx++
 			}
-			if cfg.Training.Distillation != nil && prog.Inputs[inputIdx].Name != "teacher_probs" {
-				t.Errorf("input[%d].Name = %q, want \"teacher_probs\"", inputIdx, prog.Inputs[inputIdx].Name)
+			if cfg.TrigramVocabSize > 0 {
+				if prog.Inputs[inputIdx].Name != "trigram_ids" {
+					t.Errorf("input[%d].Name = %q, want \"trigram_ids\"", inputIdx, prog.Inputs[inputIdx].Name)
+				}
 			}
 
 			// Check outputs: scalar loss, per-token NLLs, plus hidden-state/logit exports.

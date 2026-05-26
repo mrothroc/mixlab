@@ -22,6 +22,7 @@ make build
 | [gqa_8h4kv.json](gqa_8h4kv.json) | GQA transformer | 8 query heads, 4 KV heads |
 | [token_blend_plain.json](token_blend_plain.json) | Token blending | Learned adjacent-token gate |
 | [bigram_plain.json](bigram_plain.json) | Bigram embedding | Hashed bigram context features |
+| [char_features_plain.json](char_features_plain.json) | Char feature embedding | Tokenizer-level ByteLevel char feature channel |
 | [softcap_plain.json](softcap_plain.json) | Logit softcap | Bounded logits before loss |
 | [mlm_tiny.json](mlm_tiny.json) | Bidirectional transformer | Masked language modeling objective |
 | [distillation_tiny.json](distillation_tiny.json) | Teacher distillation | Causal LM with internal teacher ensemble loss |
@@ -43,6 +44,7 @@ make build
 - **Masked objectives**: Use `mlm_tiny.json` as the smallest bidirectional MLM starting point.
 - **Internal distillation**: Use `distillation_tiny.json` after training teacher checkpoints with matching `vocab_size` and `seq_len`.
 - **Relative attention**: Use `deberta_relative_tiny.json` for DeBERTa-style P2C/C2P position bias.
+- **Character/byte features**: Use `char_features_plain.json` with data prepared using `-char-vocab-size 257`.
 - **Large-batch optimizer**: Use `lamb_plain_tiny.json` as a minimal whole-model LAMB starting point.
 - **Exploring block types**: Try `mamba_2L.json`, `retnet_2L.json`, `rwkv_2L.json`, `hgrn2_2L.json`, or `mlstm_2L.json`.
 - **Custom architectures**: See `custom_geglu.json` and [custom_geglu.md](custom_geglu.md).

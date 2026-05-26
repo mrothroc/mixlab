@@ -73,7 +73,7 @@ func runEvalExports(configPath, trainPattern, safetensorsLoad, lutDir string, ex
 		return err
 	}
 
-	session, err := NewInferenceSession(configPath, safetensorsLoad)
+	session, err := newInferenceSession(configPath, safetensorsLoad, trainPattern)
 	if err != nil {
 		return err
 	}

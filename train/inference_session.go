@@ -34,6 +34,10 @@ type InferenceSession struct {
 //	defer sess.Close()
 //	nlls, err := sess.EvalTokens(myTokens)
 func NewInferenceSession(configPath, safetensorsLoad string) (*InferenceSession, error) {
+	return newInferenceSession(configPath, safetensorsLoad, "")
+}
+
+func newInferenceSession(configPath, safetensorsLoad, trainPattern string) (*InferenceSession, error) {
 	runtime.LockOSThread()
 
 	if configPath == "" {
@@ -46,6 +50,15 @@ func NewInferenceSession(configPath, safetensorsLoad string) (*InferenceSession,
 	}
 
 	cfg, err := LoadArchConfig(configPath)
+	if err != nil {
+		runtime.UnlockOSThread()
+		return nil, err
+	}
+	if trainPattern != "" {
+		_, err = configureCharFeaturesForTraining(cfg, trainPattern)
+	} else {
+		err = configureCharFeaturesForConfigPath(cfg, configPath, safetensorsLoad)
+	}
 	if err != nil {
 		runtime.UnlockOSThread()
 		return nil, err

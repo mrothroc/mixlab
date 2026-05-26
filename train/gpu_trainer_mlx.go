@@ -22,9 +22,12 @@ type mlxGPUTrainer struct {
 	baseLR             float32
 	evalLossOutputName string
 	vocabSize          int
+	charVocabSize      int
+	charMaxPerToken    int
 	bigramVocabSize    int
 	trigramVocabSize   int
 	declaredTargetSize int
+	charInput          bool
 	firstByteMaskInput bool
 	lossMaskInput      bool
 	teacherProbsInput  bool
@@ -33,8 +36,10 @@ type mlxGPUTrainer struct {
 	tgtBuf         []int32
 	lossMaskBuf    []float32
 	teacherProbBuf []float32
+	charBuf        []int32
 	bigramBuf      []int32
 	trigramBuf     []int32
+	charFeatures   []int32
 	firstByteValid []int32
 	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
 	lockedOSThread bool
@@ -149,6 +154,7 @@ func initMLXGPUTrainer(
 
 	batchElems := cfg.Training.BatchTokens
 	declaredTargetSize := 0
+	charInput := false
 	firstByteMaskInput := false
 	lossMaskInput := false
 	teacherProbsInput := false
@@ -165,6 +171,32 @@ func initMLXGPUTrainer(
 		if inp.Name == "teacher_probs" {
 			teacherProbsInput = true
 		}
+		if inp.Name == "char_ids" {
+			charInput = true
+		}
+	}
+	charFeatures := []int32(nil)
+	if charInput {
+		if cfg.CharVocabSize <= 0 {
+			gpu.TrainerDestroy(trainerHandle)
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, fmt.Errorf("program requires char_ids but char_vocab_size is disabled")
+		}
+		if cfg.CharMaxPerToken <= 0 {
+			gpu.TrainerDestroy(trainerHandle)
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, fmt.Errorf("program requires char_ids but char_max_per_token=%d", cfg.CharMaxPerToken)
+		}
+		want := cfg.VocabSize * cfg.CharMaxPerToken
+		if len(cfg.CharFeatureIDs) != want {
+			gpu.TrainerDestroy(trainerHandle)
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, fmt.Errorf("char feature lookup size=%d does not match vocab_size*char_max_per_token=%d", len(cfg.CharFeatureIDs), want)
+		}
+		charFeatures = append([]int32(nil), cfg.CharFeatureIDs...)
 	}
 	firstByteValid := []int32(nil)
 	if firstByteMaskInput {
@@ -190,9 +222,12 @@ func initMLXGPUTrainer(
 		baseLR:             optimizerSpec.DefaultBaseLR,
 		evalLossOutputName: preferredEvalLossOutputName(irProg),
 		vocabSize:          cfg.VocabSize,
+		charVocabSize:      cfg.CharVocabSize,
+		charMaxPerToken:    cfg.CharMaxPerToken,
 		bigramVocabSize:    cfg.BigramVocabSize,
 		trigramVocabSize:   cfg.TrigramVocabSize,
 		declaredTargetSize: declaredTargetSize,
+		charInput:          charInput,
 		firstByteMaskInput: firstByteMaskInput,
 		lossMaskInput:      lossMaskInput,
 		teacherProbsInput:  teacherProbsInput,
@@ -200,8 +235,10 @@ func initMLXGPUTrainer(
 		tgtBuf:             make([]int32, batchElems),
 		lossMaskBuf:        make([]float32, batchElems),
 		teacherProbBuf:     make([]float32, batchElems*cfg.VocabSize),
+		charBuf:            make([]int32, batchElems*cfg.CharMaxPerToken),
 		bigramBuf:          make([]int32, batchElems),
 		trigramBuf:         make([]int32, batchElems),
+		charFeatures:       charFeatures,
 		firstByteValid:     firstByteValid,
 		lockedOSThread:     true,
 	}
@@ -270,8 +307,12 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		t.tokBuf = make([]int32, need)
 		t.tgtBuf = make([]int32, need)
 		t.lossMaskBuf = make([]float32, need)
+		t.charBuf = make([]int32, need*t.charMaxPerToken)
 		t.bigramBuf = make([]int32, need)
 		t.trigramBuf = make([]int32, need)
+	}
+	if t.charInput && len(t.charBuf) < need*t.charMaxPerToken {
+		t.charBuf = make([]int32, need*t.charMaxPerToken)
 	}
 	needTeacherProbs := need * t.vocabSize
 	if t.teacherProbsInput && len(t.teacherProbBuf) < needTeacherProbs {
@@ -320,6 +361,25 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		}
 		inputs = append(inputs, gpu.TensorInput{
 			Name: "first_byte_valid", DType: gpu.TensorInt32, Shape: []int{t.vocabSize}, Data: t.firstByteValid,
+		})
+	}
+	if t.charInput {
+		if t.charMaxPerToken <= 0 {
+			return nil, fmt.Errorf("invalid char_max_per_token=%d", t.charMaxPerToken)
+		}
+		want := t.vocabSize * t.charMaxPerToken
+		if len(t.charFeatures) != want {
+			return nil, fmt.Errorf("char feature lookup size=%d does not match vocab_size*char_max_per_token=%d", len(t.charFeatures), want)
+		}
+		for i := 0; i < need; i++ {
+			tok := int(t.tokBuf[i])
+			if tok < 0 || tok >= t.vocabSize {
+				return nil, fmt.Errorf("token id %d at position %d outside vocab_size=%d", tok, i, t.vocabSize)
+			}
+			copy(t.charBuf[i*t.charMaxPerToken:(i+1)*t.charMaxPerToken], t.charFeatures[tok*t.charMaxPerToken:(tok+1)*t.charMaxPerToken])
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "char_ids", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen, t.charMaxPerToken}, Data: t.charBuf[:need*t.charMaxPerToken],
 		})
 	}
 	if t.bigramVocabSize > 0 {
@@ -520,9 +580,13 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.prog = gpuProg
 	t.activeIRProg = irProg
 	t.evalLossOutputName = preferredEvalLossOutputName(irProg)
+	t.charInput = programDeclaresInput(irProg, "char_ids")
 	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
 	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")
 	t.teacherProbsInput = programDeclaresInput(irProg, "teacher_probs")
+	if t.charInput && len(t.charFeatures) != t.vocabSize*t.charMaxPerToken {
+		return fmt.Errorf("char feature lookup size=%d does not match vocab_size*char_max_per_token=%d", len(t.charFeatures), t.vocabSize*t.charMaxPerToken)
+	}
 	if t.firstByteMaskInput && len(t.firstByteValid) == 0 {
 		t.firstByteValid = identityFirstByteMaskValid(t.vocabSize)
 	}

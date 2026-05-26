@@ -27,6 +27,9 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error
 	if err != nil {
 		return err
 	}
+	if _, err := configureCharFeaturesForTraining(cfg, trainPattern); err != nil {
+		return err
+	}
 	prog, err := BuildEvalIRProgramFromConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("build IR program: %w", err)

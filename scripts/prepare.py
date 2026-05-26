@@ -23,6 +23,9 @@ import numpy as np
 
 SHARD_MAGIC = 20240520
 SHARD_VERSION = 1
+CHAR_FEATURE_MAGIC = 20260526
+CHAR_FEATURE_VERSION = 1
+CHAR_FEATURE_ENCODING_BYTELEVEL = 1
 HEADER_INTS = 256
 TOKENS_PER_SHARD = 1_000_000
 
@@ -142,6 +145,101 @@ def write_shards(tokens: np.ndarray, output_dir: str, prefix: str, shuffle: bool
     return written
 
 
+def byte_level_reverse_map() -> dict[str, int]:
+    """Return HuggingFace/GPT-2 ByteLevel unicode char -> byte mapping."""
+    bs = list(range(ord("!"), ord("~") + 1))
+    bs += list(range(0xA1, 0xAC + 1))
+    bs += list(range(0xAE, 0xFF + 1))
+    cs = bs[:]
+    seen = set(bs)
+    n = 0
+    for b in range(256):
+        if b in seen:
+            continue
+        bs.append(b)
+        cs.append(256 + n)
+        n += 1
+    return {chr(c): b for b, c in zip(bs, cs)}
+
+
+def has_bytelevel_pretokenizer(tok_json: dict) -> bool:
+    def visit(node):
+        if not isinstance(node, dict):
+            return False
+        if node.get("type") == "ByteLevel":
+            return True
+        if node.get("type") == "Sequence":
+            return any(visit(child) for child in node.get("pretokenizers", []))
+        return False
+
+    return visit(tok_json.get("pre_tokenizer"))
+
+
+def write_char_features(tokenizer, output_dir: str, char_vocab_size: int, char_max_per_token: int):
+    if char_vocab_size <= 0:
+        return
+    if char_vocab_size < 257:
+        raise ValueError("--char-vocab-size must be 0 to disable or >= 257 when enabled")
+    if char_max_per_token <= 0:
+        raise ValueError("--char-max-per-token must be > 0 when char features are enabled")
+
+    tok_json = json.loads(tokenizer.to_str())
+    if tok_json.get("model", {}).get("type") != "BPE":
+        raise ValueError("char features require a HuggingFace ByteLevel BPE tokenizer (model.type=BPE)")
+    if not has_bytelevel_pretokenizer(tok_json):
+        raise ValueError("char features require a HuggingFace ByteLevel BPE tokenizer (pre_tokenizer=ByteLevel)")
+
+    vocab = tok_json.get("model", {}).get("vocab", {})
+    if not vocab:
+        raise ValueError("tokenizer JSON has no model.vocab")
+    vocab_size = tokenizer.get_vocab_size()
+    rows = np.zeros((vocab_size, char_max_per_token), dtype=np.uint16)
+
+    special_ids = set()
+    for added in tok_json.get("added_tokens", []):
+        if added.get("special"):
+            idx = int(added.get("id", -1))
+            if 0 <= idx < vocab_size:
+                special_ids.add(idx)
+
+    reverse = byte_level_reverse_map()
+    for token, idx in vocab.items():
+        idx = int(idx)
+        if idx < 0 or idx >= vocab_size or idx in special_ids:
+            continue
+        seen = set()
+        ids = []
+        for ch in token:
+            if ch not in reverse:
+                raise ValueError(f"token {token!r} contains non-ByteLevel character U+{ord(ch):04X}")
+            b = reverse[ch]
+            if b in seen:
+                continue
+            seen.add(b)
+            ids.append(b + 1)
+            if len(ids) >= char_max_per_token:
+                break
+        if ids:
+            rows[idx, : len(ids)] = np.array(ids, dtype=np.uint16)
+
+    header = np.zeros(HEADER_INTS, dtype=np.int32)
+    header[0] = CHAR_FEATURE_MAGIC
+    header[1] = CHAR_FEATURE_VERSION
+    header[2] = vocab_size
+    header[3] = char_vocab_size
+    header[4] = char_max_per_token
+    header[5] = CHAR_FEATURE_ENCODING_BYTELEVEL
+
+    path = os.path.join(output_dir, "char_features.bin")
+    with open(path, "wb") as f:
+        f.write(header.tobytes())
+        f.write(rows.tobytes())
+    print(
+        f"Saved char features to {path} "
+        f"(vocab_size={vocab_size}, char_vocab_size={char_vocab_size}, char_max_per_token={char_max_per_token})"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Prepare binary shards for mixlab training")
     parser.add_argument("--input", required=True, help="Input text file, JSONL, or directory")
@@ -152,6 +250,8 @@ def main():
     parser.add_argument("--text-field", default="text", help="JSON field name for text in JSONL files (default: text)")
     parser.add_argument("--tokens-per-shard", type=int, default=TOKENS_PER_SHARD, help="Tokens per shard (default: 1000000)")
     parser.add_argument("--no-shuffle", action="store_true", help="Disable token shuffling within shards")
+    parser.add_argument("--char-vocab-size", type=int, default=0, help="Write tokenizer-level char_features.bin; 0 disables")
+    parser.add_argument("--char-max-per-token", type=int, default=16, help="Fixed char feature slots per token")
     args = parser.parse_args()
 
     tokens_per_shard = args.tokens_per_shard
@@ -169,6 +269,8 @@ def main():
     else:
         print(f"Training BPE tokenizer with vocab_size={args.vocab_size}...")
         tokenizer = train_bpe_tokenizer(texts, args.vocab_size, args.output)
+
+    write_char_features(tokenizer, args.output, args.char_vocab_size, args.char_max_per_token)
 
     # Tokenize
     all_tokens = tokenize_texts(tokenizer, texts)

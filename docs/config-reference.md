@@ -22,6 +22,9 @@ These fields live at the root of the config object.
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
 | `smear_embeddings` | boolean | No | `false` | Enables 1-token-lookback smearing on token embeddings before the first block. |
 | `smear_embeddings_gate_shape` | string | No | `"pr130"` when smearing is enabled | Gate variant for `smear_embeddings`: `"pr130"`, `"per_channel"`, or `"per_position_per_channel"`. |
+| `char_vocab_size` | integer | No | Disabled | Enables tokenizer-level byte/char feature embeddings when `>= 257`. `0` disables. Padding id `0` is reserved; ByteLevel byte values map to ids `1..256`. |
+| `char_dim` | integer | No | `model_dim` when char features enabled | Character feature embedding dimension. If different from `model_dim`, a learned projection maps the summed feature bag to the model dimension. |
+| `char_max_per_token` | integer | No | `16` when char features enabled | Fixed sparse char slots per token id. Must be `> 0` when char features are enabled. |
 | `bigram_vocab_size` | integer | No | Disabled | Enables model-level hashed bigram embeddings when `> 1`. `0` disables. `1` is invalid. |
 | `bigram_dim` | integer | No | `model_dim` when bigrams enabled | Bigram embedding dimension. `0` inherits `model_dim`. Ignored when `bigram_vocab_size == 0`. |
 | `tie_embeddings` | boolean | No | `false` | Shares token embedding and output head weights. |
@@ -60,7 +63,7 @@ These fields live at the root of the config object.
 
 ## Smear Token Embeddings
 
-`smear_embeddings` mixes the previous token embedding into the current token embedding before flattening and before optional bigram/trigram residual embeddings. Position `0` is left unchanged, so the BOS/no-previous-token boundary is not trainable and cannot leak a wrapped final token into the first position.
+`smear_embeddings` mixes the previous token embedding into the current token embedding before flattening and before optional char/bigram/trigram residual embeddings. Position `0` is left unchanged, so the BOS/no-previous-token boundary is not trainable and cannot leak a wrapped final token into the first position.
 
 ```json
 {
@@ -78,6 +81,34 @@ Gate variants:
 | `"per_position_per_channel"` | `smear_gate: [T,D]` | Static per-position/per-channel gate. The row for position `0` is allocated but unused by the emitted graph, preserving the BOS boundary. Initializes to zero. |
 
 The smear gate weights are routed through the scalar/Adam optimizer group, not the matrix/Muon group.
+
+## Token-Level Char Features
+
+`char_vocab_size` enables a fixed sparse feature channel keyed by token id. For each token, the model gathers up to `char_max_per_token` rows of `char_table` indexed by precomputed integer ids, sums them, optionally projects the result to `model_dim`, multiplies it by learned `char_scale`, and adds it after the token embedding and before bigram/trigram feature channels. Id `0` is reserved padding and contributes zero.
+
+The engine is tokenizer-agnostic: it consumes a `[vocab_size, char_max_per_token]` table of integer ids in `[0, char_vocab_size)` from a `char_features.bin` file located next to the training shards (for `train`/`eval`/`hiddenstats`) or next to the config/weights (for `generate` and distillation teachers).
+
+### File format
+
+`char_features.bin` is a 256-int32 little-endian header followed by `vocab_size * char_max_per_token` little-endian uint16 ids:
+
+| Header index | Meaning |
+|---|---|
+| `0` | Magic (`20260526`) |
+| `1` | Version (`1`) |
+| `2` | `vocab_size` (must match config) |
+| `3` | `char_vocab_size` (must match config) |
+| `4` | `char_max_per_token` (must match config) |
+| `5..` | Reserved for tooling; the engine does not interpret these |
+
+The bundled `scripts/prepare.py` writes this format for HuggingFace ByteLevel BPE tokenizers — each token's constituent bytes become its char ids (offset by `+1` so id `0` stays reserved for padding):
+
+```bash
+mixlab -mode prepare -input data.txt -output data/example \
+  -vocab-size 1024 -char-vocab-size 257 -char-max-per-token 16
+```
+
+Other tokenizers can write their own `char_features.bin` by emitting a matching header + uint16 payload — the engine does not validate how the ids were derived.
 
 ## Multi-Token Prediction (MTP)
 
@@ -848,7 +879,7 @@ The trainer classifies weights into four optimizer groups. Muon-family optimizer
 
 | Group | Optimizer | Typical weights | LR field | Weight-decay field |
 |------|-----------|-----------------|----------|--------------------|
-| Embedding | AdamW or LAMB | `embed`, `bigram_table` | `embed_lr` | `embed_weight_decay` |
+| Embedding | AdamW or LAMB | `embed`, `char_table`, `bigram_table`, `trigram_table` | `embed_lr` | `embed_weight_decay` |
 | Head | AdamW or LAMB | `head` | `head_lr` | `head_weight_decay` |
 | Scalar | AdamW or LAMB | Norm scales, decay vectors, learned scalar scales | `scalar_lr` | `scalar_weight_decay` |
 | Matrix | Muon variant, AdamW, or LAMB | Projection and FFN matrices | `matrix_lr` | `matrix_weight_decay` |

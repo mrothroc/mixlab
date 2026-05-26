@@ -305,6 +305,62 @@ func TestBuildIRProgramWithBigram_DisabledLeavesInputsUnchanged(t *testing.T) {
 	}
 }
 
+func TestBuildIRProgramFromConfig_WithCharAddsInputAndOps(t *testing.T) {
+	cfg := &ArchConfig{
+		ModelDim:         64,
+		VocabSize:        512,
+		SeqLen:           16,
+		CharVocabSize:    257,
+		CharDim:          32,
+		CharMaxPerToken:  8,
+		BigramVocabSize:  0,
+		TrigramVocabSize: 0,
+		Blocks:           []BlockSpec{{Type: "plain", Heads: 4}},
+		Training:         TrainingSpec{BatchTokens: 32},
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	if prog.NumWeights != 13 {
+		t.Fatalf("expected 13 weights, got %d", prog.NumWeights)
+	}
+	foundCharInput := false
+	for _, in := range prog.Inputs {
+		if in.Name == "char_ids" {
+			foundCharInput = true
+			if len(in.Shape) != 3 || in.Shape[0] != 2 || in.Shape[1] != 16 || in.Shape[2] != 8 {
+				t.Fatalf("unexpected char input shape %v", in.Shape)
+			}
+		}
+	}
+	if !foundCharInput {
+		t.Fatal("missing char_ids input")
+	}
+
+	hasBag := false
+	hasProj := false
+	hasScale := false
+	hasAdd := false
+	for _, op := range prog.Ops {
+		if op.Code == OpCharFeatureBag && len(op.Inputs) == 2 && op.Inputs[0] == "w3" && op.Inputs[1] == "char_ids" {
+			hasBag = true
+		}
+		if op.Code == OpMatMul && len(op.Inputs) == 2 && op.Inputs[0] == "char_bag" && op.Inputs[1] == "w4" {
+			hasProj = true
+		}
+		if op.Code == OpMul && len(op.Inputs) == 2 && op.Inputs[0] == "char_proj" && op.Inputs[1] == "w5" {
+			hasScale = true
+		}
+		if op.Code == OpAdd && len(op.Inputs) == 2 && op.Inputs[0] == "x_tok" && op.Inputs[1] == "char_scaled" {
+			hasAdd = true
+		}
+	}
+	if !hasBag || !hasProj || !hasScale || !hasAdd {
+		t.Fatalf("char feature ops missing: bag=%v proj=%v scale=%v add=%v", hasBag, hasProj, hasScale, hasAdd)
+	}
+}
+
 func TestBuildIRProgramFromConfig_WithTrigramAddsInputAndOps(t *testing.T) {
 	cfg := &ArchConfig{
 		ModelDim:         64,

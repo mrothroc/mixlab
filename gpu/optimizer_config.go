@@ -160,7 +160,7 @@ func optimizerKind(name string) (OptimizerKind, error) {
 
 func classifyWeightOptimizer(ws OptimizerWeightMetadata) (optimizerClass, error) {
 	switch {
-	case ws.Name == "embed" || ws.Name == "bigram_table" || ws.Name == "trigram_table":
+	case ws.Name == "embed" || ws.Name == "char_table" || ws.Name == "bigram_table" || ws.Name == "trigram_table":
 		return optimizerClassEmbed, nil
 	case ws.Name == "head":
 		return optimizerClassHead, nil

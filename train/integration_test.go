@@ -41,6 +41,17 @@ func shrinkConfigForTest(cfg *arch.ArchConfig) {
 	cfg.Training.LR = 1e-3
 }
 
+func attachSyntheticCharFeaturesForTest(cfg *arch.ArchConfig) {
+	if cfg == nil || cfg.CharVocabSize <= 0 || cfg.CharMaxPerToken <= 0 {
+		return
+	}
+	cfg.CharFeatureIDs = make([]int32, cfg.VocabSize*cfg.CharMaxPerToken)
+	for tok := 0; tok < cfg.VocabSize; tok++ {
+		cfg.CharFeatureIDs[tok*cfg.CharMaxPerToken] = int32(tok%256 + 1)
+	}
+	cfg.CharFeatureSource = "synthetic integration-test features"
+}
+
 // generateSyntheticBatch creates random token sequences for training.
 // Tokens are uniform random in [0, vocabSize). Targets are the next token
 // (shifted by one position within the same random sequence).
@@ -75,6 +86,7 @@ func TestIntegrationExampleConfigs_TrainStable(t *testing.T) {
 			}
 
 			shrinkConfigForTest(cfg)
+			attachSyntheticCharFeaturesForTest(cfg)
 
 			batchSize := cfg.Training.BatchTokens / cfg.SeqLen
 			if batchSize <= 0 {
@@ -135,6 +147,7 @@ func TestIntegrationExampleConfigs_EvalForwardPass(t *testing.T) {
 			}
 
 			shrinkConfigForTest(cfg)
+			attachSyntheticCharFeaturesForTest(cfg)
 			batchSize := 1
 
 			prog, err := BuildIRProgramFromConfig(cfg)

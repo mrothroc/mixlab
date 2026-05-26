@@ -159,80 +159,6 @@ func countBlockRangeWeightsWithRefs(specs []BlockSpec, refs []int, start, end in
 	return total, nil
 }
 
-func bigramWeightCount(modelDim, bigramVocabSize, bigramDim int) int {
-	if bigramVocabSize <= 0 {
-		return 0
-	}
-	if bigramDim <= 0 {
-		bigramDim = modelDim
-	}
-	count := 2 // embed table + learned scale
-	if bigramDim != modelDim {
-		count++
-	}
-	return count
-}
-
-func trigramWeightCount(modelDim, trigramVocabSize, trigramDim int) int {
-	if trigramVocabSize <= 0 {
-		return 0
-	}
-	if trigramDim <= 0 {
-		trigramDim = modelDim
-	}
-	count := 2 // embed table + learned scale
-	if trigramDim != modelDim {
-		count++
-	}
-	return count
-}
-
-func emitBigramIR(prog *Program, B, T, D, wi, bigramVocabSize, bigramDim int) int {
-	if bigramVocabSize <= 0 {
-		return wi
-	}
-	if bigramDim <= 0 {
-		bigramDim = D
-	}
-	prog.DeclareInput("bigram_ids", TensorInt32, []int{B, T})
-	prog.Embed(weightName(wi), "bigram_ids", "bigram_embed")
-	wi++
-	prog.Reshape("bigram_embed", []int{B * T, bigramDim}, "bigram_flat")
-	bigramState := "bigram_flat"
-	if bigramDim != D {
-		prog.MatMul(bigramState, weightName(wi), "bigram_proj")
-		wi++
-		bigramState = "bigram_proj"
-	}
-	prog.Mul(bigramState, weightName(wi), "bigram_scaled")
-	wi++
-	prog.Add("x_tok", "bigram_scaled", "x")
-	return wi
-}
-
-func emitTrigramIR(prog *Program, baseState string, B, T, D, wi, trigramVocabSize, trigramDim int) int {
-	if trigramVocabSize <= 0 {
-		return wi
-	}
-	if trigramDim <= 0 {
-		trigramDim = D
-	}
-	prog.DeclareInput("trigram_ids", TensorInt32, []int{B, T})
-	prog.Embed(weightName(wi), "trigram_ids", "trigram_embed")
-	wi++
-	prog.Reshape("trigram_embed", []int{B * T, trigramDim}, "trigram_flat")
-	trigramState := "trigram_flat"
-	if trigramDim != D {
-		prog.MatMul(trigramState, weightName(wi), "trigram_proj")
-		wi++
-		trigramState = "trigram_proj"
-	}
-	prog.Mul(trigramState, weightName(wi), "trigram_scaled")
-	wi++
-	prog.Add(baseState, "trigram_scaled", "x")
-	return wi
-}
-
 // CountWeights returns the total number of IR weight tensors for a given
 // architecture configuration. This is used to validate weight registration.
 //
@@ -386,6 +312,26 @@ func countWeightsWithNgramsRecurrenceParallelHeadLayout(
 		return 0, err
 	}
 	return total + trigramWeightCount(modelDim, trigramVocabSize, trigramDim), nil
+}
+
+func countWeightsWithFeaturesRecurrenceParallelHeadLayout(
+	modelDim int,
+	mlpMult float64,
+	reserveHead bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	charVocabSize, charDim int,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	blocks []BlockSpec,
+	recurrence []int,
+) (int, error) {
+	total, err := countWeightsWithNgramsRecurrenceParallelHeadLayout(modelDim, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
+	if err != nil {
+		return 0, err
+	}
+	return total + charWeightCount(modelDim, charVocabSize, charDim), nil
 }
 
 // CountWeightsWithNgramsRecurrenceAndParallel returns the IR weight tensor
@@ -684,7 +630,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 ) (*Program, error) {
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix,
-		unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
+		unet, parallelResidual, 0, 0, 0, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
 		logitSoftcap, dropout, blocks, recurrence, executionOrder, mtp, reserveHead, useTiedHead,
 		objective,
 		false,
@@ -701,6 +647,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	blockScales, residMix bool,
 	unet bool,
 	parallelResidual bool,
+	charVocabSize, charDim, charMaxPerToken int,
 	bigramVocabSize, bigramDim int,
 	trigramVocabSize, trigramDim int,
 	logitSoftcap float32,
@@ -736,6 +683,21 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	if V <= 0 {
 		return nil, fmt.Errorf("invalid vocab_size=%d", V)
+	}
+	if charVocabSize < 0 {
+		return nil, fmt.Errorf("invalid char_vocab_size=%d", charVocabSize)
+	}
+	if charVocabSize > 0 && charVocabSize < 257 {
+		return nil, fmt.Errorf("invalid char_vocab_size=%d", charVocabSize)
+	}
+	if charDim < 0 {
+		return nil, fmt.Errorf("invalid char_dim=%d", charDim)
+	}
+	if charMaxPerToken < 0 {
+		return nil, fmt.Errorf("invalid char_max_per_token=%d", charMaxPerToken)
+	}
+	if charVocabSize > 0 && charMaxPerToken == 0 {
+		charMaxPerToken = 16
 	}
 	if bigramVocabSize < 0 {
 		return nil, fmt.Errorf("invalid bigram_vocab_size=%d", bigramVocabSize)
@@ -777,7 +739,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		return nil, fmt.Errorf("untied LM head requires reserved head weight")
 	}
 
-	nWeights, err := countWeightsWithNgramsRecurrenceParallelHeadLayout(D, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
+	nWeights, err := countWeightsWithFeaturesRecurrenceParallelHeadLayout(D, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
 	if err != nil {
 		return nil, err
 	}
@@ -815,18 +777,22 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		}
 	}
 
-	// Flatten to [B*T, D], leaving room to inject model-level n-gram embeddings.
+	// Flatten to [B*T, D], leaving room to inject optional model-level feature embeddings.
 	xState := "x"
-	if bigramVocabSize > 0 || trigramVocabSize > 0 {
+	if charVocabSize > 0 || bigramVocabSize > 0 || trigramVocabSize > 0 {
 		xState = "x_tok"
 	}
 	prog.Reshape(embedState, []int{B * T, D}, xState)
-	wi = emitBigramIR(prog, B, T, D, wi, bigramVocabSize, bigramDim)
-	trigramBase := "x_tok"
-	if bigramVocabSize > 0 {
-		trigramBase = "x"
+	featureBase := xState
+	wi = emitCharIR(prog, featureBase, B, T, D, wi, charVocabSize, charDim, charMaxPerToken)
+	if charVocabSize > 0 {
+		featureBase = "x"
 	}
-	wi = emitTrigramIR(prog, trigramBase, B, T, D, wi, trigramVocabSize, trigramDim)
+	wi = emitBigramIR(prog, featureBase, B, T, D, wi, bigramVocabSize, bigramDim)
+	if bigramVocabSize > 0 {
+		featureBase = "x"
+	}
+	wi = emitTrigramIR(prog, featureBase, B, T, D, wi, trigramVocabSize, trigramDim)
 	if residMix {
 		prog.ScalarMul("x", 1.0, "x0")
 	}

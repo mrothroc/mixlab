@@ -446,6 +446,24 @@ func trigramWeightShapes(modelDim, trigramVocabSize, trigramDim int) []WeightMet
 	return shapes
 }
 
+func charWeightShapes(modelDim, charVocabSize, charDim int) []WeightMeta {
+	if charVocabSize <= 0 {
+		return nil
+	}
+	D := modelDim
+	if charDim <= 0 {
+		charDim = D
+	}
+	shapes := []WeightMeta{
+		{Name: "char_table", Shape: []int{charVocabSize, charDim}},
+	}
+	if charDim != D {
+		shapes = append(shapes, WeightMeta{Name: "char_proj", Shape: []int{charDim, D}})
+	}
+	shapes = append(shapes, WeightMeta{Name: "char_scale", Shape: []int{1}, InitOne: true})
+	return shapes
+}
+
 // CollectWeightShapes returns the complete ordered list of WeightMeta for an
 // architecture configuration. The order matches the weight indices used by
 // BuildIRProgram: embed, head, final_norm, then block weights in emission order.
@@ -545,7 +563,7 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if err != nil {
 		return nil, fmt.Errorf("blocks: %w", err)
 	}
-	metas, err := collectWeightShapesWithRefsHeadLayout(
+	metas, err := collectWeightShapesWithRefsHeadLayoutFeatures(
 		cfg.ModelDim,
 		cfg.VocabSize,
 		cfg.SeqLen,
@@ -555,6 +573,8 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 		cfg.ResidMix,
 		cfg.UNet,
 		cfg.ParallelResidual,
+		cfg.CharVocabSize,
+		cfg.EffectiveCharDim(),
 		cfg.BigramVocabSize,
 		cfg.EffectiveBigramDim(),
 		cfg.TrigramVocabSize,
@@ -609,6 +629,22 @@ func collectWeightShapesWithRefsHeadLayout(
 	blocks []BlockSpec,
 	refs []int,
 ) ([]WeightMeta, error) {
+	return collectWeightShapesWithRefsHeadLayoutFeatures(modelDim, vocabSize, seqLen, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, 0, 0, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, refs)
+}
+
+func collectWeightShapesWithRefsHeadLayoutFeatures(
+	modelDim, vocabSize, seqLen int,
+	mlpMult float64,
+	reserveHead bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	charVocabSize, charDim int,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	blocks []BlockSpec,
+	refs []int,
+) ([]WeightMeta, error) {
 	D := modelDim
 	V := vocabSize
 	T := seqLen
@@ -617,6 +653,15 @@ func collectWeightShapesWithRefsHeadLayout(
 	}
 	if V <= 0 {
 		return nil, fmt.Errorf("invalid vocab_size=%d", V)
+	}
+	if charVocabSize < 0 {
+		return nil, fmt.Errorf("invalid char_vocab_size=%d", charVocabSize)
+	}
+	if charVocabSize > 0 && charVocabSize < 257 {
+		return nil, fmt.Errorf("invalid char_vocab_size=%d", charVocabSize)
+	}
+	if charDim < 0 {
+		return nil, fmt.Errorf("invalid char_dim=%d", charDim)
 	}
 	if bigramVocabSize < 0 {
 		return nil, fmt.Errorf("invalid bigram_vocab_size=%d", bigramVocabSize)
@@ -648,6 +693,7 @@ func collectWeightShapesWithRefsHeadLayout(
 		shapes = append(shapes, WeightMeta{Name: "head", Shape: []int{D, V}})
 	}
 	shapes = append(shapes, WeightMeta{Name: "final_norm", Shape: []int{D}, IsNormScale: true, InitOne: true})
+	shapes = append(shapes, charWeightShapes(D, charVocabSize, charDim)...)
 	shapes = append(shapes, bigramWeightShapes(D, bigramVocabSize, bigramDim)...)
 	shapes = append(shapes, trigramWeightShapes(D, trigramVocabSize, trigramDim)...)
 

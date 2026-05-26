@@ -58,6 +58,7 @@ const (
 	OpHGRN2Scan            = 70 // OP_HGRN2_SCAN
 	OpMLSTMScan            = 71 // OP_MLSTM_SCAN
 	OpDebertaRelativeBias  = 72 // OP_DEBERTA_RELATIVE_BIAS
+	OpCharFeatureBag       = 73 // OP_CHAR_FEATURE_BAG
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -388,6 +389,13 @@ func (p *Program) MLSTMScan(q, k, v, inputGate, forgetGate, out string, B, T, H,
 // [H,2*window,D]. Output is [B,H,T,T].
 func (p *Program) DebertaRelativeBias(q, k, posKey, posQuery, out string, B, T, H, D, window int) {
 	p.AddOp(OpDebertaRelativeBias, []string{q, k, posKey, posQuery}, []string{out}, nil, []int{B, T, H, D, window})
+}
+
+// CharFeatureBag sums fixed sparse character/byte feature embeddings for each
+// token. table is [char_vocab_size,D], ids is [B,T,K], output is [B*T,D].
+// Padding id 0 contributes exactly zero.
+func (p *Program) CharFeatureBag(table, ids, out string, B, T, K, D int) {
+	p.AddOp(OpCharFeatureBag, []string{table, ids}, []string{out}, nil, []int{B, T, K, D})
 }
 
 // GatherPositions selects K entries from the position axis of a [B,T,D] tensor.
