@@ -107,6 +107,7 @@ const (
 	OptimizerAdamW OptimizerKind = iota
 	OptimizerMuon
 	OptimizerSGD
+	OptimizerLAMB
 )
 
 type NewtonSchulzVariant int

@@ -189,6 +189,59 @@ func TestBuildTrainerOptimizerSpec_NorMuon(t *testing.T) {
 	}
 }
 
+func TestBuildTrainerOptimizerSpec_LAMBWholeModel(t *testing.T) {
+	cfg := &ArchConfig{
+		Name:      "lamb_optimizer",
+		ModelDim:  16,
+		VocabSize: 32,
+		SeqLen:    4,
+		Blocks: []BlockSpec{
+			{Type: "plain", Heads: 2},
+		},
+		Training: DefaultTrainingSpec(),
+	}
+	cfg.Training.Optimizer = "lamb"
+	cfg.Training.LAMBBeta1 = 0.87
+	cfg.Training.LAMBBeta2 = 0.997
+	cfg.Training.LAMBEps = 1e-5
+	cfg.Training.ApplyDefaults()
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	spec, err := buildTrainerOptimizerSpec(cfg, shapes)
+	if err != nil {
+		t.Fatalf("buildTrainerOptimizerSpec: %v", err)
+	}
+
+	seenEmbed := false
+	seenHead := false
+	seenScalar := false
+	seenMatrix := false
+	for i, shape := range shapes {
+		group := spec.Groups[spec.Weights[i].GroupIndex]
+		if group.Kind != gpu.OptimizerLAMB {
+			t.Fatalf("weight %q group kind=%d want LAMB", shape.Name, group.Kind)
+		}
+		if group.Beta1 != 0.87 || group.Beta2 != 0.997 || group.Epsilon != 1e-5 {
+			t.Fatalf("weight %q LAMB hyperparams=%+v", shape.Name, group)
+		}
+		switch {
+		case shape.Name == "embed":
+			seenEmbed = true
+		case shape.Name == "head":
+			seenHead = true
+		case shape.IsNormScale:
+			seenScalar = true
+		case len(shape.Shape) == 2:
+			seenMatrix = true
+		}
+	}
+	if !seenEmbed || !seenHead || !seenScalar || !seenMatrix {
+		t.Fatalf("did not see all optimizer classes: embed=%v head=%v scalar=%v matrix=%v", seenEmbed, seenHead, seenScalar, seenMatrix)
+	}
+}
+
 func TestBuildTrainerOptimizerSpec_CautiousWeightDecay(t *testing.T) {
 	cfg := &ArchConfig{
 		Name:      "cautious_weight_decay_optimizer",

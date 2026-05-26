@@ -448,8 +448,29 @@ mx::array apply_weight_decay(
     bool decay,
     int step_count,
     float effective_lr) {
+  auto weight_decay_term = [&]() -> mx::array {
+    auto decay_term = w;
+    const int training_step = std::max(0, step_count - 1);
+    if (group.cautious_weight_decay && training_step >= group.cautious_weight_decay_activation_step) {
+      auto mask = mx::astype(mx::greater(w * g, mx::array(0.0f, mx::float32)), w.dtype());
+      decay_term = decay_term * mask;
+    }
+    return group.weight_decay * decay_term;
+  };
   if (!decay || group.weight_decay <= 0.0f) {
     return w;
+  }
+  return w - effective_lr * weight_decay_term();
+}
+
+mx::array weight_decay_update_term(
+    const mx::array& w,
+    const mx::array& g,
+    const OptimizerGroupConfig& group,
+    bool decay,
+    int step_count) {
+  if (!decay || group.weight_decay <= 0.0f) {
+    return mx::zeros_like(w);
   }
   auto decay_term = w;
   const int training_step = std::max(0, step_count - 1);
@@ -457,7 +478,18 @@ mx::array apply_weight_decay(
     auto mask = mx::astype(mx::greater(w * g, mx::array(0.0f, mx::float32)), w.dtype());
     decay_term = decay_term * mask;
   }
-  return w - (effective_lr * group.weight_decay) * decay_term;
+  return group.weight_decay * decay_term;
+}
+
+mx::array lamb_trust_ratio(const mx::array& w, const mx::array& update) {
+  auto w_norm = mx::sqrt(mx::sum(mx::square(mx::astype(w, mx::float32))));
+  auto update_norm = mx::sqrt(mx::sum(mx::square(mx::astype(update, mx::float32))));
+  auto raw_ratio = w_norm / update_norm;
+  auto positive_norms = mx::logical_and(
+      mx::greater(w_norm, mx::array(0.0f, mx::float32)),
+      mx::greater(update_norm, mx::array(0.0f, mx::float32)));
+  auto valid_ratio = mx::logical_and(positive_norms, mx::isfinite(raw_ratio));
+  return mx::where(valid_ratio, raw_ratio, mx::array(1.0f, mx::float32));
 }
 
 void clip_gradients(std::vector<mx::array>& grads, float max_grad_norm) {
@@ -1195,6 +1227,7 @@ const char* low_memory_mamba3_gradient_mode_label(Mamba3LowMemoryGradientMode mo
 void init_lora_optimizer_state(const mx::array& weight, const OptimizerGroupConfig& group, LoraOptimizerState& state) {
   switch (group.kind) {
     case OptimizerKind::AdamW:
+    case OptimizerKind::Lamb:
       state.adam_m = mx::zeros_like(weight);
       state.adam_v = mx::zeros_like(weight);
       state.has_adam_state = 1;
@@ -1251,6 +1284,25 @@ void apply_optimizer_update(
 
       w = apply_weight_decay(w, g, group, decay, step_count, effective_lr);
       w = w - effective_lr * mhat / (mx::sqrt(vhat) + group.eps);
+      break;
+    }
+    case OptimizerKind::Lamb: {
+      if (state.has_adam_state == 0) {
+        throw std::runtime_error("LAMB state missing for LoRA adapter");
+      }
+      const float b1t = 1.0f - std::pow(group.beta1, static_cast<float>(step_count));
+      const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(step_count));
+      const float one_minus_beta1 = 1.0f - group.beta1;
+      const float one_minus_beta2 = 1.0f - group.beta2;
+      state.adam_m = group.beta1 * state.adam_m + one_minus_beta1 * g;
+      state.adam_v = group.beta2 * state.adam_v + one_minus_beta2 * mx::square(g);
+
+      auto mhat = state.adam_m / b1t;
+      auto vhat = state.adam_v / b2t;
+      auto update = mhat / (mx::sqrt(vhat) + group.eps);
+      update = update + weight_decay_update_term(w, g, group, decay, step_count);
+      auto trust_ratio = lamb_trust_ratio(w, update);
+      w = w - effective_lr * trust_ratio * update;
       break;
     }
     case OptimizerKind::Muon: {
@@ -1681,6 +1733,25 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
 
       w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
       w = w - effective_lr * mhat / (mx::sqrt(vhat) + group.eps);
+      break;
+    }
+    case OptimizerKind::Lamb: {
+      if (has_adam_state[i] == 0) {
+        throw std::runtime_error("LAMB state missing for weight");
+      }
+      const float b1t = 1.0f - std::pow(group.beta1, static_cast<float>(step_count));
+      const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(step_count));
+      const float one_minus_beta1 = 1.0f - group.beta1;
+      const float one_minus_beta2 = 1.0f - group.beta2;
+      adam_m[i] = group.beta1 * adam_m[i] + one_minus_beta1 * g;
+      adam_v[i] = group.beta2 * adam_v[i] + one_minus_beta2 * mx::square(g);
+
+      auto mhat = adam_m[i] / b1t;
+      auto vhat = adam_v[i] / b2t;
+      auto update = mhat / (mx::sqrt(vhat) + group.eps);
+      update = update + weight_decay_update_term(w, g, group, spec.decay, step_count);
+      auto trust_ratio = lamb_trust_ratio(w, update);
+      w = w - effective_lr * trust_ratio * update;
       break;
     }
     case OptimizerKind::Muon: {
@@ -2891,6 +2962,7 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
     const auto& group = groups[spec.group_index];
     switch (group.kind) {
       case OptimizerKind::AdamW:
+      case OptimizerKind::Lamb:
         trainer->adam_m.push_back(mx::zeros_like(initial_weights[i]));
         trainer->adam_v.push_back(mx::zeros_like(initial_weights[i]));
         trainer->has_adam_state.push_back(1);

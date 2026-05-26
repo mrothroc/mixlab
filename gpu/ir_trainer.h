@@ -20,6 +20,7 @@ enum class OptimizerKind : uint8_t {
   AdamW = 0,
   Muon = 1,
   SGD = 2,
+  Lamb = 3,
 };
 
 enum class QATMode : uint8_t {

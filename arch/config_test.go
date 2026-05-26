@@ -310,6 +310,15 @@ func TestTrainingDefaults(t *testing.T) {
 	if got.Training.MuonBackendSteps != d.MuonBackendSteps {
 		t.Errorf("default muon_backend_steps = %d, want %d", got.Training.MuonBackendSteps, d.MuonBackendSteps)
 	}
+	if got.Training.LAMBBeta1 != d.LAMBBeta1 {
+		t.Errorf("default lamb_beta1 = %g, want %g", got.Training.LAMBBeta1, d.LAMBBeta1)
+	}
+	if got.Training.LAMBBeta2 != d.LAMBBeta2 {
+		t.Errorf("default lamb_beta2 = %g, want %g", got.Training.LAMBBeta2, d.LAMBBeta2)
+	}
+	if got.Training.LAMBEps != d.LAMBEps {
+		t.Errorf("default lamb_eps = %g, want %g", got.Training.LAMBEps, d.LAMBEps)
+	}
 	if got.Training.EmbedWeightDecay != d.WeightDecay {
 		t.Errorf("default embed_weight_decay = %g, want %g", got.Training.EmbedWeightDecay, d.WeightDecay)
 	}
@@ -423,6 +432,30 @@ func TestOptimizerFieldParsing(t *testing.T) {
 		t.Errorf("normuon optimizer = %q, want normuon", cfg5.Training.Optimizer)
 	}
 
+	cfg6, err := ParseArchConfig([]byte(`{
+		"model_dim": 128, "vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 10, "lr": 1e-3, "batch_tokens": 128, "seed": 1, "optimizer": " LAMB ", "lamb_beta1": 0.0, "lamb_beta2": 0.999, "lamb_eps": 1e-6}
+	}`), "lamb")
+	if err != nil {
+		t.Fatalf("parse lamb: %v", err)
+	}
+	if cfg6.Training.Optimizer != "lamb" {
+		t.Errorf("lamb optimizer = %q, want lamb", cfg6.Training.Optimizer)
+	}
+	if cfg6.Training.LAMBBeta1 != 0 || cfg6.Training.LAMBBeta2 != 0.999 || cfg6.Training.LAMBEps != 1e-6 {
+		t.Errorf("lamb hyperparams = beta1=%g beta2=%g eps=%g", cfg6.Training.LAMBBeta1, cfg6.Training.LAMBBeta2, cfg6.Training.LAMBEps)
+	}
+	roundTripLAMB, err := json.Marshal(cfg6)
+	if err != nil {
+		t.Fatalf("marshal lamb: %v", err)
+	}
+	if !strings.Contains(string(roundTripLAMB), `"optimizer":"lamb"`) ||
+		!strings.Contains(string(roundTripLAMB), `"lamb_beta2":0.999`) ||
+		!strings.Contains(string(roundTripLAMB), `"lamb_eps":0.000001`) {
+		t.Fatalf("round-trip JSON missing LAMB fields: %s", roundTripLAMB)
+	}
+
 	_, err = ParseArchConfig([]byte(`{
 		"model_dim": 128, "vocab_size": 1024,
 		"blocks": [{"type": "plain", "heads": 4}],
@@ -430,6 +463,36 @@ func TestOptimizerFieldParsing(t *testing.T) {
 	}`), "bad_optimizer")
 	if err == nil {
 		t.Fatal("expected invalid optimizer error")
+	}
+}
+
+func TestLAMBValidation(t *testing.T) {
+	tests := []struct {
+		name     string
+		training string
+		want     string
+	}{
+		{"bad_beta1_negative", `"optimizer": "lamb", "lamb_beta1": -0.1`, "lamb_beta1"},
+		{"bad_beta1_one", `"optimizer": "lamb", "lamb_beta1": 1.0`, "lamb_beta1"},
+		{"bad_beta2_negative", `"optimizer": "lamb", "lamb_beta2": -0.1`, "lamb_beta2"},
+		{"bad_beta2_one", `"optimizer": "lamb", "lamb_beta2": 1.0`, "lamb_beta2"},
+		{"bad_eps_zero", `"optimizer": "lamb", "lamb_eps": 0.0`, "lamb_eps"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseArchConfig([]byte(`{
+				"model_dim": 128,
+				"vocab_size": 1024,
+				"blocks": [{"type": "plain", "heads": 4}],
+				"training": {"steps": 10, "lr": 1e-3, "batch_tokens": 128, "seed": 1, `+tt.training+`}
+			}`), tt.name)
+			if err == nil {
+				t.Fatal("ParseArchConfig succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error %q does not mention %q", err, tt.want)
+			}
+		})
 	}
 }
 

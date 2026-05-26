@@ -94,6 +94,11 @@ var exampleConfigs = []exampleConfigCase{
 		wantWeights: 31, // 3 base + 2*(10 relative plain + 4 swiglu)
 		minOps:      10,
 	},
+	{
+		filename:    "lamb_plain_tiny.json",
+		wantWeights: 25, // 3 base + 2*(7 plain + 4 swiglu)
+		minOps:      10,
+	},
 	// --- New block types (needs block impl) ---
 	{
 		filename:    "mamba_2L.json",

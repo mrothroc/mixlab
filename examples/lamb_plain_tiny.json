@@ -1,0 +1,28 @@
+{
+  "name": "lamb_plain_tiny",
+
+  // Tiny causal transformer using whole-model LAMB.
+  "model_dim": 64,
+  "vocab_size": 512,
+  "seq_len": 64,
+
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+
+  "training": {
+    "steps": 200,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "optimizer": "lamb",
+    "lamb_beta1": 0.9,
+    "lamb_beta2": 0.999,
+    "lamb_eps": 1e-6,
+    "seed": 42,
+    "batch_tokens": 512
+  }
+}

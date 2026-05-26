@@ -192,6 +192,41 @@ func TestBuildTrainerOptimizerSpec_SGD(t *testing.T) {
 	}
 }
 
+func TestBuildTrainerOptimizerSpec_LAMB(t *testing.T) {
+	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
+		Weights: []OptimizerWeightMetadata{
+			{Name: "embed", Shape: []int{10, 4}},
+			{Name: "head", Shape: []int{4, 10}},
+			{Name: "norm", Shape: []int{4}, IsNormScale: true},
+			{Name: "wq", Shape: []int{4, 4}},
+		},
+		Embed:  OptimizerSettings{Name: "lamb", LR: 1, Beta1: 0.11, Beta2: 0.91, Epsilon: 1e-6, WeightDecay: 0.01},
+		Head:   OptimizerSettings{Name: "lamb", LR: 2, Beta1: 0.12, Beta2: 0.92, Epsilon: 2e-6, WeightDecay: 0.02},
+		Scalar: OptimizerSettings{Name: "lamb", LR: 3, Beta1: 0.13, Beta2: 0.93, Epsilon: 3e-6, WeightDecay: 0.03},
+		Matrix: OptimizerSettings{Name: "lamb", LR: 4, Beta1: 0.14, Beta2: 0.94, Epsilon: 4e-6, WeightDecay: 0.04},
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainerOptimizerSpec error = %v", err)
+	}
+	if len(spec.Groups) != 4 {
+		t.Fatalf("len(spec.Groups) = %d, want 4", len(spec.Groups))
+	}
+	for i, group := range spec.Groups {
+		if group.Kind != OptimizerLAMB {
+			t.Fatalf("group %d Kind=%d, want LAMB (%d)", i, group.Kind, OptimizerLAMB)
+		}
+	}
+	if spec.Groups[0].Beta1 != 0.11 || spec.Groups[1].Beta2 != 0.92 || spec.Groups[2].Epsilon != 3e-6 || spec.Groups[3].WeightDecay != 0.04 {
+		t.Fatalf("LAMB groups did not preserve settings: %+v", spec.Groups)
+	}
+	if spec.Weights[2].Decay {
+		t.Fatalf("scalar LAMB weight should still not decay: %+v", spec.Weights[2])
+	}
+	if !spec.Weights[3].Decay {
+		t.Fatalf("matrix LAMB weight should decay: %+v", spec.Weights[3])
+	}
+}
+
 func TestBuildTrainerOptimizerSpec_MuonEqRForMatrix(t *testing.T) {
 	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
 		Weights: []OptimizerWeightMetadata{

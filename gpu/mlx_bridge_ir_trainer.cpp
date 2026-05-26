@@ -56,6 +56,9 @@ std::vector<mlx_ir::OptimizerGroupConfig> read_optimizer_groups(
       case 2:
         kind = mlx_ir::OptimizerKind::SGD;
         break;
+      case 3:
+        kind = mlx_ir::OptimizerKind::Lamb;
+        break;
       default:
         throw std::runtime_error("unsupported optimizer kind");
     }

@@ -746,17 +746,20 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `ttt_lr` | number | No | `1e-5` | Learning rate for TTT updates. Must be `>= 0`; keep much smaller than training `lr`. |
 | `ttt_rank` | integer | No | `4` | LoRA rank used when `ttt_mode="lora"`. Rank-2-or-higher weights get temporary adapters `W + A @ B` with `A:[M,R]`, `B:[R,N]`; only `A` and `B` train during LoRA-TTT. Must be `> 0`. |
 | `hardware_tflops` | number | No | `0` | Peak hardware TFLOPS used to log MFU next to `tok/s`. `0` disables MFU logging. Must be `>= 0`. |
-| `optimizer` | string | No | `"muon"` | Optimizer for matrix (rank ≥ 2) weights: `"muon"`, `"muon_eq_r"`, `"normuon"`, or `"adamw"`. `muon_eq_r` applies post-orthogonal row-L2 normalization; `normuon` applies NorMuon neuron-wise second-moment normalization after orthogonalization. Embed, head, and scalar groups always use AdamW. |
+| `optimizer` | string | No | `"muon"` | Optimizer selector: `"muon"`/`"muon_eq_r"`/`"normuon"` use Muon variants for matrix weights and AdamW for embed/head/scalar groups; `"adamw"` uses AdamW for all groups; `"lamb"` uses LAMB for all groups. |
 | `qat` | string | No | `"none"` | Quantization-aware training mode for rank-2 weights during the training forward pass. `"none"` disables it, `"int8"` applies per-row fake int8 quantization, and `"int6"` applies a coarser fake quantization with STE. |
 | `weight_init` | string | No | `"xavier_uniform"` | Initialization for rank ≥ 2 weights: `"xavier_uniform"` or `"normal"`. 1D weights are always ones (norms) or zeros. |
 | `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` initialization. Ignored when `weight_init` is `"xavier_uniform"`. |
 | `grad_clip` | number | No | `0` | Max grad norm. `0` means no clipping. Must be `>= 0`. |
 | `weight_decay` | number | No | `0.01` | Global fallback weight decay. Must be `>= 0`. |
-| `cautious_weight_decay` | boolean | No | `false` | When true, applies weight decay only to elements where parameter and gradient signs agree. This is an optimizer modifier for AdamW, Muon, MuonEq-R, NorMuon, and SGD paths, not a separate optimizer kind. |
+| `cautious_weight_decay` | boolean | No | `false` | When true, applies weight decay only to elements where parameter and gradient signs agree. This is an optimizer modifier for AdamW, LAMB, Muon, MuonEq-R, NorMuon, and SGD paths, not a separate optimizer kind. |
 | `cautious_weight_decay_activation_frac` | number | No | `0` | Fraction of training before cautious weight decay activates. Before activation, standard weight decay is used. `0` means active from step 0 when `cautious_weight_decay=true`; must be in `[0,1]`. |
 | `beta1` | number | No | `0.9` | AdamW beta1. Also seeds Muon momentum when `muon_momentum` is omitted. |
 | `beta2` | number | No | `0.95` | AdamW and Muon beta2. |
 | `epsilon` | number | No | `1e-8` | AdamW / Muon epsilon. |
+| `lamb_beta1` | number | No | `0.9` | LAMB beta1. Used only when `optimizer: "lamb"`; must be in `[0,1)`. |
+| `lamb_beta2` | number | No | `0.999` | LAMB beta2. Used only when `optimizer: "lamb"`; must be in `[0,1)`. |
+| `lamb_eps` | number | No | `1e-6` | LAMB epsilon. Used only when `optimizer: "lamb"`; must be `> 0`. |
 | `seed` | integer | No | `42` | RNG seed. `0` is treated as omitted and replaced with `42`. |
 | `batch_tokens` | integer | No | `1024` | Tokens per optimization step. Must be divisible by `seq_len`. |
 | `shuffle_chunk_tokens` | integer | No | `seq_len` | Token-block shuffle granularity for train/validation loaders. Values `<= 0` inherit `seq_len`; set to `2048` to reproduce the previous fixed-block behavior. |
@@ -841,14 +844,14 @@ V1 supports distillation only with `objective: "causal"`. It rejects masked obje
 
 ### Optimizer groups
 
-The trainer classifies weights into four optimizer groups:
+The trainer classifies weights into four optimizer groups. Muon-family optimizers affect the matrix group only; `optimizer: "adamw"` and `optimizer: "lamb"` apply to all groups.
 
 | Group | Optimizer | Typical weights | LR field | Weight-decay field |
 |------|-----------|-----------------|----------|--------------------|
-| Embedding | AdamW | `embed`, `bigram_table` | `embed_lr` | `embed_weight_decay` |
-| Head | AdamW | `head` | `head_lr` | `head_weight_decay` |
-| Scalar | AdamW | Norm scales, decay vectors, learned scalar scales | `scalar_lr` | `scalar_weight_decay` |
-| Matrix | Muon | Projection and FFN matrices | `matrix_lr` | `matrix_weight_decay` |
+| Embedding | AdamW or LAMB | `embed`, `bigram_table` | `embed_lr` | `embed_weight_decay` |
+| Head | AdamW or LAMB | `head` | `head_lr` | `head_weight_decay` |
+| Scalar | AdamW or LAMB | Norm scales, decay vectors, learned scalar scales | `scalar_lr` | `scalar_weight_decay` |
+| Matrix | Muon variant, AdamW, or LAMB | Projection and FFN matrices | `matrix_lr` | `matrix_weight_decay` |
 
 ### Training phases
 

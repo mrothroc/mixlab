@@ -212,6 +212,9 @@ type TrainingSpec struct {
 	Beta1                             float32           `json:"beta1"`
 	Beta2                             float32           `json:"beta2"`
 	Epsilon                           float32           `json:"epsilon"`
+	LAMBBeta1                         float32           `json:"lamb_beta1,omitempty"`
+	LAMBBeta2                         float32           `json:"lamb_beta2,omitempty"`
+	LAMBEps                           float32           `json:"lamb_eps,omitempty"`
 	Seed                              int64             `json:"seed"`
 	BatchTokens                       int               `json:"batch_tokens"`
 	ShuffleChunkTokens                int               `json:"shuffle_chunk_tokens,omitempty"`
@@ -227,7 +230,7 @@ type TrainingSpec struct {
 	// (You Jiacheng, arXiv:2505.16932).
 	NewtonSchulzVariant string  `json:"newton_schulz_variant,omitempty"`
 	MuonNesterov        *bool   `json:"muon_nesterov,omitempty"`
-	Optimizer           string  `json:"optimizer,omitempty"` // "muon" (default), "muon_eq_r", "normuon", or "adamw" for matrix weights
+	Optimizer           string  `json:"optimizer,omitempty"` // "muon" (default), "muon_eq_r", "normuon", "adamw", or "lamb"
 	QAT                 string  `json:"qat,omitempty"`       // "none" (default), "int8", or "int6"
 	QATStart            int     `json:"qat_start,omitempty"`
 	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
@@ -249,6 +252,9 @@ type TrainingSpec struct {
 	mlmMaskTokenIDSet     bool
 	mlmReplacementProbSet bool
 	hybridCLMFractionSet  bool
+	lambBeta1Set          bool
+	lambBeta2Set          bool
+	lambEpsSet            bool
 }
 
 func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
@@ -270,6 +276,9 @@ func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	_, keptProbSet := fields["mlm_kept_unchanged_prob"]
 	t.mlmReplacementProbSet = maskProbSet || randomProbSet || keptProbSet
 	_, t.hybridCLMFractionSet = fields["hybrid_clm_fraction"]
+	_, t.lambBeta1Set = fields["lamb_beta1"]
+	_, t.lambBeta2Set = fields["lamb_beta2"]
+	_, t.lambEpsSet = fields["lamb_eps"]
 	return nil
 }
 
@@ -345,6 +354,9 @@ func DefaultTrainingSpec() TrainingSpec {
 		Beta1:             0.9,
 		Beta2:             0.95,
 		Epsilon:           1e-8,
+		LAMBBeta1:         0.9,
+		LAMBBeta2:         0.999,
+		LAMBEps:           1e-6,
 		Seed:              42,
 		BatchTokens:       1024,
 		TTTMode:           "full",
@@ -410,6 +422,15 @@ func (t *TrainingSpec) ApplyDefaults() {
 	}
 	if t.Epsilon == 0 {
 		t.Epsilon = d.Epsilon
+	}
+	if !t.lambBeta1Set && t.LAMBBeta1 == 0 {
+		t.LAMBBeta1 = d.LAMBBeta1
+	}
+	if !t.lambBeta2Set && t.LAMBBeta2 == 0 {
+		t.LAMBBeta2 = d.LAMBBeta2
+	}
+	if !t.lambEpsSet && t.LAMBEps == 0 {
+		t.LAMBEps = d.LAMBEps
 	}
 	if t.EmbedLR == 0 {
 		t.EmbedLR = float32(t.LR)
@@ -702,9 +723,18 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, fmt.Errorf("config %q has invalid training.muon_momentum=%g (must be >= 0)", source, cfg.Training.MuonMomentum)
 	}
 	switch cfg.Training.Optimizer {
-	case "", "adamw", "muon", "muon_eq_r", "normuon":
+	case "", "adamw", "muon", "muon_eq_r", "normuon", "lamb":
 	default:
-		return nil, fmt.Errorf("config %q has invalid training.optimizer=%q (must be \"adamw\", \"muon\", \"muon_eq_r\", or \"normuon\")", source, cfg.Training.Optimizer)
+		return nil, fmt.Errorf("config %q has invalid training.optimizer=%q (must be \"adamw\", \"muon\", \"muon_eq_r\", \"normuon\", or \"lamb\")", source, cfg.Training.Optimizer)
+	}
+	if cfg.Training.LAMBBeta1 < 0 || cfg.Training.LAMBBeta1 >= 1 {
+		return nil, fmt.Errorf("config %q has invalid training.lamb_beta1=%g (must be in [0,1))", source, cfg.Training.LAMBBeta1)
+	}
+	if cfg.Training.LAMBBeta2 < 0 || cfg.Training.LAMBBeta2 >= 1 {
+		return nil, fmt.Errorf("config %q has invalid training.lamb_beta2=%g (must be in [0,1))", source, cfg.Training.LAMBBeta2)
+	}
+	if cfg.Training.LAMBEps <= 0 {
+		return nil, fmt.Errorf("config %q has invalid training.lamb_eps=%g (must be > 0)", source, cfg.Training.LAMBEps)
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Training.NewtonSchulzVariant)) {
 	case "", "fixed":

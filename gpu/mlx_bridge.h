@@ -56,7 +56,7 @@ typedef struct {
 } mlx_tensor_input;
 
 typedef struct {
-    int kind; // 0=adamw, 1=muon, 2=sgd
+    int kind; // 0=adamw, 1=muon, 2=sgd, 3=lamb
     float lr;
     float beta1;
     float beta2;

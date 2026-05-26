@@ -26,6 +26,7 @@ make build
 | [mlm_tiny.json](mlm_tiny.json) | Bidirectional transformer | Masked language modeling objective |
 | [distillation_tiny.json](distillation_tiny.json) | Teacher distillation | Causal LM with internal teacher ensemble loss |
 | [deberta_relative_tiny.json](deberta_relative_tiny.json) | Relative attention transformer | DeBERTa P2C/C2P relative position bias |
+| [lamb_plain_tiny.json](lamb_plain_tiny.json) | LAMB optimizer | Whole-model LAMB optimizer on a tiny transformer |
 | [mamba_2L.json](mamba_2L.json) | Mamba SSM | Gated recurrence, no attention |
 | [retnet_2L.json](retnet_2L.json) | RetNet | Exponential decay retention |
 | [rwkv_2L.json](rwkv_2L.json) | RWKV | Linear attention with time decay |
@@ -42,6 +43,7 @@ make build
 - **Masked objectives**: Use `mlm_tiny.json` as the smallest bidirectional MLM starting point.
 - **Internal distillation**: Use `distillation_tiny.json` after training teacher checkpoints with matching `vocab_size` and `seq_len`.
 - **Relative attention**: Use `deberta_relative_tiny.json` for DeBERTa-style P2C/C2P position bias.
+- **Large-batch optimizer**: Use `lamb_plain_tiny.json` as a minimal whole-model LAMB starting point.
 - **Exploring block types**: Try `mamba_2L.json`, `retnet_2L.json`, `rwkv_2L.json`, `hgrn2_2L.json`, or `mlstm_2L.json`.
 - **Custom architectures**: See `custom_geglu.json` and [custom_geglu.md](custom_geglu.md).
 - **Advanced features**: `unet_transformer.json` and `recurrent_parallel.json` cover U-Net skips, recurrence, parallel residuals, block scales, residual mixing, tied embeddings, and TTT.

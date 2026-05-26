@@ -726,6 +726,39 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 		muonNesterov = *cfg.Training.MuonNesterov
 	}
 	matrixOptimizerName := matrixOptimizer(cfg)
+	embedOptimizerName := "adamw"
+	headOptimizerName := "adamw"
+	scalarOptimizerName := "adamw"
+	embedBeta1 := cfg.Training.Beta1
+	embedBeta2 := cfg.Training.Beta2
+	embedEps := cfg.Training.Epsilon
+	headBeta1 := cfg.Training.Beta1
+	headBeta2 := cfg.Training.Beta2
+	headEps := cfg.Training.Epsilon
+	scalarBeta1 := cfg.Training.Beta1
+	scalarBeta2 := cfg.Training.Beta2
+	scalarEps := cfg.Training.Epsilon
+	matrixBeta1 := cfg.Training.MuonMomentum
+	matrixBeta2 := cfg.Training.Beta2
+	matrixEps := cfg.Training.Epsilon
+	if cfg.Training.Optimizer == "lamb" {
+		embedOptimizerName = "lamb"
+		headOptimizerName = "lamb"
+		scalarOptimizerName = "lamb"
+		matrixOptimizerName = "lamb"
+		embedBeta1 = cfg.Training.LAMBBeta1
+		embedBeta2 = cfg.Training.LAMBBeta2
+		embedEps = cfg.Training.LAMBEps
+		headBeta1 = cfg.Training.LAMBBeta1
+		headBeta2 = cfg.Training.LAMBBeta2
+		headEps = cfg.Training.LAMBEps
+		scalarBeta1 = cfg.Training.LAMBBeta1
+		scalarBeta2 = cfg.Training.LAMBBeta2
+		scalarEps = cfg.Training.LAMBEps
+		matrixBeta1 = cfg.Training.LAMBBeta1
+		matrixBeta2 = cfg.Training.LAMBBeta2
+		matrixEps = cfg.Training.LAMBEps
+	}
 	cautiousWeightDecay := cfg.Training.CautiousWeightDecay
 	cautiousWeightDecayActivationStep := cfg.Training.EffectiveCautiousWeightDecayActivationStep()
 	wmeta := make([]gpu.OptimizerWeightMetadata, len(shapes))
@@ -739,31 +772,31 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 	return gpu.BuildTrainerOptimizerSpec(gpu.TrainerOptimizerConfig{
 		Weights: wmeta,
 		Embed: gpu.OptimizerSettings{
-			Name:                              "adamw",
+			Name:                              embedOptimizerName,
 			LR:                                cfg.Training.EmbedLR,
-			Beta1:                             cfg.Training.Beta1,
-			Beta2:                             cfg.Training.Beta2,
-			Epsilon:                           cfg.Training.Epsilon,
+			Beta1:                             embedBeta1,
+			Beta2:                             embedBeta2,
+			Epsilon:                           embedEps,
 			WeightDecay:                       cfg.Training.EmbedWeightDecay,
 			CautiousWeightDecay:               cautiousWeightDecay,
 			CautiousWeightDecayActivationStep: cautiousWeightDecayActivationStep,
 		},
 		Head: gpu.OptimizerSettings{
-			Name:                              "adamw",
+			Name:                              headOptimizerName,
 			LR:                                cfg.Training.HeadLR,
-			Beta1:                             cfg.Training.Beta1,
-			Beta2:                             cfg.Training.Beta2,
-			Epsilon:                           cfg.Training.Epsilon,
+			Beta1:                             headBeta1,
+			Beta2:                             headBeta2,
+			Epsilon:                           headEps,
 			WeightDecay:                       cfg.Training.HeadWeightDecay,
 			CautiousWeightDecay:               cautiousWeightDecay,
 			CautiousWeightDecayActivationStep: cautiousWeightDecayActivationStep,
 		},
 		Scalar: gpu.OptimizerSettings{
-			Name:                              "adamw",
+			Name:                              scalarOptimizerName,
 			LR:                                cfg.Training.ScalarLR,
-			Beta1:                             cfg.Training.Beta1,
-			Beta2:                             cfg.Training.Beta2,
-			Epsilon:                           cfg.Training.Epsilon,
+			Beta1:                             scalarBeta1,
+			Beta2:                             scalarBeta2,
+			Epsilon:                           scalarEps,
 			WeightDecay:                       cfg.Training.ScalarWeightDecay,
 			CautiousWeightDecay:               cautiousWeightDecay,
 			CautiousWeightDecayActivationStep: cautiousWeightDecayActivationStep,
@@ -771,9 +804,9 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 		Matrix: gpu.OptimizerSettings{
 			Name:                              matrixOptimizerName,
 			LR:                                cfg.Training.MatrixLR,
-			Beta1:                             cfg.Training.MuonMomentum,
-			Beta2:                             cfg.Training.Beta2,
-			Epsilon:                           cfg.Training.Epsilon,
+			Beta1:                             matrixBeta1,
+			Beta2:                             matrixBeta2,
+			Epsilon:                           matrixEps,
 			WeightDecay:                       cfg.Training.MatrixWeightDecay,
 			CautiousWeightDecay:               cautiousWeightDecay,
 			CautiousWeightDecayActivationStep: cautiousWeightDecayActivationStep,
@@ -796,6 +829,8 @@ func matrixOptimizer(cfg *ArchConfig) string {
 		return "muon_eq_r"
 	case "normuon":
 		return "normuon"
+	case "lamb":
+		return "lamb"
 	default:
 		return "muon"
 	}

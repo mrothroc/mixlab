@@ -277,7 +277,7 @@ func mlxCreateTrainer(programHandle int64, weightHandles []int64, spec TrainerOp
 	}
 	cGroups := make([]C.mlx_ir_optimizer_group, len(spec.Groups))
 	for i, group := range spec.Groups {
-		if group.Kind != OptimizerAdamW && group.Kind != OptimizerMuon && group.Kind != OptimizerSGD {
+		if group.Kind != OptimizerAdamW && group.Kind != OptimizerMuon && group.Kind != OptimizerSGD && group.Kind != OptimizerLAMB {
 			return 0, fmt.Errorf("optimizer group %d has unsupported kind %d", i, group.Kind)
 		}
 		cGroups[i] = C.mlx_ir_optimizer_group{
