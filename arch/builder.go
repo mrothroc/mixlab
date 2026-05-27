@@ -633,6 +633,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		unet, parallelResidual, 0, 0, 0, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
 		logitSoftcap, dropout, blocks, recurrence, executionOrder, mtp, reserveHead, useTiedHead,
 		objective,
+		objective,
 		false,
 		disabledSmearEmbeddingOptions(),
 		nil,
@@ -659,6 +660,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	reserveHead bool,
 	useTiedHead bool,
 	objective string,
+	rootObjective string,
 	firstByteMask bool,
 	smearOpts smearEmbeddingOptions,
 	backoutSpec *BackoutSpec,
@@ -673,7 +675,8 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	D := modelDim
 	V := vocabSize
 	objective = normalizeTrainingObjective(objective)
-	blocks = resolveBlockAttentionMasksForObjective(blocks, objective)
+	rootObjective = normalizeTrainingObjective(rootObjective)
+	blocks = resolveBlockAttentionMasksForObjective(blocks, objective, rootObjective)
 
 	if B <= 0 || T <= 0 {
 		return nil, fmt.Errorf("invalid shape B=%d T=%d", B, T)

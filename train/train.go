@@ -260,10 +260,6 @@ type GPUTrainer interface {
 	CloseTrainer()
 }
 
-type gpuProgramSwitcher interface {
-	SetProgramGPU(*arch.Program) error
-}
-
 type gpuWeightCopier interface {
 	CopyWeightGPU(dstName, srcName string) error
 }
@@ -520,6 +516,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return TrainResult{}, fmt.Errorf("init GPU trainer: %w", err)
 	}
 	defer trainer.CloseTrainer()
+	causalEval := causalEvalSwitcher{
+		trainer:       trainer,
+		hybrid:        cfg.Training.EffectiveObjective() == arch.ObjectiveHybrid,
+		programForKey: trainingProgramForKey,
+		batchSize:     batchSize,
+		seqLen:        seqLen,
+	}
 
 	var swaEMA [][]float32
 	if swaStart > 0 {
@@ -807,7 +810,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				if valSet != nil && len(valSet.Batches) > 0 && shouldRunValidationStep(step, steps, valEvery) {
 					valStart := time.Now()
 					stopValidation := startSlowTrainingPhaseLogger(name, step, "validation")
-					valAvg, err := meanValidationLoss(valSet, trainer, batchSize, seqLen)
+					valAvg, err := causalEval.meanValidationLossCausal(currentProgramKey, valSet)
 					stopValidation()
 					valDuration = time.Since(valStart)
 					if err == nil {
@@ -885,7 +888,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 			}
 		}
-		evalLoss, err := trainer.EvaluateGPU(lastTrainBatch.x, lastTrainBatch.y, batchSize, seqLen)
+		evalLoss, err := causalEval.evaluateCausalGPU(currentProgramKey, lastTrainBatch.x, lastTrainBatch.y)
 		if err != nil {
 			return TrainResult{}, fmt.Errorf("evaluate final unmasked training loss: %w", err)
 		}
@@ -926,7 +929,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		if lutDir == "" {
 			lutDir = "data"
 		}
-		if err := runFullEval(cfg, valPattern, trainer, lutDir); err != nil {
+		if err := causalEval.withCausalEvalProgram(currentProgramKey, func() error {
+			return runFullEval(cfg, valPattern, trainer, lutDir)
+		}); err != nil {
 			fmt.Printf("  [%s] full validation BPB failed: %v\n", name, err)
 		}
 	}

@@ -145,20 +145,38 @@ func resolvedPlainAttentionMask(spec BlockSpec, objective string) string {
 	return AttentionMaskCausal
 }
 
-func resolveBlockAttentionMasksForObjective(blocks []BlockSpec, objective string) []BlockSpec {
+func resolvedPlainAttentionMaskForObjective(spec BlockSpec, objective, rootObjective string) string {
+	objective = normalizeTrainingObjective(objective)
+	if normalizeTrainingObjective(rootObjective) == ObjectiveHybrid {
+		if isMaskedTrainingObjective(objective) {
+			return AttentionMaskBidirectional
+		}
+		return AttentionMaskCausal
+	}
+	return resolvedPlainAttentionMask(spec, objective)
+}
+
+func resolveBlockAttentionMasksForObjective(blocks []BlockSpec, objective, rootObjective string) []BlockSpec {
 	if len(blocks) == 0 {
 		return blocks
 	}
 	var out []BlockSpec
 	for i, block := range blocks {
-		if blockTypeKey(block) != "plain" || strings.TrimSpace(block.AttentionMask) != "" {
+		if blockTypeKey(block) != "plain" {
+			continue
+		}
+		resolved := resolvedPlainAttentionMaskForObjective(block, objective, rootObjective)
+		if normalizeTrainingObjective(rootObjective) != ObjectiveHybrid && strings.TrimSpace(block.AttentionMask) != "" {
+			continue
+		}
+		if normalizeAttentionMask(block.AttentionMask) == resolved {
 			continue
 		}
 		if out == nil {
 			out = make([]BlockSpec, len(blocks))
 			copy(out, blocks)
 		}
-		out[i].AttentionMask = resolvedPlainAttentionMask(block, objective)
+		out[i].AttentionMask = resolved
 	}
 	if out == nil {
 		return blocks
@@ -175,6 +193,12 @@ func validatePlainAttentionMask(cfg *ArchConfig, source string, b BlockSpec, gro
 	case "", AttentionMaskCausal, AttentionMaskBidirectional, AttentionMaskNone:
 	default:
 		return fmt.Errorf("config %q %s[%d] type=plain has invalid attention_mask=%q (must be \"causal\", \"bidirectional\", or \"none\")", source, groupName, idx, b.AttentionMask)
+	}
+	if b.WindowSize > 0 && cfg.Training.EffectiveObjective() == ObjectiveHybrid && cfg.Training.HybridCLMFraction < 1 {
+		return fmt.Errorf("config %q %s[%d] type=plain sets window_size but training.objective=\"hybrid\" can run masked secondary steps that require bidirectional attention", source, groupName, idx)
+	}
+	if b.WindowSize > 0 && cfg.Training.EffectiveObjective() == ObjectiveHybrid {
+		return nil
 	}
 	if b.WindowSize > 0 && resolvedPlainAttentionMask(b, cfg.Training.DefaultConcreteObjective()) != AttentionMaskCausal {
 		return fmt.Errorf("config %q %s[%d] type=plain sets window_size but resolved attention_mask is not causal", source, groupName, idx)

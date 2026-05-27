@@ -1,0 +1,26 @@
+{
+  "name": "hybrid-tiny",
+  "model_dim": 128,
+  "vocab_size": 32000,
+  "seq_len": 128,
+  "tie_embeddings": true,
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "steps": 200,
+    "lr": 0.0003,
+    "batch_tokens": 1024,
+    "objective": "hybrid",
+    "mlm_mask_prob": 0.15,
+    "mlm_mask_token_id": 103,
+    "mlm_mask_token_prob": 0.8,
+    "mlm_random_token_prob": 0.1,
+    "mlm_kept_unchanged_prob": 0.1,
+    "hybrid_clm_fraction": 0.5,
+    "hybrid_secondary_objective": "mntp"
+  }
+}

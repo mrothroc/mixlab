@@ -225,7 +225,7 @@ Optional fields:
 - `relative_attention` — `"deberta_p2c_c2p"` enables DeBERTa-style disentangled content-to-position and position-to-content relative attention bias. Omit, set to `""`, or set to `"none"` for standard RoPE attention.
 - `relative_attention_window` — max clipped relative offset for DeBERTa relative attention. Defaults to `128` when `relative_attention` is enabled. The learned table has `2 * relative_attention_window` rows.
 - `xsa` — eXplicit Subspace Attention: after computing `y = softmax(QK^T)V`, projects `y` orthogonal to `V` at each position. Forces attention to contribute information that V doesn't already provide. Zero additional parameters. Compatible with GQA.
-- `attention_mask` — `"causal"`, `"bidirectional"`, or `"none"`. Omit to resolve from `training.objective`: causal objectives use `"causal"` and masked objectives use `"bidirectional"`. `"bidirectional"` and `"none"` both use dense softmax with no triangular mask.
+- `attention_mask` — `"causal"`, `"bidirectional"`, or `"none"`. Omit to resolve from `training.objective`: causal objectives use `"causal"` and masked objectives use `"bidirectional"`. For `training.objective: "hybrid"`, Mixlab ignores block-level `attention_mask` during training and chooses the mask from the concrete per-batch objective: causal batches use `"causal"` and MLM/MNTP batches use `"bidirectional"`. `"bidirectional"` and `"none"` both use dense softmax with no triangular mask.
 - `window_size` — sliding causal attention width. `0` means full causal attention. Valid only when the resolved `attention_mask` is `"causal"`.
 - `kv_source` — reuse K/V projections from an earlier block (1-indexed). Saves 2 weight matrices per shared block. Source must be an earlier `plain` block with matching `heads` and `kv_heads`. Not supported with `parallel_residual`.
 - `parallel_residual` — when `true`, fuses this block with the immediately following `swiglu` block into a parallel residual pair. See [`parallel_residual`](#parallel_residual) for the full description.
@@ -848,12 +848,14 @@ The `training` object controls optimization, batching, and stochastic settings.
 
 `objective: "causal"` preserves the existing shifted next-token objective. `objective: "mlm"` masks selected input positions and trains only those positions to predict the original token. `objective: "mntp"` predicts next tokens from bidirectional context while masking the corresponding next-token input position so the answer is not visible. `objective: "hybrid"` deterministically chooses causal or the configured secondary objective once per batch from `training.seed` and the step index.
 
+Hybrid training uses objective-specific attention masks regardless of any block-level `attention_mask`: causal batches are always causal, and MLM/MNTP batches are always bidirectional. Validation, full eval, generation, and other next-token scoring paths use causal attention. `plain.window_size` is rejected for hybrid configs unless `hybrid_clm_fraction` is `1.0`, because masked secondary batches require bidirectional attention.
+
 Masked objectives emit a training loss averaged only over rows where `loss_mask > 0`; the dense `eval_loss` and `per_token_nll` outputs remain available for evaluation/export paths. Top-level `mtp` and `training.first_byte_mask` are not supported with non-causal objectives in this version.
 
 ```json
 {
   "blocks": [
-    {"type": "plain", "heads": 8, "attention_mask": "bidirectional"},
+    {"type": "plain", "heads": 8},
     {"type": "swiglu"}
   ],
   "training": {

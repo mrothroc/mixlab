@@ -62,6 +62,16 @@ func TestTrainingObjectiveValidation(t *testing.T) {
 				"training": {"steps": 1, "lr": 0.001, "batch_tokens": 8, "objective": "mlm", "mlm_mask_token_id": 7}`,
 			wantErr: "window_size",
 		},
+		{
+			name: "hybrid window size rejects masked secondary",
+			training: `"blocks": [{"type": "plain", "heads": 2, "window_size": 4}],
+				"training": {
+					"steps": 1, "lr": 0.001, "batch_tokens": 8,
+					"objective": "hybrid", "mlm_mask_token_id": 7,
+					"hybrid_clm_fraction": 0.5
+				}`,
+			wantErr: "masked secondary",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -75,6 +85,15 @@ func TestTrainingObjectiveValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTrainingObjectiveValidation_HybridWindowSizeAllowedWhenCausalOnly(t *testing.T) {
+	_ = parseObjectiveConfig(t, `"blocks": [{"type": "plain", "heads": 2, "window_size": 4}],
+		"training": {
+			"steps": 1, "lr": 0.001, "batch_tokens": 8,
+			"objective": "hybrid", "mlm_mask_token_id": 7,
+			"hybrid_clm_fraction": 1.0
+		}`)
 }
 
 func TestBuildIRProgram_MLMUsesMaskedLossAndBidirectionalPlainAttention(t *testing.T) {
@@ -103,6 +122,74 @@ func TestBuildIRProgram_MLMUsesMaskedLossAndBidirectionalPlainAttention(t *testi
 	}
 	if n := countOps(prog, OpCausalMask); n != 0 {
 		t.Fatalf("MLM default plain attention emitted %d causal masks, want 0", n)
+	}
+}
+
+func TestBuildTrainingIRProgram_HybridForcesConcreteAttentionMasks(t *testing.T) {
+	for _, mode := range []string{"", AttentionMaskBidirectional, AttentionMaskNone} {
+		t.Run("mode_"+mode, func(t *testing.T) {
+			block := `{"type": "plain", "heads": 2}`
+			if mode != "" {
+				block = `{"type": "plain", "heads": 2, "attention_mask": "` + mode + `"}`
+			}
+			cfg := parseObjectiveConfig(t, `"blocks": [`+block+`],
+				"training": {
+					"steps": 1,
+					"lr": 0.001,
+					"batch_tokens": 8,
+					"objective": "hybrid",
+					"mlm_mask_token_id": 7,
+					"hybrid_secondary_objective": "mlm"
+				}`)
+			causalProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+				RecurrenceActive: true,
+				Objective:        ObjectiveCausal,
+			})
+			if err != nil {
+				t.Fatalf("BuildTrainingIRProgramFromConfig(causal): %v", err)
+			}
+			if n := countOps(causalProg, OpCausalMask); n != 1 {
+				t.Fatalf("hybrid causal program emitted %d causal masks, want 1", n)
+			}
+			if programDeclaresInputArch(causalProg, "loss_mask") {
+				t.Fatal("hybrid causal program declares loss_mask")
+			}
+
+			maskedProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+				RecurrenceActive: true,
+				Objective:        ObjectiveMLM,
+			})
+			if err != nil {
+				t.Fatalf("BuildTrainingIRProgramFromConfig(mlm): %v", err)
+			}
+			if n := countOps(maskedProg, OpCausalMask); n != 0 {
+				t.Fatalf("hybrid masked program emitted %d causal masks, want 0", n)
+			}
+			if !programDeclaresInputArch(maskedProg, "loss_mask") {
+				t.Fatal("hybrid masked program missing loss_mask")
+			}
+		})
+	}
+}
+
+func TestBuildEvalIRProgram_HybridUsesCausalAttention(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"blocks": [{"type": "plain", "heads": 2, "attention_mask": "bidirectional"}],
+		"training": {
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"objective": "hybrid",
+			"mlm_mask_token_id": 7
+		}`)
+	prog, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildEvalIRProgramFromConfig: %v", err)
+	}
+	if n := countOps(prog, OpCausalMask); n != 1 {
+		t.Fatalf("hybrid eval program emitted %d causal masks, want 1", n)
+	}
+	if programDeclaresInputArch(prog, "loss_mask") {
+		t.Fatal("hybrid eval program declares loss_mask")
 	}
 }
 
