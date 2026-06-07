@@ -17,7 +17,6 @@ jobs:
     timeout-minutes: 30
     env:
       HF_PARITY: "1"
-      CGO_ENABLED: "1"
     steps:
       - uses: actions/checkout@v4
 
@@ -37,7 +36,12 @@ jobs:
       - name: Install MLX runtime
         run: brew install mlx
 
+      # Pure-Go oracle tests build with the non-MLX stubs, matching main CI.
+      # CGO_ENABLED=1 without -tags mlx is unsupported (the gpu package then
+      # tries to compile MLX cgo without selecting the MLX sources).
       - name: Run export-hf Go oracle tests
+        env:
+          CGO_ENABLED: "0"
         run: go test ./cmd/mixlab ./train -run 'TestExportHF|TestRunExportHF|TestHFModeling' -count=1
 
       # Load-bearing FR-1 check: exports trained-magnitude fixtures, runs the
@@ -46,5 +50,6 @@ jobs:
       # TestExportHFNativePythonParity execute (it skips otherwise).
       - name: Run native-vs-HF Python parity (MLX)
         env:
+          CGO_ENABLED: "1"
           HF_PARITY_PYTHON: python3
         run: go test -tags mlx ./train -run 'TestExportHFNativePythonParity|TestExportHF.*Parity|TestNativeHF.*Parity' -count=1 -v
