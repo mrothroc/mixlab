@@ -717,7 +717,7 @@ func writeHFSafetensors(path string, cfg *ArchConfig, mapping []hfWeightMapping,
 		}
 	}
 	meta := map[string]string{
-		"format":     "mixlab_hf_export_v1",
+		"format":     "pt",
 		"name":       cfg.Name,
 		"model_dim":  fmt.Sprintf("%d", cfg.ModelDim),
 		"vocab_size": fmt.Sprintf("%d", cfg.VocabSize),

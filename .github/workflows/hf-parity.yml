@@ -8,6 +8,7 @@ on:
       - 'train/**'
       - 'arch/**'
       - 'requirements-hf.txt'
+      - 'Formula/mixlab.rb'
       - '.github/workflows/hf-parity.yml'
 
 jobs:

@@ -1,6 +1,7 @@
 package train
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -74,6 +75,13 @@ func TestExportHFWeightMapAndDirectoryMetadata(t *testing.T) {
 	tensors, err := loadSafetensors(filepath.Join(outDir, "model.safetensors"))
 	if err != nil {
 		t.Fatalf("load exported model.safetensors: %v", err)
+	}
+	meta := readSafetensorsMetadata(t, filepath.Join(outDir, "model.safetensors"))
+	if got := meta["format"]; got != "pt" {
+		t.Fatalf("model.safetensors __metadata__.format=%q, want pt", got)
+	}
+	if got := meta["name"]; got != "hf_tiny" {
+		t.Fatalf("model.safetensors __metadata__.name=%q, want hf_tiny", got)
 	}
 	for _, name := range []string{"embed_tokens.weight", "lm_head_weight", "final_norm.weight", "blocks.0.wq.weight", "blocks.1.w_down.weight"} {
 		if _, ok := tensors[name]; !ok {
@@ -882,6 +890,34 @@ func readJSON(t *testing.T, path string, v any) {
 	if err := json.Unmarshal(data, v); err != nil {
 		t.Fatalf("parse %s: %v", path, err)
 	}
+}
+
+func readSafetensorsMetadata(t *testing.T, path string) map[string]string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if len(data) < 8 {
+		t.Fatalf("safetensors file %s is too short", path)
+	}
+	headerLen := binary.LittleEndian.Uint64(data[:8])
+	if headerLen == 0 || uint64(len(data)-8) < headerLen {
+		t.Fatalf("safetensors file %s has invalid header length %d", path, headerLen)
+	}
+	var header map[string]json.RawMessage
+	if err := json.Unmarshal(data[8:8+headerLen], &header); err != nil {
+		t.Fatalf("parse safetensors header %s: %v", path, err)
+	}
+	raw, ok := header["__metadata__"]
+	if !ok {
+		t.Fatalf("safetensors file %s missing __metadata__", path)
+	}
+	var meta map[string]string
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		t.Fatalf("parse safetensors metadata %s: %v", path, err)
+	}
+	return meta
 }
 
 func containsHFWeight(mapping []hfWeightMapping, name string) bool {
