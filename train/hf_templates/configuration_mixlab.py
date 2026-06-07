@@ -22,6 +22,9 @@ class MixlabConfig(PretrainedConfig):
         trigram_dim=0,
         **kwargs,
     ):
+        # Exported checkpoints always materialize a separate lm_head weight, so
+        # the HF model must not tie embeddings to the head unless explicitly told.
+        kwargs.setdefault("tie_word_embeddings", False)
         super().__init__(**kwargs)
         self.model_dim = model_dim
         self.hidden_size = model_dim

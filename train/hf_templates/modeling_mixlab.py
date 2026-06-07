@@ -112,15 +112,22 @@ class MixlabPlainBlock(nn.Module):
         ffn_dim = max(dim, int(round(dim * float(config.mlp_mult))))
         self.ff1 = MixlabLinear(dim, ffn_dim)
         self.ff2 = MixlabLinear(ffn_dim, dim)
-        mask = self._build_attention_mask(config.seq_len, self.window_size)
-        self.register_buffer("causal_mask", mask.view(1, 1, config.seq_len, config.seq_len), persistent=False)
+        # NB: the causal mask and RoPE tables are computed dynamically in
+        # forward() rather than cached as buffers. `from_pretrained` initializes
+        # custom models on the meta device, where value-dependent buffers built
+        # from torch.ones/torch.arange in __init__ are materialized as zeros and
+        # silently disable masking / rotation. Recomputing per forward is cheap
+        # for the eval-time graph and immune to that hazard.
+
+    def _rope_tables(self, seq_len, device, dtype):
         pair_count = self.effective_rope_dims // 2
-        positions = torch.arange(config.seq_len, dtype=torch.float32)
-        dim_idx = torch.arange(pair_count, dtype=torch.float32)
+        positions = torch.arange(seq_len, device=device, dtype=torch.float32)
+        dim_idx = torch.arange(pair_count, device=device, dtype=torch.float32)
         freqs = torch.exp(dim_idx * (-math.log(10000.0) * 2.0 / float(self.effective_rope_dims)))
         angles = positions[:, None] * freqs[None, :]
-        self.register_buffer("rope_cos", torch.cos(angles).view(1, 1, config.seq_len, pair_count), persistent=False)
-        self.register_buffer("rope_sin", torch.sin(angles).view(1, 1, config.seq_len, pair_count), persistent=False)
+        cos_t = torch.cos(angles).view(1, 1, seq_len, pair_count).to(dtype)
+        sin_t = torch.sin(angles).view(1, 1, seq_len, pair_count).to(dtype)
+        return cos_t, sin_t
 
     @staticmethod
     def _build_attention_mask(seq_len, window_size):
@@ -180,13 +187,15 @@ class MixlabPlainBlock(nn.Module):
             scores = scores + self._deberta_relative_bias(q, k, seq_len)
             scores = scores / math.sqrt(float(self.head_dim * 3))
         else:
-            q = rotate_adjacent_rope(q, self.effective_rope_dims, self.rope_cos, self.rope_sin)
-            k = rotate_adjacent_rope(k, self.effective_rope_dims, self.rope_cos, self.rope_sin)
+            cos_t, sin_t = self._rope_tables(seq_len, q.device, q.dtype)
+            q = rotate_adjacent_rope(q, self.effective_rope_dims, cos_t, sin_t)
+            k = rotate_adjacent_rope(k, self.effective_rope_dims, cos_t, sin_t)
             scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(float(self.head_dim))
         if self.qk_gain is not None:
             scores = scores * self.qk_gain.view(1, self.heads, 1, 1)
         if self.attention_mask == "causal":
-            causal_mask = self.causal_mask[:, :, :seq_len, :seq_len]
+            causal_mask = self._build_attention_mask(seq_len, self.window_size).to(scores.device)
+            causal_mask = causal_mask.view(1, 1, seq_len, seq_len)
             scores = scores.masked_fill(causal_mask, -1e9)
         elif self.attention_mask in ("bidirectional", "none"):
             pass
@@ -224,14 +233,14 @@ class MixlabMoEExpert(nn.Module):
             if self.expert_type == "swiglu":
                 gate = torch.sigmoid(gate)
             else:
-                gate = torch.nn.functional.gelu(gate)
+                gate = torch.nn.functional.gelu(gate, approximate="tanh")
             return self.w_down(gate * self.w_up(x))
 
         up = self.w_up(x)
         if self.activation == "silu":
             act = torch.nn.functional.silu(up)
         elif self.activation == "gelu":
-            act = torch.nn.functional.gelu(up)
+            act = torch.nn.functional.gelu(up, approximate="tanh")
         elif self.activation == "relu":
             act = torch.relu(up)
         elif self.activation == "leaky_relu_sq":
@@ -296,7 +305,7 @@ class MixlabSwiGLUBlock(nn.Module):
         if self.gate_activation == "sigmoid":
             gate = torch.sigmoid(gate)
         elif self.gate_activation == "gelu":
-            gate = torch.nn.functional.gelu(gate)
+            gate = torch.nn.functional.gelu(gate, approximate="tanh")
         else:
             raise ValueError(f"unsupported exported gate activation {self.gate_activation!r}")
         gated = gate * self.w_up(x_norm)
@@ -320,7 +329,7 @@ class MixlabMLPBlock(nn.Module):
         if self.activation == "silu":
             act = torch.nn.functional.silu(up)
         elif self.activation == "gelu":
-            act = torch.nn.functional.gelu(up)
+            act = torch.nn.functional.gelu(up, approximate="tanh")
         elif self.activation == "relu":
             act = torch.relu(up)
         elif self.activation == "leaky_relu_sq":
@@ -365,6 +374,7 @@ class MixlabForCausalLM(PreTrainedModel):
     config_class = MixlabConfig
     base_model_prefix = "mixlab"
     supports_gradient_checkpointing = False
+    _tied_weights_keys = []
 
     def __init__(self, config):
         super().__init__(config)
@@ -384,7 +394,10 @@ class MixlabForCausalLM(PreTrainedModel):
             if char_dim != config.model_dim:
                 self.char_proj = MixlabLinear(char_dim, config.model_dim)
             self.char_scale = nn.Parameter(torch.ones(1))
-            self.register_buffer("char_lookup", load_char_lookup(config), persistent=False)
+            # Loaded lazily on first forward rather than registered as a buffer:
+            # `from_pretrained` meta-device init zeroes non-persistent buffers,
+            # which would silently drop the char feature channel.
+            self.char_lookup = None
         if int(getattr(config, "bigram_vocab_size", 0) or 0) > 0:
             bigram_dim = int(getattr(config, "bigram_dim", 0) or config.model_dim)
             self.bigram_table = nn.Embedding(int(config.bigram_vocab_size), bigram_dim)
@@ -416,6 +429,7 @@ class MixlabForCausalLM(PreTrainedModel):
         self.final_norm = MixlabRMSNorm(config.model_dim)
         self.lm_head_weight = nn.Parameter(torch.empty(config.model_dim, config.vocab_size))
         nn.init.xavier_uniform_(self.lm_head_weight)
+        self.post_init()
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -453,6 +467,8 @@ class MixlabForCausalLM(PreTrainedModel):
     def _embed_features(self, input_ids):
         x = self.embed_tokens(input_ids)
         if self.char_table is not None:
+            if self.char_lookup is None:
+                self.char_lookup = load_char_lookup(self.config).to(input_ids.device)
             char_ids = self.char_lookup[input_ids]
             char_emb = self.char_table(char_ids)
             char_emb = char_emb * char_ids.ne(0).unsqueeze(-1)

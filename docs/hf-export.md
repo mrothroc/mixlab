@@ -70,6 +70,14 @@ These guards are part of the export contract: a missing feature should be visibl
 
 ## Parity Tests
 
-The regular Go suite verifies metadata, tokenizer handling, weight mapping, unsupported-feature errors, and deterministic native-vs-HF parity fixtures. Coverage includes GEGLU/MLP, GQA, `qk_norm`, `qk_gain`, masks, causal windowing, DeBERTa relative attention, MoE routing and expert variants, feature channels, hybrid causal export semantics, gated recurrent policies, and a non-init trained-style fixture with max-logit-diff reporting.
+Two layers of parity coverage exist:
 
-Python/HF parity dependencies are declared in `requirements-hf.txt`. The gated `.github/workflows/hf-parity.yml` workflow installs those dependencies and uses `macos-latest` with Homebrew MLX for MLX-tagged parity checks. This keeps the default Linux CI lightweight while making the HF parity path reproducible on an MLX-capable runner.
+1. **Go oracle parity** (default suite, no extra deps). Verifies metadata, tokenizer handling, weight mapping, unsupported-feature errors, and deterministic native-vs-HF fixtures by comparing a native-forward oracle against an HF-forward oracle. Coverage includes GEGLU/MLP, GQA, `qk_norm`, `qk_gain`, masks, causal windowing, DeBERTa relative attention, MoE routing and expert variants, feature channels, hybrid causal export semantics, gated recurrent policies, and a non-init trained-style fixture.
+
+2. **Native-vs-Python parity** (`TestExportHFNativePythonParity`, gated on `HF_PARITY=1` + MLX + the Python toolchain). This is the load-bearing FR-1 check: it exports trained-magnitude fixtures, loads each through `AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True)`, runs the *actual* embedded `modeling_mixlab.py` forward, and asserts it agrees with the *actual* native MLX forward (max per-logit abs diff < 1e-3, mean next-token loss diff < 1e-4). Because nothing in this path re-implements the HF math, a future drift between the kernels and the shipped Python template fails by construction. Cases cover partial/full RoPE, `qk_norm`, sigmoid SwiGLU, tanh-approx GELU, GQA + `qk_gain` + sliding window, DeBERTa relative attention, top-k MoE (geglu/mlp experts), and bigram/trigram/char feature channels.
+
+Python/HF parity dependencies are declared in `requirements-hf.txt` (verified against torch 2.12 / transformers 5.10). The gated `.github/workflows/hf-parity.yml` workflow installs those dependencies and uses `macos-latest` with Homebrew MLX so the native-vs-Python check runs on an MLX-capable runner, keeping the default Linux CI lightweight.
+
+### Template note: dynamic buffers under `from_pretrained`
+
+`modeling_mixlab.py` computes its causal mask and RoPE tables in `forward()` and lazy-loads the char lookup, rather than caching them as `__init__` buffers. `from_pretrained` initializes custom models on the meta device, where value-dependent non-persistent buffers built from `torch.ones`/`torch.arange` materialize as zeros — which would silently disable masking/rotation or drop the char channel. The parity test above is what makes that class of regression visible.
