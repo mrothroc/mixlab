@@ -101,7 +101,7 @@ func init() {
 			if heads <= 0 {
 				heads = 4
 			}
-			return emitPlainAttentionIRWithKVOptions(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, spec.SkipAttention, spec.QKGain, spec.RopeDims, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.KVSource, opts.KVCache, opts.BlockIndex)
+			return emitPlainAttentionIRWithKVOptionsEx(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, spec.SkipAttention, spec.QKGain, spec.QKNorm, spec.RopeDims, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.KVSource, opts.KVCache, opts.BlockIndex)
 		},
 		WeightCount: plainWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
@@ -208,6 +208,12 @@ func plainWeightCount(spec BlockSpec, blockScales, residMix bool) (int, error) {
 	}
 	if spec.QKGain > 0 {
 		total++
+	}
+	if spec.QKNorm {
+		total++
+		if spec.KVSource <= 0 {
+			total++
+		}
 	}
 	if relativeAttentionEnabled(spec) {
 		total += 3

@@ -90,6 +90,11 @@ var exampleConfigs = []exampleConfigCase{
 		minOps:      10,
 	},
 	{
+		filename:    "qk_norm_tiny.json",
+		wantWeights: 29, // 3 base + 2*(9 qk_norm plain + 4 swiglu)
+		minOps:      10,
+	},
+	{
 		filename:    "distillation_tiny.json",
 		wantWeights: 25,
 		minOps:      10,

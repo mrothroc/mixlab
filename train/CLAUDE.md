@@ -9,6 +9,8 @@ Houses the `GPUTrainer` Go API plus the in-process training loop. The actual MLX
 - `gpu_trainer_mamba3_test.go` — analytical CPU oracle + fused-vs-expanded equivalence tests for canonical Mamba-3
 - `gpu_trainer_mamba3_bench_test.go` — benchmark at production-ish shape (D=128, T=1024, G=4)
 - `swa_smoke_config_test.go` — config/data coverage checks (skips if `data/example/` is gitignored — common in CI)
+- `swa_artifacts_test.go` — default Go tests for SWA/EMA CLI override validation, final/SWA safetensors naming, checkpoint artifact naming, and HF export selection
+- `swa_smoke_test.go` — MLX-gated smoke test for live training behavior; run with `go test -tags mlx ./train -run TestSWAWindow128Smoke -count=1` on an MLX-capable machine with `data/example/` available
 
 ## Trainer step paths
 

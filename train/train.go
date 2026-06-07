@@ -281,19 +281,22 @@ func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, 
 
 // TrainOptions holds optional parameters for runTrain.
 type TrainOptions struct {
-	SafetensorsPath string // If set, export weights after training
-	SafetensorsLoad string // If set, load weights from safetensors file before training
-	Quantize        string // Quantization mode: "none", "int8", or "int6"
-	QuantMethod     string // Quantization clipping method: "quantile" or "sdclip"
-	QuantK          float32
-	QuantKEmbed     float32
-	DoFullEval      bool   // If true, run full BPB evaluation after training
-	LUTDir          string // Directory containing BPB lookup tables
-	CheckpointDir   string // Directory for periodic safetensors checkpoints
-	CheckpointEvery int    // Save checkpoint every N steps; 0 disables
-	LogEvery        int    // Print progress every N steps; 0 uses default/env cadence
-	ValEvery        int    // Run validation every N steps; 0 uses default/env cadence
-	Timing          bool   // If true, print per-step timing breakdown at log intervals
+	SafetensorsPath     string // If set, export weights after training
+	SafetensorsLoad     string // If set, load weights from safetensors file before training
+	Quantize            string // Quantization mode: "none", "int8", or "int6"
+	QuantMethod         string // Quantization clipping method: "quantile" or "sdclip"
+	QuantK              float32
+	QuantKEmbed         float32
+	DoFullEval          bool     // If true, run full BPB evaluation after training
+	LUTDir              string   // Directory containing BPB lookup tables
+	CheckpointDir       string   // Directory for periodic safetensors checkpoints
+	CheckpointEvery     int      // Save checkpoint every N steps; 0 disables
+	LogEvery            int      // Print progress every N steps; 0 uses default/env cadence
+	ValEvery            int      // Run validation every N steps; 0 uses default/env cadence
+	Timing              bool     // If true, print per-step timing breakdown at log intervals
+	SWAStartOverride    *int     // If set, overrides training.swa_start
+	SWADecayOverride    *float32 // If set, overrides training.swa_decay
+	SWAIntervalOverride *int     // If set, overrides training.swa_interval
 
 	// OptimizerOverride lets callers customize the optimizer plan that RunArch
 	// builds before the GPU trainer is created.
@@ -368,6 +371,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	if opts.CheckpointEvery > 0 && opts.CheckpointDir == "" {
 		return TrainResult{}, fmt.Errorf("-checkpoint-dir is required when -checkpoint-every > 0")
 	}
+	swaOverrideLogs, err := applyTrainingSWAOverrides(cfg, opts)
+	if err != nil {
+		return TrainResult{}, err
+	}
 
 	seqLen := cfg.SeqLen
 	batchTokens := cfg.Training.BatchTokens
@@ -380,6 +387,12 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	batchSize := batchTokens / seqLen
 	seed := cfg.Training.Seed
 	name := cfg.Name
+	for _, msg := range swaOverrideLogs {
+		fmt.Printf("  [%s] %s\n", name, msg)
+	}
+	if swaStart > 0 {
+		fmt.Printf("  [%s] SWA/EMA enabled: start=%d interval=%d decay=%g\n", name, swaStart, swaInterval, swaDecay)
+	}
 	targetValLoss := cfg.Training.TargetValLoss
 	flops := arch.EstimateFLOPs(cfg)
 	recurrencePhaseStarts := cfg.PhaseStartSteps()
@@ -865,12 +878,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 			if shouldWriteCheckpoint(step, opts.CheckpointEvery) {
 				stopCheckpoint := startSlowTrainingPhaseLogger(name, step, "checkpoint")
-				if err := writeCheckpoint(cfg, trainer, shapes, opts.CheckpointDir, step+1); err != nil {
+				artifacts, err := writeCheckpoint(cfg, trainer, shapes, opts.CheckpointDir, step+1, swaEMA)
+				if err != nil {
 					stopCheckpoint()
 					return TrainResult{}, fmt.Errorf("checkpoint at step %d: %w", step+1, err)
 				}
 				stopCheckpoint()
-				fmt.Printf("  [%s] checkpoint saved: %s\n", name, checkpointPath(opts.CheckpointDir, step+1))
+				fmt.Printf("  [%s] checkpoint saved: %s\n", name, artifacts.Summary())
 			}
 
 			// Plain steps may submit the next batch before collecting the
@@ -897,20 +911,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 	// Export safetensors if requested (before closing trainer)
 	if opts.SafetensorsPath != "" {
-		weights, err := exportWeightsForTrainer(trainer, swaEMA)
+		artifacts, err := exportTrainingSafetensorsArtifacts(cfg, trainer, shapes, opts, swaEMA)
 		if err != nil {
-			fmt.Printf("  [%s] safetensors export skipped (read error): %v\n", name, err)
+			fmt.Printf("  [%s] safetensors export failed: %v\n", name, err)
 		} else {
-			qmode := opts.Quantize
-			if qmode == "int8" || qmode == "int6" {
-				if err := exportSafetensorsQuantized(opts.SafetensorsPath, cfg, shapes, weights, qmode, opts.QuantMethod, opts.QuantK, opts.QuantKEmbed); err != nil {
-					fmt.Printf("  [%s] quantized safetensors export failed: %v\n", name, err)
-				}
-			} else {
-				if err := exportSafetensors(opts.SafetensorsPath, cfg, shapes, weights); err != nil {
-					fmt.Printf("  [%s] safetensors export failed: %v\n", name, err)
-				}
-			}
+			fmt.Printf("  [%s] safetensors artifacts: %s\n", name, artifacts.Summary())
 		}
 	}
 
@@ -954,16 +959,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	return result, nil
 }
 
-func exportWeightsForTrainer(trainer GPUTrainer, swaEMA [][]float32) ([][]float32, error) {
-	if hasSWAWeights(swaEMA) {
-		return cloneWeights(swaEMA), nil
-	}
-	return readTrainerWeights(trainer)
-}
-
 // readTrainerWeights reads weights from a trainer via the weight-reading interface.
 // Falls back gracefully if the trainer doesn't support weight reading.
-func readTrainerWeights(trainer GPUTrainer) ([][]float32, error) {
+func readTrainerWeights(trainer any) ([][]float32, error) {
 	type weightReader interface {
 		ReadWeights() ([][]float32, error)
 	}

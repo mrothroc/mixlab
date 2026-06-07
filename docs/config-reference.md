@@ -12,6 +12,8 @@ All examples below are valid JSON fragments unless otherwise noted.
 
 These fields live at the root of the config object.
 
+For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal `plain` attention plus `swiglu`/`geglu`/`mlp` blocks, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, and embedding feature channels; unsupported blocks or config features fail explicitly.
+
 | Field | Type | Required | Default | Notes |
 |------|------|----------|---------|-------|
 | `name` | string | No | Source filename/path | Human-readable run name. |
@@ -220,6 +222,7 @@ Required fields:
 Optional fields:
 
 - `kv_heads` — grouped-query attention (must divide `heads` evenly)
+- `qk_norm` — learned RMSNorm scales applied to each Q and K head after projection/GQA expansion and before RoPE or relative-attention score construction. Adds `q_norm_scale` and `k_norm_scale` weights of shape `[head_dim]`; a `kv_source` consumer block adds only `q_norm_scale` because it reuses K from the source block.
 - `qk_gain` — learnable per-head QK scaling. When set, allocates one trainable scalar per head initialized to this value, applied as `scores = qk_gain * (Q @ K^T / sqrt(d_k))`. Omit or set to `0` for standard scaling.
 - `rope_dims` — partial RoPE: apply rotary embeddings to only the first `rope_dims` dimensions per head, leaving the rest position-invariant. Must be even and `<= head_dim`. Omit or set to `0` for full RoPE.
 - `relative_attention` — `"deberta_p2c_c2p"` enables DeBERTa-style disentangled content-to-position and position-to-content relative attention bias. Omit, set to `""`, or set to `"none"` for standard RoPE attention.
@@ -233,7 +236,7 @@ Optional fields:
 Example:
 
 ```json
-{"type": "plain", "heads": 8, "kv_heads": 4, "qk_gain": 5.25, "rope_dims": 16, "xsa": true}
+{"type": "plain", "heads": 8, "kv_heads": 4, "qk_norm": true, "qk_gain": 5.25, "rope_dims": 16, "xsa": true}
 ```
 
 DeBERTa relative attention example:
@@ -843,6 +846,19 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `swa_start` | integer | No | `0` | Step at which SWA/EMA accumulation starts. Must be `>= 0`. |
 | `swa_decay` | number | No | `0.999` | EMA decay for SWA weights. Must be in `[0, 1)`. |
 | `swa_interval` | integer | No | `10` | Update frequency for SWA accumulation. |
+
+### SWA/EMA averaged weights
+
+`training.swa_start`, `training.swa_decay`, and `training.swa_interval` enable exponential moving-average weight tracking during training. `swa_start: 0` disables the feature. The same values can be overridden at runtime with `-swa-start`, `-swa-decay`, and `-swa-interval`; explicit CLI overrides are validated before training and logged during initialization.
+
+When `-safetensors <base>.safetensors` is used without populated SWA/EMA weights, Mixlab preserves the existing behavior and writes exactly that path. Once SWA/EMA weights are populated, Mixlab writes two artifacts instead:
+
+- `<base>.final.safetensors` for the live final trainer weights
+- `<base>.swa.safetensors` for the averaged SWA/EMA weights
+
+Periodic checkpointing follows the same convention after averaged weights exist, producing `step_N.final.safetensors` and `step_N.swa.safetensors`. Checkpoints before the first averaging update keep the legacy `step_N.st` path.
+
+The Hugging Face exporter uses whichever checkpoint is passed through `-safetensors-load`. Pass the `.swa.safetensors` file to export averaged weights, or `.final.safetensors` to export live final weights.
 
 ### Training objectives
 

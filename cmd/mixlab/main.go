@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate (training configs may set training.target_val_loss for early stopping)")
+	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, export-hf (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
@@ -28,6 +28,9 @@ func main() {
 	checkpointEvery := flag.Int("checkpoint-every", 0, "save a safetensors checkpoint every N training steps (0 disables)")
 	logEvery := flag.Int("log-every", 0, "print progress every N training steps (0 uses default; MIXLAB_LOG_EVERY overrides)")
 	valEvery := flag.Int("val-every", 0, "run validation every N training steps (0 uses default; MIXLAB_VAL_EVERY overrides)")
+	swaStart := flag.Int("swa-start", 0, "override training.swa_start: step at which SWA/EMA accumulation starts; 0 disables")
+	swaDecay := flag.Float64("swa-decay", 0.999, "override training.swa_decay: EMA decay for averaged weights")
+	swaInterval := flag.Int("swa-interval", 10, "override training.swa_interval: update cadence for SWA/EMA accumulation")
 	timing := flag.Bool("timing", false, "print per-step timing breakdown")
 	maxTokens := flag.Int("max-tokens", 256, "maximum number of tokens to generate (generate mode)")
 	temperature := flag.Float64("temperature", 0.8, "sampling temperature (generate mode)")
@@ -46,7 +49,7 @@ func main() {
 
 	// prepare mode flags
 	prepInput := flag.String("input", "", "input text file, JSONL, or directory (prepare mode)")
-	prepOutput := flag.String("output", "", "output directory for shards (prepare mode) or output file (hiddenstats mode)")
+	prepOutput := flag.String("output", "", "output directory for shards (prepare mode), Hugging Face directory (export-hf mode), or output file (hiddenstats mode)")
 	prepVocabSize := flag.Int("vocab-size", 1024, "BPE vocabulary size (prepare mode)")
 	prepValSplit := flag.Float64("val-split", 0.1, "fraction of tokens for validation (prepare mode)")
 	prepTokenizerPath := flag.String("tokenizer-path", "", "path to pre-trained tokenizer.json (prepare mode)")
@@ -55,6 +58,7 @@ func main() {
 	prepCharMaxPerToken := flag.Int("char-max-per-token", 16, "fixed char feature slots per token when -char-vocab-size is enabled (prepare mode)")
 
 	flag.Parse()
+	providedFlags := providedFlagSet()
 
 	if *cpuProfile != "" {
 		f, err := os.Create(*cpuProfile)
@@ -126,6 +130,15 @@ func main() {
 		must(train.RunCount(*configPath))
 		return
 	}
+	if *mode == "export-hf" {
+		must(train.RunExportHF(train.ExportHFOptions{
+			ConfigPath:      *configPath,
+			SafetensorsLoad: *safetensorsLoad,
+			OutputDir:       *prepOutput,
+			TokenizerSource: *prepTokenizerPath,
+		}))
+		return
+	}
 
 	if !train.MLXAvailable() {
 		fmt.Fprintln(os.Stderr, "error: MLX backend unavailable\n  rebuild with: CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab\n  macOS: requires Apple Silicon and MLX (brew install mlx)\n  Linux: requires CUDA and MLX built from source (see docker/README.md)")
@@ -146,6 +159,18 @@ func main() {
 		LogEvery:        *logEvery,
 		ValEvery:        *valEvery,
 		Timing:          *timing,
+	}
+	if providedFlags["swa-start"] {
+		v := *swaStart
+		opts.SWAStartOverride = &v
+	}
+	if providedFlags["swa-decay"] {
+		v := float32(*swaDecay)
+		opts.SWADecayOverride = &v
+	}
+	if providedFlags["swa-interval"] {
+		v := *swaInterval
+		opts.SWAIntervalOverride = &v
 	}
 
 	switch *mode {
@@ -180,8 +205,16 @@ func main() {
 	case "generate":
 		must(train.RunGenerate(*configPath, *safetensorsLoad, *maxTokens, float32(*temperature), *topK, *prompt))
 	default:
-		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate)", *mode))
+		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, export-hf)", *mode))
 	}
+}
+
+func providedFlagSet() map[string]bool {
+	provided := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) {
+		provided[f.Name] = true
+	})
+	return provided
 }
 
 func must(err error) {

@@ -173,6 +173,7 @@ type BlockSpec struct {
 	RelativeAttention       string       `json:"relative_attention,omitempty"`        // plain: "", "none", or "deberta_p2c_c2p".
 	RelativeAttentionWindow int          `json:"relative_attention_window,omitempty"` // plain relative attention clipping window; defaults to 128.
 	QKGain                  float64      `json:"qk_gain,omitempty"`                   // per-head learnable QK scaling; 0 disables
+	QKNorm                  bool         `json:"qk_norm,omitempty"`                   // plain: learned RMSNorm on Q/K heads before attention scores.
 	XSA                     bool         `json:"xsa,omitempty"`                       // enable V-orthogonal projection after attention
 	WindowSize              int          `json:"window_size,omitempty"`               // plain: sliding causal attention width; 0 = full causal attention
 	AttentionMask           string       `json:"attention_mask,omitempty"`            // plain: "causal", "bidirectional", or "none"; empty resolves from training objective.
@@ -311,6 +312,8 @@ type TrainingSpec struct {
 	lambBeta1Set          bool
 	lambBeta2Set          bool
 	lambEpsSet            bool
+	swaDecaySet           bool
+	swaIntervalSet        bool
 }
 
 func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
@@ -335,6 +338,8 @@ func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	_, t.lambBeta1Set = fields["lamb_beta1"]
 	_, t.lambBeta2Set = fields["lamb_beta2"]
 	_, t.lambEpsSet = fields["lamb_eps"]
+	_, t.swaDecaySet = fields["swa_decay"]
+	_, t.swaIntervalSet = fields["swa_interval"]
 	return nil
 }
 
@@ -532,10 +537,10 @@ func (t *TrainingSpec) ApplyDefaults() {
 	if t.HeadWeightDecay == 0 {
 		t.HeadWeightDecay = t.WeightDecay
 	}
-	if t.SWADecay == 0 {
+	if !t.swaDecaySet && t.SWADecay == 0 {
 		t.SWADecay = d.SWADecay
 	}
-	if t.SWAInterval <= 0 {
+	if !t.swaIntervalSet && t.SWAInterval <= 0 {
 		t.SWAInterval = d.SWAInterval
 	}
 }
@@ -843,6 +848,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Training.SWADecay < 0 || cfg.Training.SWADecay >= 1 {
 		return nil, fmt.Errorf("config %q has invalid training.swa_decay=%g (must be in [0,1))", source, cfg.Training.SWADecay)
+	}
+	if cfg.Training.SWAInterval <= 0 {
+		return nil, fmt.Errorf("config %q has invalid training.swa_interval=%d (must be > 0)", source, cfg.Training.SWAInterval)
 	}
 	if cfg.Training.WarmdownSteps < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.warmdown_steps=%d (must be >= 0)", source, cfg.Training.WarmdownSteps)

@@ -14,6 +14,8 @@ func TestBlockWeightCount(t *testing.T) {
 	}{
 		{BlockSpec{Type: "plain", Heads: 4}, 7},
 		{BlockSpec{Type: "plain", Heads: 4, QKGain: 5.25}, 8},
+		{BlockSpec{Type: "plain", Heads: 4, QKNorm: true}, 9},
+		{BlockSpec{Type: "plain", Heads: 4, KVSource: 1, QKNorm: true}, 6},
 		{BlockSpec{Type: "plain", Heads: 8, SparseAttnGate: true}, 8},
 		{BlockSpec{Type: "swiglu"}, 4},
 		{BlockSpec{Type: "geglu"}, 4},
@@ -249,6 +251,93 @@ func TestEmitPlainAttentionIR_QKGainBeforeMaskAndSoftmax(t *testing.T) {
 	}
 	if gainReshapeIdx >= gainMulIdx || gainMulIdx >= maskIdx || maskIdx >= softmaxIdx {
 		t.Fatalf("unexpected op order reshape=%d mul=%d mask=%d softmax=%d", gainReshapeIdx, gainMulIdx, maskIdx, softmaxIdx)
+	}
+}
+
+func TestEmitPlainAttentionIR_QKNormBeforeRoPEAndQKGain(t *testing.T) {
+	p := NewProgram(10)
+	wi, err := emitBlockIR(p, BlockSpec{Type: "plain", Heads: 4, QKNorm: true, QKGain: 5.25}, "x", 0, 128, 64, 2, 1024, 0, nil, DefaultFFNMultiplier, false)
+	if err != nil {
+		t.Fatalf("emitBlockIR qk_norm: %v", err)
+	}
+	if wi != 10 {
+		t.Fatalf("expected wi=10, got %d", wi)
+	}
+
+	qNormIdx := -1
+	kNormIdx := -1
+	ropeIdx := -1
+	gainIdx := -1
+	maskIdx := -1
+	for i, op := range p.Ops {
+		switch op.Code {
+		case OpRMSNorm:
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_0_qh" && op.Inputs[1] == "w4" {
+				qNormIdx = i
+			}
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_0_kh" && op.Inputs[1] == "w5" {
+				kNormIdx = i
+			}
+		case OpRoPE:
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_0_qh_qk_norm" && op.Inputs[1] == "x_attn_0_kh_qk_norm" {
+				ropeIdx = i
+			}
+		case OpReshape:
+			if len(op.Inputs) == 1 && op.Inputs[0] == "w6" && reflect.DeepEqual(op.IntParams, []int{1, 4, 1, 1}) {
+				gainIdx = i
+			}
+		case OpCausalMask:
+			if maskIdx == -1 {
+				maskIdx = i
+			}
+		}
+	}
+	if qNormIdx == -1 || kNormIdx == -1 {
+		t.Fatalf("missing q/k RMSNorm ops q=%d k=%d", qNormIdx, kNormIdx)
+	}
+	if ropeIdx == -1 {
+		t.Fatal("missing RoPE consuming QK-normalized tensors")
+	}
+	if gainIdx == -1 {
+		t.Fatal("missing qk_gain reshape at shifted weight index")
+	}
+	if qNormIdx >= ropeIdx || kNormIdx >= ropeIdx || ropeIdx >= gainIdx || gainIdx >= maskIdx {
+		t.Fatalf("unexpected op order q_norm=%d k_norm=%d rope=%d gain=%d mask=%d", qNormIdx, kNormIdx, ropeIdx, gainIdx, maskIdx)
+	}
+}
+
+func TestEmitPlainAttentionIR_QKNormWithDebertaRelativeAttention(t *testing.T) {
+	p := NewProgram(12)
+	wi, err := emitBlockIR(p, BlockSpec{
+		Type:                    "plain",
+		Heads:                   4,
+		QKNorm:                  true,
+		RelativeAttention:       RelativeAttentionDebertaP2CC2P,
+		RelativeAttentionWindow: 4,
+		AttentionMask:           AttentionMaskBidirectional,
+	}, "x", 0, 64, 8, 2, 256, 0, nil, DefaultFFNMultiplier, false)
+	if err != nil {
+		t.Fatalf("emitBlockIR qk_norm relative: %v", err)
+	}
+	if wi != 12 {
+		t.Fatalf("expected wi=12, got %d", wi)
+	}
+
+	if n := countOps(p, OpRoPE); n != 0 {
+		t.Fatalf("expected no RoPE for relative attention, got %d", n)
+	}
+	foundRelBias := false
+	for _, op := range p.Ops {
+		if op.Code != OpDebertaRelativeBias {
+			continue
+		}
+		if len(op.Inputs) != 4 || op.Inputs[0] != "x_attn_0_qh_qk_norm" || op.Inputs[1] != "x_attn_0_kh_qk_norm" {
+			t.Fatalf("DebertaRelativeBias inputs = %v, want normalized q/k first", op.Inputs)
+		}
+		foundRelBias = true
+	}
+	if !foundRelBias {
+		t.Fatal("missing DebertaRelativeBias op")
 	}
 }
 
@@ -604,6 +693,7 @@ func TestEmitPlainAttentionIR_KVSourceReusesCachedTensors(t *testing.T) {
 
 	sharedTransposeUsesSourceK := false
 	sharedCtxUsesSourceV := false
+	sharedRoPERotatesQuery := false
 	hasSharedKMatMul := false
 	hasSharedVMatMul := false
 	for _, op := range p.Ops {
@@ -616,6 +706,9 @@ func TestEmitPlainAttentionIR_KVSourceReusesCachedTensors(t *testing.T) {
 		if op.Code == OpTranspose && len(op.Inputs) == 1 && op.Inputs[0] == "x_attn_0_k_rot" && len(op.Outputs) == 1 && op.Outputs[0] == "x_attn_1_kt" {
 			sharedTransposeUsesSourceK = true
 		}
+		if op.Code == OpRoPE && len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_1_qh" && op.Inputs[1] == "x_attn_0_k_rot" && len(op.Outputs) == 2 && op.Outputs[0] == "x_attn_1_q_rot" {
+			sharedRoPERotatesQuery = true
+		}
 		if op.Code == OpMatMul && len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_1_attn" && op.Inputs[1] == "x_attn_0_vh" {
 			sharedCtxUsesSourceV = true
 		}
@@ -626,8 +719,52 @@ func TestEmitPlainAttentionIR_KVSourceReusesCachedTensors(t *testing.T) {
 	if !sharedTransposeUsesSourceK {
 		t.Fatal("shared KV block did not reference source K tensor")
 	}
+	if !sharedRoPERotatesQuery {
+		t.Fatal("shared KV block did not rotate its query before scoring source K")
+	}
 	if !sharedCtxUsesSourceV {
 		t.Fatal("shared KV block did not reference source V tensor")
+	}
+}
+
+func TestEmitPlainAttentionIR_KVSourceQKNormNormalizesAndRotatesQuery(t *testing.T) {
+	p := NewProgram(13)
+	cache := make(map[int]BlockKVOutputs)
+
+	wi, err := emitPlainAttentionIRWithKVOptions(p, "x", 0, 8, 4, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, false, 0, 0, false, false, 0, AttentionMaskCausal, "", 0, 0, cache, 0)
+	if err != nil {
+		t.Fatalf("emitPlainAttentionIRWithKVOptions source: %v", err)
+	}
+	wi, err = emitPlainAttentionIRWithKVOptionsEx(p, "x", wi, 8, 4, 128, 64, 2, 1, DefaultFFNMultiplier, false, 0, false, 0, true, 0, false, false, 0, AttentionMaskCausal, "", 0, 1, cache, 2)
+	if err != nil {
+		t.Fatalf("emitPlainAttentionIRWithKVOptionsEx shared qk_norm: %v", err)
+	}
+	if wi != 13 {
+		t.Fatalf("shared qk_norm wi=%d want 13", wi)
+	}
+
+	qNormIdx := -1
+	ropeIdx := -1
+	for i, op := range p.Ops {
+		switch op.Code {
+		case OpRMSNorm:
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_1_qh" && op.Inputs[1] == "w9" {
+				qNormIdx = i
+			}
+		case OpRoPE:
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_1_qh_qk_norm" && op.Inputs[1] == "x_attn_0_k_rot" {
+				ropeIdx = i
+			}
+		}
+	}
+	if qNormIdx == -1 {
+		t.Fatal("missing shared-KV q_norm RMSNorm")
+	}
+	if ropeIdx == -1 {
+		t.Fatal("missing shared-KV RoPE over normalized query")
+	}
+	if qNormIdx >= ropeIdx {
+		t.Fatalf("unexpected shared-KV QK-norm order q_norm=%d rope=%d", qNormIdx, ropeIdx)
 	}
 }
 

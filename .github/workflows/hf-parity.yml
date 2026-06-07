@@ -1,0 +1,42 @@
+name: HF Parity
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'cmd/mixlab/**'
+      - 'train/**'
+      - 'arch/**'
+      - 'requirements-hf.txt'
+      - '.github/workflows/hf-parity.yml'
+
+jobs:
+  export-hf-parity:
+    name: export-hf parity smoke
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      HF_PARITY: "1"
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install HF Python dependencies
+        run: python -m pip install -r requirements-hf.txt
+
+      - name: Install MLX runtime
+        run: brew install mlx
+
+      - name: Run export-hf Go tests
+        run: go test ./cmd/mixlab ./train -run 'TestExportHF|TestRunExportHF|TestHFModeling' -count=1
+
+      - name: Run MLX-gated parity target
+        run: go test -tags mlx ./train -run 'TestExportHF.*Parity|TestNativeHF.*Parity' -count=1

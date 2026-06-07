@@ -1,7 +1,6 @@
 package train
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -42,12 +41,7 @@ func exportSafetensors(path string, cfg *ArchConfig, shapes []WeightShape, weigh
 	var offset uint64
 	for i, ws := range shapes {
 		sizeBytes := uint64(len(weights[i]) * 4)
-		header[names[i]] = safetensorHeaderEntry{
-			DType:       "F32",
-			Shape:       append([]int(nil), ws.Shape...),
-			DataOffsets: []uint64{offset, offset + sizeBytes},
-		}
-		offset += sizeBytes
+		addSafetensorHeaderEntry(header, &offset, names[i], "F32", ws.Shape, sizeBytes)
 	}
 
 	// Add metadata
@@ -60,19 +54,9 @@ func exportSafetensors(path string, cfg *ArchConfig, shapes []WeightShape, weigh
 		"format":     "mixlab_v1",
 	}
 	metaBytes, _ := json.Marshal(meta)
-	header["__metadata__"] = safetensorHeaderEntry{
-		DType:       "U8",
-		Shape:       nil,
-		DataOffsets: []uint64{0, 0},
-	}
-	_ = metaBytes // Metadata goes into the header JSON directly
-
 	// Re-build header with metadata as a raw field
 	headerMap := make(map[string]json.RawMessage, len(header)+1)
 	for k, v := range header {
-		if k == "__metadata__" {
-			continue
-		}
 		b, err := json.Marshal(v)
 		if err != nil {
 			return err
@@ -81,7 +65,7 @@ func exportSafetensors(path string, cfg *ArchConfig, shapes []WeightShape, weigh
 	}
 	headerMap["__metadata__"] = metaBytes
 
-	headerBytes, err := json.Marshal(headerMap)
+	headerBytes, err := marshalSafetensorHeader(headerMap)
 	if err != nil {
 		return err
 	}
@@ -105,19 +89,69 @@ func exportSafetensors(path string, cfg *ArchConfig, shapes []WeightShape, weigh
 		return err
 	}
 	for i, data := range weights {
-		var buf bytes.Buffer
-		for _, v := range data {
-			if err := binary.Write(&buf, binary.LittleEndian, math.Float32bits(v)); err != nil {
-				return fmt.Errorf("encode tensor %s: %w", names[i], err)
-			}
-		}
-		if _, err := f.Write(buf.Bytes()); err != nil {
+		if err := writeSafetensorPayloadBytes(f, names[i], encodeFloat32Data(data)); err != nil {
 			return err
 		}
 	}
 
 	fmt.Printf("exported safetensors to %s (%d tensors)\n", path, len(weights))
 	return nil
+}
+
+func marshalSafetensorHeader(headerMap map[string]json.RawMessage) ([]byte, error) {
+	headerBytes, err := json.Marshal(headerMap)
+	if err != nil {
+		return nil, err
+	}
+	if rem := len(headerBytes) % 8; rem != 0 {
+		headerBytes = append(headerBytes, bytesOfRepeatedSpace(8-rem)...)
+	}
+	return headerBytes, nil
+}
+
+func bytesOfRepeatedSpace(n int) []byte {
+	if n <= 0 {
+		return nil
+	}
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = ' '
+	}
+	return out
+}
+
+func exportTrainingSafetensorsArtifacts(cfg *ArchConfig, trainer any, shapes []WeightShape, opts TrainOptions, swaEMA [][]float32) (safetensorsArtifacts, error) {
+	if opts.SafetensorsPath == "" {
+		return safetensorsArtifacts{}, nil
+	}
+	liveWeights, err := readTrainerWeights(trainer)
+	if err != nil {
+		return safetensorsArtifacts{}, fmt.Errorf("read trainer weights: %w", err)
+	}
+	if hasSWAWeights(swaEMA) {
+		artifacts := suffixedSafetensorsPaths(opts.SafetensorsPath)
+		if err := exportWeightsForMode(artifacts.FinalPath, cfg, shapes, liveWeights, opts); err != nil {
+			return safetensorsArtifacts{}, fmt.Errorf("export final weights: %w", err)
+		}
+		if err := exportWeightsForMode(artifacts.SWAPath, cfg, shapes, swaEMA, opts); err != nil {
+			return safetensorsArtifacts{}, fmt.Errorf("export swa weights: %w", err)
+		}
+		return artifacts, nil
+	}
+	artifacts := safetensorsArtifacts{FinalPath: opts.SafetensorsPath}
+	if err := exportWeightsForMode(artifacts.FinalPath, cfg, shapes, liveWeights, opts); err != nil {
+		return safetensorsArtifacts{}, err
+	}
+	return artifacts, nil
+}
+
+func exportWeightsForMode(path string, cfg *ArchConfig, shapes []WeightShape, weights [][]float32, opts TrainOptions) error {
+	switch opts.Quantize {
+	case "int8", "int6":
+		return exportSafetensorsQuantized(path, cfg, shapes, weights, opts.Quantize, opts.QuantMethod, opts.QuantK, opts.QuantKEmbed)
+	default:
+		return exportSafetensors(path, cfg, shapes, weights)
+	}
 }
 
 // encodeFloat32Data encodes float32 values as little-endian bytes.
@@ -136,17 +170,94 @@ func encodeFloat32Scalar(v float32) []byte {
 	return out
 }
 
-// addSafetensorPayload adds a tensor entry to the header and appends its payload.
-func addSafetensorPayload(header map[string]safetensorHeaderEntry, payloads *[][]byte, offset *uint64, name, dtype string, shape []int, data []byte) {
+func addSafetensorHeaderEntry(header map[string]safetensorHeaderEntry, offset *uint64, name, dtype string, shape []int, sizeBytes uint64) {
 	start := *offset
-	end := start + uint64(len(data))
+	end := start + sizeBytes
 	header[name] = safetensorHeaderEntry{
 		DType:       dtype,
 		Shape:       append([]int(nil), shape...),
 		DataOffsets: []uint64{start, end},
 	}
-	*payloads = append(*payloads, data)
-	*offset = end
+	*offset = alignSafetensorOffset(end)
+}
+
+func alignSafetensorOffset(offset uint64) uint64 {
+	if rem := offset % 8; rem != 0 {
+		return offset + (8 - rem)
+	}
+	return offset
+}
+
+func safetensorPayloadPadding(sizeBytes uint64) int {
+	aligned := alignSafetensorOffset(sizeBytes)
+	return int(aligned - sizeBytes)
+}
+
+func writeSafetensorPayloadBytes(f *os.File, name string, data []byte) error {
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("write tensor %s: %w", name, err)
+	}
+	padding := safetensorPayloadPadding(uint64(len(data)))
+	if padding == 0 {
+		return nil
+	}
+	if _, err := f.Write(make([]byte, padding)); err != nil {
+		return fmt.Errorf("write tensor %s padding: %w", name, err)
+	}
+	return nil
+}
+
+func addQuantizedTensorHeaders(header map[string]safetensorHeaderEntry, offset *uint64, name string, ws WeightShape, dataLen int) error {
+	if !shouldQuantize(ws.Shape, dataLen) {
+		addSafetensorHeaderEntry(header, offset, name, "F32", ws.Shape, uint64(dataLen*4))
+		return nil
+	}
+	if len(ws.Shape) == 2 {
+		rows := ws.Shape[0]
+		cols := ws.Shape[1]
+		if rows*cols != dataLen {
+			return fmt.Errorf("tensor %s shape/data mismatch: shape=%v data=%d", name, ws.Shape, dataLen)
+		}
+		addSafetensorHeaderEntry(header, offset, name, "I8", ws.Shape, uint64(dataLen))
+		addSafetensorHeaderEntry(header, offset, name+".scale", "F32", []int{rows}, uint64(rows*4))
+		return nil
+	}
+	addSafetensorHeaderEntry(header, offset, name, "I8", ws.Shape, uint64(dataLen))
+	addSafetensorHeaderEntry(header, offset, name+".scale", "F32", []int{}, 4)
+	return nil
+}
+
+func writeQuantizedTensorPayload(f *os.File, name string, ws WeightShape, data []float32, mode, quantMethod string, kMatrix, kEmbed float32) error {
+	if !shouldQuantize(ws.Shape, len(data)) {
+		return writeSafetensorPayloadBytes(f, name, encodeFloat32Data(data))
+	}
+	if len(ws.Shape) == 2 {
+		rows := ws.Shape[0]
+		cols := ws.Shape[1]
+		if rows*cols != len(data) {
+			return fmt.Errorf("tensor %s shape/data mismatch: shape=%v data=%d", name, ws.Shape, len(data))
+		}
+		var qData []int8
+		var scales []float32
+		if quantMethod == "sdclip" {
+			k := kMatrix
+			if strings.Contains(strings.ToLower(ws.Name), "embed") {
+				k = kEmbed
+			}
+			qData, scales = quantizeTensorPerRowSDClip(data, rows, cols, mode, k)
+		} else {
+			qData, scales = quantizeTensorPerRow(data, rows, cols, mode)
+		}
+		if err := writeSafetensorPayloadBytes(f, name, int8ToBytes(qData)); err != nil {
+			return err
+		}
+		return writeSafetensorPayloadBytes(f, name+".scale", encodeFloat32Data(scales))
+	}
+	qData, scale := quantizeTensorFlat(data, mode)
+	if err := writeSafetensorPayloadBytes(f, name, int8ToBytes(qData)); err != nil {
+		return err
+	}
+	return writeSafetensorPayloadBytes(f, name+".scale", encodeFloat32Scalar(scale))
 }
 
 // exportSafetensorsQuantized writes trained weights in quantized safetensors format.
@@ -179,45 +290,13 @@ func exportSafetensorsQuantized(path string, cfg *ArchConfig, shapes []WeightSha
 	}
 
 	header := make(map[string]safetensorHeaderEntry, len(weights)*2)
-	payloads := make([][]byte, 0, len(weights)*2)
 	var offset uint64
 
 	for i, ws := range shapes {
 		name := names[i]
-		data := weights[i]
-
-		if !shouldQuantize(ws.Shape, len(data)) {
-			// Keep small / 1-D tensors as float32.
-			addSafetensorPayload(header, &payloads, &offset, name, "F32", ws.Shape, encodeFloat32Data(data))
-			continue
+		if err := addQuantizedTensorHeaders(header, &offset, name, ws, len(weights[i])); err != nil {
+			return err
 		}
-
-		if len(ws.Shape) == 2 {
-			rows := ws.Shape[0]
-			cols := ws.Shape[1]
-			if rows*cols != len(data) {
-				return fmt.Errorf("tensor %s shape/data mismatch: shape=%v data=%d", name, ws.Shape, len(data))
-			}
-			var qData []int8
-			var scales []float32
-			if quantMethod == "sdclip" {
-				k := kMatrix
-				if strings.Contains(strings.ToLower(ws.Name), "embed") {
-					k = kEmbed
-				}
-				qData, scales = quantizeTensorPerRowSDClip(data, rows, cols, mode, k)
-			} else {
-				qData, scales = quantizeTensorPerRow(data, rows, cols, mode)
-			}
-			addSafetensorPayload(header, &payloads, &offset, name, "I8", ws.Shape, int8ToBytes(qData))
-			addSafetensorPayload(header, &payloads, &offset, name+".scale", "F32", []int{rows}, encodeFloat32Data(scales))
-			continue
-		}
-
-		// 1-D large tensor (unlikely but handled): flat quantization.
-		qData, scale := quantizeTensorFlat(data, mode)
-		addSafetensorPayload(header, &payloads, &offset, name, "I8", ws.Shape, int8ToBytes(qData))
-		addSafetensorPayload(header, &payloads, &offset, name+".scale", "F32", []int{}, encodeFloat32Scalar(scale))
 	}
 
 	// Add metadata with quantization info.
@@ -247,7 +326,7 @@ func exportSafetensorsQuantized(path string, cfg *ArchConfig, shapes []WeightSha
 	}
 	headerMap["__metadata__"] = metaBytes
 
-	headerBytes, err := json.Marshal(headerMap)
+	headerBytes, err := marshalSafetensorHeader(headerMap)
 	if err != nil {
 		return err
 	}
@@ -269,8 +348,8 @@ func exportSafetensorsQuantized(path string, cfg *ArchConfig, shapes []WeightSha
 	if _, err := f.Write(headerBytes); err != nil {
 		return err
 	}
-	for _, p := range payloads {
-		if _, err := f.Write(p); err != nil {
+	for i, ws := range shapes {
+		if err := writeQuantizedTensorPayload(f, names[i], ws, weights[i], mode, quantMethod, kMatrix, kEmbed); err != nil {
 			return err
 		}
 	}

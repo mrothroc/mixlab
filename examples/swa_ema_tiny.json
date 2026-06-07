@@ -1,0 +1,27 @@
+{
+  "name": "swa_ema_tiny",
+
+  // Tiny causal transformer with SWA/EMA averaged weight tracking enabled.
+  "model_dim": 64,
+  "vocab_size": 512,
+  "seq_len": 64,
+
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+
+  "training": {
+    "steps": 200,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "swa_start": 100,
+    "swa_decay": 0.99,
+    "swa_interval": 5,
+    "seed": 42,
+    "batch_tokens": 512
+  }
+}

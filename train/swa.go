@@ -1,5 +1,43 @@
 package train
 
+import (
+	"fmt"
+	"math"
+)
+
+// applyTrainingSWAOverrides applies any CLI SWA/EMA overrides onto the config's
+// training spec, validating each provided value, and returns human-readable log
+// lines describing the overrides that were applied.
+func applyTrainingSWAOverrides(cfg *ArchConfig, opts TrainOptions) ([]string, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil config")
+	}
+	var logs []string
+	if opts.SWAStartOverride != nil {
+		if *opts.SWAStartOverride < 0 {
+			return nil, fmt.Errorf("invalid -swa-start=%d (must be >= 0)", *opts.SWAStartOverride)
+		}
+		cfg.Training.SWAStart = *opts.SWAStartOverride
+		logs = append(logs, fmt.Sprintf("training.swa_start overridden by CLI: %d", cfg.Training.SWAStart))
+	}
+	if opts.SWADecayOverride != nil {
+		v := *opts.SWADecayOverride
+		if math.IsNaN(float64(v)) || v < 0 || v >= 1 {
+			return nil, fmt.Errorf("invalid -swa-decay=%g (must be in [0,1))", v)
+		}
+		cfg.Training.SWADecay = v
+		logs = append(logs, fmt.Sprintf("training.swa_decay overridden by CLI: %g", cfg.Training.SWADecay))
+	}
+	if opts.SWAIntervalOverride != nil {
+		if *opts.SWAIntervalOverride <= 0 {
+			return nil, fmt.Errorf("invalid -swa-interval=%d (must be > 0)", *opts.SWAIntervalOverride)
+		}
+		cfg.Training.SWAInterval = *opts.SWAIntervalOverride
+		logs = append(logs, fmt.Sprintf("training.swa_interval overridden by CLI: %d", cfg.Training.SWAInterval))
+	}
+	return logs, nil
+}
+
 // shouldUpdateSWA reports whether the current training step should contribute
 // an SWA snapshot given the configured start step and update interval.
 func shouldUpdateSWA(step, start, interval int) bool {

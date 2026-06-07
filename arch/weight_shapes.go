@@ -92,6 +92,13 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 				WeightMeta{Name: "wv", Shape: []int{D, kvProjDim}},
 			)
 		}
+		if spec.QKNorm {
+			headDim := D / heads
+			metas = append(metas, WeightMeta{Name: "q_norm_scale", Shape: []int{headDim}, IsNormScale: true, InitOne: true})
+			if spec.KVSource <= 0 {
+				metas = append(metas, WeightMeta{Name: "k_norm_scale", Shape: []int{headDim}, IsNormScale: true, InitOne: true})
+			}
+		}
 		if relativeAttentionEnabled(spec) {
 			relWindow := effectiveRelativeAttentionWindow(spec)
 			metas = append(metas,

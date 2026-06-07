@@ -366,18 +366,50 @@ func TestUpdateEMAWeights(t *testing.T) {
 	}
 }
 
-func TestExportWeightsForTrainerPrefersSWA(t *testing.T) {
-	swa := [][]float32{{1, 2, 3}}
-	got, err := exportWeightsForTrainer(nil, swa)
+func TestApplyTrainingSWAOverrides(t *testing.T) {
+	cfg := &ArchConfig{Name: "swa_override", Training: DefaultTrainingSpec()}
+	start := 12
+	decay := float32(0.95)
+	interval := 3
+	logs, err := applyTrainingSWAOverrides(cfg, TrainOptions{
+		SWAStartOverride:    &start,
+		SWADecayOverride:    &decay,
+		SWAIntervalOverride: &interval,
+	})
 	if err != nil {
-		t.Fatalf("exportWeightsForTrainer: %v", err)
+		t.Fatalf("applyTrainingSWAOverrides: %v", err)
 	}
-	if !reflect.DeepEqual(got, swa) {
-		t.Fatalf("export weights = %v, want %v", got, swa)
+	if cfg.Training.SWAStart != start || cfg.Training.SWADecay != decay || cfg.Training.SWAInterval != interval {
+		t.Fatalf("SWA overrides not applied: start=%d decay=%g interval=%d", cfg.Training.SWAStart, cfg.Training.SWADecay, cfg.Training.SWAInterval)
 	}
-	got[0][0] = 99
-	if swa[0][0] != 1 {
-		t.Fatalf("exportWeightsForTrainer should clone SWA weights, mutated source=%v", swa)
+	if len(logs) != 3 {
+		t.Fatalf("logs = %v, want 3 override messages", logs)
+	}
+}
+
+func TestApplyTrainingSWAOverridesRejectsInvalidValues(t *testing.T) {
+	negStart := -1
+	badDecay := float32(1)
+	badInterval := 0
+	cases := []struct {
+		name string
+		opts TrainOptions
+		want string
+	}{
+		{name: "start", opts: TrainOptions{SWAStartOverride: &negStart}, want: "swa-start"},
+		{name: "decay", opts: TrainOptions{SWADecayOverride: &badDecay}, want: "swa-decay"},
+		{name: "interval", opts: TrainOptions{SWAIntervalOverride: &badInterval}, want: "swa-interval"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := applyTrainingSWAOverrides(&ArchConfig{Name: "bad", Training: DefaultTrainingSpec()}, tc.opts)
+			if err == nil {
+				t.Fatal("applyTrainingSWAOverrides succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error %q did not mention %q", err, tc.want)
+			}
+		})
 	}
 }
 

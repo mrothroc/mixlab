@@ -74,6 +74,38 @@ func TestInvalidSWADecay(t *testing.T) {
 	}
 }
 
+func TestExplicitZeroSWADecayIsValid(t *testing.T) {
+	raw := []byte(`{
+		"model_dim": 128,
+		"vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"swa_decay": 0}
+	}`)
+	cfg, err := ParseArchConfig(raw, "test")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if cfg.Training.SWADecay != 0 {
+		t.Fatalf("swa_decay = %g, want explicit 0", cfg.Training.SWADecay)
+	}
+}
+
+func TestInvalidSWAInterval(t *testing.T) {
+	raw := []byte(`{
+		"model_dim": 128,
+		"vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"swa_interval": 0}
+	}`)
+	_, err := ParseArchConfig(raw, "test")
+	if err == nil {
+		t.Fatal("expected error for invalid swa_interval")
+	}
+	if !strings.Contains(err.Error(), "swa_interval") {
+		t.Errorf("error should mention swa_interval: %v", err)
+	}
+}
+
 func TestNegativeWarmdownSteps(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  128,

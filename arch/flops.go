@@ -285,6 +285,13 @@ func estimatePlainBlockFLOPs(block BlockSpec, B, T, D, ffn int) int64 {
 		default:
 			total += 3 * 2 * i64(B) * i64(T) * i64(D) * i64(D)
 		}
+		if block.QKNorm {
+			qkNormTensors := int64(1)
+			if block.KVSource <= 0 {
+				qkNormTensors = 2
+			}
+			total += 5 * qkNormTensors * i64(B) * i64(heads) * i64(T) * i64(headDim)
+		}
 		total += 2 * i64(B) * i64(heads) * i64(T) * i64(attnWindow) * i64(headDim)
 		total += 2 * i64(B) * i64(heads) * i64(T) * i64(attnWindow) * i64(headDim)
 		if relativeAttentionEnabled(block) {

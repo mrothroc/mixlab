@@ -17,6 +17,7 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 	specs := []BlockSpec{
 		{Type: "plain", Heads: 4},
 		{Type: "plain", Heads: 4, QKGain: 5.25},
+		{Type: "plain", Heads: 4, QKNorm: true},
 		{Type: "plain", Heads: 8, SparseAttnGate: true},
 		{Type: "swiglu"},
 		{Type: "geglu"},
@@ -160,6 +161,23 @@ func TestBlockWeightShapes_QKGainMeta(t *testing.T) {
 	}
 }
 
+func TestBlockWeightShapes_QKNormMeta(t *testing.T) {
+	metas, err := blockWeightShapes(BlockSpec{Type: "plain", Heads: 4, QKNorm: true}, 64, 32, 1, 256, DefaultFFNMultiplier, false, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes: %v", err)
+	}
+	if len(metas) != 9 {
+		t.Fatalf("weight count = %d, want 9", len(metas))
+	}
+	want := []WeightMeta{
+		{Name: "q_norm_scale", Shape: []int{16}, IsNormScale: true, InitOne: true},
+		{Name: "k_norm_scale", Shape: []int{16}, IsNormScale: true, InitOne: true},
+	}
+	if !reflect.DeepEqual(metas[4:6], want) {
+		t.Fatalf("qk_norm metas = %+v, want %+v", metas[4:6], want)
+	}
+}
+
 func TestBlockWeightShapes_SparseAttnGateMeta(t *testing.T) {
 	metas, err := blockWeightShapes(BlockSpec{Type: "plain", Heads: 8, SparseAttnGate: true}, 384, 32, 1, 256, DefaultFFNMultiplier, false, false)
 	if err != nil {
@@ -198,6 +216,31 @@ func TestBlockWeightShapes_KVSourceOmitsWKAndWV(t *testing.T) {
 		if meta.Name == "wk" || meta.Name == "wv" {
 			t.Fatalf("unexpected shared-KV weight %q in %+v", meta.Name, metas)
 		}
+	}
+}
+
+func TestBlockWeightShapes_KVSourceQKNormOmitsKNormScale(t *testing.T) {
+	metas, err := blockWeightShapes(BlockSpec{Type: "plain", Heads: 8, KVHeads: 4, KVSource: 1, QKNorm: true}, 128, 32, 1, 256, DefaultFFNMultiplier, false, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes: %v", err)
+	}
+	if len(metas) != 6 {
+		t.Fatalf("weight count=%d want 6", len(metas))
+	}
+	foundQNorm := false
+	for _, meta := range metas {
+		switch meta.Name {
+		case "q_norm_scale":
+			foundQNorm = true
+			if got, want := meta.Shape, []int{16}; !reflect.DeepEqual(got, want) {
+				t.Fatalf("q_norm_scale shape = %v, want %v", got, want)
+			}
+		case "k_norm_scale":
+			t.Fatalf("unexpected k_norm_scale in %+v", metas)
+		}
+	}
+	if !foundQNorm {
+		t.Fatalf("missing q_norm_scale in %+v", metas)
 	}
 }
 
