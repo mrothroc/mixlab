@@ -10,7 +10,8 @@ import (
 )
 
 // TestExportHFNativePythonParity is the load-bearing FR-1 check: for each
-// covered architecture it exports a trained-magnitude fixture, runs the
+// covered architecture it exports a deterministically scaled trained-magnitude
+// fixture, runs the
 // *actual* embedded modeling_mixlab.py forward through transformers, and asserts
 // it agrees with the *actual* native MLX forward on a byte-identical batch.
 // Unlike the Go CPU oracle parity tests, nothing here re-implements the HF math,
@@ -132,7 +133,7 @@ func TestExportHFNativePythonParity(t *testing.T) {
 func runNativePythonParityCase(t *testing.T, python, script, config string) {
 	t.Helper()
 	dir := t.TempDir()
-	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, config, perturbHFExportWeightsForTrainedFixture)
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, config, scaleHFExportWeightsToTrainedMagnitude)
 
 	outDir := filepath.Join(dir, "hf_out")
 	if err := RunExportHF(ExportHFOptions{

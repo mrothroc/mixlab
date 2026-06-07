@@ -625,10 +625,59 @@ func TestNativeHFTrainedParityCPUOracle(t *testing.T) {
 			{"type": "geglu"}
 		],
 		"training": {"steps": 1, "batch_tokens": 3, "seed": 404}
-	}`, [][]int{{0, 1, 2}}, [][]int{{1, 2, 3}}, nil, perturbHFExportWeightsForTrainedFixture)
+	}`, [][]int{{0, 1, 2}}, [][]int{{1, 2, 3}}, nil, scaleHFExportWeightsToTrainedMagnitude)
 }
 
-func runExportHFParityCase(t *testing.T, config string, tokens, targets [][]int, afterExport func(*testing.T, string), mutators ...func([][]float32)) {
+func TestScaleHFExportWeightsToTrainedMagnitude(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "hf_trained_magnitude_fixture",
+		"model_dim": 8,
+		"vocab_size": 11,
+		"seq_len": 4,
+		"mlp_mult": 1.0,
+		"blocks": [
+			{"type": "plain", "heads": 2, "qk_norm": true, "rope_dims": 2},
+			{"type": "geglu"}
+		],
+		"training": {"steps": 1, "batch_tokens": 4, "seed": 505, "weight_init": "normal", "weight_init_std": 0.02}
+	}`), "hf_trained_magnitude_fixture")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	weights := initWeightData(shapes, cfg.Training.Seed, cfg.Training.WeightInit, cfg.Training.WeightInitStd)
+	before := make([]float64, len(weights))
+	for i := range weights {
+		before[i] = weightRMS(weights[i])
+	}
+	if err := scaleHFExportWeightsToTrainedMagnitude(weights, shapes); err != nil {
+		t.Fatalf("scaleHFExportWeightsToTrainedMagnitude: %v", err)
+	}
+	checked := 0
+	for i, ws := range shapes {
+		if !isTrainedMagnitudeCandidate(ws) {
+			continue
+		}
+		after := weightRMS(weights[i])
+		if after < trainedFixtureMinRMS {
+			t.Fatalf("%s RMS=%g, want >= %g", ws.Name, after, trainedFixtureMinRMS)
+		}
+		if before[i] > 0 && after < before[i]*trainedFixtureMinScaleRatio*0.99 {
+			t.Fatalf("%s RMS before=%g after=%g, want trained-scale increase", ws.Name, before[i], after)
+		}
+		checked++
+	}
+	if checked == 0 {
+		t.Fatal("no trained-magnitude tensors checked")
+	}
+}
+
+type hfExportWeightMutator func([][]float32, []WeightShape) error
+
+func runExportHFParityCase(t *testing.T, config string, tokens, targets [][]int, afterExport func(*testing.T, string), mutators ...hfExportWeightMutator) {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, config, mutators...)
@@ -678,7 +727,7 @@ func writeHFExportFixture(t *testing.T, dir, config string) (configPath, weights
 	return writeHFExportFixtureWithMutators(t, dir, config)
 }
 
-func writeHFExportFixtureWithMutators(t *testing.T, dir, config string, mutators ...func([][]float32)) (configPath, weightsPath, tokenizerDir string) {
+func writeHFExportFixtureWithMutators(t *testing.T, dir, config string, mutators ...hfExportWeightMutator) (configPath, weightsPath, tokenizerDir string) {
 	t.Helper()
 	configPath = filepath.Join(dir, "config.json")
 	if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
@@ -695,7 +744,9 @@ func writeHFExportFixtureWithMutators(t *testing.T, dir, config string, mutators
 	weights := initWeightData(shapes, cfg.Training.Seed, cfg.Training.WeightInit, cfg.Training.WeightInitStd)
 	for _, mutate := range mutators {
 		if mutate != nil {
-			mutate(weights)
+			if err := mutate(weights, shapes); err != nil {
+				t.Fatalf("mutate HF export weights: %v", err)
+			}
 		}
 	}
 	weightsPath = filepath.Join(dir, "weights.safetensors")
@@ -722,12 +773,91 @@ func writeHFExportFixtureWithMutators(t *testing.T, dir, config string, mutators
 	return configPath, weightsPath, tokenizerDir
 }
 
-func perturbHFExportWeightsForTrainedFixture(weights [][]float32) {
-	for i := range weights {
-		for j := range weights[i] {
-			weights[i][j] += float32(math.Sin(float64((i+1)*(j+3)))) * 0.003
-		}
+const (
+	trainedFixtureMinRMS        = 0.15
+	trainedFixtureMinScaleRatio = 1.50
+)
+
+func scaleHFExportWeightsToTrainedMagnitude(weights [][]float32, shapes []WeightShape) error {
+	if len(weights) != len(shapes) {
+		return fmt.Errorf("weights=%d shapes=%d", len(weights), len(shapes))
 	}
+	scaled := 0
+	for i, ws := range shapes {
+		if !isTrainedMagnitudeCandidate(ws) {
+			continue
+		}
+		before := weightRMS(weights[i])
+		addDeterministicTrainedStructure(weights[i], i)
+		afterStructure := weightRMS(weights[i])
+		if afterStructure == 0 {
+			return fmt.Errorf("weight %d %q has zero RMS after deterministic structure", i, ws.Name)
+		}
+		target := trainedMagnitudeTargetRMS(ws)
+		if target < trainedFixtureMinRMS {
+			target = trainedFixtureMinRMS
+		}
+		if minScaled := before * trainedFixtureMinScaleRatio; minScaled > target {
+			target = minScaled
+		}
+		scale := target / afterStructure
+		for j := range weights[i] {
+			weights[i][j] *= float32(scale)
+		}
+		after := weightRMS(weights[i])
+		if after < trainedFixtureMinRMS*0.99 {
+			return fmt.Errorf("weight %d %q RMS=%g below trained-magnitude floor %g", i, ws.Name, after, trainedFixtureMinRMS)
+		}
+		if before > 0 && after < before*trainedFixtureMinScaleRatio*0.99 {
+			return fmt.Errorf("weight %d %q RMS before=%g after=%g did not leave init scale", i, ws.Name, before, after)
+		}
+		scaled++
+	}
+	if scaled == 0 {
+		return fmt.Errorf("no tensors eligible for trained-magnitude scaling")
+	}
+	return nil
+}
+
+func isTrainedMagnitudeCandidate(ws WeightShape) bool {
+	if len(ws.Shape) < 2 || ws.InitZero || ws.InitOne || ws.IsNormScale || ws.InitDtBias || ws.InitLogArange {
+		return false
+	}
+	return true
+}
+
+func trainedMagnitudeTargetRMS(ws WeightShape) float64 {
+	name := strings.ToLower(ws.Name)
+	switch {
+	case strings.Contains(name, "embed") || strings.Contains(name, "table"):
+		return 0.35
+	case strings.Contains(name, "ff") || strings.Contains(name, "gate") || strings.Contains(name, "up") || strings.Contains(name, "down"):
+		return 0.40
+	case strings.Contains(name, "router"):
+		return 0.25
+	case strings.Contains(name, "pos") || strings.Contains(name, "relative"):
+		return 0.30
+	default:
+		return 0.30
+	}
+}
+
+func addDeterministicTrainedStructure(w []float32, weightIndex int) {
+	for j := range w {
+		s := math.Sin(float64((weightIndex+1)*(j+3))) + 0.5*math.Cos(float64((weightIndex+7)*(j+1)))
+		w[j] += float32(0.05 * s)
+	}
+}
+
+func weightRMS(w []float32) float64 {
+	if len(w) == 0 {
+		return 0
+	}
+	sum := 0.0
+	for _, v := range w {
+		sum += float64(v) * float64(v)
+	}
+	return math.Sqrt(sum / float64(len(w)))
 }
 
 func writeSyntheticCharFeaturesForExportTest(t *testing.T, path string, cfg *ArchConfig) {

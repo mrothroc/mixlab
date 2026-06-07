@@ -44,7 +44,7 @@ jobs:
           CGO_ENABLED: "0"
         run: go test ./cmd/mixlab ./train -run 'TestExportHF|TestRunExportHF|TestHFModeling' -count=1
 
-      # Load-bearing FR-1 check: exports trained-magnitude fixtures, runs the
+      # Load-bearing FR-1 check: exports deterministic trained-magnitude fixtures, runs the
       # embedded modeling_mixlab.py through transformers, and asserts agreement
       # with the native MLX forward. HF_PARITY=1 plus the installed torch make
       # TestExportHFNativePythonParity execute (it skips otherwise).
