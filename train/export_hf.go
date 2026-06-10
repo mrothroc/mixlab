@@ -86,11 +86,12 @@ func runExportHF(opts ExportHFOptions) error {
 	if err := configureCharFeaturesForHFExport(cfg, opts.ConfigPath, opts.SafetensorsLoad, opts.TokenizerSource); err != nil {
 		return err
 	}
-	if err := validateHFExportConfig(cfg); err != nil {
+	exportCfg := hfExportInferenceConfig(cfg)
+	if err := validateHFExportConfig(exportCfg); err != nil {
 		return err
 	}
 
-	shapes, err := computeWeightShapes(cfg)
+	shapes, err := computeWeightShapes(exportCfg)
 	if err != nil {
 		return fmt.Errorf("compute weight shapes: %w", err)
 	}
@@ -98,11 +99,11 @@ func runExportHF(opts ExportHFOptions) error {
 	if err != nil {
 		return fmt.Errorf("load safetensors %q: %w", opts.SafetensorsLoad, err)
 	}
-	exportShapes, exportWeights, err := materializeHFExportWeights(cfg, shapes, weights)
+	exportShapes, exportWeights, err := materializeHFExportWeights(exportCfg, shapes, weights)
 	if err != nil {
 		return err
 	}
-	mapping, err := buildHFWeightMap(cfg, exportShapes)
+	mapping, err := buildHFWeightMap(exportCfg, exportShapes)
 	if err != nil {
 		return err
 	}
@@ -122,13 +123,13 @@ func runExportHF(opts ExportHFOptions) error {
 	if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("create HF output directory %q: %w", opts.OutputDir, err)
 	}
-	if err := writeHFConfig(filepath.Join(opts.OutputDir, "config.json"), cfg, specials); err != nil {
+	if err := writeHFConfig(filepath.Join(opts.OutputDir, "config.json"), exportCfg, specials); err != nil {
 		return err
 	}
 	if err := writeHFTemplates(opts.OutputDir); err != nil {
 		return err
 	}
-	if err := writeHFSafetensors(filepath.Join(opts.OutputDir, "model.safetensors"), cfg, mapping, exportWeights); err != nil {
+	if err := writeHFSafetensors(filepath.Join(opts.OutputDir, "model.safetensors"), exportCfg, mapping, exportWeights); err != nil {
 		return err
 	}
 	if err := writeJSONFile(filepath.Join(opts.OutputDir, "weight_map.json"), mapping); err != nil {
@@ -137,12 +138,22 @@ func runExportHF(opts ExportHFOptions) error {
 	if err := writeHFTokenizerArtifacts(opts.OutputDir, tokenizer, specials); err != nil {
 		return err
 	}
-	if err := writeHFCharFeatureArtifact(opts.OutputDir, cfg); err != nil {
+	if err := writeHFCharFeatureArtifact(opts.OutputDir, exportCfg); err != nil {
 		return err
 	}
 
 	fmt.Printf("exported Hugging Face model to %s (%d tensors)\n", opts.OutputDir, len(weights))
 	return nil
+}
+
+func hfExportInferenceConfig(cfg *ArchConfig) *ArchConfig {
+	if cfg == nil {
+		return nil
+	}
+	out := *cfg
+	out.Training = cfg.Training
+	out.Training.Data2Vec = nil
+	return &out
 }
 
 func validateHFExportConfig(cfg *ArchConfig) error {
@@ -185,9 +196,6 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 	}
 	if cfg.Training.Distillation != nil {
 		return unsupportedHFExport("training.distillation", "teacher distillation is training-only")
-	}
-	if cfg.Training.Data2VecActive() {
-		return unsupportedHFExport("training.data2vec", "data2vec EMA representation distillation is training-only")
 	}
 	if cfg.Eval != nil && cfg.EffectiveEvalSpec().LegalChunkSGDEnabled() {
 		return unsupportedHFExport("eval.ttt_mode", "eval-time TTT is not represented in the exported HF model")

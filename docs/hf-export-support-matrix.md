@@ -14,6 +14,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `char`, `bigram`, `trigram` embedding feature channels | Supported | `char_features.bin` is copied into the HF directory; n-gram IDs mirror Mixlab native token-id lookup semantics. |
 | `tie_embeddings=true` | Supported | The exporter materializes `lm_head_weight` as the transpose of the input embedding table for broad Hugging Face consumer compatibility. |
 | `AutoModel` backbone | Supported | `config.json` includes an `AutoModel` mapping to `MixlabModel`, which returns `last_hidden_state` before the LM head. |
+| `training.data2vec` | Supported as stripped training-only state | The exporter ignores appended `data2vec_pred*` tensors and omits the training-only data2vec spec, exporting the student/base inference model. |
 | `training.objective="causal"` | Supported | Exports a causal next-token graph. |
 | `training.objective="hybrid"` | Supported for inference | Exports the causal evaluation graph. Block-level `attention_mask` values are overridden to causal in exported config because hybrid masked steps are training-only. |
 | `training.objective="mlm"` or `"mntp"` | Training-only | Rejected because masked-objective programs are not `AutoModelForCausalLM` inference graphs. |
@@ -25,6 +26,6 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `custom` blocks | Unsupported | Arbitrary JSON custom op graphs cannot be safely converted into one static generated template. |
 | `kv_source`, XSA, sparse attention gates | Gated | These attention sub-features need dedicated HF parity coverage before export. |
 | `parallel_residual`, `block_scales`, `resid_mix`, `unet`, `backout`, recurrence weight sharing | Gated | These structural features alter weight layout or multi-stream graph semantics beyond the current exporter. |
-| MTP, first-byte masked loss, distillation, data2vec, eval-time TTT | Training/eval-only | Rejected because they do not change the exported causal forward logits in a representable HF way or require separate runtime policy. |
+| MTP, first-byte masked loss, distillation, eval-time TTT | Training/eval-only | Rejected because they do not change the exported causal forward logits in a representable HF way or require separate runtime policy. |
 
 Unsupported and gated features fail before an incomplete directory is written. This is intentional: export should either produce parity-tested logits or return a field-specific error.

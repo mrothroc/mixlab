@@ -116,6 +116,71 @@ func TestRunExportHFRequiresInputs(t *testing.T) {
 	}
 }
 
+func TestExportHFData2VecStripsTrainingOnlyPredictor(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+		"name": "hf_d2v",
+		"model_dim": 4,
+		"vocab_size": 7,
+		"seq_len": 3,
+		"mlp_mult": 1.0,
+		"tie_embeddings": true,
+		"blocks": [
+			{"type": "plain", "heads": 2},
+			{"type": "swiglu"}
+		],
+		"training": {
+			"steps": 1,
+			"batch_tokens": 3,
+			"seed": 789,
+			"objective": "hybrid",
+			"mlm_mask_token_id": 1,
+			"hybrid_clm_fraction": 0.5,
+			"hybrid_secondary_objective": "mntp",
+			"data2vec": {"top_k_layers": 1}
+		}
+	}`)
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+
+	var mapping []hfWeightMapping
+	readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+	for _, entry := range mapping {
+		if strings.Contains(entry.Mixlab, "data2vec") || strings.Contains(entry.HF, "data2vec") {
+			t.Fatalf("exported data2vec training-only weight mapping: %#v", entry)
+		}
+	}
+
+	tensors, err := loadSafetensors(filepath.Join(outDir, "model.safetensors"))
+	if err != nil {
+		t.Fatalf("load exported model.safetensors: %v", err)
+	}
+	for name := range tensors {
+		if strings.Contains(name, "data2vec") {
+			t.Fatalf("exported data2vec training-only tensor %q", name)
+		}
+	}
+	if _, ok := tensors["lm_head_weight"]; !ok {
+		t.Fatal("exported data2vec+tied config did not materialize lm_head_weight")
+	}
+
+	var cfg map[string]any
+	readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+	if _, ok := cfg["training"]; ok {
+		t.Fatalf("exported config unexpectedly contains training config: %#v", cfg["training"])
+	}
+	if _, ok := cfg["data2vec"]; ok {
+		t.Fatalf("exported config unexpectedly contains data2vec: %#v", cfg["data2vec"])
+	}
+}
+
 func TestExportHFUnsupportedValidation(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -151,19 +216,6 @@ func TestExportHFUnsupportedValidation(t *testing.T) {
 				"training": {"steps": 1, "batch_tokens": 3, "objective": "mlm", "mlm_mask_token_id": 1}
 			}`,
 			wantErr: "training.objective",
-		},
-		{
-			name: "data2vec training only",
-			config: `{
-				"model_dim": 4, "vocab_size": 7, "seq_len": 3,
-				"blocks": [{"type": "plain", "heads": 2}],
-				"training": {
-					"steps": 1, "batch_tokens": 3,
-					"objective": "hybrid", "mlm_mask_token_id": 1,
-					"data2vec": {"top_k_layers": 1}
-				}
-			}`,
-			wantErr: "training.data2vec",
 		},
 		{
 			name: "xsa remains unsupported",

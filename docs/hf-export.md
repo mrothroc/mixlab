@@ -56,6 +56,7 @@ HF export supports causal next-token checkpoints using sequential blocks:
 - sequential `moe` blocks with a linear router, top-k token routing, and `swiglu`, `geglu`, or `mlp` experts
 - embedding-time `char`, `bigram`, and `trigram` feature channels
 - tied embeddings; the exporter materializes `lm_head_weight = embed_tokens.weight.T` for Hugging Face consumers
+- data2vec-trained checkpoints; the training-only predictor weights and `training.data2vec` spec are stripped, exporting the student/base inference model
 - `training.objective: "hybrid"` configs for causal evaluation/inference export; exported plain attention masks are forced to causal
 
 Tokenizer artifacts must come from an explicit `-tokenizer-path`, or from `tokenizer.json` next to the config/checkpoint. If the tokenizer source is missing or unreachable, export fails before writing an incomplete Hugging Face directory. Mixlab writes `tokenizer_config.json` and `special_tokens_map.json` by merging any source sidecars with special-token metadata derived from `tokenizer.json`, and writes matching `pad/eos/bos/unk_token_id` fields to `config.json` when the tokens are present.
@@ -66,7 +67,7 @@ When `char_vocab_size > 0`, `export-hf` also requires `char_features.bin` next t
 
 The detailed support matrix is maintained in [hf-export-support-matrix.md](hf-export-support-matrix.md). It distinguishes supported, gated, unsupported, and training-only features.
 
-Unsupported features fail fast with an error naming the field or block type. The current advanced export path intentionally gates HGRN2, mLSTM, Mamba-family blocks, RetNet/RWKV, `gated_deltanet`, `custom` blocks, `kv_source`, XSA, sparse attention gates, recurrence, U-Net, parallel residual, backout, MTP, distillation, data2vec, first-byte masked loss, and MLM/MNTP-only training objectives.
+Unsupported features fail fast with an error naming the field or block type. The current advanced export path intentionally gates HGRN2, mLSTM, Mamba-family blocks, RetNet/RWKV, `gated_deltanet`, `custom` blocks, `kv_source`, XSA, sparse attention gates, recurrence, U-Net, parallel residual, backout, MTP, distillation, first-byte masked loss, and MLM/MNTP-only training objectives.
 
 These guards are part of the export contract: a missing feature should be visible as an actionable error, not as a Hugging Face model that loads but computes different logits.
 
