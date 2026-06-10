@@ -1,6 +1,6 @@
 # Hugging Face Export Support Matrix
 
-This matrix is the source of truth for `mixlab -mode export-hf` support. Exported models are standard Hugging Face custom-code `AutoModelForCausalLM` directories, so supported features must preserve causal next-token inference logits. Features that only affect training loss or require native recurrent scan state are rejected with explicit errors.
+This matrix is the source of truth for `mixlab -mode export-hf` support. Exported models are standard Hugging Face custom-code `AutoModel` and `AutoModelForCausalLM` directories, so supported features must preserve backbone hidden states and causal next-token inference logits. Features that only affect training loss or require native recurrent scan state are rejected with explicit errors.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -12,6 +12,8 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `mlp` | Supported | `silu`, `gelu`, `relu`, and `leaky_relu_sq` activation variants. |
 | `moe` | Supported | Sequential linear router with top-k token routing and `swiglu`, `geglu`, or `mlp` experts. Load-balancing auxiliary loss is training-only and not part of exported logits. |
 | `char`, `bigram`, `trigram` embedding feature channels | Supported | `char_features.bin` is copied into the HF directory; n-gram IDs mirror Mixlab native token-id lookup semantics. |
+| `tie_embeddings=true` | Supported | The exporter materializes `lm_head_weight` as the transpose of the input embedding table for broad Hugging Face consumer compatibility. |
+| `AutoModel` backbone | Supported | `config.json` includes an `AutoModel` mapping to `MixlabModel`, which returns `last_hidden_state` before the LM head. |
 | `training.objective="causal"` | Supported | Exports a causal next-token graph. |
 | `training.objective="hybrid"` | Supported for inference | Exports the causal evaluation graph. Block-level `attention_mask` values are overridden to causal in exported config because hybrid masked steps are training-only. |
 | `training.objective="mlm"` or `"mntp"` | Training-only | Rejected because masked-objective programs are not `AutoModelForCausalLM` inference graphs. |

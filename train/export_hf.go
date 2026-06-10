@@ -43,6 +43,10 @@ type hfConfigJSON struct {
 	BigramDim             int               `json:"bigram_dim,omitempty"`
 	TrigramVocabSize      int               `json:"trigram_vocab_size,omitempty"`
 	TrigramDim            int               `json:"trigram_dim,omitempty"`
+	PadTokenID            *int              `json:"pad_token_id,omitempty"`
+	EOSTokenID            *int              `json:"eos_token_id,omitempty"`
+	BOSTokenID            *int              `json:"bos_token_id,omitempty"`
+	UNKTokenID            *int              `json:"unk_token_id,omitempty"`
 	Blocks                []map[string]any  `json:"blocks"`
 	Mixlab                map[string]any    `json:"mixlab"`
 }
@@ -94,15 +98,23 @@ func runExportHF(opts ExportHFOptions) error {
 	if err != nil {
 		return fmt.Errorf("load safetensors %q: %w", opts.SafetensorsLoad, err)
 	}
-	mapping, err := buildHFWeightMap(cfg, shapes)
+	exportShapes, exportWeights, err := materializeHFExportWeights(cfg, shapes, weights)
 	if err != nil {
 		return err
 	}
-	if len(mapping) != len(weights) {
-		return fmt.Errorf("HF weight map count mismatch: mapping=%d weights=%d", len(mapping), len(weights))
+	mapping, err := buildHFWeightMap(cfg, exportShapes)
+	if err != nil {
+		return err
+	}
+	if len(mapping) != len(exportWeights) {
+		return fmt.Errorf("HF weight map count mismatch: mapping=%d weights=%d", len(mapping), len(exportWeights))
 	}
 
 	tokenizer, err := resolveHFTokenizerSource(opts.TokenizerSource, opts.ConfigPath, opts.SafetensorsLoad)
+	if err != nil {
+		return err
+	}
+	specials, err := deriveHFTokenizerSpecials(tokenizer)
 	if err != nil {
 		return err
 	}
@@ -110,19 +122,19 @@ func runExportHF(opts ExportHFOptions) error {
 	if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("create HF output directory %q: %w", opts.OutputDir, err)
 	}
-	if err := writeHFConfig(filepath.Join(opts.OutputDir, "config.json"), cfg); err != nil {
+	if err := writeHFConfig(filepath.Join(opts.OutputDir, "config.json"), cfg, specials); err != nil {
 		return err
 	}
 	if err := writeHFTemplates(opts.OutputDir); err != nil {
 		return err
 	}
-	if err := writeHFSafetensors(filepath.Join(opts.OutputDir, "model.safetensors"), cfg, mapping, weights); err != nil {
+	if err := writeHFSafetensors(filepath.Join(opts.OutputDir, "model.safetensors"), cfg, mapping, exportWeights); err != nil {
 		return err
 	}
 	if err := writeJSONFile(filepath.Join(opts.OutputDir, "weight_map.json"), mapping); err != nil {
 		return err
 	}
-	if err := writeHFTokenizerArtifacts(opts.OutputDir, tokenizer); err != nil {
+	if err := writeHFTokenizerArtifacts(opts.OutputDir, tokenizer, specials); err != nil {
 		return err
 	}
 	if err := writeHFCharFeatureArtifact(opts.OutputDir, cfg); err != nil {
@@ -136,9 +148,6 @@ func runExportHF(opts ExportHFOptions) error {
 func validateHFExportConfig(cfg *ArchConfig) error {
 	if cfg == nil {
 		return fmt.Errorf("unsupported HF export: nil config")
-	}
-	if cfg.TieEmbeddings {
-		return unsupportedHFExport("tie_embeddings", "HF export requires an explicit LM head tensor")
 	}
 	if cfg.BlockScales {
 		return unsupportedHFExport("block_scales", "core HF export does not yet support block scale tensors")
@@ -301,7 +310,7 @@ func normalizeHFExportKVHeads(heads, kvHeads int) (int, error) {
 	return kvHeads, nil
 }
 
-func writeHFConfig(path string, cfg *ArchConfig) error {
+func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) error {
 	blocks := make([]map[string]any, 0, len(cfg.Blocks))
 	for _, block := range cfg.Blocks {
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
@@ -377,7 +386,7 @@ func writeHFConfig(path string, cfg *ArchConfig) error {
 	doc := hfConfigJSON{
 		ModelType:             "mixlab",
 		Architectures:         []string{"MixlabForCausalLM"},
-		AutoMap:               map[string]string{"AutoConfig": "configuration_mixlab.MixlabConfig", "AutoModelForCausalLM": "modeling_mixlab.MixlabForCausalLM"},
+		AutoMap:               map[string]string{"AutoConfig": "configuration_mixlab.MixlabConfig", "AutoModel": "modeling_mixlab.MixlabModel", "AutoModelForCausalLM": "modeling_mixlab.MixlabForCausalLM"},
 		Name:                  cfg.Name,
 		ModelDim:              cfg.ModelDim,
 		HiddenSize:            cfg.ModelDim,
@@ -394,6 +403,10 @@ func writeHFConfig(path string, cfg *ArchConfig) error {
 		BigramDim:             cfg.EffectiveBigramDim(),
 		TrigramVocabSize:      cfg.TrigramVocabSize,
 		TrigramDim:            cfg.EffectiveTrigramDim(),
+		PadTokenID:            specialTokenIDPtr(specials.Pad),
+		EOSTokenID:            specialTokenIDPtr(specials.EOS),
+		BOSTokenID:            specialTokenIDPtr(specials.BOS),
+		UNKTokenID:            specialTokenIDPtr(specials.UNK),
 		Blocks:                blocks,
 		Mixlab: map[string]any{
 			"format":            "mixlab_hf_export_v1",
@@ -440,6 +453,58 @@ func charFeaturesFileForHFConfig(cfg *ArchConfig) string {
 		return charFeaturesFilename
 	}
 	return ""
+}
+
+func materializeHFExportWeights(cfg *ArchConfig, shapes []WeightShape, weights [][]float32) ([]WeightShape, [][]float32, error) {
+	if cfg == nil {
+		return nil, nil, fmt.Errorf("nil config")
+	}
+	if len(shapes) != len(weights) {
+		return nil, nil, fmt.Errorf("weight shape/data count mismatch: shapes=%d weights=%d", len(shapes), len(weights))
+	}
+	if hasWeightShapeName(shapes, "head") {
+		return shapes, weights, nil
+	}
+	if !cfg.TieEmbeddings {
+		return nil, nil, fmt.Errorf("HF export requires head weight for untied embeddings")
+	}
+	embedIdx := weightShapeIndex(shapes, "embed")
+	if embedIdx < 0 {
+		return nil, nil, fmt.Errorf("HF export requires base weight %q", "embed")
+	}
+	embedShape := shapes[embedIdx].Shape
+	if len(embedShape) != 2 || embedShape[0] != cfg.VocabSize || embedShape[1] != cfg.ModelDim {
+		return nil, nil, fmt.Errorf("embed shape=%v does not match vocab/model dims [%d,%d]", embedShape, cfg.VocabSize, cfg.ModelDim)
+	}
+	head := transposeEmbeddingToHead(weights[embedIdx], cfg.VocabSize, cfg.ModelDim)
+	outShapes := append([]WeightShape(nil), shapes...)
+	outWeights := append([][]float32(nil), weights...)
+	outShapes = append(outShapes, WeightShape{Name: "head", Shape: []int{cfg.ModelDim, cfg.VocabSize}})
+	outWeights = append(outWeights, head)
+	return outShapes, outWeights, nil
+}
+
+func transposeEmbeddingToHead(embed []float32, vocab, dim int) []float32 {
+	head := make([]float32, dim*vocab)
+	for v := 0; v < vocab; v++ {
+		for d := 0; d < dim; d++ {
+			head[d*vocab+v] = embed[v*dim+d]
+		}
+	}
+	return head
+}
+
+func hasWeightShapeName(shapes []WeightShape, name string) bool {
+	return weightShapeIndex(shapes, name) >= 0
+}
+
+func weightShapeIndex(shapes []WeightShape, name string) int {
+	for i, shape := range shapes {
+		if shape.Name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 func writeHFTemplates(outputDir string) error {
@@ -881,34 +946,6 @@ func inspectHFTokenizerSource(path string) (hfTokenizerSource, error) {
 		return hfTokenizerSource{}, fmt.Errorf("verify tokenizer source %q: expected tokenizer.json or a directory containing tokenizer.json", path)
 	}
 	return hfTokenizerSource{Dir: filepath.Dir(path), TokenizerJSON: path}, nil
-}
-
-func writeHFTokenizerArtifacts(outputDir string, src hfTokenizerSource) error {
-	if err := copyFile(src.TokenizerJSON, filepath.Join(outputDir, "tokenizer.json")); err != nil {
-		return err
-	}
-	sidecars := []string{"tokenizer_config.json", "special_tokens_map.json"}
-	for _, name := range sidecars {
-		sourcePath := filepath.Join(src.Dir, name)
-		targetPath := filepath.Join(outputDir, name)
-		if _, err := os.Stat(sourcePath); err == nil {
-			if err := copyFile(sourcePath, targetPath); err != nil {
-				return err
-			}
-			continue
-		}
-		var doc map[string]any
-		switch name {
-		case "tokenizer_config.json":
-			doc = map[string]any{"tokenizer_class": "PreTrainedTokenizerFast"}
-		case "special_tokens_map.json":
-			doc = map[string]any{}
-		}
-		if err := writeJSONFile(targetPath, doc); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func copyFile(src, dst string) error {

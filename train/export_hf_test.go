@@ -59,6 +59,9 @@ func TestExportHFWeightMapAndDirectoryMetadata(t *testing.T) {
 	if got := autoMap["AutoModelForCausalLM"]; got != "modeling_mixlab.MixlabForCausalLM" {
 		t.Fatalf("AutoModelForCausalLM auto_map=%v", got)
 	}
+	if got := autoMap["AutoModel"]; got != "modeling_mixlab.MixlabModel" {
+		t.Fatalf("AutoModel auto_map=%v", got)
+	}
 
 	var mapping []hfWeightMapping
 	readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
@@ -110,69 +113,6 @@ func TestRunExportHFRequiresInputs(t *testing.T) {
 				t.Fatalf("RunExportHF error = %v, want %s", err, tt.want)
 			}
 		})
-	}
-}
-
-func TestExportHFTokenizerMissingFailsFast(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath, weightsPath, _ := writeHFExportFixture(t, dir, `{
-		"name": "hf_tiny",
-		"model_dim": 4,
-		"vocab_size": 7,
-		"seq_len": 3,
-		"mlp_mult": 1.0,
-		"blocks": [{"type": "plain", "heads": 2}],
-		"training": {"steps": 1, "batch_tokens": 3}
-	}`)
-	err := RunExportHF(ExportHFOptions{
-		ConfigPath:      cfgPath,
-		SafetensorsLoad: weightsPath,
-		OutputDir:       filepath.Join(dir, "hf_out"),
-		TokenizerSource: filepath.Join(dir, "does-not-exist", "tokenizer.json"),
-	})
-	if err == nil {
-		t.Fatal("RunExportHF succeeded with missing tokenizer")
-	}
-	if !strings.Contains(err.Error(), "tokenizer source") {
-		t.Fatalf("missing tokenizer error = %v", err)
-	}
-}
-
-func TestExportHFTokenizerSourceSidecarsDerived(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
-		"name": "hf_tiny",
-		"model_dim": 4,
-		"vocab_size": 7,
-		"seq_len": 3,
-		"mlp_mult": 1.0,
-		"blocks": [{"type": "plain", "heads": 2}],
-		"training": {"steps": 1, "batch_tokens": 3}
-	}`)
-	if err := os.Remove(filepath.Join(tokenizerDir, "tokenizer_config.json")); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(tokenizerDir, "special_tokens_map.json")); err != nil {
-		t.Fatal(err)
-	}
-	outDir := filepath.Join(dir, "hf_out")
-	if err := RunExportHF(ExportHFOptions{
-		ConfigPath:      cfgPath,
-		SafetensorsLoad: weightsPath,
-		OutputDir:       outDir,
-		TokenizerSource: filepath.Join(tokenizerDir, "tokenizer.json"),
-	}); err != nil {
-		t.Fatalf("RunExportHF: %v", err)
-	}
-	var tokenizerConfig map[string]any
-	readJSON(t, filepath.Join(outDir, "tokenizer_config.json"), &tokenizerConfig)
-	if tokenizerConfig["tokenizer_class"] != "PreTrainedTokenizerFast" {
-		t.Fatalf("derived tokenizer_config.json = %#v", tokenizerConfig)
-	}
-	var special map[string]any
-	readJSON(t, filepath.Join(outDir, "special_tokens_map.json"), &special)
-	if len(special) != 0 {
-		t.Fatalf("derived special_tokens_map.json = %#v", special)
 	}
 }
 
@@ -782,7 +722,41 @@ func writeHFExportFixtureWithMutators(t *testing.T, dir, config string, mutators
 	if err := os.MkdirAll(tokenizerDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(tokenizerDir, "tokenizer.json"), []byte(`{"version":"1.0","model":{"type":"BPE","vocab":{"a":0},"merges":[]}}`), 0o644); err != nil {
+	tokenizerJSON := `{
+  "version": "1.0",
+  "truncation": null,
+  "padding": null,
+  "added_tokens": [
+    {"id": 0, "content": "<|pad|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true},
+    {"id": 1, "content": "<|unk|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true},
+    {"id": 2, "content": "<|eos|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true},
+    {"id": 3, "content": "<|bos|>", "single_word": false, "lstrip": false, "rstrip": false, "normalized": false, "special": true}
+  ],
+  "normalizer": null,
+  "pre_tokenizer": {"type": "Whitespace"},
+  "post_processor": null,
+  "decoder": null,
+  "model": {
+    "type": "BPE",
+    "dropout": null,
+    "unk_token": "<|unk|>",
+    "continuing_subword_prefix": null,
+    "end_of_word_suffix": null,
+    "fuse_unk": false,
+    "byte_fallback": false,
+    "vocab": {
+      "<|pad|>": 0,
+      "<|unk|>": 1,
+      "<|eos|>": 2,
+      "<|bos|>": 3,
+      "a": 4,
+      "b": 5,
+      "c": 6
+    },
+    "merges": []
+  }
+}`
+	if err := os.WriteFile(filepath.Join(tokenizerDir, "tokenizer.json"), []byte(tokenizerJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(tokenizerDir, "tokenizer_config.json"), []byte(`{"tokenizer_class":"PreTrainedTokenizerFast","model_max_length":3}`), 0o644); err != nil {

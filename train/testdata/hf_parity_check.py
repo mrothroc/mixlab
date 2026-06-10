@@ -26,7 +26,7 @@ import os
 import sys
 
 import torch
-from transformers import AutoModelForCausalLM
+from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
 
 
 def main() -> int:
@@ -51,6 +51,11 @@ def main() -> int:
         print(f"input_ids shape {tuple(input_ids.shape)} != ({batch}, {seq_len})", file=sys.stderr)
         return 2
 
+    tok = AutoTokenizer.from_pretrained(args.dir)
+    if tok.pad_token_id is None:
+        print("FAIL: tokenizer.pad_token_id is None", file=sys.stderr)
+        return 2
+
     model = AutoModelForCausalLM.from_pretrained(args.dir, trust_remote_code=True)
     model.eval()
     with torch.no_grad():
@@ -58,6 +63,23 @@ def main() -> int:
 
     if tuple(hf_logits.shape) != (batch, seq_len, vocab):
         print(f"HF logits shape {tuple(hf_logits.shape)} != ({batch}, {seq_len}, {vocab})", file=sys.stderr)
+        return 2
+
+    backbone = AutoModel.from_pretrained(args.dir, trust_remote_code=True)
+    backbone.eval()
+    encoded = tok(["a b c", "a b"], return_tensors="pt", padding=True)
+    with torch.no_grad():
+        batched_lm = model(**encoded).logits
+        hidden = backbone(**encoded).last_hidden_state
+    if batched_lm.shape[-1] != vocab:
+        print(f"batched LM vocab dim {batched_lm.shape[-1]} != {vocab}", file=sys.stderr)
+        return 2
+    hidden_size = int(getattr(model.config, "hidden_size", getattr(model.config, "model_dim", 0)))
+    if hidden.shape[-1] != hidden_size:
+        print(f"backbone hidden dim {hidden.shape[-1]} != {hidden_size}", file=sys.stderr)
+        return 2
+    if not torch.isfinite(hidden).all() or not torch.isfinite(batched_lm).all():
+        print("batched AutoModel/AutoModelForCausalLM outputs contain non-finite values", file=sys.stderr)
         return 2
 
     if os.environ.get("PARITY_DEBUG") == "1":

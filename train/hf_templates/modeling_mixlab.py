@@ -5,7 +5,7 @@ import struct
 import torch
 from torch import nn
 from transformers import PreTrainedModel
-from transformers.modeling_outputs import CausalLMOutput
+from transformers.modeling_outputs import BaseModelOutput, CausalLMOutput
 
 from .configuration_mixlab import MixlabConfig
 
@@ -370,11 +370,10 @@ def load_char_lookup(config):
     return payload.view(vocab, slots)
 
 
-class MixlabForCausalLM(PreTrainedModel):
+class MixlabModel(PreTrainedModel):
     config_class = MixlabConfig
     base_model_prefix = "mixlab"
     supports_gradient_checkpointing = False
-    _tied_weights_keys = []
 
     def __init__(self, config):
         super().__init__(config)
@@ -427,8 +426,6 @@ class MixlabForCausalLM(PreTrainedModel):
                 raise ValueError(f"unsupported exported Mixlab block type {block_type!r}")
         self.blocks = nn.ModuleList(modules)
         self.final_norm = MixlabRMSNorm(config.model_dim)
-        self.lm_head_weight = nn.Parameter(torch.empty(config.model_dim, config.vocab_size))
-        nn.init.xavier_uniform_(self.lm_head_weight)
         self.post_init()
 
     def get_input_embeddings(self):
@@ -490,13 +487,28 @@ class MixlabForCausalLM(PreTrainedModel):
             x = x + state * self.trigram_scale
         return x
 
-    def forward(self, input_ids=None, labels=None, **kwargs):
+    def forward_hidden(self, input_ids=None):
         if input_ids is None:
             raise ValueError("input_ids is required")
         x = self._embed_features(input_ids)
         for block in self.blocks:
             x = block(x)
-        x = self.final_norm(x)
+        return self.final_norm(x)
+
+    def forward(self, input_ids=None, **kwargs):
+        return BaseModelOutput(last_hidden_state=self.forward_hidden(input_ids))
+
+
+class MixlabForCausalLM(MixlabModel):
+    _tied_weights_keys = []
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.lm_head_weight = nn.Parameter(torch.empty(config.model_dim, config.vocab_size))
+        nn.init.xavier_uniform_(self.lm_head_weight)
+
+    def forward(self, input_ids=None, labels=None, **kwargs):
+        x = self.forward_hidden(input_ids)
         logits = torch.matmul(x, self.lm_head_weight)
         if getattr(self.config, "logit_softcap", 0.0):
             cap = float(self.config.logit_softcap)
