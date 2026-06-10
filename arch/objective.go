@@ -38,6 +38,10 @@ func isMaskedTrainingObjective(objective string) bool {
 	}
 }
 
+func IsMaskedTrainingObjectiveForData2Vec(objective string) bool {
+	return isMaskedTrainingObjective(objective)
+}
+
 func (t TrainingSpec) EffectiveObjective() string {
 	return normalizeTrainingObjective(t.Objective)
 }

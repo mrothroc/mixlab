@@ -310,7 +310,7 @@ func mlxCreateTrainer(programHandle int64, weightHandles []int64, spec TrainerOp
 		(*C.int64_t)(unsafe.Pointer(&cWeights[0])), C.int(len(cWeights)),
 		(*C.mlx_ir_weight_optimizer)(unsafe.Pointer(&cWeightSpecs[0])), C.int(len(cWeightSpecs)),
 		(*C.mlx_ir_optimizer_group)(unsafe.Pointer(&cGroups[0])), C.int(len(cGroups)),
-		C.float(spec.MaxGradNorm), C.float(spec.DefaultBaseLR),
+		C.float(spec.MaxGradNorm), C.float(spec.DefaultBaseLR), C.int(spec.ComputeDType),
 	)
 	if h == 0 {
 		return 0, fmt.Errorf("mlx_ir_create_trainer_v2 failed")

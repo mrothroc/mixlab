@@ -13,203 +13,6 @@ import (
 	"github.com/mrothroc/mixlab/gpu"
 )
 
-// LRSchedule defines a cosine learning rate schedule with warmup and hold.
-type LRSchedule struct {
-	BaseLR             float32
-	MinLR              float32
-	Warmup             int
-	Hold               int
-	Warmdown           int
-	MaxSteps           int
-	ClampWarmdownToMin bool
-}
-
-type trainingScheduler interface {
-	At(step int) float32
-}
-
-type phaseSchedule struct {
-	lrs        []float32
-	phaseIndex []int
-	phases     []TrainingPhase
-}
-
-// At returns the learning rate at the given step.
-func (s LRSchedule) At(step int) float32 {
-	baseAt := func(step int) float32 {
-		if step < s.Warmup {
-			if s.Warmup == 0 {
-				return s.BaseLR
-			}
-			return s.BaseLR * float32(step) / float32(s.Warmup)
-		}
-		if step < s.Warmup+s.Hold {
-			return s.BaseLR
-		}
-		decaySteps := s.MaxSteps - s.Warmup - s.Hold
-		if decaySteps <= 0 {
-			return s.BaseLR
-		}
-		progress := float64(step-s.Warmup-s.Hold) / float64(decaySteps)
-		if progress > 1.0 {
-			progress = 1.0
-		}
-		cosine := 0.5 * (1.0 + math.Cos(math.Pi*progress))
-		return s.MinLR + (s.BaseLR-s.MinLR)*float32(cosine)
-	}
-
-	lr := baseAt(step)
-	if s.Warmdown <= 0 || s.MaxSteps <= 0 {
-		return lr
-	}
-	warmdownStart := s.MaxSteps - s.Warmdown
-	if warmdownStart < 0 {
-		warmdownStart = 0
-	}
-	if step < warmdownStart {
-		return lr
-	}
-	startLR := baseAt(warmdownStart)
-	targetLR := s.MinLR / 10
-	if s.ClampWarmdownToMin && targetLR < s.MinLR {
-		targetLR = s.MinLR
-	}
-	progress := float32(step-warmdownStart) / float32(s.Warmdown)
-	if progress > 1 {
-		progress = 1
-	}
-	return startLR + (targetLR-startLR)*progress
-}
-
-// At returns the per-step LR for a phase-based schedule.
-func (s phaseSchedule) At(step int) float32 {
-	if len(s.lrs) == 0 {
-		return 0
-	}
-	if step < 0 {
-		step = 0
-	}
-	if step >= len(s.lrs) {
-		step = len(s.lrs) - 1
-	}
-	return s.lrs[step]
-}
-
-func (s phaseSchedule) PhaseAt(step int) TrainingPhase {
-	if len(s.phases) == 0 {
-		return TrainingPhase{}
-	}
-	if step < 0 {
-		step = 0
-	}
-	if step >= len(s.phaseIndex) {
-		step = len(s.phaseIndex) - 1
-	}
-	idx := s.phaseIndex[step]
-	if idx < 0 || idx >= len(s.phases) {
-		return TrainingPhase{}
-	}
-	return s.phases[idx]
-}
-
-// trainingSchedule constructs the standard LR schedule from base LR and total steps.
-func trainingSchedule(lr float32, steps, warmdown int, minLRFraction float32) LRSchedule {
-	if warmdown < 0 {
-		warmdown = 0
-	}
-	if warmdown > steps {
-		warmdown = steps
-	}
-	warmup := 100
-	if steps < warmup {
-		warmup = steps
-	}
-	hold := 200
-	if steps < warmup+hold {
-		hold = steps - warmup
-		if hold < 0 {
-			hold = 0
-		}
-	}
-	minLR := lr * 0.1
-	if minLRFraction > 0 {
-		minLR = lr * minLRFraction
-	}
-	return LRSchedule{
-		BaseLR:             lr,
-		MinLR:              minLR,
-		Warmup:             warmup,
-		Hold:               hold,
-		Warmdown:           warmdown,
-		MaxSteps:           steps,
-		ClampWarmdownToMin: minLRFraction > 0,
-	}
-}
-
-func newPhaseSchedule(phases []TrainingPhase, warmdown int, minLRFraction float32) phaseSchedule {
-	totalSteps := 0
-	for _, phase := range phases {
-		totalSteps += phase.Steps
-	}
-	sched := phaseSchedule{
-		lrs:        make([]float32, totalSteps),
-		phaseIndex: make([]int, totalSteps),
-		phases:     append([]TrainingPhase(nil), phases...),
-	}
-	offset := 0
-	for phaseIdx, phase := range phases {
-		lr := float32(phase.LR)
-		for i := 0; i < phase.Steps; i++ {
-			sched.lrs[offset+i] = lr
-			sched.phaseIndex[offset+i] = phaseIdx
-		}
-		offset += phase.Steps
-	}
-	if totalSteps == 0 || warmdown <= 0 || len(phases) == 0 {
-		return sched
-	}
-	lastPhase := phases[len(phases)-1]
-	lastPhaseWarmdown := warmdown
-	if lastPhaseWarmdown > lastPhase.Steps {
-		lastPhaseWarmdown = lastPhase.Steps
-	}
-	if lastPhaseWarmdown <= 0 {
-		return sched
-	}
-	warmdownStart := totalSteps - lastPhaseWarmdown
-	startLR := sched.lrs[warmdownStart]
-	targetLR := float32(lastPhase.LR) * 0.01
-	if minLRFraction > 0 {
-		minLR := float32(lastPhase.LR) * minLRFraction
-		if targetLR < minLR {
-			targetLR = minLR
-		}
-	}
-	for step := warmdownStart; step < totalSteps; step++ {
-		progress := float32(step-warmdownStart) / float32(lastPhaseWarmdown)
-		if progress > 1 {
-			progress = 1
-		}
-		sched.lrs[step] = startLR + (targetLR-startLR)*progress
-	}
-	return sched
-}
-
-func buildTrainingScheduler(spec TrainingSpec) (trainingScheduler, int) {
-	if len(spec.Phases) > 0 {
-		totalSteps := spec.TotalSteps()
-		return newPhaseSchedule(spec.Phases, spec.WarmdownSteps, spec.MinLRFraction), totalSteps
-	}
-	return trainingSchedule(float32(spec.LR), spec.Steps, spec.WarmdownSteps, spec.MinLRFraction), spec.Steps
-}
-
-func phaseDisplayLabel(phase TrainingPhase, index int) string {
-	if strings.TrimSpace(phase.Label) != "" {
-		return phase.Label
-	}
-	return fmt.Sprintf("phase-%d", index+1)
-}
-
 // TrainResult holds the outcome of a training run.
 type TrainResult struct {
 	Name      string
@@ -489,7 +292,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 
 	var shapes []WeightShape
-	if opts.SafetensorsPath != "" || opts.CheckpointEvery > 0 {
+	if opts.SafetensorsPath != "" || opts.CheckpointEvery > 0 || cfg.Training.Data2VecActive() {
 		shapes, err = computeWeightShapes(cfg)
 		if err != nil {
 			return TrainResult{}, fmt.Errorf("compute weight shapes: %w", err)
@@ -529,6 +332,18 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return TrainResult{}, fmt.Errorf("init GPU trainer: %w", err)
 	}
 	defer trainer.CloseTrainer()
+	var data2vec *data2VecTeacher
+	if cfg.Training.Data2VecActive() {
+		initialWeights, err := readTrainerWeights(trainer)
+		if err != nil {
+			return TrainResult{}, fmt.Errorf("data2vec initial weight read: %w", err)
+		}
+		data2vec, err = newData2VecTeacher(cfg, initialWeights, data2VecTeacherObjective(cfg, currentObjective))
+		if err != nil {
+			return TrainResult{}, fmt.Errorf("init data2vec teacher: %w", err)
+		}
+		defer data2vec.Close()
+	}
 	causalEval := causalEvalSwitcher{
 		trainer:       trainer,
 		hybrid:        cfg.Training.EffectiveObjective() == arch.ObjectiveHybrid,
@@ -622,6 +437,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("prepare step 0 distillation batch: %w", err)
 		}
+		prepared, err = attachData2VecTargets(data2vec, prepared, currentObjective, batchSize, seqLen)
+		if err != nil {
+			stopInitialSubmit()
+			return TrainResult{}, fmt.Errorf("prepare step 0 data2vec batch: %w", err)
+		}
 		if err := submitPreparedStepGPU(trainer, prepared, batchSize, seqLen, sched.At(0)); err != nil {
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("submit step 0: %w", err)
@@ -708,6 +528,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				stopSubmit()
 				return 0, fmt.Errorf("prepare step %d distillation batch: %w", nextStep, err)
 			}
+			prepared, err = attachData2VecTargets(data2vec, prepared, nextObjective, batchSize, seqLen)
+			if err != nil {
+				stopSubmit()
+				return 0, fmt.Errorf("prepare step %d data2vec batch: %w", nextStep, err)
+			}
 			if err := submitPreparedStepGPU(trainer, prepared, batchSize, seqLen, sched.At(nextStep)); err != nil {
 				stopSubmit()
 				return 0, fmt.Errorf("submit step %d: %w", nextStep, err)
@@ -718,6 +543,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		}
 		canSubmitNextBeforeCollect := func(step int) bool {
 			if !stepLookaheadEnabled ||
+				data2vec != nil ||
 				step >= steps-1 ||
 				shouldLogTrainingStep(step, steps, logEvery) ||
 				shouldWriteCheckpoint(step, opts.CheckpointEvery) ||
@@ -802,6 +628,18 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				steadyStart = time.Now()
 			}
 			lastLoss = v
+
+			if data2vec != nil {
+				stopData2Vec := startSlowTrainingPhaseLogger(name, step, "data2vec_ema_read")
+				weights, err := readTrainerWeights(trainer)
+				stopData2Vec()
+				if err != nil {
+					return TrainResult{}, fmt.Errorf("data2vec read at step %d: %w", step, err)
+				}
+				if err := data2vec.updateFromStudentWeights(weights, step); err != nil {
+					return TrainResult{}, fmt.Errorf("data2vec EMA update at step %d: %w", step, err)
+				}
+			}
 
 			if shouldUpdateSWA(step, swaStart, swaInterval) {
 				stopSWA := startSlowTrainingPhaseLogger(name, step, "swa_read")

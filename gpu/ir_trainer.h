@@ -29,6 +29,11 @@ enum class QATMode : uint8_t {
   Int6 = 2,
 };
 
+enum class ComputeDType : uint8_t {
+  Float32 = 0,
+  BFloat16 = 1,
+};
+
 enum class NewtonSchulzVariant : uint8_t {
   Fixed = 0,
   PolarExpress = 1,
@@ -125,6 +130,7 @@ struct IRTrainer {
   float lr_scale = 1.0f;
   float default_base_lr = 0.0f;
   QATMode qat_mode = QATMode::None;
+  ComputeDType compute_dtype = ComputeDType::Float32;
 
   float step(const mlx::core::array& tokens, const mlx::core::array& targets);
   float step_named(const TensorMap& inputs);
@@ -150,7 +156,8 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
     const std::vector<WeightOptimizerSpec>& weight_optimizers,
     const std::vector<OptimizerGroupConfig>& optimizer_groups,
     float max_grad_norm,
-    float default_base_lr);
+    float default_base_lr,
+    int compute_dtype);
 
 } // namespace mlx_ir
 

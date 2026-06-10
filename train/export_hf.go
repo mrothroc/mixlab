@@ -177,6 +177,9 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 	if cfg.Training.Distillation != nil {
 		return unsupportedHFExport("training.distillation", "teacher distillation is training-only")
 	}
+	if cfg.Training.Data2VecActive() {
+		return unsupportedHFExport("training.data2vec", "data2vec EMA representation distillation is training-only")
+	}
 	if cfg.Eval != nil && cfg.EffectiveEvalSpec().LegalChunkSGDEnabled() {
 		return unsupportedHFExport("eval.ttt_mode", "eval-time TTT is not represented in the exported HF model")
 	}

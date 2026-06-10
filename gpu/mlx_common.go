@@ -115,6 +115,9 @@ func CreateTrainer(program *Program, weightHandles []int64, spec TrainerOptimize
 	if len(spec.Groups) == 0 {
 		return 0, fmt.Errorf("no optimizer groups; define at least one optimizer group in TrainerOptimizerSpec")
 	}
+	if spec.ComputeDType != ComputeDTypeFloat32 && spec.ComputeDType != ComputeDTypeBF16 {
+		return 0, fmt.Errorf("unsupported trainer compute dtype %d", spec.ComputeDType)
+	}
 	return mlxCreateTrainer(program.handle, weightHandles, spec)
 }
 
@@ -358,6 +361,30 @@ func EvalProgramOutput(program *Program, weightHandles []int64, inputs []TensorI
 		return nil, fmt.Errorf("output name is required")
 	}
 	return evalProgramOutput(program, weightHandles, inputs, outputName)
+}
+
+func EvalProgramOutputs(program *Program, weightHandles []int64, inputs []TensorInput, outputNames []string, outputSizes []int) (map[string][]float32, error) {
+	if program == nil || program.handle == 0 {
+		return nil, fmt.Errorf("invalid GPU program; create and populate a gpu.Program before evaluating outputs")
+	}
+	if len(weightHandles) == 0 {
+		return nil, fmt.Errorf("no weight handles; upload weights with gpu.FromData before evaluating outputs")
+	}
+	if program.nWeights != len(weightHandles) {
+		return nil, fmt.Errorf("program weight mismatch: program=%d weights=%d", program.nWeights, len(weightHandles))
+	}
+	if len(outputNames) == 0 || len(outputNames) != len(outputSizes) {
+		return nil, fmt.Errorf("outputNames and outputSizes must be non-empty and same length")
+	}
+	for i, name := range outputNames {
+		if name == "" {
+			return nil, fmt.Errorf("output name[%d] is empty", i)
+		}
+		if outputSizes[i] <= 0 {
+			return nil, fmt.Errorf("output size[%d]=%d must be > 0", i, outputSizes[i])
+		}
+	}
+	return evalProgramOutputs(program, weightHandles, inputs, outputNames, outputSizes)
 }
 
 func EvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) (float32, [][]float32, error) {

@@ -61,6 +61,7 @@ const (
 	OpDebertaRelativeBias  = 72
 	OpCharFeatureBag       = 73
 	OpMoEFeedForward       = 74
+	OpMaskedSmoothL1       = 75
 )
 
 const (
@@ -102,6 +103,13 @@ func (p *Program) operationTypes() []int {
 }
 
 type TrainerHandle int64
+
+type ComputeDType int
+
+const (
+	ComputeDTypeFloat32 ComputeDType = iota
+	ComputeDTypeBF16
+)
 
 type OptimizerKind int
 
@@ -153,6 +161,7 @@ type TrainerOptimizerSpec struct {
 	Weights       []WeightOptimizer
 	MaxGradNorm   float32
 	DefaultBaseLR float32
+	ComputeDType  ComputeDType
 }
 
 var (

@@ -803,6 +803,74 @@ int mlx_ir_eval_program_named_for_output(
   }
 }
 
+int mlx_ir_eval_program_named_outputs(
+    int64_t program,
+    int64_t* weight_handles,
+    int n_weights,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char** output_names,
+    int n_outputs,
+    float** outs,
+    const int* out_sizes) {
+  if (program <= 0 || !weight_handles || n_weights <= 0 || !inputs || n_inputs <= 0 ||
+      !output_names || n_outputs <= 0 || !outs || !out_sizes) {
+    return -1;
+  }
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return -1;
+    }
+    auto* prog = get_ir_program(program);
+    if (!prog || prog->n_weights != n_weights) {
+      return -1;
+    }
+
+    std::vector<mx::array> weights;
+    weights.reserve(static_cast<size_t>(n_weights));
+    for (int i = 0; i < n_weights; ++i) {
+      auto* w = get_handle(weight_handles[i]);
+      if (!w) {
+        return -1;
+      }
+      weights.push_back(*w);
+    }
+
+    std::vector<std::string> names;
+    names.reserve(static_cast<size_t>(n_outputs));
+    for (int i = 0; i < n_outputs; ++i) {
+      if (!output_names[i] || output_names[i][0] == '\0' || !outs[i] || out_sizes[i] <= 0) {
+        return -1;
+      }
+      names.emplace_back(output_names[i]);
+    }
+
+    auto tensor_map = to_tensor_map(inputs, n_inputs);
+    auto output_map = mlx_ir::ir_interpret_outputs(*prog, weights, tensor_map, names);
+    for (int i = 0; i < n_outputs; ++i) {
+      auto it = output_map.find(names[i]);
+      if (it == output_map.end()) {
+        return -1;
+      }
+      mx::array out_arr = it->second;
+      const int flat_size = static_cast<int>(out_arr.size());
+      if (flat_size != out_sizes[i]) {
+        return -1;
+      }
+      auto flat = mx::reshape(mx::astype(out_arr, mx::float32), {static_cast<mx::ShapeElem>(flat_size)});
+      mx::eval(flat);
+      std::memcpy(outs[i], flat.data<float>(), static_cast<size_t>(flat_size) * sizeof(float));
+    }
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_eval_program_named_outputs", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_eval_program_named_outputs unknown exception" << std::endl;
+    return -1;
+  }
+}
+
 int mlx_ir_eval_program_grads_named_for_output(
     int64_t program,
     int64_t* weight_handles,

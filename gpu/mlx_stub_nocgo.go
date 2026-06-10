@@ -117,6 +117,10 @@ func EvalProgramOutput(program *Program, weightHandles []int64, inputs []TensorI
 	return nil, errNotBuilt
 }
 
+func EvalProgramOutputs(program *Program, weightHandles []int64, inputs []TensorInput, outputNames []string, outputSizes []int) (map[string][]float32, error) {
+	return nil, errNotBuilt
+}
+
 func EvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) (float32, [][]float32, error) {
 	return 0, nil, errNotBuilt
 }

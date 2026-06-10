@@ -88,8 +88,9 @@ mx::Shape make_shape(const int* vals, int n) {
 }
 
 mx::array cross_entropy_mean(const mx::array& logits, const mx::array& targets) {
-  auto row_max = mx::max(logits, 1, true);
-  auto shifted = logits - row_max;
+  auto logits_f32 = mx::astype(logits, mx::float32);
+  auto row_max = mx::max(logits_f32, 1, true);
+  auto shifted = logits_f32 - row_max;
   auto log_norm = mx::log(mx::sum(mx::exp(shifted), 1, true));
   auto log_probs = shifted - log_norm;
   auto idx = mx::reshape(targets, {targets.shape(0), 1});
@@ -98,8 +99,9 @@ mx::array cross_entropy_mean(const mx::array& logits, const mx::array& targets) 
 }
 
 mx::array cross_entropy_per_token(const mx::array& logits, const mx::array& targets) {
-  auto row_max = mx::max(logits, 1, true);
-  auto shifted = logits - row_max;
+  auto logits_f32 = mx::astype(logits, mx::float32);
+  auto row_max = mx::max(logits_f32, 1, true);
+  auto shifted = logits_f32 - row_max;
   auto log_norm = mx::log(mx::sum(mx::exp(shifted), 1, true));
   auto log_probs = shifted - log_norm;
   auto idx = mx::reshape(targets, {targets.shape(0), 1});
@@ -164,14 +166,49 @@ mx::array distillation_kl_mean(
       student_logits.shape(1) != teacher_probs.shape(1)) {
     throw std::runtime_error("teacher_probs must match student logits shape [rows, vocab]");
   }
-  auto row_max = mx::max(student_logits, 1, true);
-  auto shifted = student_logits - row_max;
+  auto logits_f32 = mx::astype(student_logits, mx::float32);
+  auto row_max = mx::max(logits_f32, 1, true);
+  auto shifted = logits_f32 - row_max;
   auto log_norm = mx::log(mx::sum(mx::exp(shifted), 1, true));
   auto student_log_probs = shifted - log_norm;
   auto p = mx::astype(teacher_probs, mx::float32);
   auto safe_p = mx::maximum(p, mx::array(1e-20f, mx::float32));
   auto row_kl = mx::sum(p * (mx::log(safe_p) - student_log_probs), 1);
   return mx::mean(row_kl);
+}
+
+mx::array masked_smooth_l1_mean(
+    const mx::array& pred,
+    const mx::array& target,
+    const mx::array& loss_mask,
+    float beta) {
+  if (pred.ndim() != 2 || target.ndim() != 2 ||
+      pred.shape(0) != target.shape(0) || pred.shape(1) != target.shape(1)) {
+    throw std::runtime_error("masked_smooth_l1 expects pred and target shape [rows, dim]");
+  }
+  if (loss_mask.ndim() != 1 || loss_mask.shape(0) != pred.shape(0)) {
+    throw std::runtime_error("masked_smooth_l1 mask must be a rank-1 vector matching rows");
+  }
+  if (!(beta > 0.0f) || !std::isfinite(beta)) {
+    throw std::runtime_error("masked_smooth_l1 beta must be finite and > 0");
+  }
+  auto p = mx::astype(pred, mx::float32);
+  auto t = mx::astype(target, mx::float32);
+  auto diff = p - t;
+  auto abs_diff = mx::abs(diff);
+  auto beta_arr = mx::array(beta, mx::float32);
+  auto quadratic = (diff * diff) / (mx::array(2.0f, mx::float32) * beta_arr);
+  auto linear = abs_diff - mx::array(0.5f * beta, mx::float32);
+  auto per_elem = mx::where(mx::less(abs_diff, beta_arr), quadratic, linear);
+  auto mask = mx::astype(
+      mx::greater(mx::astype(loss_mask, mx::float32), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto masked = per_elem * mx::expand_dims(mask, 1);
+  auto dim = pred.shape(1);
+  auto denom = mx::maximum(
+      mx::sum(mask) * mx::array(static_cast<float>(dim), mx::float32),
+      mx::array(1.0f, mx::float32));
+  return mx::sum(masked) / denom;
 }
 
 mx::array as_float32(const mx::array& x) {
@@ -2381,6 +2418,13 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, distillation_kl_mean(get(op, 0), get(op, 1)));
         break;
       }
+      case OP_MASKED_SMOOTH_L1: {
+        if (op.n_float_params < 1) {
+          throw std::runtime_error("OP_MASKED_SMOOTH_L1 requires beta float param");
+        }
+        set_out(op, 0, masked_smooth_l1_mean(get(op, 0), get(op, 1), get(op, 2), op.float_params[0]));
+        break;
+      }
       case OP_DROPOUT: {
         if (op.n_float_params < 1) {
           throw std::runtime_error("OP_DROPOUT requires rate float param");
@@ -2816,10 +2860,11 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           throw std::runtime_error("OP_RMSNORM requires eps float param");
         }
         auto x = get(op, 0);
-        auto scale = get(op, 1);
-        auto ms = mx::mean(mx::square(x), -1, true);
+        auto x_f32 = mx::astype(x, mx::float32);
+        auto scale = mx::astype(get(op, 1), mx::float32);
+        auto ms = mx::mean(mx::square(x_f32), -1, true);
         auto rms_inv = 1.0f / mx::sqrt(ms + op.float_params[0]);
-        set_out(op, 0, x * rms_inv * scale);
+        set_out(op, 0, mx::astype(x_f32 * rms_inv * scale, x.dtype()));
         break;
       }
       case OP_ROPE: {

@@ -804,6 +804,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `hybrid_clm_fraction` | number | No | `0.5` | For `objective: "hybrid"`, deterministic per-batch probability of using causal next-token training. Must be in `[0,1]`. |
 | `hybrid_secondary_objective` | string | No | `"mntp"` | Secondary objective for hybrid training: `"mlm"` or `"mntp"`. |
 | `distillation` | object | No | Disabled | Optional internal-teacher distillation block for causal LM training. |
+| `data2vec` | object | No | Disabled | Optional online EMA representation-distillation auxiliary loss for masked objectives. |
 | `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
 | `warmdown_steps` | integer | No | `0` | Cosine warmdown length at the end of training. Must be `>= 0`; values above `steps` are clamped by the scheduler. |
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
@@ -816,6 +817,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `ttt_rank` | integer | No | `4` | LoRA rank used when `ttt_mode="lora"`. Rank-2-or-higher weights get temporary adapters `W + A @ B` with `A:[M,R]`, `B:[R,N]`; only `A` and `B` train during LoRA-TTT. Must be `> 0`. |
 | `hardware_tflops` | number | No | `0` | Peak hardware TFLOPS used to log MFU next to `tok/s`. `0` disables MFU logging. Must be `>= 0`. |
 | `optimizer` | string | No | `"muon"` | Optimizer selector: `"muon"`/`"muon_eq_r"`/`"normuon"` use Muon variants for matrix weights and AdamW for embed/head/scalar groups; `"adamw"` uses AdamW for all groups; `"lamb"` uses LAMB for all groups. |
+| `compute_dtype` | string | No | `"float32"` | MLX training compute dtype: `"float32"` or experimental `"bf16"`. BF16 keeps fp32 master weights and optimizer state, and currently supports `plain`, `swiglu`, `geglu`, `mlp`, and `moe` blocks. Unsupported blocks and QAT fail fast instead of silently falling back. |
 | `qat` | string | No | `"none"` | Quantization-aware training mode for rank-2 weights during the training forward pass. `"none"` disables it, `"int8"` applies per-row fake int8 quantization, and `"int6"` applies a coarser fake quantization with STE. |
 | `weight_init` | string | No | `"xavier_uniform"` | Initialization for rank ≥ 2 weights: `"xavier_uniform"` or `"normal"`. 1D weights are always ones (norms) or zeros. |
 | `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` initialization. Ignored when `weight_init` is `"xavier_uniform"`. |
@@ -925,6 +927,45 @@ Validation, per-token NLL export, checkpoints, SWA, and full evaluation remain s
 | `ensemble_strategy` | string | No | `"mean_logits"` | `"mean_logits"` averages raw teacher logits before softmax. `"mean_logprobs"` averages teacher log-probabilities geometrically, then renormalizes. |
 
 V1 supports distillation only with `objective: "causal"`. It rejects masked objectives, `hybrid`, top-level `mtp`, and `training.first_byte_mask` because those combinations need explicit loss semantics.
+
+### Data2Vec EMA representation distillation
+
+`training.data2vec` enables an online EMA teacher that runs on the unmasked batch and trains the student to regress normalized teacher hidden states at masked-objective positions. It is separate from `training.distillation`: data2vec uses an EMA copy of the current student weights and hidden-state SmoothL1 loss, while distillation uses fixed teacher checkpoints and token-distribution KL.
+
+V1 supports `objective: "mlm"`, `objective: "mntp"`, and `objective: "hybrid"` when masked secondary steps can run. Hybrid causal batches skip the data2vec teacher forward and contribute zero data2vec loss; masked hybrid batches use the configured secondary objective. Lookahead submission is disabled while data2vec is active so the EMA teacher for step `s+1` includes the completed optimizer update from step `s`.
+
+Current limitations: data2vec is training-only, rejects `training.distillation`, top-level `mtp`, `training.first_byte_mask`, recurrence schedules/weight sharing, U-Net, and parallel residual in v1, and uses a correctness-first CPU EMA readback/re-upload path.
+
+```json
+{
+  "training": {
+    "objective": "hybrid",
+    "mlm_mask_token_id": 103,
+    "hybrid_secondary_objective": "mntp",
+    "data2vec": {
+      "loss_weight": 0.1,
+      "ema_tau": 0.999,
+      "top_k_layers": 2,
+      "smooth_l1_beta": 1.0,
+      "target_norm": "layer_norm"
+    }
+  }
+}
+```
+
+| Field | Type | Required | Default | Notes |
+|------|------|----------|---------|-------|
+| `loss_weight` | number | No | `1.0` | Weight added to the primary training loss. Explicit `0` disables data2vec without changing the graph. |
+| `ema_tau` | number | No | `0.999` | EMA decay when no ramp is configured. Values in `[0,1]` are accepted; `1.0` freezes the teacher. |
+| `ema_tau_start` / `ema_tau_end` | number | No | `ema_tau` | Linear tau ramp endpoints when `ema_tau_ramp_steps > 0`. |
+| `ema_tau_ramp_steps` | integer | No | `0` | Number of steps over which tau ramps linearly, clamped after the ramp. |
+| `top_k_layers` | integer | No | `8` | Number of final top-level block outputs to average for teacher targets. Must be `<= len(blocks)`. |
+| `smooth_l1_beta` | number | No | `1.0` | Huber/SmoothL1 transition point. Must be `> 0`. |
+| `target_norm` | string | No | `"layer_norm"` | `"layer_norm"`, `"instance_norm"`, and `"feature_norm"` all normalize each token vector over feature dimension; `"none"` is for debugging. |
+| `target_norm_eps` | number | No | `1e-5` | Epsilon for target normalization. |
+| `mask_source` | string | No | `"objective"` | V1 reuses the MLM/MNTP objective loss mask. |
+| `mask_prob` | number | No | `0.0` | Reserved for future separate data2vec masks; must be in `[0,1]`. |
+| `predictor_hidden_dim` | integer | No | `0` | `0` uses a single linear `D -> D` predictor; positive values use a two-layer GELU predictor. |
 
 ### Optimizer groups
 

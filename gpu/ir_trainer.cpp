@@ -494,10 +494,14 @@ mx::array lamb_trust_ratio(const mx::array& w, const mx::array& update) {
 
 void clip_gradients(std::vector<mx::array>& grads, float max_grad_norm) {
   if (max_grad_norm <= 0.0f) {
+    for (auto& g : grads) {
+      g = mx::astype(g, mx::float32);
+    }
     return;
   }
   auto total_norm_sq = mx::array(0.0f, mx::float32);
-  for (const auto& g : grads) {
+  for (auto& g : grads) {
+    g = mx::astype(g, mx::float32);
     total_norm_sq = total_norm_sq + mx::sum(mx::square(g));
   }
   auto total_norm = mx::sqrt(total_norm_sq);
@@ -1267,6 +1271,7 @@ void apply_optimizer_update(
     float lr_scale,
     LoraOptimizerState& state) {
   const float effective_lr = group.lr * lr_scale;
+  auto grad = mx::astype(g, mx::float32);
   switch (group.kind) {
     case OptimizerKind::AdamW: {
       if (state.has_adam_state == 0) {
@@ -1276,13 +1281,13 @@ void apply_optimizer_update(
       const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(step_count));
       const float one_minus_beta1 = 1.0f - group.beta1;
       const float one_minus_beta2 = 1.0f - group.beta2;
-      state.adam_m = group.beta1 * state.adam_m + one_minus_beta1 * g;
-      state.adam_v = group.beta2 * state.adam_v + one_minus_beta2 * mx::square(g);
+      state.adam_m = group.beta1 * state.adam_m + one_minus_beta1 * grad;
+      state.adam_v = group.beta2 * state.adam_v + one_minus_beta2 * mx::square(grad);
 
       auto mhat = state.adam_m / b1t;
       auto vhat = state.adam_v / b2t;
 
-      w = apply_weight_decay(w, g, group, decay, step_count, effective_lr);
+      w = apply_weight_decay(w, grad, group, decay, step_count, effective_lr);
       w = w - effective_lr * mhat / (mx::sqrt(vhat) + group.eps);
       break;
     }
@@ -1294,13 +1299,13 @@ void apply_optimizer_update(
       const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(step_count));
       const float one_minus_beta1 = 1.0f - group.beta1;
       const float one_minus_beta2 = 1.0f - group.beta2;
-      state.adam_m = group.beta1 * state.adam_m + one_minus_beta1 * g;
-      state.adam_v = group.beta2 * state.adam_v + one_minus_beta2 * mx::square(g);
+      state.adam_m = group.beta1 * state.adam_m + one_minus_beta1 * grad;
+      state.adam_v = group.beta2 * state.adam_v + one_minus_beta2 * mx::square(grad);
 
       auto mhat = state.adam_m / b1t;
       auto vhat = state.adam_v / b2t;
       auto update = mhat / (mx::sqrt(vhat) + group.eps);
-      update = update + weight_decay_update_term(w, g, group, decay, step_count);
+      update = update + weight_decay_update_term(w, grad, group, decay, step_count);
       auto trust_ratio = lamb_trust_ratio(w, update);
       w = w - effective_lr * trust_ratio * update;
       break;
@@ -1312,8 +1317,8 @@ void apply_optimizer_update(
       if (w.ndim() != 2) {
         throw std::runtime_error("Muon only supports rank-2 LoRA adapters");
       }
-      state.muon_momentum = group.beta1 * state.muon_momentum + g;
-      mx::array update = group.nesterov ? (g + group.beta1 * state.muon_momentum) : state.muon_momentum;
+      state.muon_momentum = group.beta1 * state.muon_momentum + grad;
+      mx::array update = group.nesterov ? (grad + group.beta1 * state.muon_momentum) : state.muon_momentum;
       update = zeropower_via_newtonschulz5(update, group.backend_steps, group.newton_schulz_variant);
       const auto rows = static_cast<float>(w.shape(0));
       const auto cols = static_cast<float>(w.shape(1));
@@ -1332,7 +1337,7 @@ void apply_optimizer_update(
           update = normuon_normalize(update, state.muon_second_moment, group.beta2);
           break;
       }
-      w = apply_weight_decay(w, g, group, decay, step_count, effective_lr);
+      w = apply_weight_decay(w, grad, group, decay, step_count, effective_lr);
       w = w - effective_lr * update;
       break;
     }
@@ -1375,14 +1380,33 @@ mx::array fake_quantize_weight(const mx::array& weight, QATMode mode) {
 
 std::vector<mx::array> effective_training_weights(
     const std::vector<mx::array>& base_weights,
-    QATMode qat_mode) {
-  if (qat_mode == QATMode::None) {
+    QATMode qat_mode,
+    ComputeDType compute_dtype) {
+  if (qat_mode == QATMode::None && compute_dtype == ComputeDType::Float32) {
     return base_weights;
   }
   std::vector<mx::array> effective;
   effective.reserve(base_weights.size());
   for (const auto& weight : base_weights) {
-    effective.push_back(fake_quantize_weight(weight, qat_mode));
+    auto exec_weight = fake_quantize_weight(weight, qat_mode);
+    if (compute_dtype == ComputeDType::BFloat16) {
+      exec_weight = mx::astype(exec_weight, mx::bfloat16);
+    }
+    effective.push_back(exec_weight);
+  }
+  return effective;
+}
+
+std::vector<mx::array> effective_compute_weights(
+    const std::vector<mx::array>& base_weights,
+    ComputeDType compute_dtype) {
+  if (compute_dtype == ComputeDType::Float32) {
+    return base_weights;
+  }
+  std::vector<mx::array> effective;
+  effective.reserve(base_weights.size());
+  for (const auto& weight : base_weights) {
+    effective.push_back(mx::astype(weight, mx::bfloat16));
   }
   return effective;
 }
@@ -1684,7 +1708,7 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   std::iota(argnums.begin(), argnums.end(), 0);
   auto fn = mx::value_and_grad(
       [this, tokens, targets](const std::vector<mx::array>& w) {
-        auto effective = effective_training_weights(w, qat_mode);
+        auto effective = effective_training_weights(w, qat_mode, compute_dtype);
         return ir_interpret(program, effective, tokens, targets, true);
       },
       argnums);
@@ -1729,6 +1753,7 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
   const auto& group = optimizer_groups[spec.group_index];
   const float effective_lr = group.lr * lr_scale;
   auto& w = weights[i];
+  auto grad = mx::astype(g, mx::float32);
 
   switch (group.kind) {
     case OptimizerKind::AdamW: {
@@ -1739,13 +1764,13 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
       const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(step_count));
       const float one_minus_beta1 = 1.0f - group.beta1;
       const float one_minus_beta2 = 1.0f - group.beta2;
-      adam_m[i] = group.beta1 * adam_m[i] + one_minus_beta1 * g;
-      adam_v[i] = group.beta2 * adam_v[i] + one_minus_beta2 * mx::square(g);
+      adam_m[i] = group.beta1 * adam_m[i] + one_minus_beta1 * grad;
+      adam_v[i] = group.beta2 * adam_v[i] + one_minus_beta2 * mx::square(grad);
 
       auto mhat = adam_m[i] / b1t;
       auto vhat = adam_v[i] / b2t;
 
-      w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
+      w = apply_weight_decay(w, grad, group, spec.decay, step_count, effective_lr);
       w = w - effective_lr * mhat / (mx::sqrt(vhat) + group.eps);
       break;
     }
@@ -1757,13 +1782,13 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
       const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(step_count));
       const float one_minus_beta1 = 1.0f - group.beta1;
       const float one_minus_beta2 = 1.0f - group.beta2;
-      adam_m[i] = group.beta1 * adam_m[i] + one_minus_beta1 * g;
-      adam_v[i] = group.beta2 * adam_v[i] + one_minus_beta2 * mx::square(g);
+      adam_m[i] = group.beta1 * adam_m[i] + one_minus_beta1 * grad;
+      adam_v[i] = group.beta2 * adam_v[i] + one_minus_beta2 * mx::square(grad);
 
       auto mhat = adam_m[i] / b1t;
       auto vhat = adam_v[i] / b2t;
       auto update = mhat / (mx::sqrt(vhat) + group.eps);
-      update = update + weight_decay_update_term(w, g, group, spec.decay, step_count);
+      update = update + weight_decay_update_term(w, grad, group, spec.decay, step_count);
       auto trust_ratio = lamb_trust_ratio(w, update);
       w = w - effective_lr * trust_ratio * update;
       break;
@@ -1775,8 +1800,8 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
       if (w.ndim() != 2) {
         throw std::runtime_error("Muon only supports rank-2 weights");
       }
-      muon_momentum[i] = group.beta1 * muon_momentum[i] + g;
-      mx::array update = group.nesterov ? (g + group.beta1 * muon_momentum[i]) : muon_momentum[i];
+      muon_momentum[i] = group.beta1 * muon_momentum[i] + grad;
+      mx::array update = group.nesterov ? (grad + group.beta1 * muon_momentum[i]) : muon_momentum[i];
       update = zeropower_via_newtonschulz5(update, group.backend_steps, group.newton_schulz_variant);
       const auto rows = static_cast<float>(w.shape(0));
       const auto cols = static_cast<float>(w.shape(1));
@@ -1795,7 +1820,7 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
           update = normuon_normalize(update, muon_second_moment[i], group.beta2);
           break;
       }
-      w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
+      w = apply_weight_decay(w, grad, group, spec.decay, step_count, effective_lr);
       w = w - effective_lr * update;
       break;
     }
@@ -1803,8 +1828,8 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
       if (has_sgd_state[i] == 0) {
         throw std::runtime_error("SGD state missing for weight");
       }
-      sgd_momentum[i] = group.beta1 * sgd_momentum[i] + g;
-      w = apply_weight_decay(w, g, group, spec.decay, step_count, effective_lr);
+      sgd_momentum[i] = group.beta1 * sgd_momentum[i] + grad;
+      w = apply_weight_decay(w, grad, group, spec.decay, step_count, effective_lr);
       w = w - effective_lr * sgd_momentum[i];
       break;
     }
@@ -1919,7 +1944,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         for (size_t i = 0; i < n_weights; ++i) {
           w.push_back(fn_args[i]);
         }
-        auto effective = effective_training_weights(w, qat_mode);
+        auto effective = effective_training_weights(w, qat_mode, compute_dtype);
         ArrayMap input_map;
         input_map.reserve(local_input_names.size());
         for (size_t i = 0; i < local_input_names.size(); ++i) {
@@ -2679,7 +2704,8 @@ float IRTrainer::evaluate(const mx::array& tokens, const mx::array& targets) {
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
   }
-  auto loss = ir_interpret(program, weights, tokens, targets, false);
+  auto effective = effective_compute_weights(weights, compute_dtype);
+  auto loss = ir_interpret(program, effective, tokens, targets, false);
   mx::eval(loss);
   report_gated_delta_timing_summary("eval", step_count);
   return loss.item<float>();
@@ -2692,7 +2718,8 @@ float IRTrainer::evaluate_named(const TensorMap& inputs) {
   }
   auto loss_name = evaluation_loss_name(program);
   auto output_names = collect_cached_output_names(program, loss_name);
-  last_outputs = ir_interpret_outputs(program, weights, inputs, output_names);
+  auto effective = effective_compute_weights(weights, compute_dtype);
+  last_outputs = ir_interpret_outputs(program, effective, inputs, output_names);
   auto loss = last_outputs.at(loss_name);
   mx::eval(loss);
   report_gated_delta_timing_summary("eval", step_count);
@@ -2713,7 +2740,7 @@ float IRTrainer::compute_mean_square_grads_named(const TensorMap& inputs, const 
   std::unordered_map<std::string, mx::array> outputs;
   auto fn = mx::value_and_grad(
       [this, inputs, output_name, &outputs](const std::vector<mx::array>& w) {
-        auto effective = effective_training_weights(w, qat_mode);
+        auto effective = effective_training_weights(w, qat_mode, compute_dtype);
         outputs = ir_interpret_outputs(program, effective, inputs, {output_name}, true);
         auto it = outputs.find(output_name);
         if (it == outputs.end()) {
@@ -2748,7 +2775,8 @@ std::vector<float> IRTrainer::evaluate_per_token(const TensorMap& inputs) {
   }
   auto output_names = collect_cached_output_names(program, evaluation_loss_name(program));
   output_names.push_back("per_token_nll");
-  last_outputs = ir_interpret_outputs(program, weights, inputs, output_names);
+  auto effective = effective_compute_weights(weights, compute_dtype);
+  last_outputs = ir_interpret_outputs(program, effective, inputs, output_names);
   auto nll = mx::astype(last_outputs.at("per_token_nll"), mx::float32);
   auto flat = mx::reshape(nll, {static_cast<mx::ShapeElem>(nll.size())});
   mx::eval(flat);
@@ -2816,7 +2844,9 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
             local_adapters[weight_idx].a = params[param_idx++];
             local_adapters[weight_idx].b = params[param_idx++];
           }
-          auto effective = effective_lora_weights(weights, local_adapters);
+          auto effective = effective_compute_weights(
+              effective_lora_weights(weights, local_adapters),
+              compute_dtype);
           return ir_interpret(program, effective, inputs, loss_name, true);
         },
         argnums);
@@ -2865,7 +2895,7 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
   }
 
   auto output_names = collect_cached_output_names(program, loss_name);
-  auto effective = effective_lora_weights(weights, adapters);
+  auto effective = effective_compute_weights(effective_lora_weights(weights, adapters), compute_dtype);
   last_outputs = ir_interpret_outputs(program, effective, inputs, output_names);
   auto loss = last_outputs.at(loss_name);
   std::vector<mx::array> eval_arrays;
@@ -2943,7 +2973,8 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
     const std::vector<WeightOptimizerSpec>& weight_specs,
     const std::vector<OptimizerGroupConfig>& groups,
     float max_grad_norm,
-    float default_base_lr) {
+    float default_base_lr,
+    int compute_dtype) {
   if (initial_weights.empty()) {
     throw std::runtime_error("IR trainer requires at least one weight");
   }
@@ -2955,6 +2986,16 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
   }
 
   auto trainer = std::make_unique<IRTrainer>();
+  switch (compute_dtype) {
+    case 0:
+      trainer->compute_dtype = ComputeDType::Float32;
+      break;
+    case 1:
+      trainer->compute_dtype = ComputeDType::BFloat16;
+      break;
+    default:
+      throw std::runtime_error("unsupported IR trainer compute dtype");
+  }
   trainer->program = program;
   trainer->weights = initial_weights;
   trainer->optimizer_groups = groups;

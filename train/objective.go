@@ -9,10 +9,13 @@ import (
 )
 
 type objectiveBatch struct {
-	x            []int
-	y            []int
-	lossMask     []float32
-	teacherProbs []float32
+	x               []int
+	y               []int
+	lossMask        []float32
+	teacherProbs    []float32
+	unmaskedX       []int
+	data2vecTargets []float32
+	data2vecMask    []float32
 }
 
 func objectiveForStep(spec TrainingSpec, step int) string {
@@ -53,7 +56,7 @@ func prepareObjectiveBatch(cfg *ArchConfig, batch trainBatch, step int, objectiv
 	case arch.ObjectiveMNTP:
 		return prepareMNTPBatch(cfg, batch, step, need)
 	default:
-		return objectiveBatch{x: batch.x, y: batch.y}, nil
+		return objectiveBatch{x: batch.x, y: batch.y, unmaskedX: batch.x[:need]}, nil
 	}
 }
 
@@ -76,6 +79,7 @@ func prepareMLMBatch(cfg *ArchConfig, batch trainBatch, step, need int) (objecti
 	}
 	x := append([]int(nil), batch.x[:need]...)
 	y := append([]int(nil), batch.x[:need]...)
+	unmasked := append([]int(nil), batch.x[:need]...)
 	lossMask := make([]float32, need)
 	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0x243f6a8885a308d3)
 	selected := selectMaskPositions(rng, lossMask, cfg.Training.MLMMaskProb, need)
@@ -87,7 +91,7 @@ func prepareMLMBatch(cfg *ArchConfig, batch trainBatch, step, need int) (objecti
 	if selected > 0 {
 		replaceSelectedMLMTokens(cfg, rng, x, y, lossMask)
 	}
-	return objectiveBatch{x: x, y: y, lossMask: lossMask}, nil
+	return objectiveBatch{x: x, y: y, lossMask: lossMask, unmaskedX: unmasked}, nil
 }
 
 func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need int) (objectiveBatch, error) {
@@ -100,6 +104,7 @@ func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need int) (object
 	}
 	x := append([]int(nil), batch.x[:need]...)
 	y := append([]int(nil), batch.y[:need]...)
+	unmasked := append([]int(nil), batch.x[:need]...)
 	lossMask := make([]float32, need)
 	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0x13198a2e03707344)
 	selected := 0
@@ -130,7 +135,7 @@ func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need int) (object
 			slot--
 		}
 	}
-	return objectiveBatch{x: x, y: y, lossMask: lossMask}, nil
+	return objectiveBatch{x: x, y: y, lossMask: lossMask, unmaskedX: unmasked}, nil
 }
 
 func selectMaskPositions(rng *rand.Rand, lossMask []float32, prob float64, n int) int {

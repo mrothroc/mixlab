@@ -43,6 +43,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 			HeadUntied:           cfg.MTPUntieEnabled(),
 			Objective:            ObjectiveCausal,
 			DistillationInactive: true,
+			Data2VecInactive:     true,
 		}, nil, cfg.RecurrencePhases[len(cfg.RecurrencePhases)-1].Order, false)
 	}
 	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
@@ -50,6 +51,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		HeadUntied:           cfg.MTPUntieEnabled(),
 		Objective:            ObjectiveCausal,
 		DistillationInactive: true,
+		Data2VecInactive:     true,
 	}, nil, false)
 }
 
@@ -60,7 +62,10 @@ type TrainingProgramState struct {
 	HeadUntied           bool
 	MTPAuxInactive       bool
 	DistillationInactive bool
+	Data2VecInactive     bool
 	Objective            string
+	HiddenCaptureTopK    int
+	HiddenCapturePrefix  string
 }
 
 // BuildTrainingIRProgramFromConfig constructs a training program with MTP
@@ -142,6 +147,10 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	if state.DistillationInactive {
 		distillation = nil
 	}
+	var data2vec *Data2VecSpec
+	if cfg.Training.Data2VecActive() && !state.Data2VecInactive && state.HiddenCaptureTopK == 0 {
+		data2vec = cfg.Training.Data2Vec
+	}
 	objective := normalizeTrainingObjective(state.Objective)
 	if objective == ObjectiveCausal && strings.TrimSpace(state.Objective) == "" {
 		objective = cfg.Training.DefaultConcreteObjective()
@@ -179,7 +188,30 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		cfg.smearEmbeddingOptions(),
 		cfg.Backout,
 		distillation,
+		data2vec,
+		newData2VecHiddenCapture(state.HiddenCaptureTopK, len(cfg.Blocks), state.HiddenCapturePrefix),
 	)
+}
+
+// BuildData2VecTeacherIRProgramFromConfig constructs a no-gradient teacher
+// program that exposes top-K block hidden states for data2vec targets.
+func BuildData2VecTeacherIRProgramFromConfig(cfg *ArchConfig, objective string) (*Program, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil config")
+	}
+	if !cfg.Training.Data2VecActive() {
+		return nil, fmt.Errorf("training.data2vec is not active")
+	}
+	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
+		RecurrenceActive:     true,
+		HeadUntied:           cfg.MTPUntieEnabled(),
+		MTPAuxInactive:       true,
+		DistillationInactive: true,
+		Data2VecInactive:     true,
+		Objective:            objective,
+		HiddenCaptureTopK:    cfg.Training.Data2Vec.TopKLayers,
+		HiddenCapturePrefix:  "data2vec",
+	}, nil, false)
 }
 
 // CountIRWeightsFromConfig returns the expected number of IR weight tensors.

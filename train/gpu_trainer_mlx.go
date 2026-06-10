@@ -31,16 +31,19 @@ type mlxGPUTrainer struct {
 	firstByteMaskInput bool
 	lossMaskInput      bool
 	teacherProbsInput  bool
+	data2VecInput      bool
 	// Pre-allocated input buffers to avoid per-step allocation.
-	tokBuf         []int32
-	tgtBuf         []int32
-	lossMaskBuf    []float32
-	teacherProbBuf []float32
-	charBuf        []int32
-	bigramBuf      []int32
-	trigramBuf     []int32
-	charFeatures   []int32
-	firstByteValid []int32
+	tokBuf            []int32
+	tgtBuf            []int32
+	lossMaskBuf       []float32
+	teacherProbBuf    []float32
+	data2VecTargetBuf []float32
+	data2VecMaskBuf   []float32
+	charBuf           []int32
+	bigramBuf         []int32
+	trigramBuf        []int32
+	charFeatures      []int32
+	firstByteValid    []int32
 	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
 	lockedOSThread bool
 }
@@ -138,6 +141,13 @@ func initMLXGPUTrainer(
 			return nil, fmt.Errorf("optimizer override returned invalid spec: %w", err)
 		}
 	}
+	computeDType, err := gpuComputeDTypeForTraining(cfg)
+	if err != nil {
+		gpuProg.Destroy()
+		gpu.FreeHandles(handles)
+		return nil, err
+	}
+	optimizerSpec.ComputeDType = computeDType
 
 	trainerHandle, err := gpu.CreateTrainer(gpuProg, handles, optimizerSpec)
 	if err != nil {
@@ -158,6 +168,7 @@ func initMLXGPUTrainer(
 	firstByteMaskInput := false
 	lossMaskInput := false
 	teacherProbsInput := false
+	data2VecInput := false
 	for _, inp := range irProg.Inputs {
 		if inp.Name == "targets" && len(inp.Shape) == 1 {
 			declaredTargetSize = inp.Shape[0]
@@ -170,6 +181,9 @@ func initMLXGPUTrainer(
 		}
 		if inp.Name == "teacher_probs" {
 			teacherProbsInput = true
+		}
+		if inp.Name == "data2vec_targets" {
+			data2VecInput = true
 		}
 		if inp.Name == "char_ids" {
 			charInput = true
@@ -231,10 +245,13 @@ func initMLXGPUTrainer(
 		firstByteMaskInput: firstByteMaskInput,
 		lossMaskInput:      lossMaskInput,
 		teacherProbsInput:  teacherProbsInput,
+		data2VecInput:      data2VecInput,
 		tokBuf:             make([]int32, batchElems),
 		tgtBuf:             make([]int32, batchElems),
 		lossMaskBuf:        make([]float32, batchElems),
 		teacherProbBuf:     make([]float32, batchElems*cfg.VocabSize),
+		data2VecTargetBuf:  make([]float32, batchElems*cfg.ModelDim),
+		data2VecMaskBuf:    make([]float32, batchElems),
 		charBuf:            make([]int32, batchElems*cfg.CharMaxPerToken),
 		bigramBuf:          make([]int32, batchElems),
 		trigramBuf:         make([]int32, batchElems),
@@ -253,6 +270,18 @@ func weightIndexByName(shapes []WeightShape, name string) (int, error) {
 		}
 	}
 	return -1, fmt.Errorf("unknown weight %q", name)
+}
+
+func (t *mlxGPUTrainer) shapesModelDim() int {
+	for _, shape := range t.shapes {
+		if shape.Name == "final_norm" && len(shape.Shape) == 1 {
+			return shape.Shape[0]
+		}
+	}
+	if len(t.shapes) > 0 && len(t.shapes[0].Shape) == 2 {
+		return t.shapes[0].Shape[1]
+	}
+	return 0
 }
 
 func copyWeightDataByName(weights [][]float32, shapes []WeightShape, dstName, srcName string) error {
@@ -318,6 +347,13 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 	if t.teacherProbsInput && len(t.teacherProbBuf) < needTeacherProbs {
 		t.teacherProbBuf = make([]float32, needTeacherProbs)
 	}
+	needData2VecTargets := need * t.shapesModelDim()
+	if t.data2VecInput && len(t.data2VecTargetBuf) < needData2VecTargets {
+		t.data2VecTargetBuf = make([]float32, needData2VecTargets)
+	}
+	if t.data2VecInput && len(t.data2VecMaskBuf) < need {
+		t.data2VecMaskBuf = make([]float32, need)
+	}
 	for i := 0; i < need; i++ {
 		t.tokBuf[i] = int32(batch.x[i])
 		t.tgtBuf[i] = int32(batch.y[i])
@@ -354,6 +390,30 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		inputs = append(inputs, gpu.TensorInput{
 			Name: "teacher_probs", DType: gpu.TensorFloat32, Shape: []int{need, t.vocabSize}, Data: t.teacherProbBuf[:needTeacherProbs],
 		})
+	}
+	if t.data2VecInput {
+		modelDim := t.shapesModelDim()
+		if modelDim <= 0 {
+			return nil, fmt.Errorf("invalid model_dim for data2vec inputs")
+		}
+		if len(batch.data2vecTargets) >= needData2VecTargets {
+			copy(t.data2VecTargetBuf[:needData2VecTargets], batch.data2vecTargets[:needData2VecTargets])
+		} else {
+			for i := 0; i < needData2VecTargets; i++ {
+				t.data2VecTargetBuf[i] = 0
+			}
+		}
+		if len(batch.data2vecMask) >= need {
+			copy(t.data2VecMaskBuf[:need], batch.data2vecMask[:need])
+		} else {
+			for i := 0; i < need; i++ {
+				t.data2VecMaskBuf[i] = 0
+			}
+		}
+		inputs = append(inputs,
+			gpu.TensorInput{Name: "data2vec_targets", DType: gpu.TensorFloat32, Shape: []int{need, modelDim}, Data: t.data2VecTargetBuf[:needData2VecTargets]},
+			gpu.TensorInput{Name: "data2vec_loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.data2VecMaskBuf[:need]},
+		)
 	}
 	if t.firstByteMaskInput {
 		if len(t.firstByteValid) != t.vocabSize {
@@ -584,6 +644,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
 	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")
 	t.teacherProbsInput = programDeclaresInput(irProg, "teacher_probs")
+	t.data2VecInput = programDeclaresInput(irProg, "data2vec_targets")
 	if t.charInput && len(t.charFeatures) != t.vocabSize*t.charMaxPerToken {
 		return fmt.Errorf("char feature lookup size=%d does not match vocab_size*char_max_per_token=%d", len(t.charFeatures), t.vocabSize*t.charMaxPerToken)
 	}

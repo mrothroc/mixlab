@@ -213,6 +213,19 @@ func TestExportHFUnsupportedValidation(t *testing.T) {
 			wantErr: "training.objective",
 		},
 		{
+			name: "data2vec training only",
+			config: `{
+				"model_dim": 4, "vocab_size": 7, "seq_len": 3,
+				"blocks": [{"type": "plain", "heads": 2}],
+				"training": {
+					"steps": 1, "batch_tokens": 3,
+					"objective": "hybrid", "mlm_mask_token_id": 1,
+					"data2vec": {"top_k_layers": 1}
+				}
+			}`,
+			wantErr: "training.data2vec",
+		},
+		{
 			name: "xsa remains unsupported",
 			config: `{
 				"model_dim": 4, "vocab_size": 7, "seq_len": 3,

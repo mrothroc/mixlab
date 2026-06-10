@@ -64,7 +64,7 @@ When `char_vocab_size > 0`, `export-hf` also requires `char_features.bin` next t
 
 The detailed support matrix is maintained in [hf-export-support-matrix.md](hf-export-support-matrix.md). It distinguishes supported, gated, unsupported, and training-only features.
 
-Unsupported features fail fast with an error naming the field or block type. The current advanced export path intentionally gates HGRN2, mLSTM, Mamba-family blocks, RetNet/RWKV, `gated_deltanet`, `custom` blocks, `kv_source`, XSA, sparse attention gates, recurrence, U-Net, parallel residual, backout, MTP, distillation, first-byte masked loss, tied embeddings, and MLM/MNTP-only training objectives.
+Unsupported features fail fast with an error naming the field or block type. The current advanced export path intentionally gates HGRN2, mLSTM, Mamba-family blocks, RetNet/RWKV, `gated_deltanet`, `custom` blocks, `kv_source`, XSA, sparse attention gates, recurrence, U-Net, parallel residual, backout, MTP, distillation, data2vec, first-byte masked loss, tied embeddings, and MLM/MNTP-only training objectives.
 
 These guards are part of the export contract: a missing feature should be visible as an actionable error, not as a Hugging Face model that loads but computes different logits.
 

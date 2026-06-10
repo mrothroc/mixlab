@@ -79,6 +79,7 @@ enum OpType {
   OP_DEBERTA_RELATIVE_BIAS = 72,
   OP_CHAR_FEATURE_BAG = 73,
   OP_MOE_FEED_FORWARD = 74,
+  OP_MASKED_SMOOTH_L1 = 75,
 };
 
 struct IRop {

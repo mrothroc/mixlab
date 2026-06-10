@@ -176,7 +176,8 @@ int64_t mlx_ir_create_trainer(
       &group,
       1,
       max_grad_norm,
-      lr);
+      lr,
+      0);
 }
 
 int64_t mlx_ir_create_trainer_v2(
@@ -188,7 +189,8 @@ int64_t mlx_ir_create_trainer_v2(
     const mlx_ir_optimizer_group* optimizer_groups,
     int n_optimizer_groups,
     float max_grad_norm,
-    float default_base_lr) {
+    float default_base_lr,
+    int compute_dtype) {
   if (program <= 0 || !weight_handles || n_weights <= 0 || !weight_optimizers || !optimizer_groups ||
       n_weight_optimizers != n_weights || n_optimizer_groups <= 0) {
     return 0;
@@ -204,7 +206,8 @@ int64_t mlx_ir_create_trainer_v2(
     auto weights = read_weight_arrays(weight_handles, n_weights);
     auto specs = read_weight_specs(weight_optimizers, n_weight_optimizers);
     auto groups = read_optimizer_groups(optimizer_groups, n_optimizer_groups);
-    auto trainer = mlx_ir::create_ir_trainer(*prog, weights, specs, groups, max_grad_norm, default_base_lr);
+    auto trainer = mlx_ir::create_ir_trainer(
+        *prog, weights, specs, groups, max_grad_norm, default_base_lr, compute_dtype);
     return alloc_ir_trainer(std::move(trainer));
   } catch (const std::exception& e) {
     log_bridge_exception("mlx_ir_create_trainer_v2", e);

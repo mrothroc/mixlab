@@ -129,6 +129,32 @@ func emitDistillationLanguageModelLossIR(prog *Program, logits, targets, teacher
 	return nil
 }
 
+func emitData2VecPredictorIR(prog *Program, spec *Data2VecSpec, wi int) int {
+	if spec == nil || spec.LossWeight <= 0 {
+		return wi
+	}
+	if spec.PredictorHidden > 0 {
+		prog.MatMul("x_final_norm", weightName(wi), "data2vec_pred_hidden")
+		wi++
+		prog.GELU("data2vec_pred_hidden", "data2vec_pred_hidden_gelu")
+		prog.MatMul("data2vec_pred_hidden_gelu", weightName(wi), "data2vec_pred")
+		wi++
+		return wi
+	}
+	prog.MatMul("x_final_norm", weightName(wi), "data2vec_pred")
+	return wi + 1
+}
+
+func emitData2VecLossIR(prog *Program, spec *Data2VecSpec) {
+	if spec == nil || spec.LossWeight <= 0 {
+		return
+	}
+	prog.ScalarMul("loss", 1.0, "primary_loss")
+	prog.MaskedSmoothL1("data2vec_pred", "data2vec_targets", "data2vec_loss_mask", float32(spec.SmoothL1Beta), "data2vec_loss")
+	prog.ScalarMul("data2vec_loss", float32(spec.LossWeight), "data2vec_loss_weighted")
+	prog.Add("primary_loss", "data2vec_loss_weighted", "loss")
+}
+
 func collectMoEAuxiliaryOutputs(prog *Program) (auxLosses []string, entropies []string) {
 	for _, op := range prog.Ops {
 		for _, out := range op.Outputs {

@@ -237,6 +237,30 @@ type DistillationSpec struct {
 	EnsembleStrategy   string   `json:"ensemble_strategy,omitempty"`
 }
 
+// Data2VecSpec configures optional online EMA representation distillation.
+type Data2VecSpec struct {
+	LossWeight      float64 `json:"loss_weight,omitempty"`
+	EMATau          float64 `json:"ema_tau,omitempty"`
+	EMATauStart     float64 `json:"ema_tau_start,omitempty"`
+	EMATauEnd       float64 `json:"ema_tau_end,omitempty"`
+	EMATauRampSteps int     `json:"ema_tau_ramp_steps,omitempty"`
+	TopKLayers      int     `json:"top_k_layers,omitempty"`
+	SmoothL1Beta    float64 `json:"smooth_l1_beta,omitempty"`
+	TargetNorm      string  `json:"target_norm,omitempty"`
+	TargetNormEps   float64 `json:"target_norm_eps,omitempty"`
+	MaskSource      string  `json:"mask_source,omitempty"`
+	MaskProb        float64 `json:"mask_prob,omitempty"`
+	PredictorHidden int     `json:"predictor_hidden_dim,omitempty"`
+
+	lossWeightSet    bool
+	emaTauSet        bool
+	emaTauStartSet   bool
+	emaTauEndSet     bool
+	topKLayersSet    bool
+	smoothL1BetaSet  bool
+	targetNormEpsSet bool
+}
+
 // TrainingSpec holds training hyperparameters.
 type TrainingSpec struct {
 	Steps                             int               `json:"steps"`
@@ -251,6 +275,7 @@ type TrainingSpec struct {
 	HybridCLMFraction                 float64           `json:"hybrid_clm_fraction,omitempty"`
 	HybridSecondaryObjective          string            `json:"hybrid_secondary_objective,omitempty"`
 	Distillation                      *DistillationSpec `json:"distillation,omitempty"`
+	Data2Vec                          *Data2VecSpec     `json:"data2vec,omitempty"`
 	WarmdownSteps                     int               `json:"warmdown_steps,omitempty"`
 	TargetValLoss                     float64           `json:"target_val_loss,omitempty"`
 	FirstByteMask                     bool              `json:"first_byte_mask,omitempty"`
@@ -288,7 +313,8 @@ type TrainingSpec struct {
 	NewtonSchulzVariant string  `json:"newton_schulz_variant,omitempty"`
 	MuonNesterov        *bool   `json:"muon_nesterov,omitempty"`
 	Optimizer           string  `json:"optimizer,omitempty"` // "muon" (default), "muon_eq_r", "normuon", "adamw", or "lamb"
-	QAT                 string  `json:"qat,omitempty"`       // "none" (default), "int8", or "int6"
+	ComputeDType        string  `json:"compute_dtype,omitempty"`
+	QAT                 string  `json:"qat,omitempty"` // "none" (default), "int8", or "int6"
 	QATStart            int     `json:"qat_start,omitempty"`
 	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
 	WeightInitStd       float32 `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
@@ -406,6 +432,15 @@ func (t TrainingSpec) TotalSteps() int {
 	return total
 }
 
+// EffectiveComputeDType returns the training compute dtype, defaulting to fp32.
+func (t TrainingSpec) EffectiveComputeDType() string {
+	dtype := strings.ToLower(strings.TrimSpace(t.ComputeDType))
+	if dtype == "" {
+		return "float32"
+	}
+	return dtype
+}
+
 // DefaultTrainingSpec returns sensible training defaults.
 func DefaultTrainingSpec() TrainingSpec {
 	return TrainingSpec{
@@ -472,6 +507,9 @@ func (t *TrainingSpec) ApplyDefaults() {
 	} else {
 		t.HybridSecondaryObjective = normalizeTrainingObjective(t.HybridSecondaryObjective)
 	}
+	if t.Data2Vec != nil {
+		t.Data2Vec.applyDefaults()
+	}
 	if t.WeightDecay == 0 {
 		t.WeightDecay = d.WeightDecay
 	}
@@ -525,6 +563,7 @@ func (t *TrainingSpec) ApplyDefaults() {
 		t.MuonBackendSteps = d.MuonBackendSteps
 	}
 	t.Optimizer = strings.ToLower(strings.TrimSpace(t.Optimizer))
+	t.ComputeDType = strings.ToLower(strings.TrimSpace(t.ComputeDType))
 	if t.EmbedWeightDecay == 0 {
 		t.EmbedWeightDecay = t.WeightDecay
 	}
@@ -797,6 +836,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if err := validateTrainingDistillation(cfg, source); err != nil {
 		return nil, err
 	}
+	if err := validateTrainingData2Vec(cfg, source); err != nil {
+		return nil, err
+	}
 	for i, b := range cfg.Blocks {
 		if err := validatePlainAttentionMask(cfg, source, b, "blocks", i); err != nil {
 			return nil, err
@@ -815,6 +857,11 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	case "", "adamw", "muon", "muon_eq_r", "normuon", "lamb":
 	default:
 		return nil, fmt.Errorf("config %q has invalid training.optimizer=%q (must be \"adamw\", \"muon\", \"muon_eq_r\", \"normuon\", or \"lamb\")", source, cfg.Training.Optimizer)
+	}
+	switch cfg.Training.EffectiveComputeDType() {
+	case "float32", "bf16":
+	default:
+		return nil, fmt.Errorf("config %q has invalid training.compute_dtype=%q (must be \"float32\" or \"bf16\")", source, cfg.Training.ComputeDType)
 	}
 	if cfg.Training.LAMBBeta1 < 0 || cfg.Training.LAMBBeta1 >= 1 {
 		return nil, fmt.Errorf("config %q has invalid training.lamb_beta1=%g (must be in [0,1))", source, cfg.Training.LAMBBeta1)

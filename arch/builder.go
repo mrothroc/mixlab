@@ -638,6 +638,8 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		disabledSmearEmbeddingOptions(),
 		nil,
 		nil,
+		nil,
+		nil,
 	)
 }
 
@@ -665,6 +667,8 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	smearOpts smearEmbeddingOptions,
 	backoutSpec *BackoutSpec,
 	distillation *DistillationSpec,
+	data2vec *Data2VecSpec,
+	hiddenCapture *data2VecHiddenCapture,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -752,6 +756,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	nWeights += len(smearWeights)
 	nWeights += len(backoutWeightShapes(backoutSpec))
+	nWeights += data2VecWeightCount(data2vec)
 
 	prog := NewProgram(nWeights)
 	maskedObjective := isMaskedTrainingObjective(objective)
@@ -763,6 +768,11 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	if distillationEnabled {
 		prog.DeclareInput("teacher_probs", TensorFloat32, []int{B * T, V})
+	}
+	data2VecEnabled := data2vec != nil && data2vec.LossWeight > 0
+	if data2VecEnabled {
+		prog.DeclareInput("data2vec_targets", TensorFloat32, []int{B * T, D})
+		prog.DeclareInput("data2vec_loss_mask", TensorFloat32, []int{B * T})
 	}
 	if firstByteMask {
 		prog.DeclareInput("first_byte_valid", TensorInt32, []int{V})
@@ -860,6 +870,18 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			return nil, err
 		}
 	default:
+		if hiddenCapture != nil {
+			for i := 0; i < len(blocks); i++ {
+				wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
+				if err != nil {
+					return nil, err
+				}
+				backoutPlan.captureAfterBlock(prog, i, "x")
+				hiddenCapture.captureAfterBlock(prog, i, "x")
+				opIdx++
+			}
+			break
+		}
 		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, &backoutPlan)
 		if err != nil {
 			return nil, err
@@ -876,6 +898,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	// Final normalization
 	prog.RMSNorm("x", weightName(finalNormWeightIndexWithHead(reserveHead)), "x_final_norm", 1e-5)
 	prog.Reshape("x_final_norm", []int{B, T, D}, "x_hidden")
+	if data2VecEnabled {
+		wi = emitData2VecPredictorIR(prog, data2vec, wi)
+	}
 
 	// Output head projection
 	if useTiedHead {
@@ -908,6 +933,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			return nil, err
 		}
 	}
+	if data2VecEnabled {
+		emitData2VecLossIR(prog, data2vec)
+	}
 	taskLossHasEvalLoss := maskedObjective || distillationEnabled || firstByteMask || (mtp != nil && mtp.EffectiveN() > 1)
 	moeEnabled := emitMoEAuxiliaryAggregatesIR(prog, taskLossHasEvalLoss)
 	prog.DeclareOutput("loss", TensorFloat32, []int{1})
@@ -921,6 +949,10 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	prog.DeclareOutput("per_token_nll", TensorFloat32, []int{B * T})
 	prog.DeclareOutput("x_hidden", TensorFloat32, []int{B, T, D})
 	prog.DeclareOutput("logits", TensorFloat32, []int{B * T, V})
+	if data2VecEnabled {
+		prog.DeclareOutput("data2vec_loss", TensorFloat32, []int{1})
+	}
+	hiddenCapture.declareOutputs(prog, B*T, D)
 
 	// Verify weight count consistency
 	if wi != nWeights {

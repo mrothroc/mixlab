@@ -10,6 +10,7 @@ checkpoints/
 .idea/
 .projectdb/
 .weft/
+.weft.backup-*/
 .claude/
 .venv/
 

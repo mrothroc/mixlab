@@ -58,6 +58,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [mlm_tiny.json](mlm_tiny.json) | Bidirectional transformer | Masked language modeling objective |
 | [hybrid_tiny.json](hybrid_tiny.json) | Hybrid transformer | Per-batch causal plus masked-objective training |
 | [distillation_tiny.json](distillation_tiny.json) | Teacher distillation | Causal LM with internal teacher ensemble loss |
+| [data2vec_hybrid_tiny.json](data2vec_hybrid_tiny.json) | EMA representation distillation | Hybrid masked training with data2vec auxiliary loss |
 | [swa_ema_tiny.json](swa_ema_tiny.json) | SWA/EMA averaging | Final and averaged checkpoint artifacts |
 | [deberta_relative_tiny.json](deberta_relative_tiny.json) | Relative attention transformer | DeBERTa P2C/C2P relative position bias |
 | [lamb_plain_tiny.json](lamb_plain_tiny.json) | LAMB optimizer | Whole-model LAMB optimizer on a tiny transformer |
@@ -78,6 +79,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **Masked objectives**: Use `mlm_tiny.json` as the smallest bidirectional MLM starting point.
 - **Hybrid objectives**: Use `hybrid_tiny.json` for GPT-BERT-style causal plus masked-objective training.
 - **Internal distillation**: Use `distillation_tiny.json` after training teacher checkpoints with matching `vocab_size` and `seq_len`.
+- **EMA representation distillation**: Use `data2vec_hybrid_tiny.json` for experimental online data2vec-style hidden-state targets on masked objective steps. The current implementation prioritizes correctness and uses CPU EMA weight refreshes.
 - **Averaged checkpoints**: Use `swa_ema_tiny.json` to keep both live final and SWA/EMA averaged weights.
 - **Relative attention**: Use `deberta_relative_tiny.json` for DeBERTa-style P2C/C2P position bias.
 - **Character/byte features**: Use `char_features_plain.json` with data prepared using `-char-vocab-size 257`.
