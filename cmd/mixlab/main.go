@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, export-hf (training configs may set training.target_val_loss for early stopping)")
+	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
@@ -42,6 +42,11 @@ func main() {
 	logitsOut := flag.String("logits-out", "", "write per-token full-vocab logits to a binary file (eval mode); can be combined with -logprobs-out, -ranks-out, -uncertainty-out for a single eval pass")
 	logitsDType := flag.String("logits-dtype", "float16", "on-disk dtype for -logits-out: float16 (default) or float32")
 	logitsForm := flag.String("logits-form", "raw", "encoding for -logits-out rows: raw (default) or logprobs (log_softmax)")
+	hfDir := flag.String("hf", "", "Hugging Face export directory to compare against native inference (parity mode)")
+	parityThreshold := flag.Float64("threshold", 0.05, "maximum allowed native-vs-HF mean NLL difference (parity mode)")
+	maxLogitDiff := flag.Float64("max-logit-diff", 1e-3, "maximum allowed native-vs-HF absolute logit difference on the sampled rows; <=0 disables (parity mode)")
+	parityLogitTokens := flag.Int("parity-logit-tokens", 0, "number of token pairs to sample for logit comparison; rounded up to full eval batches, 0 uses one batch (parity mode)")
+	parityPython := flag.String("parity-python", "", "Python interpreter for the HF parity checker; defaults to HF_PARITY_PYTHON or python3 (parity mode)")
 
 	// profiling flags
 	cpuProfile := flag.String("cpuprofile", "", "write CPU profile to file")
@@ -204,8 +209,19 @@ func main() {
 		must(train.RunHiddenstats(*configPath, *trainPattern, *safetensorsLoad, *prepOutput))
 	case "generate":
 		must(train.RunGenerate(*configPath, *safetensorsLoad, *maxTokens, float32(*temperature), *topK, *prompt))
+	case "parity":
+		must(train.RunParity(train.ParityOptions{
+			ConfigPath:      *configPath,
+			SafetensorsLoad: *safetensorsLoad,
+			HFDir:           *hfDir,
+			TokenPattern:    *trainPattern,
+			Python:          *parityPython,
+			LossThreshold:   *parityThreshold,
+			MaxLogitDiff:    *maxLogitDiff,
+			LogitTokens:     *parityLogitTokens,
+		}))
 	default:
-		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, export-hf)", *mode))
+		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, export-hf, parity)", *mode))
 	}
 }
 
