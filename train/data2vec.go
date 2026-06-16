@@ -196,26 +196,55 @@ func (t *data2VecTeacher) targets(xTok, yTok []int, mask []float32, batchSize, s
 		return nil, nil, err
 	}
 	targets := t.targetBuffer(need)
+	if err := fillData2VecTargetsFromOutputs(
+		targets,
+		t.outputNames,
+		outs,
+		need,
+		t.modelDim,
+		t.cfg.Training.Data2Vec.TargetNorm,
+		float32(t.cfg.Training.Data2Vec.TargetNormEps),
+	); err != nil {
+		return nil, nil, err
+	}
+	outMask := t.maskBuffer(need)
+	copy(outMask, mask[:need])
+	return targets, outMask, nil
+}
+
+func fillData2VecTargetsFromOutputs(targets []float32, outputNames []string, outs map[string][]float32, tokens, modelDim int, targetNorm string, eps float32) error {
+	need := tokens * modelDim
+	if tokens < 0 || modelDim <= 0 {
+		return fmt.Errorf("invalid data2vec target shape: tokens=%d model_dim=%d", tokens, modelDim)
+	}
+	if len(targets) < need {
+		return fmt.Errorf("data2vec target buffer size=%d want at least %d", len(targets), need)
+	}
+	if len(outputNames) == 0 {
+		return fmt.Errorf("data2vec teacher program declared no hidden outputs")
+	}
+	targets = targets[:need]
 	clear(targets)
-	for _, name := range t.outputNames {
-		out := outs[name]
-		if len(out) != need*t.modelDim {
-			return nil, nil, fmt.Errorf("data2vec output %q size=%d want %d", name, len(out), need*t.modelDim)
+	for _, name := range outputNames {
+		out, ok := outs[name]
+		if !ok {
+			return fmt.Errorf("data2vec output %q missing", name)
+		}
+		if len(out) != need {
+			return fmt.Errorf("data2vec output %q size=%d want %d", name, len(out), need)
 		}
 		for i, v := range out {
 			targets[i] += v
 		}
 	}
-	scale := float32(1.0 / float64(len(t.outputNames)))
+	scale := float32(1.0 / float64(len(outputNames)))
 	for i := range targets {
 		targets[i] *= scale
 	}
-	if t.cfg.Training.Data2Vec.TargetNorm != arch.Data2VecTargetNormNone {
-		normalizeRowsInPlace(targets, need, t.modelDim, float32(t.cfg.Training.Data2Vec.TargetNormEps))
+	if targetNorm != arch.Data2VecTargetNormNone {
+		normalizeRowsInPlace(targets, tokens, modelDim, eps)
 	}
-	outMask := t.maskBuffer(need)
-	copy(outMask, mask[:need])
-	return targets, outMask, nil
+	return nil
 }
 
 func (t *data2VecTeacher) zeroTargets(tokens int) []float32 {
@@ -252,8 +281,7 @@ func (t *data2VecTeacher) updateFromStudentWeights(weights [][]float32, step int
 	if len(weights) < len(t.emaWeights) {
 		return fmt.Errorf("student weight count=%d smaller than data2vec EMA count=%d", len(weights), len(t.emaWeights))
 	}
-	tau := float32(data2VecTauForStep(t.cfg.Training.Data2Vec, step))
-	updateEMAWeights(t.emaWeights, weights[:len(t.emaWeights)], tau)
+	updateData2VecEMAWeights(t.emaWeights, weights[:len(t.emaWeights)], t.cfg.Training.Data2Vec, step)
 	gpu.FreeHandles(t.handles)
 	handles, err := uploadWeightHandles(t.shapes, t.emaWeights)
 	if err != nil {
@@ -262,6 +290,11 @@ func (t *data2VecTeacher) updateFromStudentWeights(weights [][]float32, step int
 	}
 	t.handles = handles
 	return nil
+}
+
+func updateData2VecEMAWeights(ema, current [][]float32, spec *arch.Data2VecSpec, step int) {
+	tau := float32(data2VecTauForStep(spec, step))
+	updateEMAWeights(ema, current, tau)
 }
 
 func data2VecTauForStep(spec *arch.Data2VecSpec, step int) float64 {
