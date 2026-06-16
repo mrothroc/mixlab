@@ -26,6 +26,12 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 			if block.QKNorm {
 				entry["qk_norm"] = true
 			}
+			if block.XSA {
+				entry["xsa"] = true
+			}
+			if block.SparseAttnGate {
+				entry["sparse_attn_gate"] = true
+			}
 			if block.WindowSize > 0 {
 				entry["window_size"] = block.WindowSize
 			}
@@ -108,7 +114,7 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 			"source":            "mixlab",
 			"weight_map":        "weight_map.json",
 			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":  []string{"plain", "plain.qk_norm", "plain.relative_attention=deberta_p2c_c2p", "swiglu", "geglu", "mlp", "moe"},
+			"supported_blocks":  []string{"plain", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "swiglu", "geglu", "mlp", "moe"},
 			"unsupported_fails": true,
 		},
 	}

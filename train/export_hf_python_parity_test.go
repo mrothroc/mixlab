@@ -96,6 +96,18 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// XSA projection and sparse per-head attention output gate.
+			name: "xsa_sparse_gate",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 2, "rope_dims": 4, "xsa": true, "sparse_attn_gate": true, "qk_gain": 1.25},
+					{"type": "swiglu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 92}
+			}`,
+		},
+		{
 			// Sparse MoE: top-k routed experts (geglu) + mlp experts.
 			name: "moe_topk",
 			config: `{

@@ -19,8 +19,10 @@ type hfExportCapability struct {
 
 func hfExportCapabilities() []hfExportCapability {
 	return []hfExportCapability{
-		{Feature: "plain", Status: hfExportSupported, Reason: "Core attention export with RoPE, GQA, qk_norm, qk_gain, masks, and causal windowing."},
+		{Feature: "plain", Status: hfExportSupported, Reason: "Core attention export with RoPE, GQA, qk_norm, qk_gain, XSA, sparse attention gates, masks, and causal windowing."},
 		{Feature: "plain.qk_norm", Status: hfExportSupported, Reason: "Learned Q/K RMSNorm scales are mirrored in the generated PyTorch template."},
+		{Feature: "plain.xsa", Status: hfExportSupported, Reason: "XSA output projection is mirrored in the generated PyTorch template."},
+		{Feature: "plain.sparse_attn_gate", Status: hfExportSupported, Reason: "Sparse per-head attention gates are mirrored in the generated PyTorch template."},
 		{Feature: "plain.relative_attention=deberta_p2c_c2p", Status: hfExportSupported, Reason: "DeBERTa C2P/P2C relative bias is mirrored in the generated PyTorch template."},
 		{Feature: "swiglu", Status: hfExportSupported, Reason: "Bias-free SwiGLU FFN export is covered by native-vs-HF parity tests."},
 		{Feature: "geglu", Status: hfExportSupported, Reason: "Bias-free GEGLU FFN export is covered by native-vs-HF parity tests."},

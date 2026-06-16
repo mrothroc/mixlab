@@ -121,3 +121,51 @@ func TestHFConfigWritesHalfRotationRoPEConvention(t *testing.T) {
 		t.Fatalf("default adjacent rope_convention should be omitted, got %v", doc.Blocks[0]["rope_convention"])
 	}
 }
+
+func TestExportHFWritesXSASparseGateConfigAndWeightMap(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+		"name": "hf_xsa_sparse_gate_config",
+		"model_dim": 8,
+		"vocab_size": 11,
+		"seq_len": 4,
+		"mlp_mult": 1.0,
+		"blocks": [
+			{"type": "plain", "heads": 2, "xsa": true, "sparse_attn_gate": true}
+		],
+		"training": {"steps": 1, "batch_tokens": 4, "seed": 215}
+	}`)
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+
+	var cfg hfConfigJSON
+	readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+	if got := cfg.Blocks[0]["xsa"]; got != true {
+		t.Fatalf("xsa=%v, want true", got)
+	}
+	if got := cfg.Blocks[0]["sparse_attn_gate"]; got != true {
+		t.Fatalf("sparse_attn_gate=%v, want true", got)
+	}
+
+	var mapping []hfWeightMapping
+	readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+	found := false
+	for _, entry := range mapping {
+		if entry.HF == "blocks.0.attn_gate_w" {
+			found = true
+			if len(entry.Shape) != 2 || entry.Shape[0] != 2 || entry.Shape[1] != 8 {
+				t.Fatalf("attn_gate_w shape=%v, want [2 8]", entry.Shape)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("weight_map missing blocks.0.attn_gate_w")
+	}
+}

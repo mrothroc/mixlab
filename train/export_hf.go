@@ -217,14 +217,8 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 			if block.KVSource > 0 {
 				return unsupportedHFExport(field+".kv_source", "KV sharing export is planned for a later release")
 			}
-			if block.XSA {
-				return unsupportedHFExport(field+".xsa", "XSA export is planned for a later release")
-			}
 			if block.SkipAttention {
 				return unsupportedHFExport(field+".skip_attention", "skip_attention is not a deployable HF forward path")
-			}
-			if block.SparseAttnGate {
-				return unsupportedHFExport(field+".sparse_attn_gate", "sparse attention gate export is planned for a later release")
 			}
 			relAttention := strings.ToLower(strings.TrimSpace(block.RelativeAttention))
 			switch relAttention {
@@ -498,6 +492,7 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 				{mixlab: "w_pos_key", hf: "w_pos_key.weight"},
 				{mixlab: "w_pos_query", hf: "w_pos_query.weight"},
 				{mixlab: "qk_gain", hf: "qk_gain"},
+				{mixlab: "attn_gate_w", hf: "attn_gate_w"},
 				{mixlab: "wo", hf: "wo.weight"},
 				{mixlab: "ff1", hf: "ff1.weight"},
 				{mixlab: "ff2", hf: "ff2.weight"},
@@ -513,6 +508,9 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 					continue
 				}
 				if name.mixlab == "qk_gain" && shapes[wi].Name != "qk_gain" {
+					continue
+				}
+				if name.mixlab == "attn_gate_w" && !block.SparseAttnGate {
 					continue
 				}
 				if err := addExpected(wi, name.mixlab, prefix+"."+name.hf); err != nil {

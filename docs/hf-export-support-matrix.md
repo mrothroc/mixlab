@@ -4,8 +4,10 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `plain` attention | Supported | Adjacent-pair RoPE by default, optional `rope_convention: "half_rotation"`, partial `rope_dims`, GQA through `kv_heads`, `qk_norm`, `qk_gain`, `causal`/`bidirectional`/`none` masks, and causal `window_size`. |
+| `plain` attention | Supported | Adjacent-pair RoPE by default, optional `rope_convention: "half_rotation"`, partial `rope_dims`, GQA through `kv_heads`, `qk_norm`, `qk_gain`, XSA projection, sparse attention gates, `causal`/`bidirectional`/`none` masks, and causal `window_size`. |
 | `plain.qk_norm` | Supported | Learned per-head-dimension Q/K RMSNorm scales before RoPE or DeBERTa relative score construction. |
+| `plain.xsa` | Supported | Attention outputs are projected away from the corresponding value vector before the output projection. |
+| `plain.sparse_attn_gate` | Supported | Per-head attention outputs are gated from the first token-state channels before head merge and output projection. |
 | `plain.relative_attention=deberta_p2c_c2p` | Supported | DeBERTa C2P/P2C relative bias, projected position key/query tensors, clipping window, masks, and optional `qk_norm`/`qk_gain`. |
 | `swiglu` | Supported | Bias-free SwiGLU FFN parity. |
 | `geglu` | Supported | Bias-free GEGLU FFN parity. |
@@ -24,7 +26,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `mamba`, `gated_linear_ssm`, `mamba3`, `mamba3-canonical` | Gated | Selective-scan and canonical Mamba-3 paths rely on native scan and backend-specific execution details. |
 | `retnet` and `rwkv` | Gated | Recurrent/retention semantics need dedicated exported-state parity fixtures before support is enabled. |
 | `custom` blocks | Unsupported | Arbitrary JSON custom op graphs cannot be safely converted into one static generated template. |
-| `kv_source`, XSA, sparse attention gates | Gated | These attention sub-features need dedicated HF parity coverage before export. |
+| `kv_source` | Gated | KV sharing export needs dedicated HF parity coverage before support is enabled. |
 | `parallel_residual`, `block_scales`, `resid_mix`, `unet`, `backout`, recurrence weight sharing | Gated | These structural features alter weight layout or multi-stream graph semantics beyond the current exporter. |
 | MTP, first-byte masked loss, distillation, eval-time TTT | Training/eval-only | Rejected because they do not change the exported causal forward logits in a representable HF way or require separate runtime policy. |
 

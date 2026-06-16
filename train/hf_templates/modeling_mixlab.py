@@ -115,6 +115,9 @@ class MixlabPlainBlock(nn.Module):
             self.effective_rope_dims = self.head_dim
         self.attention_mask = str(block_config.get("attention_mask", "") or "causal").lower()
         self.window_size = int(block_config.get("window_size", 0) or 0)
+        self.xsa = bool(block_config.get("xsa", False))
+        self.sparse_attn_gate = bool(block_config.get("sparse_attn_gate", False))
+        self.attn_gate_dim = min(dim, 12)
         self.relative_attention = str(block_config.get("relative_attention", "") or "none").lower()
         self.relative_attention_window = int(block_config.get("relative_attention_window", 0) or 128)
         self.norm = MixlabRMSNorm(dim)
@@ -141,6 +144,10 @@ class MixlabPlainBlock(nn.Module):
         if float(block_config.get("qk_gain", 0.0) or 0.0) > 0.0:
             self.qk_gain = nn.Parameter(torch.empty(heads))
             nn.init.constant_(self.qk_gain, float(block_config["qk_gain"]))
+        self.attn_gate_w = None
+        if self.sparse_attn_gate:
+            self.attn_gate_w = nn.Parameter(torch.empty(heads, self.attn_gate_dim))
+            nn.init.zeros_(self.attn_gate_w)
         self.wo = MixlabLinear(dim, dim)
         ffn_dim = max(dim, int(round(dim * float(config.mlp_mult))))
         self.ff1 = MixlabLinear(dim, ffn_dim)
@@ -239,7 +246,16 @@ class MixlabPlainBlock(nn.Module):
         else:
             raise ValueError(f"unsupported exported attention_mask {self.attention_mask!r}")
         attn = torch.softmax(scores, dim=-1)
-        ctx = torch.matmul(attn, v).transpose(1, 2).contiguous().view(bsz, seq_len, dim)
+        ctx = torch.matmul(attn, v)
+        if self.xsa:
+            dot_yv = torch.sum(ctx * v, dim=-1, keepdim=True)
+            dot_vv = torch.sum(v * v, dim=-1, keepdim=True)
+            ctx = ctx - (dot_yv / (dot_vv + 1e-8)) * v
+        if self.sparse_attn_gate:
+            gate_in = residual[..., :self.attn_gate_dim]
+            gate = torch.sigmoid(torch.matmul(gate_in, self.attn_gate_w.transpose(0, 1)))
+            ctx = ctx * gate.transpose(1, 2).unsqueeze(-1)
+        ctx = ctx.transpose(1, 2).contiguous().view(bsz, seq_len, dim)
         x = residual + self.wo(ctx)
 
         ff = self.ff2(torch.nn.functional.silu(self.ff1(x)))

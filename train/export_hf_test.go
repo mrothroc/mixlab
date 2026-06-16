@@ -153,15 +153,6 @@ func TestExportHFUnsupportedValidation(t *testing.T) {
 			wantErr: "training.objective",
 		},
 		{
-			name: "xsa remains unsupported",
-			config: `{
-				"model_dim": 4, "vocab_size": 7, "seq_len": 3,
-				"blocks": [{"type": "plain", "heads": 2, "xsa": true}],
-				"training": {"steps": 1, "batch_tokens": 3}
-			}`,
-			wantErr: "blocks[0].xsa",
-		},
-		{
 			name: "hgrn2 remains gated advanced",
 			config: `{
 				"model_dim": 4, "vocab_size": 7, "seq_len": 3,
@@ -310,6 +301,20 @@ func TestExportHFDebertaRelativeAttentionParityCPUOracle(t *testing.T) {
 			{"type": "plain", "heads": 4, "attention_mask": "bidirectional", "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 2, "qk_gain": 1.25}
 		],
 		"training": {"steps": 1, "batch_tokens": 4, "seed": 212}
+	}`, [][]int{{0, 1, 2, 3}}, [][]int{{1, 2, 3, 4}}, nil)
+}
+
+func TestExportHFXSASparseGateParityCPUOracle(t *testing.T) {
+	runExportHFParityCase(t, `{
+		"name": "hf_xsa_sparse_gate",
+		"model_dim": 8,
+		"vocab_size": 11,
+		"seq_len": 4,
+		"mlp_mult": 1.0,
+		"blocks": [
+			{"type": "plain", "heads": 2, "rope_dims": 4, "xsa": true, "sparse_attn_gate": true, "qk_gain": 1.2}
+		],
+		"training": {"steps": 1, "batch_tokens": 4, "seed": 214}
 	}`, [][]int{{0, 1, 2, 3}}, [][]int{{1, 2, 3, 4}}, nil)
 }
 
