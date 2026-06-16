@@ -102,7 +102,7 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 		if relativeAttentionEnabled(spec) {
 			relWindow := effectiveRelativeAttentionWindow(spec)
 			metas = append(metas,
-				WeightMeta{Name: "relative_embeddings", Shape: []int{2 * relWindow, D}},
+				WeightMeta{Name: "relative_embeddings", Shape: []int{2*relWindow - 1, D}},
 				WeightMeta{Name: "w_pos_key", Shape: []int{D, D}},
 				WeightMeta{Name: "w_pos_query", Shape: []int{D, D}},
 			)

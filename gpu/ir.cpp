@@ -290,7 +290,7 @@ mx::array deberta_relative_bias(
   if (window <= 0) {
     throw std::runtime_error("OP_DEBERTA_RELATIVE_BIAS requires relative window > 0");
   }
-  const int R = 2 * window;
+  const int R = 2 * window - 1;
   if (q.ndim() != 4 || k.ndim() != 4 || q.shape(0) != B || k.shape(0) != B ||
       q.shape(1) != H || k.shape(1) != H || q.shape(2) != T || k.shape(2) != T ||
       q.shape(3) != D || k.shape(3) != D) {
@@ -300,30 +300,59 @@ mx::array deberta_relative_bias(
       pos_key.shape(0) != H || pos_query.shape(0) != H ||
       pos_key.shape(1) != R || pos_query.shape(1) != R ||
       pos_key.shape(2) != D || pos_query.shape(2) != D) {
-    throw std::runtime_error("OP_DEBERTA_RELATIVE_BIAS expects position tensors shape [H,2*window,D]");
+    throw std::runtime_error("OP_DEBERTA_RELATIVE_BIAS expects position tensors shape [H,2*window-1,D]");
   }
 
-  auto pos = mx::astype(mx::arange(T), mx::int32);
-  auto query_pos = mx::expand_dims(pos, 1);
-  auto key_pos = mx::expand_dims(pos, 0);
-  auto rel = query_pos - key_pos;
-  auto lo = mx::array(0, mx::int32);
-  auto hi = mx::array(R - 1, mx::int32);
-  auto offset = mx::array(window, mx::int32);
-  auto c2p_idx2 = mx::minimum(mx::maximum(rel + offset, lo), hi);
-  auto p2c_idx2 = mx::minimum(mx::maximum((mx::array(0, mx::int32) - rel) + offset, lo), hi);
-  auto c2p_idx = mx::broadcast_to(mx::reshape(c2p_idx2, {1, 1, T, T}), {B, H, T, T});
-  auto p2c_idx = mx::broadcast_to(mx::reshape(p2c_idx2, {1, 1, T, T}), {B, H, T, T});
+  auto bucket_index_for = [](int rel, int bucket_size, int max_position) -> int {
+    if (bucket_size <= 1) {
+      return 0;
+    }
+    const int mid = bucket_size / 2;
+    const int sign = (rel > 0) - (rel < 0);
+    int abs_pos = 0;
+    if (rel < mid && rel > -mid) {
+      abs_pos = mid - 1;
+    } else {
+      abs_pos = std::min(std::abs(rel), std::max(max_position - 1, 0));
+    }
+
+    int bucket_pos = rel;
+    if (abs_pos > mid) {
+      int log_pos = bucket_size - 1;
+      if (mid > 0 && max_position - 1 > mid) {
+        const double denom = std::log(static_cast<double>(max_position - 1) / static_cast<double>(mid));
+        if (std::isfinite(denom) && denom > 0.0) {
+          const double scaled = std::log(static_cast<double>(abs_pos) / static_cast<double>(mid)) /
+              denom * static_cast<double>(mid - 1);
+          log_pos = static_cast<int>(std::ceil(scaled)) + mid;
+        }
+      }
+      bucket_pos = log_pos * sign;
+    }
+    const int max_bucket = bucket_size - 1;
+    bucket_pos = std::max(-max_bucket, std::min(max_bucket, bucket_pos));
+    return bucket_pos + max_bucket;
+  };
+
+  std::vector<int32_t> rel_idx_host(static_cast<size_t>(T) * static_cast<size_t>(T));
+  for (int i = 0; i < T; ++i) {
+    for (int j = 0; j < T; ++j) {
+      rel_idx_host[static_cast<size_t>(i) * static_cast<size_t>(T) + static_cast<size_t>(j)] =
+          bucket_index_for(i - j, window, T);
+    }
+  }
+  auto rel_idx2 = mx::array(rel_idx_host.data(), {T, T}, mx::int32);
+  auto rel_idx = mx::broadcast_to(mx::reshape(rel_idx2, {1, 1, T, T}), {B, H, T, T});
 
   auto pos_key_t = mx::expand_dims(mx::transpose(pos_key, {0, 2, 1}), 0);     // [1,H,D,R]
   auto pos_query_t = mx::expand_dims(mx::transpose(pos_query, {0, 2, 1}), 0); // [1,H,D,R]
 
   auto c2p_all = mx::matmul(q, pos_key_t); // [B,H,T,R]
-  auto c2p = mx::take_along_axis(c2p_all, c2p_idx, 3);
+  auto c2p = mx::take_along_axis(c2p_all, rel_idx, 3);
 
   auto p2c_all = mx::matmul(k, pos_query_t);                  // [B,H,T,R]
   auto p2c_by_rel = mx::transpose(p2c_all, {0, 1, 3, 2});      // [B,H,R,T]
-  auto p2c = mx::take_along_axis(p2c_by_rel, p2c_idx, 2);      // [B,H,T,T]
+  auto p2c = mx::take_along_axis(p2c_by_rel, rel_idx, 2);      // [B,H,T,T]
 
   return as_float32(c2p + p2c);
 }

@@ -313,9 +313,8 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 					}
 					scores[j] = dot(qh[b][h][i], kh[b][h][j])
 					if relativeAttentionEnabledForHF(block) {
-						c2p := clipRelativeIndex(i-j+relWindow, relWindow)
-						p2c := clipRelativeIndex(j-i+relWindow, relWindow)
-						scores[j] += dot(qh[b][h][i], relKey[h][c2p]) + dot(kh[b][h][j], relQuery[h][p2c])
+						relIdx := gptBertRelativeBucketIndex(i-j, relWindow, seqLen)
+						scores[j] += dot(qh[b][h][i], relKey[h][relIdx]) + dot(kh[b][h][j], relQuery[h][relIdx])
 					}
 					scores[j] /= scale
 					if qkGain != nil {
@@ -379,7 +378,7 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 
 func relativeAttentionProjectionCPU(t *testing.T, block BlockSpec, embeddings, wPosKey, wPosQuery []float64, dim, heads, headDim, window int) ([][][]float64, [][][]float64) {
 	t.Helper()
-	rows := 2 * window
+	rows := 2*window - 1
 	keyFlat := matmul2DCPU(embeddings, wPosKey, rows, dim, dim)
 	queryFlat := matmul2DCPU(embeddings, wPosQuery, rows, dim, dim)
 	key := make3D(heads, rows, headDim)
@@ -394,13 +393,49 @@ func relativeAttentionProjectionCPU(t *testing.T, block BlockSpec, embeddings, w
 	return key, query
 }
 
-func clipRelativeIndex(v, window int) int {
-	maxV := 2*window - 1
-	if v < 0 {
+func gptBertRelativeBucketIndex(rel, bucketSize, maxPosition int) int {
+	if bucketSize <= 1 {
 		return 0
 	}
-	if v > maxV {
-		return maxV
+	mid := bucketSize / 2
+	absPos := 0
+	if rel < mid && rel > -mid {
+		absPos = mid - 1
+	} else {
+		absPos = absInt(rel)
+		if max := maxPosition - 1; absPos > max {
+			absPos = max
+		}
+	}
+	bucketPos := rel
+	if absPos > mid {
+		logPos := bucketSize - 1
+		if mid > 0 && maxPosition-1 > mid {
+			denom := math.Log(float64(maxPosition-1) / float64(mid))
+			if denom > 0 && !math.IsInf(denom, 0) && !math.IsNaN(denom) {
+				scaled := math.Log(float64(absPos)/float64(mid)) / denom * float64(mid-1)
+				logPos = int(math.Ceil(scaled)) + mid
+			}
+		}
+		if rel < 0 {
+			bucketPos = -logPos
+		} else {
+			bucketPos = logPos
+		}
+	}
+	maxBucket := bucketSize - 1
+	if bucketPos < -maxBucket {
+		bucketPos = -maxBucket
+	}
+	if bucketPos > maxBucket {
+		bucketPos = maxBucket
+	}
+	return bucketPos + maxBucket
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
 	}
 	return v
 }

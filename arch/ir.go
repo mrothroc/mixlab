@@ -411,7 +411,8 @@ func (p *Program) MLSTMScan(q, k, v, inputGate, forgetGate, out string, B, T, H,
 
 // DebertaRelativeBias emits DeBERTa-style C2P+P2C disentangled relative
 // attention bias. Inputs are q/k [B,H,T,D] and projected position tensors
-// [H,2*window,D]. Output is [B,H,T,T].
+// [H,2*window-1,D]. Relative positions use the GPT-BERT/DeBERTa log-bucketed
+// q-k index matrix for both C2P and P2C terms. Output is [B,H,T,T].
 func (p *Program) DebertaRelativeBias(q, k, posKey, posQuery, out string, B, T, H, D, window int) {
 	p.AddOp(OpDebertaRelativeBias, []string{q, k, posKey, posQuery}, []string{out}, nil, []int{B, T, H, D, window})
 }

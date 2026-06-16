@@ -84,7 +84,7 @@ func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, w
 		if D != H*headDim {
 			return "", "", wi, fmt.Errorf("invalid relative attention dimensions D=%d H=%d head_dim=%d", D, H, headDim)
 		}
-		relRows := 2 * relativeWindow
+		relRows := 2*relativeWindow - 1
 		relKeyFlat := prefix + "_rel_key_flat"
 		relQueryFlat := prefix + "_rel_query_flat"
 		relKey3 := prefix + "_rel_key3"

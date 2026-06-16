@@ -69,7 +69,7 @@ HF export supports causal next-token checkpoints using sequential blocks:
 - `sparse_attn_gate` per-head attention output gates
 - `attention_mask` values `causal`, `bidirectional`, and `none`
 - causal `window_size` sliding attention
-- DeBERTa-style `relative_attention: "deberta_p2c_c2p"` on `plain` blocks
+- DeBERTa/GPT-BERT-style `relative_attention: "deberta_p2c_c2p"` on `plain` blocks, including log-bucketed `q-k` relative positions
 - `swiglu`, `geglu`, and `mlp` FFN blocks, including MLP activation variants `silu`, `gelu`, `relu`, and `leaky_relu_sq`
 - sequential `moe` blocks with a linear router, top-k token routing, and `swiglu`, `geglu`, or `mlp` experts
 - embedding-time `char`, `bigram`, and `trigram` feature channels

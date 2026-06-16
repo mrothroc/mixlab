@@ -8,7 +8,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `plain.qk_norm` | Supported | Learned per-head-dimension Q/K RMSNorm scales before RoPE or DeBERTa relative score construction. |
 | `plain.xsa` | Supported | Attention outputs are projected away from the corresponding value vector before the output projection. |
 | `plain.sparse_attn_gate` | Supported | Per-head attention outputs are gated from the first token-state channels before head merge and output projection. |
-| `plain.relative_attention=deberta_p2c_c2p` | Supported | DeBERTa C2P/P2C relative bias, projected position key/query tensors, clipping window, masks, and optional `qk_norm`/`qk_gain`. |
+| `plain.relative_attention=deberta_p2c_c2p` | Supported | DeBERTa/GPT-BERT C2P/P2C relative-bias operator semantics with Mixlab's per-block projected position tensors, `2 * bucket - 1` table rows, log-bucketed `q-k` relative positions, masks, and optional `qk_norm`/`qk_gain`. |
 | `swiglu` | Supported | Bias-free SwiGLU FFN parity. |
 | `geglu` | Supported | Bias-free GEGLU FFN parity. |
 | `mlp` | Supported | `silu`, `gelu`, `relu`, and `leaky_relu_sq` activation variants. |

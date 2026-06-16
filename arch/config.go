@@ -172,7 +172,7 @@ type BlockSpec struct {
 	RopeDims                int          `json:"rope_dims,omitempty"`                 // RoPE rotation dims per head; 0 or head_dim = full RoPE
 	RopeConvention          string       `json:"rope_convention,omitempty"`           // plain: "", "adjacent_pair", or "half_rotation".
 	RelativeAttention       string       `json:"relative_attention,omitempty"`        // plain: "", "none", or "deberta_p2c_c2p".
-	RelativeAttentionWindow int          `json:"relative_attention_window,omitempty"` // plain relative attention clipping window; defaults to 128.
+	RelativeAttentionWindow int          `json:"relative_attention_window,omitempty"` // plain relative attention bucket size; defaults to 128.
 	QKGain                  float64      `json:"qk_gain,omitempty"`                   // per-head learnable QK scaling; 0 disables
 	QKNorm                  bool         `json:"qk_norm,omitempty"`                   // plain: learned RMSNorm on Q/K heads before attention scores.
 	XSA                     bool         `json:"xsa,omitempty"`                       // enable V-orthogonal projection after attention

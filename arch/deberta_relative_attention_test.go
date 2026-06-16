@@ -129,7 +129,7 @@ func TestDebertaRelativeAttentionWeightLayout(t *testing.T) {
 			t.Fatalf("metas[%d].Name=%q want %q", i, metas[i].Name, want)
 		}
 	}
-	if got, want := metas[4].Shape, []int{6, 64}; !sameInts(got, want) {
+	if got, want := metas[4].Shape, []int{5, 64}; !sameInts(got, want) {
 		t.Fatalf("relative_embeddings shape=%v want %v", got, want)
 	}
 

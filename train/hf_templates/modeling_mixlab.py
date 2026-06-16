@@ -133,7 +133,7 @@ class MixlabPlainBlock(nn.Module):
         self.w_pos_key = None
         self.w_pos_query = None
         if self.relative_attention == "deberta_p2c_c2p":
-            rel_rows = 2 * self.relative_attention_window
+            rel_rows = 2 * self.relative_attention_window - 1
             self.relative_embeddings = nn.Parameter(torch.empty(rel_rows, dim))
             self.w_pos_key = MixlabLinear(dim, dim)
             self.w_pos_query = MixlabLinear(dim, dim)
@@ -190,24 +190,39 @@ class MixlabPlainBlock(nn.Module):
     def _deberta_relative_bias(self, q, k, seq_len):
         rel_key = self.w_pos_key(self.relative_embeddings)
         rel_query = self.w_pos_query(self.relative_embeddings)
-        rel_key = rel_key.view(2 * self.relative_attention_window, self.heads, self.head_dim).permute(1, 0, 2)
-        rel_query = rel_query.view(2 * self.relative_attention_window, self.heads, self.head_dim).permute(1, 0, 2)
+        rel_rows = 2 * self.relative_attention_window - 1
+        rel_key = rel_key.view(rel_rows, self.heads, self.head_dim).permute(1, 0, 2)
+        rel_query = rel_query.view(rel_rows, self.heads, self.head_dim).permute(1, 0, 2)
         pos = torch.arange(seq_len, device=q.device)
-        c2p = torch.clamp(
-            pos.view(seq_len, 1) - pos.view(1, seq_len) + self.relative_attention_window,
-            0,
-            2 * self.relative_attention_window - 1,
-        )
-        p2c = torch.clamp(
-            pos.view(1, seq_len) - pos.view(seq_len, 1) + self.relative_attention_window,
-            0,
-            2 * self.relative_attention_window - 1,
-        )
-        c2p_key = rel_key[:, c2p, :]
-        p2c_query = rel_query[:, p2c, :]
+        rel = pos.view(seq_len, 1) - pos.view(1, seq_len)
+        rel_idx = self._relative_position_bucket(rel, seq_len) + (self.relative_attention_window - 1)
+        c2p_key = rel_key[:, rel_idx, :]
+        p2c_query = rel_query[:, rel_idx, :]
         c2p_bias = torch.einsum("bhid,hijd->bhij", q, c2p_key)
         p2c_bias = torch.einsum("bhjd,hijd->bhij", k, p2c_query)
         return c2p_bias + p2c_bias
+
+    def _relative_position_bucket(self, relative_pos, max_position):
+        bucket_size = self.relative_attention_window
+        if bucket_size <= 1:
+            return torch.zeros_like(relative_pos)
+        mid = bucket_size // 2
+        sign = torch.sign(relative_pos)
+        abs_pos = torch.where(
+            (relative_pos < mid) & (relative_pos > -mid),
+            torch.full_like(relative_pos, mid - 1),
+            torch.abs(relative_pos).clamp(max=max(max_position - 1, 0)),
+        )
+        if mid > 0 and max_position - 1 > mid:
+            denom = math.log(float(max_position - 1) / float(mid))
+            log_pos = torch.ceil(
+                torch.log(abs_pos.float() / float(mid)) / denom * float(mid - 1)
+            ).to(torch.long) + mid
+        else:
+            log_pos = torch.full_like(relative_pos, bucket_size - 1)
+        bucket_pos = torch.where(abs_pos <= mid, relative_pos, log_pos * sign)
+        max_bucket = bucket_size - 1
+        return torch.clamp(bucket_pos, -max_bucket, max_bucket).long()
 
     def forward(self, x):
         residual = x
