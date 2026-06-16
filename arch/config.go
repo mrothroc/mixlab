@@ -170,6 +170,7 @@ type BlockSpec struct {
 	KVHeads                 int          `json:"kv_heads,omitempty"`
 	KVSource                int          `json:"kv_source,omitempty"`                 // -1 or 0 = compute own KV; positive = reuse KV from block N (1-indexed)
 	RopeDims                int          `json:"rope_dims,omitempty"`                 // RoPE rotation dims per head; 0 or head_dim = full RoPE
+	RopeConvention          string       `json:"rope_convention,omitempty"`           // plain: "", "adjacent_pair", or "half_rotation".
 	RelativeAttention       string       `json:"relative_attention,omitempty"`        // plain: "", "none", or "deberta_p2c_c2p".
 	RelativeAttentionWindow int          `json:"relative_attention_window,omitempty"` // plain relative attention clipping window; defaults to 128.
 	QKGain                  float64      `json:"qk_gain,omitempty"`                   // per-head learnable QK scaling; 0 disables
@@ -281,6 +282,7 @@ type TrainingSpec struct {
 	SeqLenSchedule                    [][]int           `json:"seq_len_schedule,omitempty"`
 	WarmdownSteps                     int               `json:"warmdown_steps,omitempty"`
 	TargetValLoss                     float64           `json:"target_val_loss,omitempty"`
+	EarlyStop                         *EarlyStopSpec    `json:"early_stop,omitempty"`
 	FirstByteMask                     bool              `json:"first_byte_mask,omitempty"`
 	FirstByteMaskValid                []int32           `json:"-"`
 	RecurrenceActivationFrac          float64           `json:"recurrence_activation_frac,omitempty"`
@@ -343,6 +345,17 @@ type TrainingSpec struct {
 	lambEpsSet            bool
 	swaDecaySet           bool
 	swaIntervalSet        bool
+}
+
+// EarlyStopSpec controls optional validation-loss early stopping beyond the
+// legacy target_val_loss threshold.
+type EarlyStopSpec struct {
+	Metric   string  `json:"metric,omitempty"`
+	Patience int     `json:"patience,omitempty"`
+	MinDelta float64 `json:"min_delta,omitempty"`
+	MinSteps int     `json:"min_steps,omitempty"`
+	ValGT    float64 `json:"val_gt,omitempty"`
+	AtStep   int     `json:"at_step,omitempty"`
 }
 
 func (t *TrainingSpec) UnmarshalJSON(data []byte) error {

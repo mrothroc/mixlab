@@ -198,6 +198,12 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		fmt.Printf("  [%s] SWA/EMA enabled: start=%d interval=%d decay=%g\n", name, swaStart, swaInterval, swaDecay)
 	}
 	targetValLoss := cfg.Training.TargetValLoss
+	earlyStop := newEarlyStopState(cfg.Training.EarlyStop)
+	if earlyStop != nil {
+		fmt.Printf("  [%s] early stop enabled: patience=%d min_delta=%g min_steps=%d val_gt=%g at_step=%d\n",
+			name, cfg.Training.EarlyStop.Patience, cfg.Training.EarlyStop.MinDelta,
+			cfg.Training.EarlyStop.MinSteps, cfg.Training.EarlyStop.ValGT, cfg.Training.EarlyStop.AtStep)
+	}
 	flops := arch.EstimateFLOPs(cfg)
 	recurrencePhaseStarts := cfg.PhaseStartSteps()
 	recurrencePhasesScheduled := len(recurrencePhaseStarts) > 0
@@ -685,6 +691,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				logStart := time.Now()
 				valDuration := time.Duration(0)
 				valStr := ""
+				ranValidation := false
 				if valSet != nil && len(valSet.Batches) > 0 && shouldRunValidationStep(step, steps, valEvery) {
 					valStart := time.Now()
 					stopValidation := startSlowTrainingPhaseLogger(name, step, "validation")
@@ -694,6 +701,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					if err == nil {
 						lastValLoss = valAvg
 						hasValLoss = true
+						ranValidation = true
 						valStr = fmt.Sprintf(" val=%.4f", valAvg)
 					}
 				}
@@ -734,10 +742,16 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 						float64(valDuration)/float64(time.Millisecond),
 						float64(logDuration)/float64(time.Millisecond))
 				}
-				if hasValLoss && targetValLoss > 0 && lastValLoss <= targetValLoss {
+				if ranValidation && hasValLoss && targetValLoss > 0 && lastValLoss <= targetValLoss {
 					fmt.Printf("  [%s] target val loss %.4f reached at step %d (val=%.4f), stopping early\n",
 						name, targetValLoss, step, lastValLoss)
 					break
+				}
+				if ranValidation && earlyStop != nil {
+					if stop, reason := earlyStop.observe(step, lastValLoss); stop {
+						fmt.Printf("  [%s] early stop at step %d: %s\n", name, step, reason)
+						break
+					}
 				}
 			}
 

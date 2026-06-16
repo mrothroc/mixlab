@@ -10,6 +10,7 @@ type BlockSpec = arch.BlockSpec
 type CustomOpSpec = arch.CustomOpSpec
 type CustomWeightSpec = arch.CustomWeightSpec
 type DistillationSpec = arch.DistillationSpec
+type EarlyStopSpec = arch.EarlyStopSpec
 type EvalSpec = arch.EvalSpec
 type OpSpec = arch.OpSpec
 type Program = arch.Program

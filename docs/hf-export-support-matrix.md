@@ -4,7 +4,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `plain` attention | Supported | Adjacent-pair RoPE, partial `rope_dims`, GQA through `kv_heads`, `qk_norm`, `qk_gain`, `causal`/`bidirectional`/`none` masks, and causal `window_size`. |
+| `plain` attention | Supported | Adjacent-pair RoPE by default, optional `rope_convention: "half_rotation"`, partial `rope_dims`, GQA through `kv_heads`, `qk_norm`, `qk_gain`, `causal`/`bidirectional`/`none` masks, and causal `window_size`. |
 | `plain.qk_norm` | Supported | Learned per-head-dimension Q/K RMSNorm scales before RoPE or DeBERTa relative score construction. |
 | `plain.relative_attention=deberta_p2c_c2p` | Supported | DeBERTa C2P/P2C relative bias, projected position key/query tensors, clipping window, masks, and optional `qk_norm`/`qk_gain`. |
 | `swiglu` | Supported | Bias-free SwiGLU FFN parity. |

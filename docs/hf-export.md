@@ -61,7 +61,7 @@ The Python checker requires the HF parity dependencies from `requirements-hf.txt
 
 HF export supports causal next-token checkpoints using sequential blocks:
 
-- `plain` attention with Mixlab's adjacent-pair RoPE convention, including partial `rope_dims`
+- `plain` attention with Mixlab's default adjacent-pair RoPE convention or explicit `rope_convention: "half_rotation"`, including partial `rope_dims`
 - grouped-query attention through `kv_heads`
 - learned per-head-dimension `qk_norm`
 - learned per-head `qk_gain`

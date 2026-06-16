@@ -55,7 +55,15 @@ func emitQKNormIR(prog *Program, qh, kh string, wi int, qkNorm, normalizeK bool)
 	return qNorm, kNorm, wi
 }
 
-func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, wi, B, H, D, T, headDim int, baseScale float32, qkGain float64, ropeDims int, relativeAttention string, relativeWindow int) (string, string, int, error) {
+func emitRoPEForConvention(prog *Program, q, k, qOut, kOut string, T, headDim, ropeDims int, convention string) {
+	if normalizeRopeConvention(convention) == RopeConventionHalfRotation {
+		prog.RoPEWithConvention(q, k, qOut, kOut, T, headDim, ropeDims, 10000.0, convention)
+		return
+	}
+	prog.RoPE(q, k, qOut, kOut, T, headDim, ropeDims, 10000.0)
+}
+
+func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, wi, B, H, D, T, headDim int, baseScale float32, qkGain float64, ropeDims int, ropeConvention, relativeAttention string, relativeWindow int) (string, string, int, error) {
 	relMode := normalizeRelativeAttention(relativeAttention)
 	qForScores := qh
 	kForScores := kh
@@ -65,7 +73,7 @@ func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, w
 	case "", RelativeAttentionNone:
 		qRot := prefix + "_q_rot"
 		kRot := prefix + "_k_rot"
-		prog.RoPE(qh, kh, qRot, kRot, T, headDim, ropeDims, 10000.0)
+		emitRoPEForConvention(prog, qh, kh, qRot, kRot, T, headDim, ropeDims, ropeConvention)
 		qForScores = qRot
 		kForScores = kRot
 		keyForCache = kRot
@@ -133,6 +141,10 @@ func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T
 }
 
 func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
+	return emitPlainAttentionIRWithKVOptionsExConvention(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, skipAttention, qkGain, qkNorm, ropeDims, RopeConventionAdjacentPair, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, kvSource, kvCache, blockIndex)
+}
+
+func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -266,7 +278,7 @@ func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D,
 
 			qh, kh, wi = emitQKNormIR(prog, qh, kh, wi, qkNorm, true)
 			var keyForCache string
-			scaled, keyForCache, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, D, T, headDim, scale, qkGain, ropeDims, relativeAttention, relativeWindow)
+			scaled, keyForCache, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow)
 			if err != nil {
 				return wi, err
 			}
@@ -280,7 +292,7 @@ func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D,
 			case "", RelativeAttentionNone:
 				qRot := prefix + "_q_rot"
 				kRotUnused := prefix + "_k_rot_unused"
-				prog.RoPE(qh, kh, qRot, kRotUnused, T, headDim, ropeDims, 10000.0)
+				emitRoPEForConvention(prog, qh, kh, qRot, kRotUnused, T, headDim, ropeDims, ropeConvention)
 				qh = qRot
 			case RelativeAttentionDebertaP2CC2P:
 				return wi, fmt.Errorf("kv_source is not supported with relative_attention")
@@ -605,7 +617,7 @@ func emitMLPIR(prog *Program, x string, wi, idx int, activation string, leakySlo
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, qkGain float64, qkNorm bool, ropeDims int, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int) (string, int, error) {
 	_ = mlpMult
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return "", wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
@@ -694,7 +706,7 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	}
 
 	qh, kh, wi = emitQKNormIR(prog, qh, kh, wi, qkNorm, true)
-	scaled, _, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, D, T, headDim, scale, qkGain, ropeDims, relativeAttention, relativeWindow)
+	scaled, _, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow)
 	if err != nil {
 		return "", wi, err
 	}

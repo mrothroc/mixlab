@@ -225,6 +225,7 @@ Optional fields:
 - `qk_norm` — learned RMSNorm scales applied to each Q and K head after projection/GQA expansion and before RoPE or relative-attention score construction. Adds `q_norm_scale` and `k_norm_scale` weights of shape `[head_dim]`; a `kv_source` consumer block adds only `q_norm_scale` because it reuses K from the source block.
 - `qk_gain` — learnable per-head QK scaling. When set, allocates one trainable scalar per head initialized to this value, applied as `scores = qk_gain * (Q @ K^T / sqrt(d_k))`. Omit or set to `0` for standard scaling.
 - `rope_dims` — partial RoPE: apply rotary embeddings to only the first `rope_dims` dimensions per head, leaving the rest position-invariant. Must be even and `<= head_dim`. Omit or set to `0` for full RoPE.
+- `rope_convention` — rotary pairing convention. Omit or set to `"adjacent_pair"` for Mixlab's default adjacent-dimension pairs `(0,1),(2,3),...`; set to `"half_rotation"` for the split-half convention used by some Hugging Face models. Only applies to standard RoPE attention and is rejected with `relative_attention`.
 - `relative_attention` — `"deberta_p2c_c2p"` enables DeBERTa-style disentangled content-to-position and position-to-content relative attention bias. Omit, set to `""`, or set to `"none"` for standard RoPE attention.
 - `relative_attention_window` — max clipped relative offset for DeBERTa relative attention. Defaults to `128` when `relative_attention` is enabled. The learned table has `2 * relative_attention_window` rows.
 - `xsa` — eXplicit Subspace Attention: after computing `y = softmax(QK^T)V`, projects `y` orthogonal to `V` at each position. Forces attention to contribute information that V doesn't already provide. Zero additional parameters. Compatible with GQA.
@@ -810,6 +811,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
 | `warmdown_steps` | integer | No | `0` | Cosine warmdown length at the end of training. Must be `>= 0`; values above `steps` are clamped by the scheduler. |
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
+| `early_stop` | object | No | Disabled | Optional validation early-stop policy. V1 supports validation-loss plateau patience and step-gated `val_gt` aborts. See below. |
 | `first_byte_mask` | boolean | No | `false` | Enables training-time first-byte masked softmax. At UTF-8 codepoint-boundary targets, the optimization loss only normalizes over vocabulary entries whose first byte is syntactically valid as a UTF-8 first byte. Validation, exported per-token NLL, and BPB evaluation use the unmasked loss. Byte-id corpora (`vocab_size <= 256`) work directly; BPE corpora use `tokenizer.json` next to the training shards. |
 | `recurrence_activation_frac` | number | No | `0` | Delays model-level `recurrence` execution until `floor(frac * total_steps)`. Before activation, training executes each recurrence root once in first-appearance order while preserving the full recurrence weight layout. Mutually exclusive with `recurrence_activation_step` and top-level `recurrence_phases`; must be in `[0,1]`. |
 | `recurrence_activation_step` | integer | No | `0` | Delays model-level `recurrence` execution until this absolute training step. Before activation, training executes each recurrence root once in first-appearance order while preserving the full recurrence weight layout. Mutually exclusive with `recurrence_activation_frac` and top-level `recurrence_phases`; must be `>= 0`. |
@@ -876,6 +878,16 @@ Masked objectives emit a training loss averaged only over rows where `loss_mask 
 `mlm_mask_prob_schedule` changes the mask ratio as a deterministic stepwise schedule. For example, `[[0, 0.30], [5000, 0.15]]` uses a 30% mask rate until step 5000, then 15%. It applies to MLM, MNTP, and masked hybrid batches; causal hybrid batches ignore it because they do not use masked-objective rows.
 
 `seq_len_schedule` changes the training graph shape at configured step boundaries while keeping `batch_tokens` fixed. Mixlab caches one program per active scheduled shape/objective combination and switches at boundaries; validation, full eval, generation, and final unmasked loss use the top-level maximum `seq_len`. This v1 schedule is intentionally disabled with fixed-teacher distillation and active data2vec because those teacher runtimes are built around the configured sequence length.
+
+`early_stop` observes validation loss when validation runs. The existing `target_val_loss` is still the simplest success threshold. `early_stop.patience` stops after that many consecutive validation checks without an improvement greater than `min_delta` after `min_steps`; `early_stop.val_gt` stops at the first validation check at or after `at_step` whose loss remains above the configured value. Omitted or zero-valued `patience` / `val_gt` disables that sub-policy.
+
+```json
+{
+  "training": {
+    "early_stop": {"metric": "val", "patience": 3, "min_delta": 0.01, "min_steps": 1000}
+  }
+}
+```
 
 ```json
 {

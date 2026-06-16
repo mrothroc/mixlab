@@ -248,8 +248,14 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 			if !relativeAttentionEnabledForHF(block) {
 				flatQ := flattenHead(qh[b][h])
 				flatK := flattenHead(kh[b][h])
-				rotQ := hfAdjacentRoPEForTest(flatQ, 0, 1, seqLen, headDim, block.RopeDims)
-				rotK := hfAdjacentRoPEForTest(flatK, 0, 1, seqLen, headDim, block.RopeDims)
+				var rotQ, rotK []float64
+				if normalizeHFRopeConvention(block.RopeConvention) == "half_rotation" {
+					rotQ = halfRotationRoPEForTest(flatQ, seqLen, headDim, block.RopeDims)
+					rotK = halfRotationRoPEForTest(flatK, seqLen, headDim, block.RopeDims)
+				} else {
+					rotQ = hfAdjacentRoPEForTest(flatQ, 0, 1, seqLen, headDim, block.RopeDims)
+					rotK = hfAdjacentRoPEForTest(flatK, 0, 1, seqLen, headDim, block.RopeDims)
+				}
 				unflattenHead(rotQ, qh[b][h])
 				unflattenHead(rotK, kh[b][h])
 			}
@@ -818,6 +824,9 @@ func cpuCrossEntropy(logits [][][]float64, targets [][]int) float64 {
 
 func halfRotationRoPEForTest(x []float64, seqLen, headDim, ropeDims int) []float64 {
 	out := append([]float64(nil), x...)
+	if ropeDims <= 0 || ropeDims >= headDim {
+		ropeDims = headDim
+	}
 	half := ropeDims / 2
 	for t := 0; t < seqLen; t++ {
 		for d := 0; d < half; d++ {

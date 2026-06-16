@@ -63,6 +63,36 @@ def rotate_adjacent_rope(x, rope_dims, cos_t=None, sin_t=None, base=10000.0):
     return torch.cat((rotated, x_pass), dim=-1)
 
 
+def rotate_half_rope(x, rope_dims, cos_t=None, sin_t=None, base=10000.0):
+    head_dim = x.shape[-1]
+    if rope_dims is None or rope_dims <= 0 or rope_dims >= head_dim:
+        rope_dims = head_dim
+    if rope_dims % 2 != 0:
+        raise ValueError(f"rope_dims must be even, got {rope_dims}")
+
+    seq_len = x.shape[-2]
+    x_rot = x[..., :rope_dims]
+    x_pass = x[..., rope_dims:]
+    pair_count = rope_dims // 2
+    if cos_t is None or sin_t is None:
+        positions = torch.arange(seq_len, device=x.device, dtype=x.dtype)
+        dim_idx = torch.arange(pair_count, device=x.device, dtype=x.dtype)
+        freqs = torch.exp(dim_idx * (-math.log(base) * 2.0 / float(rope_dims)))
+        angles = positions[:, None] * freqs[None, :]
+        cos_t = torch.cos(angles).view(1, 1, seq_len, pair_count)
+        sin_t = torch.sin(angles).view(1, 1, seq_len, pair_count)
+    else:
+        cos_t = cos_t[:, :, :seq_len, :]
+        sin_t = sin_t[:, :, :seq_len, :]
+
+    first = x_rot[..., :pair_count]
+    second = x_rot[..., pair_count:]
+    rotated = torch.cat((first * cos_t - second * sin_t, first * sin_t + second * cos_t), dim=-1)
+    if x_pass.shape[-1] == 0:
+        return rotated
+    return torch.cat((rotated, x_pass), dim=-1)
+
+
 class MixlabPlainBlock(nn.Module):
     def __init__(self, config, block_config):
         super().__init__()
@@ -77,6 +107,9 @@ class MixlabPlainBlock(nn.Module):
             raise ValueError("kv_source is not supported by Mixlab HF export")
         self.kv_group_size = heads // self.kv_heads
         self.rope_dims = int(block_config.get("rope_dims", 0) or 0)
+        self.rope_convention = str(block_config.get("rope_convention", "") or "adjacent_pair").lower()
+        if self.rope_convention not in ("adjacent_pair", "half_rotation"):
+            raise ValueError(f"unsupported exported rope_convention {self.rope_convention!r}")
         self.effective_rope_dims = self.rope_dims
         if self.effective_rope_dims <= 0 or self.effective_rope_dims >= self.head_dim:
             self.effective_rope_dims = self.head_dim
@@ -188,8 +221,12 @@ class MixlabPlainBlock(nn.Module):
             scores = scores / math.sqrt(float(self.head_dim * 3))
         else:
             cos_t, sin_t = self._rope_tables(seq_len, q.device, q.dtype)
-            q = rotate_adjacent_rope(q, self.effective_rope_dims, cos_t, sin_t)
-            k = rotate_adjacent_rope(k, self.effective_rope_dims, cos_t, sin_t)
+            if self.rope_convention == "half_rotation":
+                q = rotate_half_rope(q, self.effective_rope_dims, cos_t, sin_t)
+                k = rotate_half_rope(k, self.effective_rope_dims, cos_t, sin_t)
+            else:
+                q = rotate_adjacent_rope(q, self.effective_rope_dims, cos_t, sin_t)
+                k = rotate_adjacent_rope(k, self.effective_rope_dims, cos_t, sin_t)
             scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(float(self.head_dim))
         if self.qk_gain is not None:
             scores = scores * self.qk_gain.view(1, self.heads, 1, 1)

@@ -3,6 +3,7 @@ package arch
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 // EffectiveSeqLenForStep returns the sequence length active for a training
@@ -57,6 +58,9 @@ func validateTrainingRecipeKnobs(cfg *ArchConfig, source string) error {
 	if err := validateMLMMaskProbSchedule(cfg, source); err != nil {
 		return err
 	}
+	if err := validateEarlyStopSpec(cfg, source); err != nil {
+		return err
+	}
 	if len(cfg.Training.SeqLenSchedule) > 0 {
 		if cfg.Training.Distillation != nil {
 			return fmt.Errorf("config %q has training.seq_len_schedule but distillation teacher runtimes use fixed seq_len in v1", source)
@@ -64,6 +68,34 @@ func validateTrainingRecipeKnobs(cfg *ArchConfig, source string) error {
 		if cfg.Training.Data2VecActive() {
 			return fmt.Errorf("config %q has training.seq_len_schedule but training.data2vec teacher runtimes use fixed seq_len in v1", source)
 		}
+	}
+	return nil
+}
+
+func validateEarlyStopSpec(cfg *ArchConfig, source string) error {
+	spec := cfg.Training.EarlyStop
+	if spec == nil {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(spec.Metric)) {
+	case "", "val", "validation", "val_loss", "validation_loss":
+	default:
+		return fmt.Errorf("config %q has invalid training.early_stop.metric=%q (v1 supports \"val\")", source, spec.Metric)
+	}
+	if spec.Patience < 0 {
+		return fmt.Errorf("config %q has invalid training.early_stop.patience=%d (must be >= 0)", source, spec.Patience)
+	}
+	if spec.MinDelta < 0 || math.IsNaN(spec.MinDelta) || math.IsInf(spec.MinDelta, 0) {
+		return fmt.Errorf("config %q has invalid training.early_stop.min_delta=%g (must be finite and >= 0)", source, spec.MinDelta)
+	}
+	if spec.MinSteps < 0 {
+		return fmt.Errorf("config %q has invalid training.early_stop.min_steps=%d (must be >= 0)", source, spec.MinSteps)
+	}
+	if spec.ValGT < 0 || math.IsNaN(spec.ValGT) || math.IsInf(spec.ValGT, 0) {
+		return fmt.Errorf("config %q has invalid training.early_stop.val_gt=%g (must be finite and >= 0)", source, spec.ValGT)
+	}
+	if spec.AtStep < 0 {
+		return fmt.Errorf("config %q has invalid training.early_stop.at_step=%d (must be >= 0)", source, spec.AtStep)
 	}
 	return nil
 }

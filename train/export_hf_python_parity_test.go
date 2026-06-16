@@ -58,6 +58,20 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// Half-rotation (GPT-NeoX/Llama) RoPE convention, partial and full.
+			name: "rope_half_rotation",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 2, "rope_convention": "half_rotation"},
+					{"type": "swiglu"},
+					{"type": "plain", "heads": 2, "rope_dims": 2, "rope_convention": "half_rotation"},
+					{"type": "geglu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 4242}
+			}`,
+		},
+		{
 			// Grouped-query attention + per-head qk_gain + sliding causal window.
 			name: "gqa_qkgain_window",
 			config: `{

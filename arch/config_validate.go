@@ -150,6 +150,11 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		return fmt.Errorf("config %q %s[%d] type=plain has invalid window_size=%d (must be >= 0)", source, groupName, idx, b.WindowSize)
 	}
 	if b.Type == "plain" {
+		switch normalizeRopeConvention(b.RopeConvention) {
+		case RopeConventionAdjacentPair, RopeConventionHalfRotation:
+		default:
+			return fmt.Errorf("config %q %s[%d] type=plain has invalid rope_convention=%q (must be \"adjacent_pair\" or \"half_rotation\")", source, groupName, idx, b.RopeConvention)
+		}
 		switch normalizeAttentionMask(b.AttentionMask) {
 		case "", AttentionMaskCausal, AttentionMaskBidirectional, AttentionMaskNone:
 		default:
@@ -166,6 +171,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		if relativeAttentionEnabled(b) {
 			if b.RopeDims != 0 {
 				return fmt.Errorf("config %q %s[%d] type=plain cannot combine relative_attention with rope_dims", source, groupName, idx)
+			}
+			if strings.TrimSpace(b.RopeConvention) != "" {
+				return fmt.Errorf("config %q %s[%d] type=plain cannot combine relative_attention with rope_convention", source, groupName, idx)
 			}
 			if b.KVSource > 0 {
 				return fmt.Errorf("config %q %s[%d] type=plain cannot combine relative_attention with kv_source", source, groupName, idx)

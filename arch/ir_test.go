@@ -137,6 +137,17 @@ func TestRoPE(t *testing.T) {
 	}
 }
 
+func TestRoPEWithConvention(t *testing.T) {
+	p := NewProgram(0)
+	p.RoPEWithConvention("q", "k", "qr", "kr", 128, 32, 16, 10000.0, RopeConventionHalfRotation)
+	if len(p.Ops) != 1 || p.Ops[0].Code != OpRoPE {
+		t.Fatalf("unexpected: %+v", p.Ops)
+	}
+	if got := p.Ops[0].IntParams; len(got) != 6 || got[0] != 128 || got[1] != 32 || got[2] != 16 || got[3] != 0 || got[4] != 1 || got[5] != ropeConventionCodeHalfRotation {
+		t.Fatalf("bad RoPE convention int params: %v", got)
+	}
+}
+
 func TestRoPEIndexed(t *testing.T) {
 	p := NewProgram(0)
 	p.RoPEIndexed("q", "k", "positions", "qr", "kr", 3, 8, 4, 10000.0)
@@ -155,6 +166,17 @@ func TestRoPEIndexed(t *testing.T) {
 	}
 	if len(op.IntParams) != 3 || op.IntParams[0] != 3 || op.IntParams[1] != 8 || op.IntParams[2] != 4 {
 		t.Fatalf("bad RoPEIndexed int params: %v", op.IntParams)
+	}
+}
+
+func TestRoPEIndexedWithConvention(t *testing.T) {
+	p := NewProgram(0)
+	p.RoPEIndexedWithConvention("q", "k", "positions", "qr", "kr", 3, 8, 4, 10000.0, RopeConventionHalfRotation)
+	if len(p.Ops) != 1 || p.Ops[0].Code != OpRoPEIndexed {
+		t.Fatalf("unexpected: %+v", p.Ops)
+	}
+	if got := p.Ops[0].IntParams; len(got) != 4 || got[0] != 3 || got[1] != 8 || got[2] != 4 || got[3] != ropeConventionCodeHalfRotation {
+		t.Fatalf("bad RoPEIndexed convention int params: %v", got)
 	}
 }
 

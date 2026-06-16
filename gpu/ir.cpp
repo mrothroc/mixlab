@@ -222,6 +222,47 @@ mx::array z_loss_mean(const mx::array& logits) {
   return mx::mean(mx::square(log_z));
 }
 
+mx::array apply_rope_convention(
+    const mx::array& x,
+    const mx::array& cos_t,
+    const mx::array& sin_t,
+    int time_len,
+    int head_dim,
+    int rope_dims,
+    int convention,
+    const char* op_name) {
+  if (x.ndim() != 4 || x.shape(2) != time_len || x.shape(3) != head_dim) {
+    throw std::runtime_error(std::string(op_name) + " expects q/k shape [B,H,T,head_dim]");
+  }
+  if (convention != 0 && convention != 1) {
+    throw std::runtime_error(std::string(op_name) + " has invalid RoPE convention");
+  }
+  auto x_rot = mx::slice(x, {0, 0, 0, 0}, {x.shape(0), x.shape(1), x.shape(2), rope_dims});
+  if (convention == 1) {
+    int half = rope_dims / 2;
+    auto first = mx::slice(x_rot, {0, 0, 0, 0}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), half});
+    auto second = mx::slice(x_rot, {0, 0, 0, half}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), rope_dims});
+    auto rot_first = first * cos_t - second * sin_t;
+    auto rot_second = first * sin_t + second * cos_t;
+    auto rotated = mx::concatenate({rot_first, rot_second}, 3);
+    if (rope_dims == head_dim) {
+      return rotated;
+    }
+    auto pass = mx::slice(x, {0, 0, 0, rope_dims}, {x.shape(0), x.shape(1), x.shape(2), x.shape(3)});
+    return mx::concatenate({rotated, pass}, 3);
+  }
+  auto even = mx::slice(x_rot, {0, 0, 0, 0}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), x_rot.shape(3)}, {1, 1, 1, 2});
+  auto odd = mx::slice(x_rot, {0, 0, 0, 1}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), x_rot.shape(3)}, {1, 1, 1, 2});
+  auto rot_even = even * cos_t - odd * sin_t;
+  auto rot_odd = even * sin_t + odd * cos_t;
+  auto rotated = mx::reshape(mx::stack({rot_even, rot_odd}, 4), x_rot.shape());
+  if (rope_dims == head_dim) {
+    return rotated;
+  }
+  auto pass = mx::slice(x, {0, 0, 0, rope_dims}, {x.shape(0), x.shape(1), x.shape(2), x.shape(3)});
+  return mx::concatenate({rotated, pass}, 3);
+}
+
 mx::array as_float32(const mx::array& x) {
   return mx::astype(x, mx::float32);
 }
@@ -2900,6 +2941,7 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         }
         int start = (op.n_int_params > 3) ? op.int_params[3] : 0;
         int stride = (op.n_int_params > 4) ? op.int_params[4] : 1;
+        int convention = (op.n_int_params > 5) ? op.int_params[5] : 0;
         float base = (op.n_float_params > 0) ? op.float_params[0] : 10000.0f;
 
         auto dim_idx = mx::astype(mx::arange(0, rope_dims / 2), mx::float32);
@@ -2918,25 +2960,8 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         auto cos_t = mx::reshape(mx::cos(angles), {1, 1, T, rope_dims / 2});
         auto sin_t = mx::reshape(mx::sin(angles), {1, 1, T, rope_dims / 2});
 
-        auto apply_rope = [&](const mx::array& x) -> mx::array {
-          if (x.ndim() != 4 || x.shape(2) != T || x.shape(3) != HD) {
-            throw std::runtime_error("OP_ROPE expects q/k shape [B,H,T,head_dim]");
-          }
-          auto x_rot = mx::slice(x, {0, 0, 0, 0}, {x.shape(0), x.shape(1), x.shape(2), rope_dims});
-          auto even = mx::slice(x_rot, {0, 0, 0, 0}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), x_rot.shape(3)}, {1, 1, 1, 2});
-          auto odd = mx::slice(x_rot, {0, 0, 0, 1}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), x_rot.shape(3)}, {1, 1, 1, 2});
-          auto rot_even = even * cos_t - odd * sin_t;
-          auto rot_odd = even * sin_t + odd * cos_t;
-          auto rotated = mx::reshape(mx::stack({rot_even, rot_odd}, 4), x_rot.shape());
-          if (rope_dims == HD) {
-            return rotated;
-          }
-          auto pass = mx::slice(x, {0, 0, 0, rope_dims}, {x.shape(0), x.shape(1), x.shape(2), x.shape(3)});
-          return mx::concatenate({rotated, pass}, 3);
-        };
-
-        set_out(op, 0, apply_rope(get(op, 0)));
-        set_out(op, 1, apply_rope(get(op, 1)));
+        set_out(op, 0, apply_rope_convention(get(op, 0), cos_t, sin_t, T, HD, rope_dims, convention, "OP_ROPE"));
+        set_out(op, 1, apply_rope_convention(get(op, 1), cos_t, sin_t, T, HD, rope_dims, convention, "OP_ROPE"));
         break;
       }
       case OP_ROPE_INDEXED: {
@@ -2958,6 +2983,7 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         if ((rope_dims % 2) != 0) {
           throw std::runtime_error("OP_ROPE_INDEXED requires even rope_dims");
         }
+        int convention = (op.n_int_params > 3) ? op.int_params[3] : 0;
         float base = (op.n_float_params > 0) ? op.float_params[0] : 10000.0f;
 
         auto positions_in = mx::astype(get(op, 2), mx::int32);
@@ -2971,25 +2997,8 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         auto cos_t = mx::reshape(mx::cos(angles), {1, 1, K, rope_dims / 2});
         auto sin_t = mx::reshape(mx::sin(angles), {1, 1, K, rope_dims / 2});
 
-        auto apply_rope = [&](const mx::array& x) -> mx::array {
-          if (x.ndim() != 4 || x.shape(2) != K || x.shape(3) != HD) {
-            throw std::runtime_error("OP_ROPE_INDEXED expects q/k shape [B,H,K,head_dim]");
-          }
-          auto x_rot = mx::slice(x, {0, 0, 0, 0}, {x.shape(0), x.shape(1), x.shape(2), rope_dims});
-          auto even = mx::slice(x_rot, {0, 0, 0, 0}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), x_rot.shape(3)}, {1, 1, 1, 2});
-          auto odd = mx::slice(x_rot, {0, 0, 0, 1}, {x_rot.shape(0), x_rot.shape(1), x_rot.shape(2), x_rot.shape(3)}, {1, 1, 1, 2});
-          auto rot_even = even * cos_t - odd * sin_t;
-          auto rot_odd = even * sin_t + odd * cos_t;
-          auto rotated = mx::reshape(mx::stack({rot_even, rot_odd}, 4), x_rot.shape());
-          if (rope_dims == HD) {
-            return rotated;
-          }
-          auto pass = mx::slice(x, {0, 0, 0, rope_dims}, {x.shape(0), x.shape(1), x.shape(2), x.shape(3)});
-          return mx::concatenate({rotated, pass}, 3);
-        };
-
-        set_out(op, 0, apply_rope(get(op, 0)));
-        set_out(op, 1, apply_rope(get(op, 1)));
+        set_out(op, 0, apply_rope_convention(get(op, 0), cos_t, sin_t, K, HD, rope_dims, convention, "OP_ROPE_INDEXED"));
+        set_out(op, 1, apply_rope_convention(get(op, 1), cos_t, sin_t, K, HD, rope_dims, convention, "OP_ROPE_INDEXED"));
         break;
       }
       case OP_ROPE_STRIDED: {

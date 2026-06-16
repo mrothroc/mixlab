@@ -204,6 +204,51 @@ func TestRoPEPartialLeavesPassThroughDimsUnchanged(t *testing.T) {
 	}
 }
 
+func TestRoPEHalfRotationMatchesCPUOracle(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+
+	prog := buildRoPEIndexedTestProgram(false)
+	for i := range prog.Ops {
+		if prog.Ops[i].Code == ir.OpRoPE {
+			prog.Ops[i].IntParams = []int{ropeIndexedTestT, ropeIndexedTestHeadDim, 0, 0, 1, 1}
+			break
+		}
+	}
+	got := runRoPEIndexedTestProgram(t, prog, nil)
+	want := ropeHalfRotationOracleQR()
+	requireSameFloat32s(t, "half-rotation RoPE", want, got, ropeIndexedTestTol)
+
+	adjacent := runRoPEIndexedTestProgram(t, buildRoPEIndexedTestProgram(false), nil)
+	if math.Abs(float64(adjacent[ropeIndexedTestQRIndex(0, 0, 1, 1)]-got[ropeIndexedTestQRIndex(0, 0, 1, 1)])) <= ropeIndexedTestTol {
+		t.Fatal("half-rotation RoPE unexpectedly matched adjacent-pair rotation on nontrivial fixture")
+	}
+}
+
+func ropeHalfRotationOracleQR() []float32 {
+	out := make([]float32, ropeIndexedTestB*ropeIndexedTestH*ropeIndexedTestT*ropeIndexedTestHeadDim)
+	for tok := 0; tok < ropeIndexedTestT; tok++ {
+		for h := 0; h < ropeIndexedTestH; h++ {
+			baseDim := h * ropeIndexedTestHeadDim
+			first := make([]float64, ropeIndexedTestHeadDim/2)
+			second := make([]float64, ropeIndexedTestHeadDim/2)
+			for d := 0; d < ropeIndexedTestHeadDim/2; d++ {
+				first[d] = float64(0.1 + float32(tok*ropeIndexedTestD+baseDim+d)*0.01)
+				second[d] = float64(0.1 + float32(tok*ropeIndexedTestD+baseDim+ropeIndexedTestHeadDim/2+d)*0.01)
+			}
+			for d := 0; d < ropeIndexedTestHeadDim/2; d++ {
+				freq := math.Exp(float64(d) * (-math.Log(ropeIndexedTestBase) * 2.0 / float64(ropeIndexedTestHeadDim)))
+				angle := float64(tok) * freq
+				c, s := math.Cos(angle), math.Sin(angle)
+				out[ropeIndexedTestQRIndex(0, h, tok, d)] = float32(first[d]*c - second[d]*s)
+				out[ropeIndexedTestQRIndex(0, h, tok, ropeIndexedTestHeadDim/2+d)] = float32(first[d]*s + second[d]*c)
+			}
+		}
+	}
+	return out
+}
+
 func requireSameFloat32s(t *testing.T, label string, want, got []float32, tol float64) {
 	t.Helper()
 	if len(want) != len(got) {

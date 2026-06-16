@@ -103,7 +103,8 @@ func TestTrainingRecipeKnobValidationAndDefaults(t *testing.T) {
 		"batch_tokens": 8,
 		"z_loss": 0.0001,
 		"seq_len_schedule": [[0,2],[5,4]],
-		"mlm_mask_prob_schedule": [[0,0.3],[5,0.15]]
+		"mlm_mask_prob_schedule": [[0,0.3],[5,0.15]],
+		"early_stop": {"metric": "val", "patience": 3, "min_delta": 0.01, "min_steps": 10}
 	}`)
 	if cfg.Training.ZLoss != 0.0001 {
 		t.Fatalf("z_loss=%g", cfg.Training.ZLoss)
@@ -120,6 +121,9 @@ func TestTrainingRecipeKnobValidationAndDefaults(t *testing.T) {
 	if got := cfg.Training.EffectiveMLMMaskProbForStep(5); got != 0.15 {
 		t.Fatalf("mask prob step5=%g, want 0.15", got)
 	}
+	if cfg.Training.EarlyStop == nil || cfg.Training.EarlyStop.Patience != 3 {
+		t.Fatalf("early_stop=%+v, want patience 3", cfg.Training.EarlyStop)
+	}
 }
 
 func TestTrainingRecipeKnobValidationErrors(t *testing.T) {
@@ -134,6 +138,9 @@ func TestTrainingRecipeKnobValidationErrors(t *testing.T) {
 		{name: "seq schedule divides batch", body: `"training": {"batch_tokens": 8, "seq_len_schedule": [[0,3]]}`, wantErr: "must be divisible"},
 		{name: "mask schedule integer step", body: `"training": {"batch_tokens": 8, "mlm_mask_prob_schedule": [[0.5,0.2]]}`, wantErr: "step must be an integer"},
 		{name: "mask schedule probability", body: `"training": {"batch_tokens": 8, "mlm_mask_prob_schedule": [[0,1.5]]}`, wantErr: "must be in [0,1]"},
+		{name: "early stop metric", body: `"training": {"batch_tokens": 8, "early_stop": {"metric": "train", "patience": 2}}`, wantErr: "early_stop.metric"},
+		{name: "early stop patience", body: `"training": {"batch_tokens": 8, "early_stop": {"patience": -1}}`, wantErr: "early_stop.patience"},
+		{name: "early stop val gt", body: `"training": {"batch_tokens": 8, "early_stop": {"val_gt": -1}}`, wantErr: "early_stop.val_gt"},
 		{name: "seq schedule rejects distillation", body: `"training": {"batch_tokens": 8, "seq_len_schedule": [[0,2]], "distillation": {"teacher_checkpoints":["a"], "teacher_configs":["b"], "loss_weight_ce":1, "loss_weight_kl":0, "ensemble_strategy":"mean_logits"}}`, wantErr: "seq_len_schedule"},
 	}
 	for _, tt := range tests {

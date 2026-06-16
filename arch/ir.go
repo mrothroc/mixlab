@@ -246,9 +246,21 @@ func (p *Program) RoPE(q, k, qOut, kOut string, T, headDim, ropeDims int, base f
 	p.AddOp(OpRoPE, []string{q, k}, []string{qOut, kOut}, []float32{base}, []int{T, headDim, ropeDims})
 }
 
+// RoPEWithConvention emits rotary position embeddings using the selected
+// convention. Existing RoPE calls use Mixlab's adjacent-pair convention.
+func (p *Program) RoPEWithConvention(q, k, qOut, kOut string, T, headDim, ropeDims int, base float32, convention string) {
+	p.AddOp(OpRoPE, []string{q, k}, []string{qOut, kOut}, []float32{base}, []int{T, headDim, ropeDims, 0, 1, ropeConventionCode(convention)})
+}
+
 // RoPEIndexed emits rotary position embeddings using explicit position indices.
 func (p *Program) RoPEIndexed(q, k, positions, qOut, kOut string, K, headDim, ropeDims int, base float32) {
 	p.AddOp(OpRoPEIndexed, []string{q, k, positions}, []string{qOut, kOut}, []float32{base}, []int{K, headDim, ropeDims})
+}
+
+// RoPEIndexedWithConvention emits indexed rotary embeddings with the selected
+// convention. Existing RoPEIndexed calls use adjacent-pair rotation.
+func (p *Program) RoPEIndexedWithConvention(q, k, positions, qOut, kOut string, K, headDim, ropeDims int, base float32, convention string) {
+	p.AddOp(OpRoPEIndexed, []string{q, k, positions}, []string{qOut, kOut}, []float32{base}, []int{K, headDim, ropeDims, ropeConventionCode(convention)})
 }
 
 // Broadcast tiles a 1-D or 2-D tensor along a new leading batch dimension.
