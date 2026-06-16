@@ -167,27 +167,33 @@ func (e *distillationEnsemble) TeacherProbs(batch objectiveBatch, batchSize, seq
 		if len(logits) != len(out) {
 			return nil, fmt.Errorf("teacher %d logits size=%d want %d", i, len(logits), len(out))
 		}
-		switch e.strategy {
-		case arch.DistillationMeanLogProbs:
-			addLogSoftmaxRows(out, logits, e.vocabSize)
-		default:
-			addRows(out, logits)
-		}
+		accumulateTeacherLogits(out, logits, e.strategy, e.vocabSize)
 	}
 	if len(e.teachers) == 0 {
 		return nil, fmt.Errorf("distillation has no teachers")
 	}
-	scale := float32(1.0 / float64(len(e.teachers)))
-	for i := range out {
-		out[i] *= scale
-	}
-	switch e.strategy {
-	case arch.DistillationMeanLogProbs:
-		softmaxRowsInPlace(out, e.vocabSize)
-	default:
-		softmaxRowsInPlace(out, e.vocabSize)
-	}
+	finalizeTeacherProbs(out, len(e.teachers), e.vocabSize)
 	return out, nil
+}
+
+func accumulateTeacherLogits(dst, logits []float32, strategy string, vocabSize int) {
+	switch strategy {
+	case arch.DistillationMeanLogProbs:
+		addLogSoftmaxRows(dst, logits, vocabSize)
+	default:
+		addRows(dst, logits)
+	}
+}
+
+func finalizeTeacherProbs(values []float32, nTeachers, vocabSize int) {
+	if nTeachers <= 0 {
+		return
+	}
+	scale := float32(1.0 / float64(nTeachers))
+	for i := range values {
+		values[i] *= scale
+	}
+	softmaxRowsInPlace(values, vocabSize)
 }
 
 func (e *distillationEnsemble) teacherProbBuffer(tokens int) []float32 {
