@@ -2563,14 +2563,25 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         break;
       }
       case OP_LESS_THAN: {
-        if (op.n_float_params < 1) {
-          throw std::runtime_error("OP_LESS_THAN requires scalar");
+        if (op.n_inputs >= 2) {
+          set_out(op, 0, get(op, 0) < get(op, 1));
+        } else {
+          if (op.n_float_params < 1) {
+            throw std::runtime_error("OP_LESS_THAN requires a second input or scalar");
+          }
+          set_out(op, 0, get(op, 0) < mx::array(op.float_params[0], mx::float32));
         }
-        set_out(op, 0, get(op, 0) < mx::array(op.float_params[0], mx::float32));
         break;
       }
       case OP_GREATER_EQ: {
-        set_out(op, 0, get(op, 0) >= get(op, 1));
+        if (op.n_inputs >= 2) {
+          set_out(op, 0, get(op, 0) >= get(op, 1));
+        } else {
+          if (op.n_float_params < 1) {
+            throw std::runtime_error("OP_GREATER_EQ requires a second input or scalar");
+          }
+          set_out(op, 0, get(op, 0) >= mx::array(op.float_params[0], mx::float32));
+        }
         break;
       }
       case OP_ARANGE: {
@@ -2952,6 +2963,23 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mx::astype(x_f32 * rms_inv * scale, x.dtype()));
         break;
       }
+      case OP_LAYERNORM: {
+        float eps = (op.n_float_params > 0) ? op.float_params[0] : 1e-5f;
+        auto x = get(op, 0);
+        auto x_f32 = mx::astype(x, mx::float32);
+        auto mean = mx::mean(x_f32, -1, true);
+        auto centered = x_f32 - mean;
+        auto variance = mx::mean(mx::square(centered), -1, true);
+        auto y = centered / mx::sqrt(variance + eps);
+        if (op.n_inputs >= 2) {
+          y = y * mx::astype(get(op, 1), mx::float32);
+        }
+        if (op.n_inputs >= 3) {
+          y = y + mx::astype(get(op, 2), mx::float32);
+        }
+        set_out(op, 0, mx::astype(y, x.dtype()));
+        break;
+      }
       case OP_ROPE: {
         if (op.n_int_params < 2) {
           throw std::runtime_error("OP_ROPE requires int params: T, head_dim");
@@ -3073,6 +3101,10 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, 1.0f / mx::sqrt(get(op, 0)));
         break;
       }
+      case OP_RECIPROCAL: {
+        set_out(op, 0, 1.0f / get(op, 0));
+        break;
+      }
       case OP_SIN: {
         set_out(op, 0, mx::sin(get(op, 0)));
         break;
@@ -3083,6 +3115,90 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
       }
       case OP_EXP: {
         set_out(op, 0, mx::exp(get(op, 0)));
+        break;
+      }
+      case OP_LOG: {
+        set_out(op, 0, mx::log(get(op, 0)));
+        break;
+      }
+      case OP_POW: {
+        if (op.n_inputs < 2 && op.n_float_params < 1) {
+          throw std::runtime_error("OP_POW requires a second input or exponent");
+        }
+        auto exponent = (op.n_inputs >= 2)
+            ? get(op, 1)
+            : mx::array(op.float_params[0], mx::float32);
+        // mx::power handles negative bases (e.g. (-2)^2) correctly; the
+        // exp(log(x)*e) identity would produce NaN for any negative input.
+        set_out(op, 0, mx::power(get(op, 0), exponent));
+        break;
+      }
+      case OP_ABS: {
+        set_out(op, 0, mx::abs(get(op, 0)));
+        break;
+      }
+      case OP_CLAMP: {
+        if (op.n_float_params < 2) {
+          throw std::runtime_error("OP_CLAMP requires min and max float params");
+        }
+        set_out(op, 0, mx::minimum(
+                           mx::maximum(get(op, 0), mx::array(op.float_params[0], mx::float32)),
+                           mx::array(op.float_params[1], mx::float32)));
+        break;
+      }
+      case OP_MINIMUM: {
+        if (op.n_inputs >= 2) {
+          set_out(op, 0, mx::minimum(get(op, 0), get(op, 1)));
+        } else {
+          if (op.n_float_params < 1) {
+            throw std::runtime_error("OP_MINIMUM requires a second input or scalar");
+          }
+          set_out(op, 0, mx::minimum(get(op, 0), mx::array(op.float_params[0], mx::float32)));
+        }
+        break;
+      }
+      case OP_MAXIMUM: {
+        if (op.n_inputs >= 2) {
+          set_out(op, 0, mx::maximum(get(op, 0), get(op, 1)));
+        } else {
+          if (op.n_float_params < 1) {
+            throw std::runtime_error("OP_MAXIMUM requires a second input or scalar");
+          }
+          set_out(op, 0, mx::maximum(get(op, 0), mx::array(op.float_params[0], mx::float32)));
+        }
+        break;
+      }
+      case OP_GREATER_THAN: {
+        if (op.n_inputs >= 2) {
+          set_out(op, 0, get(op, 0) > get(op, 1));
+        } else {
+          if (op.n_float_params < 1) {
+            throw std::runtime_error("OP_GREATER_THAN requires a second input or scalar");
+          }
+          set_out(op, 0, get(op, 0) > mx::array(op.float_params[0], mx::float32));
+        }
+        break;
+      }
+      case OP_LESS_EQ: {
+        if (op.n_inputs >= 2) {
+          set_out(op, 0, get(op, 0) <= get(op, 1));
+        } else {
+          if (op.n_float_params < 1) {
+            throw std::runtime_error("OP_LESS_EQ requires a second input or scalar");
+          }
+          set_out(op, 0, get(op, 0) <= mx::array(op.float_params[0], mx::float32));
+        }
+        break;
+      }
+      case OP_EQUAL: {
+        if (op.n_inputs >= 2) {
+          set_out(op, 0, get(op, 0) == get(op, 1));
+        } else {
+          if (op.n_float_params < 1) {
+            throw std::runtime_error("OP_EQUAL requires a second input or scalar");
+          }
+          set_out(op, 0, get(op, 0) == mx::array(op.float_params[0], mx::float32));
+        }
         break;
       }
       case OP_SOFTPLUS: {

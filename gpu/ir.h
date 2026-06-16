@@ -81,6 +81,17 @@ enum OpType {
   OP_MOE_FEED_FORWARD = 74,
   OP_MASKED_SMOOTH_L1 = 75,
   OP_Z_LOSS = 76,
+  OP_LOG = 77,
+  OP_RECIPROCAL = 78,
+  OP_POW = 79,
+  OP_ABS = 80,
+  OP_CLAMP = 81,
+  OP_MINIMUM = 82,
+  OP_MAXIMUM = 83,
+  OP_GREATER_THAN = 84,
+  OP_LESS_EQ = 85,
+  OP_EQUAL = 86,
+  OP_LAYERNORM = 87,
 };
 
 struct IRop {

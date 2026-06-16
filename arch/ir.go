@@ -25,11 +25,16 @@ const (
 	OpSquare               = 20 // OP_SQUARE
 	OpSub                  = 21 // OP_SUB
 	OpDiv                  = 22 // OP_DIV
+	OpWhere                = 25 // OP_WHERE
+	OpLessThan             = 26 // OP_LESS_THAN
+	OpGreaterEq            = 27 // OP_GREATER_EQ
 	OpArange               = 28 // OP_ARANGE
 	OpMeanAxis             = 29 // OP_MEAN_AXIS
 	OpFull                 = 30 // OP_FULL
 	OpRMSNorm              = 33 // OP_RMSNORM
 	OpRoPE                 = 34 // OP_ROPE
+	OpSqrt                 = 35 // OP_SQRT
+	OpRSqrt                = 36 // OP_RSQRT
 	OpExp                  = 39 // OP_EXP
 	OpOuter                = 40 // OP_OUTER
 	OpGELU                 = 42 // OP_GELU
@@ -62,6 +67,17 @@ const (
 	OpMoEFeedForward       = 74 // OP_MOE_FEED_FORWARD
 	OpMaskedSmoothL1       = 75 // OP_MASKED_SMOOTH_L1
 	OpZLoss                = 76 // OP_Z_LOSS
+	OpLog                  = 77 // OP_LOG
+	OpReciprocal           = 78 // OP_RECIPROCAL
+	OpPow                  = 79 // OP_POW
+	OpAbs                  = 80 // OP_ABS
+	OpClamp                = 81 // OP_CLAMP
+	OpMinimum              = 82 // OP_MINIMUM
+	OpMaximum              = 83 // OP_MAXIMUM
+	OpGreaterThan          = 84 // OP_GREATER_THAN
+	OpLessEq               = 85 // OP_LESS_EQ
+	OpEqual                = 86 // OP_EQUAL
+	OpLayerNorm            = 87 // OP_LAYERNORM
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -239,6 +255,18 @@ func (p *Program) ZLoss(logits, output string) {
 // RMSNorm emits RMS normalization with a learned scale parameter.
 func (p *Program) RMSNorm(x, scale, output string, eps float32) {
 	p.AddOp(OpRMSNorm, []string{x, scale}, []string{output}, []float32{eps}, nil)
+}
+
+// LayerNorm emits layer normalization over the last dimension with learned
+// affine scale and bias parameters.
+func (p *Program) LayerNorm(x, scale, bias, output string, eps float32) {
+	p.AddOp(OpLayerNorm, []string{x, scale, bias}, []string{output}, []float32{eps}, nil)
+}
+
+// LayerNormNoAffine emits layer normalization over the last dimension without
+// learned affine parameters.
+func (p *Program) LayerNormNoAffine(x, output string, eps float32) {
+	p.AddOp(OpLayerNorm, []string{x}, []string{output}, []float32{eps}, nil)
 }
 
 // RoPE emits rotary position embeddings.
@@ -447,6 +475,111 @@ func (p *Program) ScatterPositions(input, updates, positions, output string, B, 
 // Exp emits element-wise exponential: output = exp(a).
 func (p *Program) Exp(a, output string) {
 	p.AddOp(OpExp, []string{a}, []string{output}, nil, nil)
+}
+
+// Log emits element-wise natural logarithm.
+func (p *Program) Log(a, output string) {
+	p.AddOp(OpLog, []string{a}, []string{output}, nil, nil)
+}
+
+// Sqrt emits element-wise square root.
+func (p *Program) Sqrt(a, output string) {
+	p.AddOp(OpSqrt, []string{a}, []string{output}, nil, nil)
+}
+
+// RSqrt emits element-wise reciprocal square root.
+func (p *Program) RSqrt(a, output string) {
+	p.AddOp(OpRSqrt, []string{a}, []string{output}, nil, nil)
+}
+
+// Reciprocal emits element-wise reciprocal.
+func (p *Program) Reciprocal(a, output string) {
+	p.AddOp(OpReciprocal, []string{a}, []string{output}, nil, nil)
+}
+
+// Pow emits element-wise power with tensor exponents.
+func (p *Program) Pow(a, exponent, output string) {
+	p.AddOp(OpPow, []string{a, exponent}, []string{output}, nil, nil)
+}
+
+// PowScalar emits element-wise power with a scalar exponent.
+func (p *Program) PowScalar(a string, exponent float32, output string) {
+	p.AddOp(OpPow, []string{a}, []string{output}, []float32{exponent}, nil)
+}
+
+// Abs emits element-wise absolute value.
+func (p *Program) Abs(a, output string) {
+	p.AddOp(OpAbs, []string{a}, []string{output}, nil, nil)
+}
+
+// Clamp emits element-wise clamp to [minValue, maxValue].
+func (p *Program) Clamp(a string, minValue, maxValue float32, output string) {
+	p.AddOp(OpClamp, []string{a}, []string{output}, []float32{minValue, maxValue}, nil)
+}
+
+// Minimum emits element-wise minimum.
+func (p *Program) Minimum(a, b, output string) {
+	p.AddOp(OpMinimum, []string{a, b}, []string{output}, nil, nil)
+}
+
+// Maximum emits element-wise maximum.
+func (p *Program) Maximum(a, b, output string) {
+	p.AddOp(OpMaximum, []string{a, b}, []string{output}, nil, nil)
+}
+
+// Where emits element-wise select: condition ? ifTrue : ifFalse.
+func (p *Program) Where(condition, ifTrue, ifFalse, output string) {
+	p.AddOp(OpWhere, []string{condition, ifTrue, ifFalse}, []string{output}, nil, nil)
+}
+
+// LessThan emits element-wise less-than comparison.
+func (p *Program) LessThan(a, b, output string) {
+	p.AddOp(OpLessThan, []string{a, b}, []string{output}, nil, nil)
+}
+
+// LessThanScalar emits element-wise less-than comparison against a scalar.
+func (p *Program) LessThanScalar(a string, scalar float32, output string) {
+	p.AddOp(OpLessThan, []string{a}, []string{output}, []float32{scalar}, nil)
+}
+
+// GreaterThan emits element-wise greater-than comparison.
+func (p *Program) GreaterThan(a, b, output string) {
+	p.AddOp(OpGreaterThan, []string{a, b}, []string{output}, nil, nil)
+}
+
+// GreaterThanScalar emits element-wise greater-than comparison against a scalar.
+func (p *Program) GreaterThanScalar(a string, scalar float32, output string) {
+	p.AddOp(OpGreaterThan, []string{a}, []string{output}, []float32{scalar}, nil)
+}
+
+// GreaterEq emits element-wise greater-than-or-equal comparison.
+func (p *Program) GreaterEq(a, b, output string) {
+	p.AddOp(OpGreaterEq, []string{a, b}, []string{output}, nil, nil)
+}
+
+// GreaterEqScalar emits element-wise greater-than-or-equal comparison against a scalar.
+func (p *Program) GreaterEqScalar(a string, scalar float32, output string) {
+	p.AddOp(OpGreaterEq, []string{a}, []string{output}, []float32{scalar}, nil)
+}
+
+// LessEq emits element-wise less-than-or-equal comparison.
+func (p *Program) LessEq(a, b, output string) {
+	p.AddOp(OpLessEq, []string{a, b}, []string{output}, nil, nil)
+}
+
+// LessEqScalar emits element-wise less-than-or-equal comparison against a scalar.
+func (p *Program) LessEqScalar(a string, scalar float32, output string) {
+	p.AddOp(OpLessEq, []string{a}, []string{output}, []float32{scalar}, nil)
+}
+
+// Equal emits element-wise equality comparison.
+func (p *Program) Equal(a, b, output string) {
+	p.AddOp(OpEqual, []string{a, b}, []string{output}, nil, nil)
+}
+
+// EqualScalar emits element-wise equality comparison against a scalar.
+func (p *Program) EqualScalar(a string, scalar float32, output string) {
+	p.AddOp(OpEqual, []string{a}, []string{output}, []float32{scalar}, nil)
 }
 
 // Softplus emits element-wise softplus: output = log(1 + exp(a)).

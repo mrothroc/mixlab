@@ -26,11 +26,16 @@ const (
 	OpSquare               = 20
 	OpSub                  = 21
 	OpDiv                  = 22
+	OpWhere                = 25
+	OpLessThan             = 26
+	OpGreaterEq            = 27
 	OpArange               = 28
 	OpMeanAxis             = 29
 	OpFull                 = 30
 	OpRMSNorm              = 33
 	OpRoPE                 = 34
+	OpSqrt                 = 35
+	OpRSqrt                = 36
 	OpExp                  = 39
 	OpOuter                = 40
 	OpGELU                 = 42
@@ -63,6 +68,17 @@ const (
 	OpMoEFeedForward       = 74
 	OpMaskedSmoothL1       = 75
 	OpZLoss                = 76
+	OpLog                  = 77
+	OpReciprocal           = 78
+	OpPow                  = 79
+	OpAbs                  = 80
+	OpClamp                = 81
+	OpMinimum              = 82
+	OpMaximum              = 83
+	OpGreaterThan          = 84
+	OpLessEq               = 85
+	OpEqual                = 86
+	OpLayerNorm            = 87
 )
 
 const (

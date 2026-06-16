@@ -85,6 +85,35 @@ func TestRMSNorm(t *testing.T) {
 	}
 }
 
+func TestLayerNorm(t *testing.T) {
+	p := NewProgram(2)
+	p.LayerNorm("x", "scale", "bias", "x_norm", 1e-5)
+	p.LayerNormNoAffine("x", "x_norm_no_affine", 1e-6)
+	if len(p.Ops) != 2 {
+		t.Fatalf("expected 2 ops, got %d", len(p.Ops))
+	}
+	affine := p.Ops[0]
+	if affine.Code != OpLayerNorm {
+		t.Fatalf("expected OpLayerNorm (%d), got %d", OpLayerNorm, affine.Code)
+	}
+	if len(affine.Inputs) != 3 || affine.Inputs[1] != "scale" || affine.Inputs[2] != "bias" {
+		t.Fatalf("bad affine LayerNorm inputs: %v", affine.Inputs)
+	}
+	if len(affine.FloatParams) != 1 || affine.FloatParams[0] != 1e-5 {
+		t.Fatalf("bad affine LayerNorm params: %v", affine.FloatParams)
+	}
+	noAffine := p.Ops[1]
+	if noAffine.Code != OpLayerNorm {
+		t.Fatalf("expected OpLayerNorm (%d), got %d", OpLayerNorm, noAffine.Code)
+	}
+	if len(noAffine.Inputs) != 1 || noAffine.Inputs[0] != "x" {
+		t.Fatalf("bad non-affine LayerNorm inputs: %v", noAffine.Inputs)
+	}
+	if len(noAffine.FloatParams) != 1 || noAffine.FloatParams[0] != 1e-6 {
+		t.Fatalf("bad non-affine LayerNorm params: %v", noAffine.FloatParams)
+	}
+}
+
 func TestCrossEntropyPerToken(t *testing.T) {
 	p := NewProgram(0)
 	p.CrossEntropyPerToken("logits", "targets", "per_token_nll")
@@ -344,6 +373,55 @@ func TestSub(t *testing.T) {
 	}
 	if len(op.Outputs) != 1 || op.Outputs[0] != "c" {
 		t.Fatalf("bad outputs: %v", op.Outputs)
+	}
+}
+
+func TestElementwiseHelperOps(t *testing.T) {
+	p := NewProgram(0)
+	p.Sqrt("a", "sqrt")
+	p.RSqrt("a", "rsqrt")
+	p.Reciprocal("a", "recip")
+	p.Log("a", "log")
+	p.Pow("a", "b", "pow")
+	p.PowScalar("a", 3, "pow_scalar")
+	p.Abs("a", "abs")
+	p.Clamp("a", -1, 1, "clamp")
+	p.Minimum("a", "b", "min")
+	p.Maximum("a", "b", "max")
+	p.LessThan("a", "b", "lt")
+	p.GreaterEqScalar("a", 0, "ge0")
+	p.Where("lt", "a", "b", "where")
+	want := []int{
+		OpSqrt,
+		OpRSqrt,
+		OpReciprocal,
+		OpLog,
+		OpPow,
+		OpPow,
+		OpAbs,
+		OpClamp,
+		OpMinimum,
+		OpMaximum,
+		OpLessThan,
+		OpGreaterEq,
+		OpWhere,
+	}
+	if len(p.Ops) != len(want) {
+		t.Fatalf("ops=%d want %d", len(p.Ops), len(want))
+	}
+	for i, code := range want {
+		if p.Ops[i].Code != code {
+			t.Fatalf("op[%d]=%d want %d", i, p.Ops[i].Code, code)
+		}
+	}
+	if got := p.Ops[5].FloatParams; len(got) != 1 || got[0] != 3 {
+		t.Fatalf("PowScalar params=%v want [3]", got)
+	}
+	if got := p.Ops[7].FloatParams; len(got) != 2 || got[0] != -1 || got[1] != 1 {
+		t.Fatalf("Clamp params=%v want [-1 1]", got)
+	}
+	if got := p.Ops[11].FloatParams; len(got) != 1 || got[0] != 0 {
+		t.Fatalf("GreaterEqScalar params=%v want [0]", got)
 	}
 }
 

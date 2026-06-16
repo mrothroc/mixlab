@@ -737,15 +737,37 @@ These symbols are accepted in custom weight shapes and in `params.shape`:
 | `mul` | 2 | 1 | None | Elementwise multiply. |
 | `div` | 2 | 1 | None | Elementwise divide. |
 | `scalar_mul` | 1 | 1 | `scalar` | Multiply tensor by scalar. |
+| `where` / `select` | 3 | 1 | None | Elementwise select: condition, true value, false value. |
+| `lt` / `less_than` | 1 or 2 | 1 | `scalar` when one input | Elementwise less-than comparison. |
+| `gt` / `greater_than` | 1 or 2 | 1 | `scalar` when one input | Elementwise greater-than comparison. |
+| `ge` / `gte` / `greater_eq` | 1 or 2 | 1 | `scalar` when one input | Elementwise greater-than-or-equal comparison. |
+| `le` / `lte` / `less_eq` | 1 or 2 | 1 | `scalar` when one input | Elementwise less-than-or-equal comparison. |
+| `eq` / `equal` | 1 or 2 | 1 | `scalar` when one input | Elementwise equality comparison. |
+| `min` / `minimum` | 1 or 2 | 1 | `scalar` when one input | Elementwise minimum. |
+| `max` / `maximum` | 1 or 2 | 1 | `scalar` when one input | Elementwise maximum. |
 | `sigmoid` | 1 | 1 | None | Elementwise sigmoid. |
 | `silu` | 1 | 1 | None | SiLU activation. |
 | `gelu` | 1 | 1 | None | GELU activation. |
 | `relu` | 1 | 1 | None | ReLU activation. |
 | `tanh` | 1 | 1 | None | Tanh activation. |
+| `exp` | 1 | 1 | None | Elementwise exponential. |
+| `log` | 1 | 1 | None | Elementwise natural logarithm. |
+| `sqrt` | 1 | 1 | None | Elementwise square root. |
+| `rsqrt` | 1 | 1 | None | Elementwise reciprocal square root. |
+| `reciprocal` | 1 | 1 | None | Elementwise reciprocal. |
+| `pow` | 1 or 2 | 1 | `exponent` when one input | Elementwise power. |
+| `abs` | 1 | 1 | None | Elementwise absolute value. |
+| `clamp` | 1 | 1 | `min`, `max` | Elementwise clamp. |
 | `softmax` | 1 | 1 | `axis` | Softmax over an axis. |
+| `mean` / `mean_axis` | 1 | 1 | `axis` | Mean reduction over an axis. |
+| `arange` | 0 | 1 | `start`, `end` | Integer range `[start, end)`. |
+| `full` | 0 | 1 | `shape`, `value` | Constant float tensor. |
 | `reshape` | 1 | 1 | `shape` | Shape values can use symbolic dims. |
 | `transpose` | 1 | 1 | `axes` | Permute tensor dimensions. |
+| `dropout` | 1 | 1 | `rate` | Inverted dropout; active only in training. |
+| `causal_mask` | 1 | 1 | `T`, `window_size` | Applies Mixlab's causal or sliding-window attention mask. `T` defaults to current sequence length; `window_size: 0` means full causal. |
 | `rmsnorm` / `rms_norm` | 2 | 1 | `eps` | Inputs are typically `[x, scale]`. |
+| `layernorm` / `layer_norm` | 1 or 3 | 1 | `eps` | Non-affine LayerNorm with one input, or affine LayerNorm with `[x, scale, bias]`. |
 | `rope` | 2 | 2 | `T`, `head_dim`, `base` | Rotary embedding helper. Outputs are rotated Q and K. |
 
 ### Param keys
@@ -756,12 +778,17 @@ The custom-op decoder recognizes these `params` keys:
 |------|------|---------|
 | `shape` | array of strings/numbers | `reshape` |
 | `axes` | array of integers | `transpose` |
-| `axis` | integer | `softmax` |
+| `axis` | integer | `softmax`, `mean_axis` |
 | `head_dim` | integer | `rope` |
-| `T` | string or number | `rope` |
-| `scalar` | number | `scalar_mul` |
-| `eps` | number | `rmsnorm` |
+| `T` | string or number | `rope`, `causal_mask` |
+| `window_size` | integer | `causal_mask` |
+| `scalar` | number | `scalar_mul`, one-input comparisons, one-input `min`/`max` |
+| `value` | number | `full` |
+| `eps` | number | `rmsnorm`, `layernorm` |
 | `base` | number | `rope` |
+| `rate` | number | `dropout` |
+| `exponent` | number | one-input `pow` |
+| `min` / `max` | number | `clamp` |
 
 ### Custom block example with reshape
 

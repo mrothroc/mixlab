@@ -391,9 +391,14 @@ func TestEmitCustomBlockIR_MultiOutput(t *testing.T) {
 func TestOpNameToCode_Coverage(t *testing.T) {
 	required := []string{
 		"matmul", "add", "sub", "mul", "scalar_mul", "div",
-		"scan", "scan_tv", "embed", "outer", "square", "exp",
+		"where", "select", "lt", "less_than", "ge", "gte", "greater_eq", "greater_equal",
+		"arange", "mean", "mean_axis", "full",
+		"scan", "scan_tv", "embed", "outer", "square", "sqrt", "rsqrt", "reciprocal", "exp", "log",
+		"pow", "abs", "clamp", "min", "minimum", "max", "maximum",
+		"gt", "greater_than", "le", "lte", "less_eq", "less_equal", "eq", "equal",
 		"sigmoid", "silu", "gelu", "relu", "tanh",
-		"softmax", "reshape", "transpose", "rmsnorm", "rope",
+		"softmax", "reshape", "transpose", "dropout", "causal_mask",
+		"rmsnorm", "rms_norm", "layernorm", "layer_norm", "rope",
 		"slice", "concat",
 	}
 	for _, name := range required {
@@ -838,6 +843,109 @@ func TestEmitCustomBlockIR_RMSNormWithEps(t *testing.T) {
 	}
 	if len(op.FloatParams) != 1 || op.FloatParams[0] != 1e-5 {
 		t.Errorf("rmsnorm eps = %v, want [1e-5]", op.FloatParams)
+	}
+}
+
+func TestEmitCustomBlockIR_LayerNormWithEps(t *testing.T) {
+	spec := BlockSpec{
+		Type: "custom",
+		Name: "layernorm_test",
+		Weights: []WeightSpec{
+			{Name: "scale", Shape: []string{"D"}},
+			{Name: "bias", Shape: []string{"D"}},
+		},
+		Ops: []OpSpec{
+			{Op: "layer_norm", Inputs: []string{"x", "scale", "bias"}, Output: "x", Params: map[string]interface{}{
+				"eps": float64(1e-5),
+			}},
+		},
+	}
+	prog := NewProgram(2)
+	_, err := emitCustomBlockIR(prog, spec, "x", 0, 128, 64, 1, 1024, 0)
+	if err != nil {
+		t.Fatalf("emitCustomBlockIR: %v", err)
+	}
+	op := prog.Ops[0]
+	if op.Code != OpLayerNorm {
+		t.Fatalf("expected OpLayerNorm, got %d", op.Code)
+	}
+	if len(op.Inputs) != 3 || op.Inputs[1] != "w0" || op.Inputs[2] != "w1" {
+		t.Fatalf("layer_norm inputs = %v, want [x w0 w1]", op.Inputs)
+	}
+	if len(op.FloatParams) != 1 || op.FloatParams[0] != 1e-5 {
+		t.Errorf("layer_norm eps = %v, want [1e-5]", op.FloatParams)
+	}
+}
+
+func TestEmitCustomBlockIR_NewPrototypeOps(t *testing.T) {
+	spec := BlockSpec{
+		Type: "custom",
+		Name: "prototype_ops",
+		Weights: []WeightSpec{
+			{Name: "w", Shape: []string{"D", "D"}},
+		},
+		Ops: []OpSpec{
+			{Op: "full", Output: "ones", Params: map[string]interface{}{
+				"shape": []interface{}{"BT", "D"},
+				"value": float64(1),
+			}},
+			{Op: "matmul", Inputs: []string{"x", "w"}, Output: "h"},
+			{Op: "causal_mask", Inputs: []string{"h"}, Output: "masked", Params: map[string]interface{}{
+				"T":           "T",
+				"window_size": float64(4),
+			}},
+			{Op: "dropout", Inputs: []string{"masked"}, Output: "dropped", Params: map[string]interface{}{
+				"rate": float64(0.25),
+			}},
+			{Op: "mean_axis", Inputs: []string{"dropped"}, Output: "mean", Params: map[string]interface{}{
+				"axis": float64(-1),
+			}},
+			{Op: "sqrt", Inputs: []string{"ones"}, Output: "sqrt"},
+			{Op: "log", Inputs: []string{"sqrt"}, Output: "log"},
+			{Op: "pow", Inputs: []string{"log"}, Output: "pow", Params: map[string]interface{}{
+				"exponent": float64(2),
+			}},
+			{Op: "clamp", Inputs: []string{"pow"}, Output: "clamped", Params: map[string]interface{}{
+				"min": float64(-1),
+				"max": float64(1),
+			}},
+			{Op: "gt", Inputs: []string{"clamped"}, Output: "keep", Params: map[string]interface{}{
+				"scalar": float64(0),
+			}},
+			{Op: "select", Inputs: []string{"keep", "clamped", "ones"}, Output: "x"},
+		},
+	}
+	prog := NewProgram(1)
+	_, err := emitCustomBlockIR(prog, spec, "x", 0, 8, 6, 2, 32, 0)
+	if err != nil {
+		t.Fatalf("emitCustomBlockIR: %v", err)
+	}
+	if got := prog.Ops[0].Code; got != OpFull {
+		t.Fatalf("op0=%d want OpFull", got)
+	}
+	if got := prog.Ops[0].IntParams; len(got) != 2 || got[0] != 12 || got[1] != 8 {
+		t.Fatalf("full shape params=%v want [12 8]", got)
+	}
+	if got := prog.Ops[2].IntParams; len(got) != 2 || got[0] != 6 || got[1] != 4 {
+		t.Fatalf("causal_mask params=%v want [6 4]", got)
+	}
+	if got := prog.Ops[3].FloatParams; len(got) != 1 || got[0] != 0.25 {
+		t.Fatalf("dropout params=%v want [0.25]", got)
+	}
+	if got := prog.Ops[4].IntParams; len(got) != 1 || got[0] != -1 {
+		t.Fatalf("mean_axis params=%v want [-1]", got)
+	}
+	if got := prog.Ops[7].FloatParams; len(got) != 1 || got[0] != 2 {
+		t.Fatalf("pow params=%v want [2]", got)
+	}
+	if got := prog.Ops[8].FloatParams; len(got) != 2 || got[0] != -1 || got[1] != 1 {
+		t.Fatalf("clamp params=%v want [-1 1]", got)
+	}
+	if got := prog.Ops[9].Code; got != OpGreaterThan {
+		t.Fatalf("op9=%d want OpGreaterThan", got)
+	}
+	if got := prog.Ops[10].Code; got != OpWhere {
+		t.Fatalf("op10=%d want OpWhere", got)
 	}
 }
 

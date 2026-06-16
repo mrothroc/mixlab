@@ -9,32 +9,67 @@ import (
 
 // opNameToCode maps JSON op names to IR op codes for custom blocks.
 var opNameToCode = map[string]int{
-	"matmul":      OpMatMul,
-	"add":         OpAdd,
-	"sub":         OpSub,
-	"mul":         OpMul,
-	"scalar_mul":  OpScalarMul,
-	"div":         OpDiv,
-	"scan":        OpScan,
-	"matrix_scan": OpMatrixScan,
-	"scan_tv":     OpScanTV,
-	"embed":       OpEmbed,
-	"outer":       OpOuter,
-	"square":      OpSquare,
-	"exp":         OpExp,
-	"sigmoid":     OpSigmoid,
-	"silu":        OpSiLU,
-	"gelu":        OpGELU,
-	"relu":        OpReLU,
-	"tanh":        OpTanh,
-	"softmax":     OpSoftmax,
-	"reshape":     OpReshape,
-	"transpose":   OpTranspose,
-	"slice":       OpSlice,
-	"concat":      OpConcat,
-	"rmsnorm":     OpRMSNorm,
-	"rms_norm":    OpRMSNorm,
-	"rope":        OpRoPE,
+	"matmul":        OpMatMul,
+	"add":           OpAdd,
+	"sub":           OpSub,
+	"mul":           OpMul,
+	"scalar_mul":    OpScalarMul,
+	"div":           OpDiv,
+	"where":         OpWhere,
+	"select":        OpWhere,
+	"lt":            OpLessThan,
+	"less_than":     OpLessThan,
+	"ge":            OpGreaterEq,
+	"gte":           OpGreaterEq,
+	"greater_eq":    OpGreaterEq,
+	"greater_equal": OpGreaterEq,
+	"arange":        OpArange,
+	"mean":          OpMeanAxis,
+	"mean_axis":     OpMeanAxis,
+	"full":          OpFull,
+	"scan":          OpScan,
+	"matrix_scan":   OpMatrixScan,
+	"scan_tv":       OpScanTV,
+	"embed":         OpEmbed,
+	"outer":         OpOuter,
+	"square":        OpSquare,
+	"sqrt":          OpSqrt,
+	"rsqrt":         OpRSqrt,
+	"reciprocal":    OpReciprocal,
+	"exp":           OpExp,
+	"log":           OpLog,
+	"pow":           OpPow,
+	"abs":           OpAbs,
+	"clamp":         OpClamp,
+	"min":           OpMinimum,
+	"minimum":       OpMinimum,
+	"max":           OpMaximum,
+	"maximum":       OpMaximum,
+	"gt":            OpGreaterThan,
+	"greater_than":  OpGreaterThan,
+	"le":            OpLessEq,
+	"lte":           OpLessEq,
+	"less_eq":       OpLessEq,
+	"less_equal":    OpLessEq,
+	"eq":            OpEqual,
+	"equal":         OpEqual,
+	"sigmoid":       OpSigmoid,
+	"silu":          OpSiLU,
+	"gelu":          OpGELU,
+	"relu":          OpReLU,
+	"tanh":          OpTanh,
+	"softmax":       OpSoftmax,
+	"reshape":       OpReshape,
+	"transpose":     OpTranspose,
+	"slice":         OpSlice,
+	"concat":        OpConcat,
+	"dropout":       OpDropout,
+	"causal_mask":   OpCausalMask,
+	"rmsnorm":       OpRMSNorm,
+	"rms_norm":      OpRMSNorm,
+	"layernorm":     OpLayerNorm,
+	"layer_norm":    OpLayerNorm,
+	"rope":          OpRoPE,
 }
 
 // resolveShapeSymbol resolves a slice of symbolic shape dimensions to concrete
@@ -202,6 +237,13 @@ func emitCustomBlockIR(
 			}
 			intParams = append(intParams, n)
 		}
+		if v, ok := p["window_size"]; ok {
+			n, err := valueToInt(v)
+			if err != nil {
+				return nil, nil, fmt.Errorf("window_size param: %w", err)
+			}
+			intParams = append(intParams, n)
+		}
 		if v, ok := p["head_dim"]; ok {
 			n, err := valueToInt(v)
 			if err != nil {
@@ -256,6 +298,13 @@ func emitCustomBlockIR(
 			}
 			floatParams = append(floatParams, f)
 		}
+		if v, ok := p["value"]; ok {
+			f, err := valueToFloat(v)
+			if err != nil {
+				return nil, nil, fmt.Errorf("value param: %w", err)
+			}
+			floatParams = append(floatParams, f)
+		}
 		if v, ok := p["eps"]; ok {
 			f, err := valueToFloat(v)
 			if err != nil {
@@ -267,6 +316,34 @@ func emitCustomBlockIR(
 			f, err := valueToFloat(v)
 			if err != nil {
 				return nil, nil, fmt.Errorf("base param: %w", err)
+			}
+			floatParams = append(floatParams, f)
+		}
+		if v, ok := p["rate"]; ok {
+			f, err := valueToFloat(v)
+			if err != nil {
+				return nil, nil, fmt.Errorf("rate param: %w", err)
+			}
+			floatParams = append(floatParams, f)
+		}
+		if v, ok := p["exponent"]; ok {
+			f, err := valueToFloat(v)
+			if err != nil {
+				return nil, nil, fmt.Errorf("exponent param: %w", err)
+			}
+			floatParams = append(floatParams, f)
+		}
+		if v, ok := p["min"]; ok {
+			f, err := valueToFloat(v)
+			if err != nil {
+				return nil, nil, fmt.Errorf("min param: %w", err)
+			}
+			floatParams = append(floatParams, f)
+		}
+		if v, ok := p["max"]; ok {
+			f, err := valueToFloat(v)
+			if err != nil {
+				return nil, nil, fmt.Errorf("max param: %w", err)
 			}
 			floatParams = append(floatParams, f)
 		}
@@ -305,10 +382,42 @@ func emitCustomBlockIR(
 				return wi, fmt.Errorf("custom block %q op[%d] slice params: %w", spec.Name, i, err)
 			}
 		}
+		if code == OpCausalMask {
+			intParams, err = causalMaskIntParams(op.Params, D, heads, T, B, V)
+			if err != nil {
+				return wi, fmt.Errorf("custom block %q op[%d] causal_mask params: %w", spec.Name, i, err)
+			}
+		}
 		prog.AddOp(code, inputs, outputs, floatParams, intParams)
 	}
 
 	return wi, nil
+}
+
+// causalMaskIntParams returns causal mask params in the order [T, window_size].
+// T defaults to the block sequence length; window_size defaults to full causal
+// attention.
+func causalMaskIntParams(p map[string]interface{}, D, H, T, B, V int) ([]int, error) {
+	timeLen := T
+	windowSize := 0
+	if p != nil {
+		if v, ok := p["T"]; ok {
+			ss := []string{fmt.Sprint(v)}
+			res, err := resolveShapeSymbol(ss, D, H, T, B, V)
+			if err != nil {
+				return nil, fmt.Errorf("causal_mask T param: %w", err)
+			}
+			timeLen = res[0]
+		}
+		if v, ok := p["window_size"]; ok {
+			n, err := valueToInt(v)
+			if err != nil {
+				return nil, fmt.Errorf("window_size param: %w", err)
+			}
+			windowSize = n
+		}
+	}
+	return []int{timeLen, windowSize}, nil
 }
 
 // sliceIntParams returns slice op int params in the order [start, end, step, axis]
