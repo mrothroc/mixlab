@@ -523,8 +523,9 @@ Custom blocks let you define novel architectures entirely in JSON.
 ```
 
 See `examples/custom_geglu.json` for a runnable example and
-[`docs/config-reference.md`](docs/config-reference.md) for the full JSON schema,
-shape symbols, op list, and training fields.
+[`docs/config-reference.md`](docs/config-reference.md#custom-blocks) for the
+canonical custom-block schema, shape symbols, supported-op reference, and
+training fields.
 
 ## Troubleshooting
 

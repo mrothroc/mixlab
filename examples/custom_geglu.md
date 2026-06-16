@@ -60,7 +60,7 @@ Each entry in `ops` describes one IR operation.
 | `inputs` | array of strings | Input tensor names (weights, intermediates, or `"x"` for block input) |
 | `output` | string | Output tensor name for single-output ops. Use `"x"` to write back to the block's hidden state |
 | `outputs` | array of strings | Output tensor names for multi-output ops such as `rope` |
-| `params` | object | Optional op parameters such as `shape`, `axes`, `axis`, `scalar`, `eps`, `T`, `head_dim`, or `base` |
+| `params` | object | Optional op parameters such as `shape`, `axes`, `axis`, `scalar`, `value`, `eps`, `rate`, `T`, `window_size`, `head_dim`, or `base` |
 
 ## Shape symbols
 
@@ -88,15 +88,19 @@ Integer literals are also allowed for fixed-size dimensions.
 
 ## Supported IR opcodes
 
+The canonical supported-op reference is in
+[`docs/config-reference.md`](../docs/config-reference.md#supported-ops). This
+section is a quick orientation for common groups.
+
 ### Linear algebra
 - `matmul` -- matrix multiply: `output = a @ b`
 
 ### Element-wise arithmetic
-- `add` -- `output = a + b`
-- `sub` -- `output = a - b`
-- `mul` -- `output = a * b`
-- `div` -- `output = a / b`
-- `scalar_mul` -- `output = a * scalar`
+- `add`, `sub`, `mul`, `div`, `scalar_mul`
+- `where` / `select`
+- comparisons: `lt`, `gt`, `ge`, `le`, `eq` and long-form aliases
+- `min` / `minimum`, `max` / `maximum`
+- `exp`, `log`, `sqrt`, `rsqrt`, `reciprocal`, `pow`, `abs`, `clamp`
 
 ### Activations
 - `sigmoid` -- `output = sigmoid(a)`
@@ -107,13 +111,20 @@ Integer literals are also allowed for fixed-size dimensions.
 
 ### Reductions
 - `softmax` -- softmax along an axis
+- `mean` / `mean_axis` -- mean along an axis
 
 ### Shape manipulation
 - `reshape` -- reshape tensor
 - `transpose` -- transpose axes
+- `concat` -- concatenate two tensors along an axis
+- `arange` -- create an integer range
+- `full` -- create a constant float tensor
 
 ### Special
 - `rmsnorm` -- RMS normalization with learned scale
+- `layernorm` / `layer_norm` -- non-affine or affine LayerNorm
+- `dropout` -- training-time inverted dropout
+- `causal_mask` -- causal or sliding-window attention masking
 - `rope` -- rotary position embeddings
 
 ## Data flow
