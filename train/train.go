@@ -140,6 +140,7 @@ type trainingProgramCacheKey struct {
 	headUntied      bool
 	mtpAuxOn        bool
 	objective       string
+	seqLen          int
 }
 
 func qatModeForStep(spec TrainingSpec, step int) string {
@@ -232,10 +233,18 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	mtpAuxActivateStep := cfg.EffectiveMTPActivateStep()
 	mtpAuxActive := !mtpAuxActivationScheduled || mtpAuxActivateStep <= 0
 	currentObjective := objectiveForStep(cfg.Training, 0)
+	currentSeqLen := cfg.Training.EffectiveSeqLenForStep(seqLen, 0)
+	currentBatchSize := batchTokens / currentSeqLen
 	programCache := make(map[trainingProgramCacheKey]*arch.Program)
 	trainingProgramForKey := func(key trainingProgramCacheKey) (*arch.Program, error) {
 		if cached := programCache[key]; cached != nil {
 			return cached, nil
+		}
+		programCfg := cfg
+		if key.seqLen > 0 && key.seqLen != cfg.SeqLen {
+			clone := *cfg
+			clone.SeqLen = key.seqLen
+			programCfg = &clone
 		}
 		state := TrainingProgramState{
 			RecurrenceActive: key.recurrenceOn,
@@ -246,9 +255,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		var built *arch.Program
 		var buildErr error
 		if recurrencePhasesScheduled {
-			built, buildErr = arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, key.recurrencePhase, state)
+			built, buildErr = arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(programCfg, key.recurrencePhase, state)
 		} else {
-			built, buildErr = BuildTrainingIRProgramFromConfig(cfg, state)
+			built, buildErr = BuildTrainingIRProgramFromConfig(programCfg, state)
 		}
 		if buildErr != nil {
 			return nil, buildErr
@@ -262,6 +271,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		headUntied:      headUntied,
 		mtpAuxOn:        mtpAuxActive,
 		objective:       currentObjective,
+		seqLen:          currentSeqLen,
 	}
 	initialProg, err := trainingProgramForKey(currentProgramKey)
 	if err != nil {
@@ -289,6 +299,12 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	case arch.ObjectiveHybrid:
 		fmt.Printf("  [%s] training objective: hybrid causal=%.2f secondary=%s\n",
 			name, cfg.Training.HybridCLMFraction, cfg.Training.EffectiveHybridSecondaryObjective())
+	}
+	if len(cfg.Training.SeqLenSchedule) > 0 {
+		fmt.Printf("  [%s] seq_len schedule: max=%d active_step0=%d\n", name, seqLen, currentSeqLen)
+	}
+	if len(cfg.Training.MLMMaskProbSchedule) > 0 {
+		fmt.Printf("  [%s] MLM mask probability schedule enabled: step0=%.3f\n", name, cfg.Training.EffectiveMLMMaskProbForStep(0))
 	}
 
 	var shapes []WeightShape
@@ -427,22 +443,22 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		lastTrainBatch := batch
 		initialSubmitStart := time.Now()
 		stopInitialSubmit := startSlowTrainingPhaseLogger(name, 0, "submit_step")
-		prepared, err := prepareObjectiveBatch(cfg, batch, 0, currentObjective)
+		prepared, err := prepareObjectiveBatchWithSeqLen(cfg, batch, 0, currentObjective, currentSeqLen)
 		if err != nil {
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("prepare step 0 objective batch: %w", err)
 		}
-		prepared, err = attachDistillationTeacherProbs(distiller, prepared, batchSize, seqLen)
+		prepared, err = attachDistillationTeacherProbs(distiller, prepared, currentBatchSize, currentSeqLen)
 		if err != nil {
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("prepare step 0 distillation batch: %w", err)
 		}
-		prepared, err = attachData2VecTargets(data2vec, prepared, currentObjective, batchSize, seqLen)
+		prepared, err = attachData2VecTargets(data2vec, prepared, currentObjective, currentBatchSize, currentSeqLen)
 		if err != nil {
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("prepare step 0 data2vec batch: %w", err)
 		}
-		if err := submitPreparedStepGPU(trainer, prepared, batchSize, seqLen, sched.At(0)); err != nil {
+		if err := submitPreparedStepGPU(trainer, prepared, currentBatchSize, currentSeqLen, sched.At(0)); err != nil {
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("submit step 0: %w", err)
 		}
@@ -466,12 +482,15 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			nextHeadUntied := headUntied || (mtpUntieScheduled && nextStep >= mtpUntieStep)
 			nextMTPAuxActive := mtpAuxActive || (mtpAuxActivationScheduled && nextStep >= mtpAuxActivateStep)
 			nextObjective := objectiveForStep(cfg.Training, nextStep)
+			nextSeqLen := cfg.Training.EffectiveSeqLenForStep(seqLen, nextStep)
+			nextBatchSize := batchTokens / nextSeqLen
 			nextProgramKey := trainingProgramCacheKey{
 				recurrencePhase: nextRecurrencePhase,
 				recurrenceOn:    nextRecurrenceActive,
 				headUntied:      nextHeadUntied,
 				mtpAuxOn:        nextMTPAuxActive,
 				objective:       nextObjective,
+				seqLen:          nextSeqLen,
 			}
 			if nextProgramKey != currentProgramKey {
 				switcher, ok := trainer.(gpuProgramSwitcher)
@@ -509,31 +528,36 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				if nextMTPAuxActive && !mtpAuxActive {
 					fmt.Printf("  [%s] MTP auxiliary loss activated at step %d\n", name, nextStep)
 				}
+				if nextSeqLen != currentSeqLen {
+					fmt.Printf("  [%s] seq_len changed at step %d: %d -> %d\n", name, nextStep, currentSeqLen, nextSeqLen)
+				}
 				currentRecurrencePhase = nextRecurrencePhase
 				recurrenceActive = nextRecurrenceActive
 				headUntied = nextHeadUntied
 				mtpAuxActive = nextMTPAuxActive
 				currentObjective = nextObjective
+				currentSeqLen = nextSeqLen
+				currentBatchSize = nextBatchSize
 				currentProgramKey = nextProgramKey
 			}
 			submitStart := time.Now()
 			stopSubmit := startSlowTrainingPhaseLogger(name, nextStep, "submit_step")
-			prepared, err := prepareObjectiveBatch(cfg, batch, nextStep, nextObjective)
+			prepared, err := prepareObjectiveBatchWithSeqLen(cfg, batch, nextStep, nextObjective, nextSeqLen)
 			if err != nil {
 				stopSubmit()
 				return 0, fmt.Errorf("prepare step %d objective batch: %w", nextStep, err)
 			}
-			prepared, err = attachDistillationTeacherProbs(distiller, prepared, batchSize, seqLen)
+			prepared, err = attachDistillationTeacherProbs(distiller, prepared, nextBatchSize, nextSeqLen)
 			if err != nil {
 				stopSubmit()
 				return 0, fmt.Errorf("prepare step %d distillation batch: %w", nextStep, err)
 			}
-			prepared, err = attachData2VecTargets(data2vec, prepared, nextObjective, batchSize, seqLen)
+			prepared, err = attachData2VecTargets(data2vec, prepared, nextObjective, nextBatchSize, nextSeqLen)
 			if err != nil {
 				stopSubmit()
 				return 0, fmt.Errorf("prepare step %d data2vec batch: %w", nextStep, err)
 			}
-			if err := submitPreparedStepGPU(trainer, prepared, batchSize, seqLen, sched.At(nextStep)); err != nil {
+			if err := submitPreparedStepGPU(trainer, prepared, nextBatchSize, nextSeqLen, sched.At(nextStep)); err != nil {
 				stopSubmit()
 				return 0, fmt.Errorf("submit step %d: %w", nextStep, err)
 			}
@@ -555,6 +579,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				return false
 			}
 			if objectiveForStep(cfg.Training, nextStep) != currentObjective {
+				return false
+			}
+			if cfg.Training.EffectiveSeqLenForStep(seqLen, nextStep) != currentSeqLen {
 				return false
 			}
 			nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)

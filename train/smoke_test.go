@@ -3,6 +3,7 @@ package train
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -44,6 +45,70 @@ func TestSmokeEmbeddedConfig(t *testing.T) {
 	if counted != prog.NumWeights {
 		t.Errorf("CountIRWeights=%d vs prog.NumWeights=%d", counted, prog.NumWeights)
 	}
+}
+
+func TestSeqLenScheduleTrainingProgramsUseScheduledShapes(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "seq_len_schedule_shape",
+		"model_dim": 16,
+		"vocab_size": 32,
+		"seq_len": 8,
+		"blocks": [
+			{"type": "plain", "heads": 2},
+			{"type": "swiglu"}
+		],
+		"training": {
+			"steps": 4,
+			"lr": 0.001,
+			"batch_tokens": 16,
+			"seq_len_schedule": [[0,4],[2,8]]
+		}
+	}`), "seq_len_schedule_shape")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+
+	shortCfg := *cfg
+	shortCfg.SeqLen = cfg.Training.EffectiveSeqLenForStep(cfg.SeqLen, 0)
+	shortProg, err := BuildTrainingIRProgramFromConfig(&shortCfg, TrainingProgramState{RecurrenceActive: true})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(short): %v", err)
+	}
+	maxProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{RecurrenceActive: true})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(max): %v", err)
+	}
+	if shortProg.NumWeights != maxProg.NumWeights {
+		t.Fatalf("scheduled weight count mismatch: short=%d max=%d", shortProg.NumWeights, maxProg.NumWeights)
+	}
+	if got, want := outputShape(t, shortProg, "x_hidden"), []int{4, 4, 16}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("short x_hidden shape = %v, want %v", got, want)
+	}
+	if got, want := outputShape(t, maxProg, "x_hidden"), []int{2, 8, 16}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("max x_hidden shape = %v, want %v", got, want)
+	}
+	if got, want := outputShape(t, shortProg, "logits"), []int{16, 32}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("short logits shape = %v, want %v", got, want)
+	}
+
+	evalProg, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildEvalIRProgramFromConfig: %v", err)
+	}
+	if got, want := outputShape(t, evalProg, "x_hidden"), []int{2, 8, 16}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("eval x_hidden shape = %v, want %v", got, want)
+	}
+}
+
+func outputShape(t *testing.T, prog *Program, name string) []int {
+	t.Helper()
+	for _, out := range prog.Outputs {
+		if out.Name == name {
+			return out.Shape
+		}
+	}
+	t.Fatalf("program missing output %q", name)
+	return nil
 }
 
 // exampleConfigCase describes a single example config for table-driven tests.

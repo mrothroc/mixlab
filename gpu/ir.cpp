@@ -211,6 +211,17 @@ mx::array masked_smooth_l1_mean(
   return mx::sum(masked) / denom;
 }
 
+mx::array z_loss_mean(const mx::array& logits) {
+  if (logits.ndim() != 2) {
+    throw std::runtime_error("z_loss expects logits shape [rows, vocab]");
+  }
+  auto logits_f32 = mx::astype(logits, mx::float32);
+  auto row_max = mx::max(logits_f32, 1, true);
+  auto shifted = logits_f32 - row_max;
+  auto log_z = row_max + mx::log(mx::sum(mx::exp(shifted), 1, true));
+  return mx::mean(mx::square(log_z));
+}
+
 mx::array as_float32(const mx::array& x) {
   return mx::astype(x, mx::float32);
 }
@@ -2423,6 +2434,10 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           throw std::runtime_error("OP_MASKED_SMOOTH_L1 requires beta float param");
         }
         set_out(op, 0, masked_smooth_l1_mean(get(op, 0), get(op, 1), get(op, 2), op.float_params[0]));
+        break;
+      }
+      case OP_Z_LOSS: {
+        set_out(op, 0, z_loss_mean(get(op, 0)));
         break;
       }
       case OP_DROPOUT: {

@@ -155,6 +155,20 @@ func emitData2VecLossIR(prog *Program, spec *Data2VecSpec) {
 	prog.Add("primary_loss", "data2vec_loss_weighted", "loss")
 }
 
+func emitZLossIR(prog *Program, logits string, weight float64, taskLossHasEvalLoss bool) bool {
+	if weight <= 0 {
+		return taskLossHasEvalLoss
+	}
+	if !taskLossHasEvalLoss {
+		prog.ScalarMul("loss", 1.0, "eval_loss")
+		taskLossHasEvalLoss = true
+	}
+	prog.ZLoss(logits, "z_loss_raw")
+	prog.ScalarMul("z_loss_raw", float32(weight), "z_loss_weighted")
+	prog.Add("loss", "z_loss_weighted", "loss")
+	return taskLossHasEvalLoss
+}
+
 func collectMoEAuxiliaryOutputs(prog *Program) (auxLosses []string, entropies []string) {
 	for _, op := range prog.Ops {
 		for _, out := range op.Outputs {

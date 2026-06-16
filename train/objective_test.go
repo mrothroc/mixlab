@@ -57,6 +57,42 @@ func TestPrepareObjectiveBatchMLMTargetsAndReplacementModes(t *testing.T) {
 	}
 }
 
+func TestPrepareObjectiveBatchUsesMLMMaskProbSchedule(t *testing.T) {
+	cfg := objectiveTestConfig()
+	cfg.Training.BatchTokens = 8
+	cfg.Training.MLMMaskProb = 0
+	cfg.Training.MLMMaskProbSchedule = [][]float64{{0, 0}, {1, 1}}
+	cfg.Training.MLMMaskTokenProb = 1
+	cfg.Training.MLMRandomTokenProb = 0
+	cfg.Training.MLMKeptUnchangedProb = 0
+	batch := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 5, 6, 7, 8, 9},
+	}
+
+	step0, err := prepareObjectiveBatch(cfg, batch, 0, arch.ObjectiveMLM)
+	if err != nil {
+		t.Fatalf("prepare step0 MLM batch: %v", err)
+	}
+	if want := []float32{0, 0, 0, 0, 0, 0, 0, 0}; !reflect.DeepEqual(step0.lossMask, want) {
+		t.Fatalf("step0 lossMask = %v, want %v", step0.lossMask, want)
+	}
+	if !reflect.DeepEqual(step0.x, batch.x) {
+		t.Fatalf("step0 x = %v, want unchanged %v", step0.x, batch.x)
+	}
+
+	step1, err := prepareObjectiveBatch(cfg, batch, 1, arch.ObjectiveMLM)
+	if err != nil {
+		t.Fatalf("prepare step1 MLM batch: %v", err)
+	}
+	if want := []float32{1, 1, 1, 1, 1, 1, 1, 1}; !reflect.DeepEqual(step1.lossMask, want) {
+		t.Fatalf("step1 lossMask = %v, want %v", step1.lossMask, want)
+	}
+	if want := []int{9, 9, 9, 9, 9, 9, 9, 9}; !reflect.DeepEqual(step1.x, want) {
+		t.Fatalf("step1 x = %v, want %v", step1.x, want)
+	}
+}
+
 func TestPrepareObjectiveBatchMNTPMasksNextInputWithoutLeakage(t *testing.T) {
 	cfg := objectiveTestConfig()
 	cfg.SeqLen = 4

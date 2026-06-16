@@ -635,6 +635,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		objective,
 		objective,
 		false,
+		0,
 		disabledSmearEmbeddingOptions(),
 		nil,
 		nil,
@@ -664,6 +665,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	objective string,
 	rootObjective string,
 	firstByteMask bool,
+	zLoss float64,
 	smearOpts smearEmbeddingOptions,
 	backoutSpec *BackoutSpec,
 	distillation *DistillationSpec,
@@ -937,6 +939,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		emitData2VecLossIR(prog, data2vec)
 	}
 	taskLossHasEvalLoss := maskedObjective || distillationEnabled || firstByteMask || (mtp != nil && mtp.EffectiveN() > 1)
+	taskLossHasEvalLoss = emitZLossIR(prog, logitsState, zLoss, taskLossHasEvalLoss)
 	moeEnabled := emitMoEAuxiliaryAggregatesIR(prog, taskLossHasEvalLoss)
 	prog.DeclareOutput("loss", TensorFloat32, []int{1})
 	if taskLossHasEvalLoss || moeEnabled {

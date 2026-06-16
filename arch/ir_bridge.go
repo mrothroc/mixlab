@@ -44,6 +44,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 			Objective:            ObjectiveCausal,
 			DistillationInactive: true,
 			Data2VecInactive:     true,
+			ZLossInactive:        true,
 		}, nil, cfg.RecurrencePhases[len(cfg.RecurrencePhases)-1].Order, false)
 	}
 	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
@@ -52,6 +53,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		Objective:            ObjectiveCausal,
 		DistillationInactive: true,
 		Data2VecInactive:     true,
+		ZLossInactive:        true,
 	}, nil, false)
 }
 
@@ -63,6 +65,7 @@ type TrainingProgramState struct {
 	MTPAuxInactive       bool
 	DistillationInactive bool
 	Data2VecInactive     bool
+	ZLossInactive        bool
 	Objective            string
 	HiddenCaptureTopK    int
 	HiddenCapturePrefix  string
@@ -151,6 +154,10 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	if cfg.Training.Data2VecActive() && !state.Data2VecInactive && state.HiddenCaptureTopK == 0 {
 		data2vec = cfg.Training.Data2Vec
 	}
+	zLoss := cfg.Training.ZLoss
+	if state.ZLossInactive {
+		zLoss = 0
+	}
 	objective := normalizeTrainingObjective(state.Objective)
 	if objective == ObjectiveCausal && strings.TrimSpace(state.Objective) == "" {
 		objective = cfg.Training.DefaultConcreteObjective()
@@ -185,6 +192,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		objective,
 		cfg.Training.EffectiveObjective(),
 		firstByteMask,
+		zLoss,
 		cfg.smearEmbeddingOptions(),
 		cfg.Backout,
 		distillation,
@@ -208,6 +216,7 @@ func BuildData2VecTeacherIRProgramFromConfig(cfg *ArchConfig, objective string) 
 		MTPAuxInactive:       true,
 		DistillationInactive: true,
 		Data2VecInactive:     true,
+		ZLossInactive:        true,
 		Objective:            objective,
 		HiddenCaptureTopK:    cfg.Training.Data2Vec.TopKLayers,
 		HiddenCapturePrefix:  "data2vec",

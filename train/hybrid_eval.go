@@ -32,7 +32,8 @@ type causalEvalSwitcher struct {
 // When the run is not hybrid, or the current program is already causal, fn runs
 // without any program switch.
 func (c causalEvalSwitcher) withCausalEvalProgram(currentKey trainingProgramCacheKey, fn func() error) error {
-	if !c.hybrid {
+	needsShapeSwitch := currentKey.seqLen > 0 && currentKey.seqLen != c.seqLen
+	if !c.hybrid && !needsShapeSwitch {
 		return fn()
 	}
 	switcher, ok := c.trainer.(gpuProgramSwitcher)
@@ -44,7 +45,10 @@ func (c causalEvalSwitcher) withCausalEvalProgram(currentKey trainingProgramCach
 	}
 	restoreKey := currentKey
 	causalKey := currentKey
-	causalKey.objective = arch.ObjectiveCausal
+	if c.hybrid {
+		causalKey.objective = arch.ObjectiveCausal
+	}
+	causalKey.seqLen = c.seqLen
 	switched := causalKey != restoreKey
 	if switched {
 		causalProg, err := c.programForKey(causalKey)

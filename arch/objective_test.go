@@ -96,6 +96,77 @@ func TestTrainingObjectiveValidation_HybridWindowSizeAllowedWhenCausalOnly(t *te
 		}`)
 }
 
+func TestTrainingRecipeKnobValidationAndDefaults(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"training": {
+		"steps": 10,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"z_loss": 0.0001,
+		"seq_len_schedule": [[0,2],[5,4]],
+		"mlm_mask_prob_schedule": [[0,0.3],[5,0.15]]
+	}`)
+	if cfg.Training.ZLoss != 0.0001 {
+		t.Fatalf("z_loss=%g", cfg.Training.ZLoss)
+	}
+	if got := cfg.Training.EffectiveSeqLenForStep(cfg.SeqLen, 0); got != 2 {
+		t.Fatalf("seq len step0=%d, want 2", got)
+	}
+	if got := cfg.Training.EffectiveSeqLenForStep(cfg.SeqLen, 5); got != 4 {
+		t.Fatalf("seq len step5=%d, want 4", got)
+	}
+	if got := cfg.Training.EffectiveMLMMaskProbForStep(0); got != 0.3 {
+		t.Fatalf("mask prob step0=%g, want 0.3", got)
+	}
+	if got := cfg.Training.EffectiveMLMMaskProbForStep(5); got != 0.15 {
+		t.Fatalf("mask prob step5=%g, want 0.15", got)
+	}
+}
+
+func TestTrainingRecipeKnobValidationErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{name: "bad z loss", body: `"training": {"batch_tokens": 8, "z_loss": -1}`, wantErr: "z_loss"},
+		{name: "seq schedule must start at zero", body: `"training": {"batch_tokens": 8, "seq_len_schedule": [[1,2]]}`, wantErr: "first step must be 0"},
+		{name: "seq schedule value bounded", body: `"training": {"batch_tokens": 8, "seq_len_schedule": [[0,8]]}`, wantErr: "must be in [1, seq_len=4]"},
+		{name: "seq schedule divides batch", body: `"training": {"batch_tokens": 8, "seq_len_schedule": [[0,3]]}`, wantErr: "must be divisible"},
+		{name: "mask schedule integer step", body: `"training": {"batch_tokens": 8, "mlm_mask_prob_schedule": [[0.5,0.2]]}`, wantErr: "step must be an integer"},
+		{name: "mask schedule probability", body: `"training": {"batch_tokens": 8, "mlm_mask_prob_schedule": [[0,1.5]]}`, wantErr: "must be in [0,1]"},
+		{name: "seq schedule rejects distillation", body: `"training": {"batch_tokens": 8, "seq_len_schedule": [[0,2]], "distillation": {"teacher_checkpoints":["a"], "teacher_configs":["b"], "loss_weight_ce":1, "loss_weight_kl":0, "ensemble_strategy":"mean_logits"}}`, wantErr: "seq_len_schedule"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseArchConfig([]byte(objectiveConfigJSON(tt.body)), "recipe_error")
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ParseArchConfig error=%v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestBuildIRProgram_ZLossAddsTrainingOnlyLoss(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"training": {"steps": 1, "lr": 0.001, "batch_tokens": 8, "z_loss": 0.0001}`)
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	if n := countOps(prog, OpZLoss); n != 1 {
+		t.Fatalf("OpZLoss count=%d, want 1", n)
+	}
+	if !programDeclaresOutputArch(prog, "eval_loss") {
+		t.Fatal("z_loss program should expose eval_loss for CE-only validation")
+	}
+	evalProg, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildEvalIRProgramFromConfig: %v", err)
+	}
+	if n := countOps(evalProg, OpZLoss); n != 0 {
+		t.Fatalf("eval OpZLoss count=%d, want 0", n)
+	}
+}
+
 func TestBuildIRProgram_MLMUsesMaskedLossAndBidirectionalPlainAttention(t *testing.T) {
 	cfg := parseObjectiveConfig(t, `"training": {
 		"steps": 1,

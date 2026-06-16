@@ -62,6 +62,7 @@ const (
 	OpCharFeatureBag       = 73
 	OpMoEFeedForward       = 74
 	OpMaskedSmoothL1       = 75
+	OpZLoss                = 76
 )
 
 const (

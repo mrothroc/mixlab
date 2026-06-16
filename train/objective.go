@@ -37,6 +37,10 @@ func objectiveForStep(spec TrainingSpec, step int) string {
 }
 
 func prepareObjectiveBatch(cfg *ArchConfig, batch trainBatch, step int, objective string) (objectiveBatch, error) {
+	return prepareObjectiveBatchWithSeqLen(cfg, batch, step, objective, cfg.SeqLen)
+}
+
+func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int, objective string, seqLen int) (objectiveBatch, error) {
 	if cfg == nil {
 		return objectiveBatch{}, fmt.Errorf("nil config")
 	}
@@ -54,7 +58,7 @@ func prepareObjectiveBatch(cfg *ArchConfig, batch trainBatch, step int, objectiv
 	case arch.ObjectiveMLM:
 		return prepareMLMBatch(cfg, batch, step, need)
 	case arch.ObjectiveMNTP:
-		return prepareMNTPBatch(cfg, batch, step, need)
+		return prepareMNTPBatch(cfg, batch, step, need, seqLen)
 	default:
 		return objectiveBatch{x: batch.x, y: batch.y, unmaskedX: batch.x[:need]}, nil
 	}
@@ -82,8 +86,9 @@ func prepareMLMBatch(cfg *ArchConfig, batch trainBatch, step, need int) (objecti
 	unmasked := append([]int(nil), batch.x[:need]...)
 	lossMask := make([]float32, need)
 	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0x243f6a8885a308d3)
-	selected := selectMaskPositions(rng, lossMask, cfg.Training.MLMMaskProb, need)
-	if selected == 0 && cfg.Training.MLMMaskProb > 0 && need > 0 {
+	maskProb := cfg.Training.EffectiveMLMMaskProbForStep(step)
+	selected := selectMaskPositions(rng, lossMask, maskProb, need)
+	if selected == 0 && maskProb > 0 && need > 0 {
 		pos := rng.Intn(need)
 		lossMask[pos] = 1
 		selected = 1
@@ -94,8 +99,7 @@ func prepareMLMBatch(cfg *ArchConfig, batch trainBatch, step, need int) (objecti
 	return objectiveBatch{x: x, y: y, lossMask: lossMask, unmaskedX: unmasked}, nil
 }
 
-func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need int) (objectiveBatch, error) {
-	seqLen := cfg.SeqLen
+func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int) (objectiveBatch, error) {
 	if seqLen <= 1 {
 		return objectiveBatch{}, fmt.Errorf("mntp objective requires seq_len > 1")
 	}
@@ -107,6 +111,7 @@ func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need int) (object
 	unmasked := append([]int(nil), batch.x[:need]...)
 	lossMask := make([]float32, need)
 	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0x13198a2e03707344)
+	maskProb := cfg.Training.EffectiveMLMMaskProbForStep(step)
 	selected := 0
 	eligible := 0
 	for i := 0; i < need; i++ {
@@ -114,14 +119,14 @@ func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need int) (object
 			continue
 		}
 		eligible++
-		if rng.Float64() >= cfg.Training.MLMMaskProb {
+		if rng.Float64() >= maskProb {
 			continue
 		}
 		lossMask[i] = 1
 		x[i+1] = cfg.Training.MLMMaskTokenID
 		selected++
 	}
-	if selected == 0 && cfg.Training.MLMMaskProb > 0 && eligible > 0 {
+	if selected == 0 && maskProb > 0 && eligible > 0 {
 		slot := rng.Intn(eligible)
 		for i := 0; i < need; i++ {
 			if i%seqLen == seqLen-1 {

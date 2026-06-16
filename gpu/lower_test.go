@@ -61,6 +61,7 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"CharFeatureBag", ir.OpCharFeatureBag, OpCharFeatureBag},
 		{"MoEFeedForward", ir.OpMoEFeedForward, OpMoEFeedForward},
 		{"MaskedSmoothL1", ir.OpMaskedSmoothL1, OpMaskedSmoothL1},
+		{"ZLoss", ir.OpZLoss, OpZLoss},
 		{"StopGradient", ir.OpStopGradient, OpStopGradient},
 		{"FirstByteMaskedCrossEntropy", ir.OpFirstByteMaskedCE, OpFirstByteMaskedCE},
 	}

@@ -61,6 +61,7 @@ const (
 	OpCharFeatureBag       = 73 // OP_CHAR_FEATURE_BAG
 	OpMoEFeedForward       = 74 // OP_MOE_FEED_FORWARD
 	OpMaskedSmoothL1       = 75 // OP_MASKED_SMOOTH_L1
+	OpZLoss                = 76 // OP_Z_LOSS
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -228,6 +229,11 @@ func (p *Program) DistillationKL(logits, teacherProbs, output string) {
 // MaskedSmoothL1 emits mean Huber/SmoothL1 loss over rows where mask > 0.
 func (p *Program) MaskedSmoothL1(pred, target, mask string, beta float32, output string) {
 	p.AddOp(OpMaskedSmoothL1, []string{pred, target, mask}, []string{output}, []float32{beta}, nil)
+}
+
+// ZLoss emits mean(square(logsumexp(logits))) over token rows.
+func (p *Program) ZLoss(logits, output string) {
+	p.AddOp(OpZLoss, []string{logits}, []string{output}, nil, nil)
 }
 
 // RMSNorm emits RMS normalization with a learned scale parameter.

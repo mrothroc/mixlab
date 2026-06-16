@@ -80,6 +80,7 @@ enum OpType {
   OP_CHAR_FEATURE_BAG = 73,
   OP_MOE_FEED_FORWARD = 74,
   OP_MASKED_SMOOTH_L1 = 75,
+  OP_Z_LOSS = 76,
 };
 
 struct IRop {

@@ -796,7 +796,9 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
 | `lr` | number | No | `3e-4` | Base learning rate. Must be `> 0`. |
 | `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, or `"hybrid"`. Existing configs default to causal next-token training. |
+| `z_loss` | number | No | `0` | Training-only logit z-regularization weight. When positive, Mixlab adds `z_loss * mean(logsumexp(logits)^2)` to optimizer loss while keeping `eval_loss` and `per_token_nll` as the primary task loss. Must be finite and `>= 0`. |
 | `mlm_mask_prob` | number | No | `0.15` | Probability of selecting each eligible token for masked-objective loss. Must be in `[0,1]`. |
+| `mlm_mask_prob_schedule` | array | No | Disabled | Stepwise mask-probability schedule as `[[step, probability], ...]`. Entries must start at step `0`, use strictly increasing integer steps, and probabilities in `[0,1]`. Overrides `mlm_mask_prob` on MLM/MNTP/hybrid masked steps. |
 | `mlm_mask_token_id` | integer | Required for `mlm`, `mntp`, `hybrid` | None | Token id used as the mask replacement. Must be in `[0, vocab_size)`. |
 | `mlm_mask_token_prob` | number | No | `0.8` | Probability that a selected MLM token is replaced with `mlm_mask_token_id`. |
 | `mlm_random_token_prob` | number | No | `0.1` | Probability that a selected MLM token is replaced with a random token id. |
@@ -833,6 +835,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `lamb_eps` | number | No | `1e-6` | LAMB epsilon. Used only when `optimizer: "lamb"`; must be `> 0`. |
 | `seed` | integer | No | `42` | RNG seed. `0` is treated as omitted and replaced with `42`. |
 | `batch_tokens` | integer | No | `1024` | Tokens per optimization step. Must be divisible by `seq_len`. |
+| `seq_len_schedule` | array | No | Disabled | Stepwise training sequence-length schedule as `[[step, seq_len], ...]`. The top-level `seq_len` remains the maximum/eval/inference length. Scheduled lengths must start at step `0`, be strictly increasing by step, stay in `[1, seq_len]`, and divide `batch_tokens`. V1 rejects this with distillation or active data2vec. |
 | `shuffle_chunk_tokens` | integer | No | `seq_len` | Token-block shuffle granularity for train/validation loaders. Values `<= 0` inherit `seq_len`; set to `2048` to reproduce the previous fixed-block behavior. |
 | `embed_lr` | number | No | `lr` | Learning rate for embedding-class weights. |
 | `matrix_lr` | number | No | `lr` | Learning rate for matrix weights. Used with Muon. |
@@ -869,6 +872,10 @@ The Hugging Face exporter uses whichever checkpoint is passed through `-safetens
 Hybrid training uses objective-specific attention masks regardless of any block-level `attention_mask`: causal batches are always causal, and MLM/MNTP batches are always bidirectional. Validation, full eval, generation, and other next-token scoring paths use causal attention. `plain.window_size` is rejected for hybrid configs unless `hybrid_clm_fraction` is `1.0`, because masked secondary batches require bidirectional attention.
 
 Masked objectives emit a training loss averaged only over rows where `loss_mask > 0`; the dense `eval_loss` and `per_token_nll` outputs remain available for evaluation/export paths. Top-level `mtp` and `training.first_byte_mask` are not supported with non-causal objectives in this version.
+
+`mlm_mask_prob_schedule` changes the mask ratio as a deterministic stepwise schedule. For example, `[[0, 0.30], [5000, 0.15]]` uses a 30% mask rate until step 5000, then 15%. It applies to MLM, MNTP, and masked hybrid batches; causal hybrid batches ignore it because they do not use masked-objective rows.
+
+`seq_len_schedule` changes the training graph shape at configured step boundaries while keeping `batch_tokens` fixed. Mixlab caches one program per active scheduled shape/objective combination and switches at boundaries; validation, full eval, generation, and final unmasked loss use the top-level maximum `seq_len`. This v1 schedule is intentionally disabled with fixed-teacher distillation and active data2vec because those teacher runtimes are built around the configured sequence length.
 
 ```json
 {

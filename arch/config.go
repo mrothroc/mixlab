@@ -272,10 +272,13 @@ type TrainingSpec struct {
 	MLMMaskTokenProb                  float64           `json:"mlm_mask_token_prob,omitempty"`
 	MLMRandomTokenProb                float64           `json:"mlm_random_token_prob,omitempty"`
 	MLMKeptUnchangedProb              float64           `json:"mlm_kept_unchanged_prob,omitempty"`
+	MLMMaskProbSchedule               [][]float64       `json:"mlm_mask_prob_schedule,omitempty"`
 	HybridCLMFraction                 float64           `json:"hybrid_clm_fraction,omitempty"`
 	HybridSecondaryObjective          string            `json:"hybrid_secondary_objective,omitempty"`
 	Distillation                      *DistillationSpec `json:"distillation,omitempty"`
 	Data2Vec                          *Data2VecSpec     `json:"data2vec,omitempty"`
+	ZLoss                             float64           `json:"z_loss,omitempty"`
+	SeqLenSchedule                    [][]int           `json:"seq_len_schedule,omitempty"`
 	WarmdownSteps                     int               `json:"warmdown_steps,omitempty"`
 	TargetValLoss                     float64           `json:"target_val_loss,omitempty"`
 	FirstByteMask                     bool              `json:"first_byte_mask,omitempty"`
@@ -830,6 +833,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 
 	cfg.Training.ApplyDefaults()
+	if err := validateTrainingRecipeKnobs(cfg, source); err != nil {
+		return nil, err
+	}
 	if err := validateTrainingObjective(cfg, source); err != nil {
 		return nil, err
 	}
