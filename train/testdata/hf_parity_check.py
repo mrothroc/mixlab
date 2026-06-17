@@ -26,7 +26,7 @@ import os
 import sys
 
 import torch
-from transformers import AutoModel, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModel, AutoModelForCausalLM, AutoModelForMaskedLM, AutoTokenizer
 
 
 def main() -> int:
@@ -81,6 +81,23 @@ def main() -> int:
     if not torch.isfinite(hidden).all() or not torch.isfinite(batched_lm).all():
         print("batched AutoModel/AutoModelForCausalLM outputs contain non-finite values", file=sys.stderr)
         return 2
+
+    with open(os.path.join(args.dir, "config.json")) as f:
+        config_doc = json.load(f)
+    if "AutoModelForMaskedLM" in config_doc.get("auto_map", {}):
+        masked = AutoModelForMaskedLM.from_pretrained(args.dir, trust_remote_code=True)
+        masked.eval()
+        labels = input_ids.clone()
+        if labels.numel() > 1:
+            labels[:, :-1] = -100
+        with torch.no_grad():
+            masked_out = masked(input_ids=input_ids, labels=labels)
+        if tuple(masked_out.logits.shape) != (batch, seq_len, vocab):
+            print(f"MaskedLM logits shape {tuple(masked_out.logits.shape)} != ({batch}, {seq_len}, {vocab})", file=sys.stderr)
+            return 2
+        if masked_out.loss is None or not torch.isfinite(masked_out.loss):
+            print("MaskedLM loss is missing or non-finite", file=sys.stderr)
+            return 2
 
     if os.environ.get("PARITY_DEBUG") == "1":
         torch.set_printoptions(precision=4, sci_mode=False, linewidth=200)

@@ -1,6 +1,6 @@
 # Hugging Face Export Support Matrix
 
-This matrix is the source of truth for `mixlab -mode export-hf` support. Exported models are standard Hugging Face custom-code `AutoModel` and `AutoModelForCausalLM` directories, so supported features must preserve backbone hidden states and causal next-token inference logits. Features that only affect training loss or require native recurrent scan state are rejected with explicit errors.
+This matrix is the source of truth for `mixlab -mode export-hf` support. Exported models are standard Hugging Face custom-code `AutoModel` and `AutoModelForCausalLM` directories, with `AutoModelForMaskedLM` added for MLM/MNTP/hybrid checkpoints. Supported features must preserve backbone hidden states, causal next-token inference logits, and masked-LM logits when that head is exported. Features that only affect training loss or require native recurrent scan state are rejected with explicit errors.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -16,10 +16,11 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `char`, `bigram`, `trigram` embedding feature channels | Supported | `char_features.bin` is copied into the HF directory; n-gram IDs mirror Mixlab native token-id lookup semantics. |
 | `tie_embeddings=true` | Supported | The exporter materializes `lm_head_weight` as the transpose of the input embedding table for broad Hugging Face consumer compatibility. |
 | `AutoModel` backbone | Supported | `config.json` includes an `AutoModel` mapping to `MixlabModel`, which returns `last_hidden_state` before the LM head. |
+| `AutoModelForMaskedLM` | Supported for masked-capable checkpoints | MLM, MNTP, and hybrid exports register `MixlabForMaskedLM`. It reuses the same exported `lm_head_weight`, computes unshifted masked-label cross entropy with `-100` ignored labels, and constructs plain attention blocks with bidirectional masks. |
 | `training.data2vec` | Supported as stripped training-only state | The exporter ignores appended `data2vec_pred*` tensors and omits the training-only data2vec spec, exporting the student/base inference model. |
 | `training.objective="causal"` | Supported | Exports a causal next-token graph. |
-| `training.objective="hybrid"` | Supported for inference | Exports the causal evaluation graph. Block-level `attention_mask` values are overridden to causal in exported config because hybrid masked steps are training-only. |
-| `training.objective="mlm"` or `"mntp"` | Training-only | Rejected because masked-objective programs are not `AutoModelForCausalLM` inference graphs. |
+| `training.objective="hybrid"` | Supported | Exports both the causal evaluation graph and a masked-LM graph. Block-level `attention_mask` values are overridden by head: causal for `AutoModelForCausalLM`, bidirectional for `AutoModelForMaskedLM`. |
+| `training.objective="mlm"` or `"mntp"` | Supported | Exports both heads. `AutoModelForMaskedLM` is the intended masked-eval path; `AutoModelForCausalLM` remains available for consumers that need next-token logits from the same checkpoint. |
 | `hgrn2` | Gated | Matrix-state scan export is deferred until the PyTorch template has explicit recurrent-state parity coverage. |
 | `mlstm` | Gated | Stabilized matrix-memory scan export is deferred until the PyTorch template has explicit recurrent-state parity coverage. |
 | `gated_deltanet` | Gated | Chunked delta-rule recurrence uses native scan semantics not yet mirrored by the HF template. |

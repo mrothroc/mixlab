@@ -5,7 +5,7 @@ import struct
 import torch
 from torch import nn
 from transformers import PreTrainedModel
-from transformers.modeling_outputs import BaseModelOutput, CausalLMOutput
+from transformers.modeling_outputs import BaseModelOutput, CausalLMOutput, MaskedLMOutput
 
 from .configuration_mixlab import MixlabConfig
 
@@ -443,7 +443,7 @@ class MixlabModel(PreTrainedModel):
     base_model_prefix = "mixlab"
     supports_gradient_checkpointing = False
 
-    def __init__(self, config):
+    def __init__(self, config, blocks=None):
         super().__init__(config)
         self.embed_tokens = nn.Embedding(config.vocab_size, config.model_dim)
         self.char_table = None
@@ -478,7 +478,8 @@ class MixlabModel(PreTrainedModel):
                 self.trigram_proj = MixlabLinear(trigram_dim, config.model_dim)
             self.trigram_scale = nn.Parameter(torch.ones(1))
         modules = []
-        for block in config.blocks:
+        block_configs = blocks if blocks is not None else config.blocks
+        for block in block_configs:
             block_type = block.get("type")
             if block_type == "plain":
                 modules.append(MixlabPlainBlock(config, block))
@@ -591,3 +592,29 @@ class MixlabForCausalLM(MixlabModel):
                 shift_labels.view(-1),
             )
         return CausalLMOutput(loss=loss, logits=logits)
+
+
+class MixlabForMaskedLM(MixlabModel):
+    _tied_weights_keys = []
+
+    def __init__(self, config):
+        masked_blocks = getattr(config, "masked_blocks", None) or config.blocks
+        super().__init__(config, blocks=masked_blocks)
+        self.lm_head_weight = nn.Parameter(torch.empty(config.model_dim, config.vocab_size))
+        nn.init.xavier_uniform_(self.lm_head_weight)
+
+    def forward(self, input_ids=None, labels=None, **kwargs):
+        x = self.forward_hidden(input_ids)
+        logits = torch.matmul(x, self.lm_head_weight)
+        if getattr(self.config, "logit_softcap", 0.0):
+            cap = float(self.config.logit_softcap)
+            logits = torch.tanh(logits / cap) * cap
+
+        loss = None
+        if labels is not None:
+            loss = torch.nn.functional.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                labels.view(-1),
+                ignore_index=-100,
+            )
+        return MaskedLMOutput(loss=loss, logits=logits)

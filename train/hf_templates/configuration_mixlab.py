@@ -11,6 +11,7 @@ class MixlabConfig(PretrainedConfig):
         seq_len=0,
         mlp_mult=2.67,
         blocks=None,
+        masked_blocks=None,
         logit_softcap=0.0,
         char_vocab_size=0,
         char_dim=0,
@@ -33,6 +34,7 @@ class MixlabConfig(PretrainedConfig):
         self.max_position_embeddings = seq_len
         self.mlp_mult = mlp_mult
         self.blocks = blocks or []
+        self.masked_blocks = masked_blocks or []
         self.logit_softcap = logit_softcap
         self.char_vocab_size = char_vocab_size
         self.char_dim = char_dim

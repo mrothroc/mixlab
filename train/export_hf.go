@@ -48,6 +48,7 @@ type hfConfigJSON struct {
 	BOSTokenID            *int              `json:"bos_token_id,omitempty"`
 	UNKTokenID            *int              `json:"unk_token_id,omitempty"`
 	Blocks                []map[string]any  `json:"blocks"`
+	MaskedBlocks          []map[string]any  `json:"masked_blocks,omitempty"`
 	Mixlab                map[string]any    `json:"mixlab"`
 }
 
@@ -185,9 +186,7 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 		return unsupportedHFExport("recurrence", "weight sharing and recurrence phases are planned for later HF coverage")
 	}
 	switch cfg.Training.EffectiveObjective() {
-	case "causal", "hybrid":
-	case "mlm", "mntp":
-		return unsupportedHFExport("training.objective", "masked MLM/MNTP objectives are training-only; export-hf writes causal next-token inference graphs")
+	case "causal", "hybrid", "mlm", "mntp":
 	default:
 		return unsupportedHFExport("training.objective", fmt.Sprintf("unknown objective %q", cfg.Training.EffectiveObjective()))
 	}

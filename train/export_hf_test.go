@@ -62,6 +62,9 @@ func TestExportHFWeightMapAndDirectoryMetadata(t *testing.T) {
 	if got := autoMap["AutoModel"]; got != "modeling_mixlab.MixlabModel" {
 		t.Fatalf("AutoModel auto_map=%v", got)
 	}
+	if _, ok := autoMap["AutoModelForMaskedLM"]; ok {
+		t.Fatalf("causal-only export unexpectedly registered AutoModelForMaskedLM: %#v", autoMap)
+	}
 
 	var mapping []hfWeightMapping
 	readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
@@ -144,15 +147,6 @@ func TestExportHFUnsupportedValidation(t *testing.T) {
 			wantErr: "blocks[1].kv_source",
 		},
 		{
-			name: "non causal objective",
-			config: `{
-				"model_dim": 4, "vocab_size": 7, "seq_len": 3,
-				"blocks": [{"type": "plain", "heads": 2}],
-				"training": {"steps": 1, "batch_tokens": 3, "objective": "mlm", "mlm_mask_token_id": 1}
-			}`,
-			wantErr: "training.objective",
-		},
-		{
 			name: "hgrn2 remains gated advanced",
 			config: `{
 				"model_dim": 4, "vocab_size": 7, "seq_len": 3,
@@ -206,7 +200,7 @@ func TestHFModelingPartialRoPEAdjacentPair(t *testing.T) {
 		t.Fatalf("read modeling template: %v", err)
 	}
 	source := string(modeling)
-	for _, want := range []string{"rotate_adjacent_rope", "rotate_half_rope", "rope_convention", "rope_dims", "torch.stack((even * cos_t - odd * sin_t"} {
+	for _, want := range []string{"rotate_adjacent_rope", "rotate_half_rope", "rope_convention", "rope_dims", "MixlabForMaskedLM", "MaskedLMOutput", "ignore_index=-100", "torch.stack((even * cos_t - odd * sin_t"} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("modeling template missing %q", want)
 		}

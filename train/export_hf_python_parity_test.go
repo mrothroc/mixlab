@@ -96,6 +96,28 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// Hybrid export registers both causal and masked-LM heads. The
+			// parity script compares the causal head against native logits and
+			// also loads/runs AutoModelForMaskedLM when advertised.
+			name: "hybrid_masked_lm_head",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 5, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 2, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 4},
+					{"type": "swiglu"}
+				],
+				"training": {
+					"steps": 1,
+					"batch_tokens": 5,
+					"seed": 93,
+					"objective": "hybrid",
+					"mlm_mask_token_id": 1,
+					"hybrid_clm_fraction": 0.5,
+					"hybrid_secondary_objective": "mntp"
+				}
+			}`,
+		},
+		{
 			// XSA projection and sparse per-head attention output gate.
 			name: "xsa_sparse_gate",
 			config: `{

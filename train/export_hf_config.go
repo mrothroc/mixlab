@@ -3,6 +3,58 @@ package train
 import "strings"
 
 func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) error {
+	blocks := hfBlockEntries(cfg, false)
+	maskedBlocks := []map[string]any(nil)
+	architectures := []string{"MixlabForCausalLM"}
+	autoMap := map[string]string{
+		"AutoConfig":           "configuration_mixlab.MixlabConfig",
+		"AutoModel":            "modeling_mixlab.MixlabModel",
+		"AutoModelForCausalLM": "modeling_mixlab.MixlabForCausalLM",
+	}
+	if hfExportSupportsMaskedLM(cfg) {
+		maskedBlocks = hfBlockEntries(cfg, true)
+		architectures = append(architectures, "MixlabForMaskedLM")
+		autoMap["AutoModelForMaskedLM"] = "modeling_mixlab.MixlabForMaskedLM"
+	}
+	doc := hfConfigJSON{
+		ModelType:             "mixlab",
+		Architectures:         architectures,
+		AutoMap:               autoMap,
+		Name:                  cfg.Name,
+		ModelDim:              cfg.ModelDim,
+		HiddenSize:            cfg.ModelDim,
+		VocabSize:             cfg.VocabSize,
+		SeqLen:                cfg.SeqLen,
+		MaxPositionEmbeddings: cfg.SeqLen,
+		MLPMult:               cfg.EffectiveMLPMult(),
+		LogitSoftcap:          cfg.LogitSoftcap,
+		CharVocabSize:         cfg.CharVocabSize,
+		CharDim:               cfg.EffectiveCharDim(),
+		CharMaxPerToken:       cfg.EffectiveCharMaxPerToken(),
+		CharFeaturesFile:      charFeaturesFileForHFConfig(cfg),
+		BigramVocabSize:       cfg.BigramVocabSize,
+		BigramDim:             cfg.EffectiveBigramDim(),
+		TrigramVocabSize:      cfg.TrigramVocabSize,
+		TrigramDim:            cfg.EffectiveTrigramDim(),
+		PadTokenID:            specialTokenIDPtr(specials.Pad),
+		EOSTokenID:            specialTokenIDPtr(specials.EOS),
+		BOSTokenID:            specialTokenIDPtr(specials.BOS),
+		UNKTokenID:            specialTokenIDPtr(specials.UNK),
+		Blocks:                blocks,
+		MaskedBlocks:          maskedBlocks,
+		Mixlab: map[string]any{
+			"format":            "mixlab_hf_export_v1",
+			"source":            "mixlab",
+			"weight_map":        "weight_map.json",
+			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
+			"supported_blocks":  []string{"plain", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "swiglu", "geglu", "mlp", "moe"},
+			"unsupported_fails": true,
+		},
+	}
+	return writeJSONFile(path, doc)
+}
+
+func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 	blocks := make([]map[string]any, 0, len(cfg.Blocks))
 	for _, block := range cfg.Blocks {
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
@@ -32,14 +84,14 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 			if block.SparseAttnGate {
 				entry["sparse_attn_gate"] = true
 			}
-			if block.WindowSize > 0 {
+			if block.WindowSize > 0 && !masked {
 				entry["window_size"] = block.WindowSize
 			}
 			if relativeAttentionEnabledForHF(block) {
 				entry["relative_attention"] = "deberta_p2c_c2p"
 				entry["relative_attention_window"] = effectiveHFRelativeAttentionWindow(block)
 			}
-			mask := hfExportAttentionMask(cfg, block)
+			mask := hfExportAttentionMask(cfg, block, masked)
 			if mask != "" {
 				entry["attention_mask"] = mask
 			}
@@ -84,41 +136,21 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 			blocks = append(blocks, entry)
 		}
 	}
-	doc := hfConfigJSON{
-		ModelType:             "mixlab",
-		Architectures:         []string{"MixlabForCausalLM"},
-		AutoMap:               map[string]string{"AutoConfig": "configuration_mixlab.MixlabConfig", "AutoModel": "modeling_mixlab.MixlabModel", "AutoModelForCausalLM": "modeling_mixlab.MixlabForCausalLM"},
-		Name:                  cfg.Name,
-		ModelDim:              cfg.ModelDim,
-		HiddenSize:            cfg.ModelDim,
-		VocabSize:             cfg.VocabSize,
-		SeqLen:                cfg.SeqLen,
-		MaxPositionEmbeddings: cfg.SeqLen,
-		MLPMult:               cfg.EffectiveMLPMult(),
-		LogitSoftcap:          cfg.LogitSoftcap,
-		CharVocabSize:         cfg.CharVocabSize,
-		CharDim:               cfg.EffectiveCharDim(),
-		CharMaxPerToken:       cfg.EffectiveCharMaxPerToken(),
-		CharFeaturesFile:      charFeaturesFileForHFConfig(cfg),
-		BigramVocabSize:       cfg.BigramVocabSize,
-		BigramDim:             cfg.EffectiveBigramDim(),
-		TrigramVocabSize:      cfg.TrigramVocabSize,
-		TrigramDim:            cfg.EffectiveTrigramDim(),
-		PadTokenID:            specialTokenIDPtr(specials.Pad),
-		EOSTokenID:            specialTokenIDPtr(specials.EOS),
-		BOSTokenID:            specialTokenIDPtr(specials.BOS),
-		UNKTokenID:            specialTokenIDPtr(specials.UNK),
-		Blocks:                blocks,
-		Mixlab: map[string]any{
-			"format":            "mixlab_hf_export_v1",
-			"source":            "mixlab",
-			"weight_map":        "weight_map.json",
-			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":  []string{"plain", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "swiglu", "geglu", "mlp", "moe"},
-			"unsupported_fails": true,
-		},
+	return blocks
+}
+
+func hfExportSupportsMaskedLM(cfg *ArchConfig) bool {
+	if cfg == nil {
+		return false
 	}
-	return writeJSONFile(path, doc)
+	switch cfg.Training.EffectiveObjective() {
+	case "mlm", "mntp":
+		return true
+	case "hybrid":
+		return cfg.Training.HybridCLMFraction < 1
+	default:
+		return false
+	}
 }
 
 func normalizeHFRopeConvention(v string) string {
@@ -130,9 +162,15 @@ func normalizeHFRopeConvention(v string) string {
 	}
 }
 
-func hfExportAttentionMask(cfg *ArchConfig, block BlockSpec) string {
-	if cfg != nil && cfg.Training.EffectiveObjective() == "hybrid" {
-		return "causal"
+func hfExportAttentionMask(cfg *ArchConfig, block BlockSpec, masked bool) string {
+	if masked {
+		return "bidirectional"
+	}
+	if cfg != nil {
+		switch cfg.Training.EffectiveObjective() {
+		case "hybrid", "mlm", "mntp":
+			return "causal"
+		}
 	}
 	mask := strings.ToLower(strings.TrimSpace(block.AttentionMask))
 	if mask == "" {

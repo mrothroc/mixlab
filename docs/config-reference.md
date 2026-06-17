@@ -12,7 +12,7 @@ All examples below are valid JSON fragments unless otherwise noted.
 
 These fields live at the root of the config object.
 
-For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal `plain` attention plus `swiglu`/`geglu`/`mlp` blocks, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, and embedding feature channels; unsupported blocks or config features fail explicitly.
+For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal and masked-LM heads for supported sequential `plain` attention stacks plus `swiglu`/`geglu`/`mlp`/`moe` blocks, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, DeBERTa relative attention, and embedding feature channels; unsupported blocks or config features fail explicitly.
 
 | Field | Type | Required | Default | Notes |
 |------|------|----------|---------|-------|
