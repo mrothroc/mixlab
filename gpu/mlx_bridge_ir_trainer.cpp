@@ -626,6 +626,17 @@ void mlx_ir_trainer_set_qat(int64_t trainer, const char* mode) {
   }
   try {
     t->qat_mode = parse_qat_mode(mode);
+    t->cached_named_step_metadata_valid = false;
+    t->cached_named_step_argnums.clear();
+    t->cached_named_step_output_names.clear();
+    t->cached_named_step_input_names.clear();
+    t->cached_named_step_input_dtypes.clear();
+    t->cached_named_step_input_shapes.clear();
+    t->cached_named_step_signature.clear();
+    t->compiled_named_step = nullptr;
+    t->compiled_named_step_signature.clear();
+    t->compiled_named_update_step = nullptr;
+    t->compiled_named_update_step_signature.clear();
   } catch (const std::exception& e) {
     log_bridge_exception("mlx_ir_trainer_set_qat", e);
   } catch (...) {

@@ -60,6 +60,60 @@ func TestDebertaRelativeBiasMatchesCPUOracle(t *testing.T) {
 	}
 }
 
+func TestDebertaRelativeBiasRepeatedEvalMatchesCPUOracle(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	const (
+		B      = 2
+		T      = 32
+		H      = 3
+		D      = 4
+		window = 16
+	)
+	R := 2*window - 1
+	q := patternedFloats(B*H*T*D, 0.031)
+	k := patternedFloats(B*H*T*D, 0.043)
+	posKey := patternedFloats(H*R*D, 0.059)
+	posQuery := patternedFloats(H*R*D, 0.071)
+
+	prog := ir.NewProgram(1)
+	prog.DeclareInput("q", ir.TensorFloat32, []int{B, H, T, D})
+	prog.DeclareInput("k", ir.TensorFloat32, []int{B, H, T, D})
+	prog.DeclareInput("pk", ir.TensorFloat32, []int{H, R, D})
+	prog.DeclareInput("pq", ir.TensorFloat32, []int{H, R, D})
+	prog.DeclareOutput("bias", ir.TensorFloat32, []int{B, H, T, T})
+	prog.DebertaRelativeBias("q", "k", "pk", "pq", "bias", B, T, H, D, window)
+
+	gpuProg, err := LowerIRProgram(prog)
+	if err != nil {
+		t.Fatalf("LowerIRProgram: %v", err)
+	}
+	defer gpuProg.Destroy()
+	dummy, err := FromData([]float32{0}, 1, 1)
+	if err != nil {
+		t.Fatalf("FromData(dummy): %v", err)
+	}
+	defer FreeHandle(dummy)
+
+	want := cpuDebertaRelativeBias(q, k, posKey, posQuery, B, T, H, D, window)
+	inputs := []TensorInput{
+		{Name: "q", DType: TensorFloat32, Shape: []int{B, H, T, D}, Data: q},
+		{Name: "k", DType: TensorFloat32, Shape: []int{B, H, T, D}, Data: k},
+		{Name: "pk", DType: TensorFloat32, Shape: []int{H, R, D}, Data: posKey},
+		{Name: "pq", DType: TensorFloat32, Shape: []int{H, R, D}, Data: posQuery},
+	}
+	for iter := 0; iter < 20; iter++ {
+		got, err := EvalProgramOutput(gpuProg, []int64{dummy}, inputs, "bias")
+		if err != nil {
+			t.Fatalf("EvalProgramOutput iter %d: %v", iter, err)
+		}
+		if diff := maxAbsDiffFloat32(got, want); diff > 1e-5 {
+			t.Fatalf("iter %d DebertaRelativeBias L_inf=%g, want <= 1e-5", iter, diff)
+		}
+	}
+}
+
 func TestDebertaRelativeBucketIndexMatchesGPTBertReference(t *testing.T) {
 	const (
 		T      = 8

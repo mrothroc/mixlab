@@ -15,6 +15,7 @@
 #include <cstring>
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <stdexcept>
 #include <tuple>
@@ -277,6 +278,72 @@ mx::array stable_exp_nonpos(const mx::array& x) {
   return mx::exp(clamp_float32(x, kGatedDeltaExpClampMin, kGatedDeltaExpClampMax));
 }
 
+struct DebertaRelativeIndexEntry {
+  std::vector<int32_t> host;
+  mx::array array;
+
+  DebertaRelativeIndexEntry(std::vector<int32_t>&& values, int T)
+      : host(std::move(values)),
+        array(host.data(), {T, T}, mx::int32) {}
+};
+
+int gpt_bert_relative_bucket_index(int rel, int bucket_size, int max_position) {
+  if (bucket_size <= 1) {
+    return 0;
+  }
+  const int mid = bucket_size / 2;
+  const int sign = (rel > 0) - (rel < 0);
+  int abs_pos = 0;
+  if (rel < mid && rel > -mid) {
+    abs_pos = mid - 1;
+  } else {
+    abs_pos = std::min(std::abs(rel), std::max(max_position - 1, 0));
+  }
+
+  int bucket_pos = rel;
+  if (abs_pos > mid) {
+    int log_pos = bucket_size - 1;
+    if (mid > 0 && max_position - 1 > mid) {
+      const double denom = std::log(static_cast<double>(max_position - 1) / static_cast<double>(mid));
+      if (std::isfinite(denom) && denom > 0.0) {
+        const double scaled = std::log(static_cast<double>(abs_pos) / static_cast<double>(mid)) /
+            denom * static_cast<double>(mid - 1);
+        log_pos = static_cast<int>(std::ceil(scaled)) + mid;
+      }
+    }
+    bucket_pos = log_pos * sign;
+  }
+  const int max_bucket = bucket_size - 1;
+  bucket_pos = std::max(-max_bucket, std::min(max_bucket, bucket_pos));
+  return bucket_pos + max_bucket;
+}
+
+mx::array cached_deberta_relative_index(int T, int window) {
+  const long long key = (static_cast<long long>(T) << 32) ^ static_cast<unsigned int>(window);
+  static std::mutex mu;
+  static std::unordered_map<long long, std::shared_ptr<DebertaRelativeIndexEntry>> cache;
+  std::lock_guard<std::mutex> lock(mu);
+  auto it = cache.find(key);
+  if (it != cache.end()) {
+    return it->second->array;
+  }
+  std::vector<int32_t> rel_idx_host(static_cast<size_t>(T) * static_cast<size_t>(T));
+  for (int i = 0; i < T; ++i) {
+    for (int j = 0; j < T; ++j) {
+      rel_idx_host[static_cast<size_t>(i) * static_cast<size_t>(T) + static_cast<size_t>(j)] =
+          gpt_bert_relative_bucket_index(i - j, window, T);
+    }
+  }
+  auto entry = std::make_shared<DebertaRelativeIndexEntry>(std::move(rel_idx_host), T);
+  // Keep both the host backing store and the MLX array alive for the process
+  // lifetime. This avoids repeatedly rebuilding the same index tensor and
+  // removes any dependency on whether the MLX host-data constructor copies
+  // eagerly before compiled/lazy graph use.
+  auto out = entry->array;
+  cache.emplace(key, std::move(entry));
+  return out;
+}
+
 mx::array deberta_relative_bias(
     const mx::array& q,
     const mx::array& k,
@@ -303,45 +370,7 @@ mx::array deberta_relative_bias(
     throw std::runtime_error("OP_DEBERTA_RELATIVE_BIAS expects position tensors shape [H,2*window-1,D]");
   }
 
-  auto bucket_index_for = [](int rel, int bucket_size, int max_position) -> int {
-    if (bucket_size <= 1) {
-      return 0;
-    }
-    const int mid = bucket_size / 2;
-    const int sign = (rel > 0) - (rel < 0);
-    int abs_pos = 0;
-    if (rel < mid && rel > -mid) {
-      abs_pos = mid - 1;
-    } else {
-      abs_pos = std::min(std::abs(rel), std::max(max_position - 1, 0));
-    }
-
-    int bucket_pos = rel;
-    if (abs_pos > mid) {
-      int log_pos = bucket_size - 1;
-      if (mid > 0 && max_position - 1 > mid) {
-        const double denom = std::log(static_cast<double>(max_position - 1) / static_cast<double>(mid));
-        if (std::isfinite(denom) && denom > 0.0) {
-          const double scaled = std::log(static_cast<double>(abs_pos) / static_cast<double>(mid)) /
-              denom * static_cast<double>(mid - 1);
-          log_pos = static_cast<int>(std::ceil(scaled)) + mid;
-        }
-      }
-      bucket_pos = log_pos * sign;
-    }
-    const int max_bucket = bucket_size - 1;
-    bucket_pos = std::max(-max_bucket, std::min(max_bucket, bucket_pos));
-    return bucket_pos + max_bucket;
-  };
-
-  std::vector<int32_t> rel_idx_host(static_cast<size_t>(T) * static_cast<size_t>(T));
-  for (int i = 0; i < T; ++i) {
-    for (int j = 0; j < T; ++j) {
-      rel_idx_host[static_cast<size_t>(i) * static_cast<size_t>(T) + static_cast<size_t>(j)] =
-          bucket_index_for(i - j, window, T);
-    }
-  }
-  auto rel_idx2 = mx::array(rel_idx_host.data(), {T, T}, mx::int32);
+  auto rel_idx2 = cached_deberta_relative_index(T, window);
   auto rel_idx = mx::broadcast_to(mx::reshape(rel_idx2, {1, 1, T, T}), {B, H, T, T});
 
   auto pos_key_t = mx::expand_dims(mx::transpose(pos_key, {0, 2, 1}), 0);     // [1,H,D,R]

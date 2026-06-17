@@ -1548,12 +1548,35 @@ std::vector<std::string> sorted_input_names(const TensorMap& inputs) {
 }
 
 std::string named_step_signature(
+    const IRProgram& program,
+    QATMode qat_mode,
+    ComputeDType compute_dtype,
     const TensorMap& inputs,
     const std::vector<std::string>& input_names,
     const std::vector<std::string>& output_names,
     size_t n_weights) {
   std::ostringstream oss;
-  oss << "nw=" << n_weights;
+  oss << "nw=" << n_weights
+      << "|qat=" << static_cast<int>(qat_mode)
+      << "|dtype=" << static_cast<int>(compute_dtype)
+      << "|prog_ops=" << program.ops.size()
+      << "|prog_weights=" << program.n_weights;
+  for (size_t i = 0; i < program.ops.size(); ++i) {
+    const auto& op = program.ops[i];
+    oss << "|op=" << i << "," << op.type;
+    for (int j = 0; j < op.n_inputs; ++j) {
+      oss << ",in:" << op.inputs[j];
+    }
+    for (int j = 0; j < op.n_outputs; ++j) {
+      oss << ",out:" << op.outputs[j];
+    }
+    for (int j = 0; j < op.n_int_params; ++j) {
+      oss << ",ip:" << op.int_params[j];
+    }
+    for (int j = 0; j < op.n_float_params; ++j) {
+      oss << ",fp:" << op.float_params[j];
+    }
+  }
   for (const auto& output_name : output_names) {
     oss << "|out=" << output_name;
   }
@@ -1604,6 +1627,9 @@ void refresh_named_step_metadata(IRTrainer& trainer, const TensorMap& inputs) {
     trainer.cached_named_step_input_shapes.push_back(desc.shape);
   }
   trainer.cached_named_step_signature = named_step_signature(
+      trainer.program,
+      trainer.qat_mode,
+      trainer.compute_dtype,
       inputs,
       trainer.cached_named_step_input_names,
       trainer.cached_named_step_output_names,
@@ -2400,25 +2426,31 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     }
     try {
       if (!compiled_named_step || compiled_named_step_signature != signature) {
-        const bool compiled_checkpoint_step =
-            checkpoint_step &&
-            (!program_has_fused_canonical_mamba3_block(program) ||
-             env_truthy("MIXLAB_MAMBA3_CHECKPOINT_COMPILED_STEP"));
-        const auto base_forward_fn = get_forward_fn();
-        auto compiled_forward_fn = compiled_checkpoint_step
-            ? mx::checkpoint(base_forward_fn)
-            : base_forward_fn;
-        auto grad_fn = mx::value_and_grad(compiled_forward_fn, argnums);
-        compiled_named_step = mx::compile(
-            [grad_fn](const std::vector<mx::array>& fn_args) {
-              auto result = grad_fn(fn_args);
-              std::vector<mx::array> out;
-              out.reserve(result.first.size() + result.second.size());
-              out.insert(out.end(), result.first.begin(), result.first.end());
-              out.insert(out.end(), result.second.begin(), result.second.end());
-              return out;
-            },
-            false);
+        auto cached = compiled_named_step_cache.find(signature);
+        if (cached != compiled_named_step_cache.end()) {
+          compiled_named_step = cached->second;
+        } else {
+          const bool compiled_checkpoint_step =
+              checkpoint_step &&
+              (!program_has_fused_canonical_mamba3_block(program) ||
+               env_truthy("MIXLAB_MAMBA3_CHECKPOINT_COMPILED_STEP"));
+          const auto base_forward_fn = get_forward_fn();
+          auto compiled_forward_fn = compiled_checkpoint_step
+              ? mx::checkpoint(base_forward_fn)
+              : base_forward_fn;
+          auto grad_fn = mx::value_and_grad(compiled_forward_fn, argnums);
+          compiled_named_step = mx::compile(
+              [grad_fn](const std::vector<mx::array>& fn_args) {
+                auto result = grad_fn(fn_args);
+                std::vector<mx::array> out;
+                out.reserve(result.first.size() + result.second.size());
+                out.insert(out.end(), result.first.begin(), result.first.end());
+                out.insert(out.end(), result.second.begin(), result.second.end());
+                return out;
+              },
+              false);
+          compiled_named_step_cache[signature] = compiled_named_step;
+        }
         compiled_named_step_signature = signature;
       }
       const auto grad_t0 = HostClock::now();
@@ -2430,10 +2462,18 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       if (!program_has_fused_canonical_mamba3_block(program) ||
           !use_low_memory_mamba3_updates(program) ||
           env_truthy("MIXLAB_FORCE_COMPILED_STEP")) {
+        if (!compiled_named_step_signature.empty()) {
+          compiled_named_step_cache.erase(compiled_named_step_signature);
+        }
+        compiled_named_step = nullptr;
+        compiled_named_step_signature.clear();
         throw;
       }
       log_fused_mamba3_compiled_step_fallback_once(*this, e);
       fused_mamba3_compiled_step_disabled = true;
+      if (!compiled_named_step_signature.empty()) {
+        compiled_named_step_cache.erase(compiled_named_step_signature);
+      }
       compiled_named_step = nullptr;
       compiled_named_step_signature.clear();
       run_low_memory_mamba3_step();
