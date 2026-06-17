@@ -15,10 +15,11 @@ type hfSpecialToken struct {
 }
 
 type hfTokenizerSpecials struct {
-	Pad hfSpecialToken
-	EOS hfSpecialToken
-	BOS hfSpecialToken
-	UNK hfSpecialToken
+	Pad  hfSpecialToken
+	EOS  hfSpecialToken
+	BOS  hfSpecialToken
+	UNK  hfSpecialToken
+	Mask hfSpecialToken
 }
 
 func specialTokenIDPtr(tok hfSpecialToken) *int {
@@ -58,7 +59,7 @@ func writeHFTokenizerArtifacts(outputDir string, src hfTokenizerSource, specials
 	return nil
 }
 
-func deriveHFTokenizerSpecials(src hfTokenizerSource) (hfTokenizerSpecials, error) {
+func deriveHFTokenizerSpecials(src hfTokenizerSource, cfg *ArchConfig) (hfTokenizerSpecials, error) {
 	tokenToID, added, err := inspectTokenizerJSONForSpecials(src.TokenizerJSON)
 	if err != nil {
 		return hfTokenizerSpecials{}, err
@@ -76,7 +77,26 @@ func deriveHFTokenizerSpecials(src hfTokenizerSource) (hfTokenizerSpecials, erro
 		}
 		applyInferredSpecialToken(tok.Content, tok.ID, &out)
 	}
+	// Masked-capable exports advertise an AutoModelForMaskedLM head; the MNTP/MLM
+	// eval path needs tokenizer.mask_token to be set. The authoritative mask id is
+	// training.mlm_mask_token_id (required and range-validated for masked objectives),
+	// so resolve its token string from the vocab when the tokenizer didn't already
+	// declare a mask token.
+	if !out.Mask.Set && hfExportSupportsMaskedLM(cfg) {
+		if token, ok := tokenForID(tokenToID, cfg.Training.MLMMaskTokenID); ok {
+			setSpecialToken(&out.Mask, token, cfg.Training.MLMMaskTokenID)
+		}
+	}
 	return out, nil
+}
+
+func tokenForID(tokenToID map[string]int, id int) (string, bool) {
+	for token, tokenID := range tokenToID {
+		if tokenID == id {
+			return token, true
+		}
+	}
+	return "", false
 }
 
 type hfAddedTokenJSON struct {
@@ -130,6 +150,7 @@ func mergeSpecialsFromSidecar(path string, tokenToID map[string]int, out *hfToke
 		{key: "eos_token", dst: &out.EOS},
 		{key: "bos_token", dst: &out.BOS},
 		{key: "unk_token", dst: &out.UNK},
+		{key: "mask_token", dst: &out.Mask},
 	} {
 		token, ok := specialTokenString(doc[spec.key])
 		if !ok {
@@ -167,6 +188,8 @@ func applyInferredSpecialToken(token string, id int, out *hfTokenizerSpecials) {
 		setSpecialToken(&out.BOS, token, id)
 	case !out.UNK.Set && strings.Contains(lower, "unk"):
 		setSpecialToken(&out.UNK, token, id)
+	case !out.Mask.Set && strings.Contains(lower, "mask"):
+		setSpecialToken(&out.Mask, token, id)
 	}
 }
 
@@ -189,6 +212,7 @@ func mergeTokenizerConfigSpecials(doc map[string]any, specials hfTokenizerSpecia
 		{tokenKey: "eos_token", idKey: "eos_token_id", token: specials.EOS},
 		{tokenKey: "bos_token", idKey: "bos_token_id", token: specials.BOS},
 		{tokenKey: "unk_token", idKey: "unk_token_id", token: specials.UNK},
+		{tokenKey: "mask_token", idKey: "mask_token_id", token: specials.Mask},
 	} {
 		if !item.token.Set {
 			continue
@@ -207,6 +231,7 @@ func mergeSpecialTokensMap(doc map[string]any, specials hfTokenizerSpecials) {
 		{key: "eos_token", token: specials.EOS},
 		{key: "bos_token", token: specials.BOS},
 		{key: "unk_token", token: specials.UNK},
+		{key: "mask_token", token: specials.Mask},
 	} {
 		if item.token.Set {
 			doc[item.key] = item.token.Token

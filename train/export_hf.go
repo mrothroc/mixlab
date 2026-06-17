@@ -116,7 +116,7 @@ func runExportHF(opts ExportHFOptions) error {
 	if err != nil {
 		return err
 	}
-	specials, err := deriveHFTokenizerSpecials(tokenizer)
+	specials, err := deriveHFTokenizerSpecials(tokenizer, exportCfg)
 	if err != nil {
 		return err
 	}

@@ -118,6 +118,85 @@ func TestExportHFPureMaskedObjectiveRegistersMaskedLM(t *testing.T) {
 	}
 }
 
+func TestExportHFMaskedLMSetsTokenizerMaskToken(t *testing.T) {
+	dir := t.TempDir()
+	// mlm_mask_token_id=6 maps to vocab token "c" in the fixture tokenizer, so a
+	// correct ID-based vocab resolution must surface mask_token "c" (not the unk
+	// token), proving the mask token is derived from training.mlm_mask_token_id.
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+		"name": "hf_mask_token",
+		"model_dim": 4,
+		"vocab_size": 11,
+		"seq_len": 3,
+		"mlp_mult": 1.0,
+		"blocks": [{"type": "plain", "heads": 2}],
+		"training": {
+			"steps": 1,
+			"batch_tokens": 3,
+			"seed": 808,
+			"objective": "mlm",
+			"mlm_mask_token_id": 6
+		}
+	}`)
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+
+	var tokCfg map[string]any
+	readJSON(t, filepath.Join(outDir, "tokenizer_config.json"), &tokCfg)
+	if got := tokCfg["mask_token"]; got != "c" {
+		t.Fatalf("tokenizer_config mask_token=%v, want \"c\"", got)
+	}
+	if got, ok := tokCfg["mask_token_id"].(float64); !ok || int(got) != 6 {
+		t.Fatalf("tokenizer_config mask_token_id=%v, want 6", tokCfg["mask_token_id"])
+	}
+
+	var specialMap map[string]any
+	readJSON(t, filepath.Join(outDir, "special_tokens_map.json"), &specialMap)
+	if got := specialMap["mask_token"]; got != "c" {
+		t.Fatalf("special_tokens_map mask_token=%v, want \"c\"", got)
+	}
+}
+
+func TestExportHFCausalOmitsTokenizerMaskToken(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+		"name": "hf_no_mask_token",
+		"model_dim": 4,
+		"vocab_size": 11,
+		"seq_len": 3,
+		"mlp_mult": 1.0,
+		"blocks": [{"type": "plain", "heads": 2}],
+		"training": {"steps": 1, "batch_tokens": 3, "seed": 909}
+	}`)
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+
+	var tokCfg map[string]any
+	readJSON(t, filepath.Join(outDir, "tokenizer_config.json"), &tokCfg)
+	if _, ok := tokCfg["mask_token"]; ok {
+		t.Fatalf("causal export unexpectedly set tokenizer_config mask_token: %#v", tokCfg)
+	}
+	var specialMap map[string]any
+	readJSON(t, filepath.Join(outDir, "special_tokens_map.json"), &specialMap)
+	if _, ok := specialMap["mask_token"]; ok {
+		t.Fatalf("causal export unexpectedly set special_tokens_map mask_token: %#v", specialMap)
+	}
+}
+
 func decodeHFBlockSpecs(t *testing.T, blocks []map[string]any) []BlockSpec {
 	t.Helper()
 	data, err := json.Marshal(blocks)

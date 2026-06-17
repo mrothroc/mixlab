@@ -98,6 +98,9 @@ def main() -> int:
         if masked_out.loss is None or not torch.isfinite(masked_out.loss):
             print("MaskedLM loss is missing or non-finite", file=sys.stderr)
             return 2
+        if tok.mask_token is None or tok.mask_token_id is None:
+            print("FAIL: tokenizer.mask_token is None for a masked-LM export", file=sys.stderr)
+            return 2
 
     if os.environ.get("PARITY_DEBUG") == "1":
         torch.set_printoptions(precision=4, sci_mode=False, linewidth=200)
