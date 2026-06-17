@@ -280,6 +280,9 @@ type TrainingSpec struct {
 	Data2Vec                          *Data2VecSpec     `json:"data2vec,omitempty"`
 	ZLoss                             float64           `json:"z_loss,omitempty"`
 	SeqLenSchedule                    [][]int           `json:"seq_len_schedule,omitempty"`
+	WarmupSteps                       int               `json:"warmup_steps,omitempty"`
+	WarmupRatio                       float64           `json:"warmup_ratio,omitempty"`
+	HoldSteps                         int               `json:"hold_steps,omitempty"`
 	WarmdownSteps                     int               `json:"warmdown_steps,omitempty"`
 	TargetValLoss                     float64           `json:"target_val_loss,omitempty"`
 	EarlyStop                         *EarlyStopSpec    `json:"early_stop,omitempty"`
@@ -340,6 +343,9 @@ type TrainingSpec struct {
 	mlmMaskTokenIDSet     bool
 	mlmReplacementProbSet bool
 	hybridCLMFractionSet  bool
+	warmupStepsSet        bool
+	warmupRatioSet        bool
+	holdStepsSet          bool
 	lambBeta1Set          bool
 	lambBeta2Set          bool
 	lambEpsSet            bool
@@ -377,6 +383,9 @@ func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	_, keptProbSet := fields["mlm_kept_unchanged_prob"]
 	t.mlmReplacementProbSet = maskProbSet || randomProbSet || keptProbSet
 	_, t.hybridCLMFractionSet = fields["hybrid_clm_fraction"]
+	_, t.warmupStepsSet = fields["warmup_steps"]
+	_, t.warmupRatioSet = fields["warmup_ratio"]
+	_, t.holdStepsSet = fields["hold_steps"]
 	_, t.lambBeta1Set = fields["lamb_beta1"]
 	_, t.lambBeta2Set = fields["lamb_beta2"]
 	_, t.lambEpsSet = fields["lamb_eps"]
@@ -385,54 +394,19 @@ func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// EvalSpec holds optional evaluation-only behavior. When omitted, or when
-// ttt_mode is "none", eval runs exactly as the standard single-pass path.
-type EvalSpec struct {
-	TTTMode       string   `json:"ttt_mode,omitempty"`
-	ChunkTokens   int      `json:"chunk_tokens,omitempty"`
-	TTTEpochs     int      `json:"ttt_epochs,omitempty"`
-	TTTLR         float64  `json:"ttt_lr,omitempty"`
-	TTTMomentum   *float64 `json:"ttt_momentum,omitempty"`
-	TTTLRSchedule string   `json:"ttt_lr_schedule,omitempty"`
+// WarmupStepsConfigured reports whether training.warmup_steps was provided.
+func (t TrainingSpec) WarmupStepsConfigured() bool {
+	return t.warmupStepsSet || t.WarmupSteps != 0
 }
 
-// DefaultEvalSpec returns the inactive eval defaults.
-func DefaultEvalSpec() EvalSpec {
-	return EvalSpec{TTTMode: "none"}
+// WarmupRatioConfigured reports whether training.warmup_ratio was provided.
+func (t TrainingSpec) WarmupRatioConfigured() bool {
+	return t.warmupRatioSet || t.WarmupRatio != 0
 }
 
-// DefaultLegalChunkSGDEvalSpec returns the modded-nanogpt style eval-time TTT defaults.
-func DefaultLegalChunkSGDEvalSpec() EvalSpec {
-	momentum := 0.9
-	return EvalSpec{
-		TTTMode:       "legal_chunk_sgd",
-		ChunkTokens:   32768,
-		TTTEpochs:     3,
-		TTTLR:         0.005,
-		TTTMomentum:   &momentum,
-		TTTLRSchedule: "cosine",
-	}
-}
-
-// EffectiveEvalSpec returns an inactive spec when eval is omitted.
-func (c *ArchConfig) EffectiveEvalSpec() EvalSpec {
-	if c == nil || c.Eval == nil {
-		return DefaultEvalSpec()
-	}
-	return *c.Eval
-}
-
-// LegalChunkSGDEnabled reports whether eval-time score-first chunk SGD is active.
-func (e EvalSpec) LegalChunkSGDEnabled() bool {
-	return e.TTTMode == "legal_chunk_sgd"
-}
-
-// EffectiveTTTMomentum returns the eval-time SGD momentum value.
-func (e EvalSpec) EffectiveTTTMomentum() float64 {
-	if e.TTTMomentum == nil {
-		return 0.9
-	}
-	return *e.TTTMomentum
+// HoldStepsConfigured reports whether training.hold_steps was provided.
+func (t TrainingSpec) HoldStepsConfigured() bool {
+	return t.holdStepsSet || t.HoldSteps != 0
 }
 
 // TotalSteps returns the effective training step count.
@@ -917,6 +891,18 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Training.SWAInterval <= 0 {
 		return nil, fmt.Errorf("config %q has invalid training.swa_interval=%d (must be > 0)", source, cfg.Training.SWAInterval)
+	}
+	if cfg.Training.WarmupSteps < 0 {
+		return nil, fmt.Errorf("config %q has invalid training.warmup_steps=%d (must be >= 0)", source, cfg.Training.WarmupSteps)
+	}
+	if cfg.Training.WarmupRatio < 0 || cfg.Training.WarmupRatio > 1 {
+		return nil, fmt.Errorf("config %q has invalid training.warmup_ratio=%g (must be in [0,1])", source, cfg.Training.WarmupRatio)
+	}
+	if cfg.Training.WarmupStepsConfigured() && cfg.Training.WarmupRatioConfigured() {
+		return nil, fmt.Errorf("config %q cannot set both training.warmup_steps and training.warmup_ratio", source)
+	}
+	if cfg.Training.HoldSteps < 0 {
+		return nil, fmt.Errorf("config %q has invalid training.hold_steps=%d (must be >= 0)", source, cfg.Training.HoldSteps)
 	}
 	if cfg.Training.WarmdownSteps < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.warmdown_steps=%d (must be >= 0)", source, cfg.Training.WarmdownSteps)

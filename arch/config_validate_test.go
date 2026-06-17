@@ -123,6 +123,57 @@ func TestNegativeWarmdownSteps(t *testing.T) {
 	}
 }
 
+func TestInvalidWarmupScheduleFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name:    "negative warmup steps",
+			body:    `"training": {"warmup_steps": -1}`,
+			wantErr: "warmup_steps",
+		},
+		{
+			name:    "negative warmup ratio",
+			body:    `"training": {"warmup_ratio": -0.1}`,
+			wantErr: "warmup_ratio",
+		},
+		{
+			name:    "too large warmup ratio",
+			body:    `"training": {"warmup_ratio": 1.1}`,
+			wantErr: "warmup_ratio",
+		},
+		{
+			name:    "ambiguous warmup",
+			body:    `"training": {"warmup_steps": 10, "warmup_ratio": 0.1}`,
+			wantErr: "warmup_steps and training.warmup_ratio",
+		},
+		{
+			name:    "negative hold",
+			body:    `"training": {"hold_steps": -1}`,
+			wantErr: "hold_steps",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := []byte(`{
+				"model_dim": 128,
+				"vocab_size": 1024,
+				"blocks": [{"type": "plain", "heads": 4}],
+				` + tt.body + `
+			}`)
+			_, err := ParseArchConfig(raw, "test")
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error %q should mention %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestNegativeTargetValLoss(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  128,

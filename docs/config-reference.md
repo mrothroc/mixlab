@@ -838,6 +838,9 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `distillation` | object | No | Disabled | Optional internal-teacher distillation block for causal LM training. |
 | `data2vec` | object | No | Disabled | Optional online EMA representation-distillation auxiliary loss for masked objectives. |
 | `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
+| `warmup_steps` | integer | No | Legacy default | Absolute warmup length for the standard cosine schedule. Must be `>= 0`; values above `steps` are clamped. Mutually exclusive with `warmup_ratio`. When both warmup fields are omitted, Mixlab keeps the historical `min(100, steps)` warmup. |
+| `warmup_ratio` | number | No | Disabled | Fraction of `steps` to use for warmup in the standard cosine schedule, rounded to the nearest step. Must be in `[0,1]`. Mutually exclusive with `warmup_steps`. For example, `0.016` gives about a 1.6% warmup. |
+| `hold_steps` | integer | No | Legacy default | Constant-peak-LR plateau after warmup in the standard cosine schedule. Must be `>= 0`; values above the remaining steps are clamped. When omitted, Mixlab keeps the historical `200`-step hold, clamped by total steps. Set `0` explicitly to start cosine decay immediately after warmup. |
 | `warmdown_steps` | integer | No | `0` | Cosine warmdown length at the end of training. Must be `>= 0`; values above `steps` are clamped by the scheduler. |
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
 | `early_stop` | object | No | Disabled | Optional validation early-stop policy. V1 supports validation-loss plateau patience and step-gated `val_gt` aborts. See below. |
@@ -1035,6 +1038,7 @@ the sum of all phase steps.
 When `phases` is present:
 
 - top-level `steps` and `lr` are ignored by the training loop
+- `warmup_steps`, `warmup_ratio`, and `hold_steps` are ignored; model phase warmup/cooldown explicitly as phases when needed
 - `warmdown_steps` still applies, but only within the final phase
 - the trainer logs phase transitions using `label` when provided
 
@@ -1061,6 +1065,8 @@ Example:
   "training": {
     "steps": 20000,
     "lr": 0.0003,
+    "warmup_ratio": 0.016,
+    "hold_steps": 0,
     "warmdown_steps": 1000,
     "target_val_loss": 1.2,
     "grad_clip": 0.3,

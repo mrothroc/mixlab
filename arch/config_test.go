@@ -286,6 +286,15 @@ func TestTrainingDefaults(t *testing.T) {
 	if got.Training.WarmdownSteps != 0 {
 		t.Errorf("default warmdown_steps = %d, want 0", got.Training.WarmdownSteps)
 	}
+	if got.Training.WarmupSteps != 0 {
+		t.Errorf("default warmup_steps = %d, want 0", got.Training.WarmupSteps)
+	}
+	if got.Training.WarmupRatio != 0 {
+		t.Errorf("default warmup_ratio = %g, want 0", got.Training.WarmupRatio)
+	}
+	if got.Training.HoldSteps != 0 {
+		t.Errorf("default hold_steps = %d, want 0", got.Training.HoldSteps)
+	}
 	if got.Training.TTTSteps != 0 {
 		t.Errorf("default ttt_steps = %d, want 0", got.Training.TTTSteps)
 	}

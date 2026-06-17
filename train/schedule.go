@@ -27,6 +27,15 @@ type phaseSchedule struct {
 	phases     []TrainingPhase
 }
 
+type trainingScheduleOptions struct {
+	WarmupSteps    int
+	WarmupStepsSet bool
+	WarmupRatio    float64
+	WarmupRatioSet bool
+	HoldSteps      int
+	HoldStepsSet   bool
+}
+
 // At returns the learning rate at the given step.
 func (s LRSchedule) At(step int) float32 {
 	baseAt := func(step int) float32 {
@@ -107,6 +116,10 @@ func (s phaseSchedule) PhaseAt(step int) TrainingPhase {
 
 // trainingSchedule constructs the standard LR schedule from base LR and total steps.
 func trainingSchedule(lr float32, steps, warmdown int, minLRFraction float32) LRSchedule {
+	return trainingScheduleWithOptions(lr, steps, warmdown, minLRFraction, trainingScheduleOptions{})
+}
+
+func trainingScheduleWithOptions(lr float32, steps, warmdown int, minLRFraction float32, opts trainingScheduleOptions) LRSchedule {
 	if warmdown < 0 {
 		warmdown = 0
 	}
@@ -114,10 +127,24 @@ func trainingSchedule(lr float32, steps, warmdown int, minLRFraction float32) LR
 		warmdown = steps
 	}
 	warmup := 100
+	if opts.WarmupRatioSet {
+		warmup = int(math.Round(float64(steps) * opts.WarmupRatio))
+	} else if opts.WarmupStepsSet {
+		warmup = opts.WarmupSteps
+	}
+	if warmup < 0 {
+		warmup = 0
+	}
 	if steps < warmup {
 		warmup = steps
 	}
 	hold := 200
+	if opts.HoldStepsSet {
+		hold = opts.HoldSteps
+	}
+	if hold < 0 {
+		hold = 0
+	}
 	if steps < warmup+hold {
 		hold = steps - warmup
 		if hold < 0 {
@@ -193,7 +220,15 @@ func buildTrainingScheduler(spec TrainingSpec) (trainingScheduler, int) {
 		totalSteps := spec.TotalSteps()
 		return newPhaseSchedule(spec.Phases, spec.WarmdownSteps, spec.MinLRFraction), totalSteps
 	}
-	return trainingSchedule(float32(spec.LR), spec.Steps, spec.WarmdownSteps, spec.MinLRFraction), spec.Steps
+	opts := trainingScheduleOptions{
+		WarmupSteps:    spec.WarmupSteps,
+		WarmupStepsSet: spec.WarmupStepsConfigured(),
+		WarmupRatio:    spec.WarmupRatio,
+		WarmupRatioSet: spec.WarmupRatioConfigured(),
+		HoldSteps:      spec.HoldSteps,
+		HoldStepsSet:   spec.HoldStepsConfigured(),
+	}
+	return trainingScheduleWithOptions(float32(spec.LR), spec.Steps, spec.WarmdownSteps, spec.MinLRFraction, opts), spec.Steps
 }
 
 func phaseDisplayLabel(phase TrainingPhase, index int) string {

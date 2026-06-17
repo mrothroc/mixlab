@@ -169,6 +169,71 @@ func TestTrainingSchedule_Default(t *testing.T) {
 	}
 }
 
+func TestTrainingSchedule_CustomWarmupStepsAndHold(t *testing.T) {
+	s := trainingScheduleWithOptions(0.01, 1000, 0, 0, trainingScheduleOptions{
+		WarmupSteps:    160,
+		WarmupStepsSet: true,
+		HoldSteps:      0,
+		HoldStepsSet:   true,
+	})
+	if s.Warmup != 160 {
+		t.Fatalf("Warmup = %d, want 160", s.Warmup)
+	}
+	if s.Hold != 0 {
+		t.Fatalf("Hold = %d, want 0", s.Hold)
+	}
+	if got := s.At(80); math.Abs(float64(got-0.005)) > 1e-8 {
+		t.Fatalf("At(80) = %g, want 0.005", got)
+	}
+}
+
+func TestTrainingSchedule_WarmupRatio(t *testing.T) {
+	s := trainingScheduleWithOptions(0.01, 9914, 0, 0, trainingScheduleOptions{
+		WarmupRatio:    0.016,
+		WarmupRatioSet: true,
+		HoldSteps:      0,
+		HoldStepsSet:   true,
+	})
+	if s.Warmup != 159 {
+		t.Fatalf("Warmup = %d, want 159", s.Warmup)
+	}
+	if s.Hold != 0 {
+		t.Fatalf("Hold = %d, want 0", s.Hold)
+	}
+}
+
+func TestBuildTrainingScheduler_UsesWarmupFields(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim": 32,
+		"vocab_size": 128,
+		"seq_len": 8,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {
+			"steps": 1000,
+			"lr": 0.01,
+			"warmup_steps": 25,
+			"hold_steps": 0
+		}
+	}`), "test")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	sched, steps := buildTrainingScheduler(cfg.Training)
+	if steps != 1000 {
+		t.Fatalf("steps = %d, want 1000", steps)
+	}
+	s, ok := sched.(LRSchedule)
+	if !ok {
+		t.Fatalf("scheduler type = %T, want LRSchedule", sched)
+	}
+	if s.Warmup != 25 {
+		t.Fatalf("Warmup = %d, want 25", s.Warmup)
+	}
+	if s.Hold != 0 {
+		t.Fatalf("Hold = %d, want 0", s.Hold)
+	}
+}
+
 func TestTrainingSchedule_StepsLessThanWarmup(t *testing.T) {
 	s := trainingSchedule(0.01, 50, 0, 0)
 	if s.Warmup != 50 {
