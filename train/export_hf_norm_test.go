@@ -101,3 +101,30 @@ func TestExportHFLayerNormNoAffineSandwich(t *testing.T) {
 		}
 	}
 }
+
+func TestExportHFAttnPostNormBeforeOutProjParityCPUOracle(t *testing.T) {
+	runExportHFParityCase(t, `{
+		"name": "hf_attn_post_norm_before_outproj",
+		"model_dim": 8,
+		"vocab_size": 17,
+		"seq_len": 4,
+		"mlp_mult": 1.0,
+		"blocks": [
+			{"type": "plain", "heads": 2, "attn_post_norm": "before_outproj"}
+		],
+		"training": {"steps": 1, "batch_tokens": 4, "seed": 459}
+	}`, [][]int{{0, 1, 2, 3}}, [][]int{{1, 2, 3, 4}}, func(t *testing.T, outDir string) {
+		var cfg map[string]any
+		readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+		blocks := cfg["blocks"].([]any)
+		block := blocks[0].(map[string]any)
+		if got := block["attn_post_norm"]; got != "before_outproj" {
+			t.Fatalf("attn_post_norm=%v want before_outproj", got)
+		}
+		var mapping []hfWeightMapping
+		readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+		if !containsHFWeight(mapping, "blocks.0.post_attn_norm.weight") {
+			t.Fatalf("weight_map missing blocks.0.post_attn_norm.weight: %#v", mapping)
+		}
+	})
+}

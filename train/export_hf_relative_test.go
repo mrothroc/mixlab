@@ -81,3 +81,36 @@ func TestExportHFDebertaSharedQKReuseParityCPUOracle(t *testing.T) {
 		}
 	})
 }
+
+func TestExportHFDebertaSharedQKReuseEmbeddingNormParityCPUOracle(t *testing.T) {
+	runExportHFParityCase(t, `{
+		"name": "hf_deberta_shared_qk_reuse_embedding_norm",
+		"model_dim": 8,
+		"vocab_size": 11,
+		"seq_len": 4,
+		"mlp_mult": 1.0,
+		"norm_eps": 1e-6,
+		"blocks": [
+			{"type": "plain", "heads": 4, "kv_heads": 2, "attention_mask": "bidirectional", "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 2, "relative_attention_parameterization": "shared_qk_reuse", "relative_attention_embedding_norm": "layernorm"},
+			{"type": "plain", "heads": 4, "attention_mask": "bidirectional", "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 2, "relative_attention_parameterization": "shared_qk_reuse", "relative_attention_embedding_norm": "layernorm"}
+		],
+		"training": {"steps": 1, "batch_tokens": 4, "seed": 217}
+	}`, [][]int{{0, 1, 2, 3}}, [][]int{{1, 2, 3, 4}}, func(t *testing.T, outDir string) {
+		var weightMap []hfWeightMapping
+		readJSON(t, filepath.Join(outDir, "weight_map.json"), &weightMap)
+		for _, name := range []string{"relative_embeddings", "relative_layer_norm.weight", "relative_layer_norm.bias"} {
+			if !containsHFWeight(weightMap, name) {
+				t.Fatalf("weight_map missing %s: %#v", name, weightMap)
+			}
+		}
+		var cfg map[string]any
+		readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+		blocks := cfg["blocks"].([]any)
+		for i, raw := range blocks {
+			block := raw.(map[string]any)
+			if got := block["relative_attention_embedding_norm"]; got != "layernorm" {
+				t.Fatalf("blocks[%d].relative_attention_embedding_norm=%v want layernorm", i, got)
+			}
+		}
+	})
+}

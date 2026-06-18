@@ -114,6 +114,7 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		}
 		kvProjDim := kvHeads * (D / heads)
 		ffn := ffnDim(D, mlpMult)
+		attnPostNorm := effectivePlainAttnPostNorm(spec, placement)
 		var metas []WeightMeta
 		if placement == NormPlacementPre || placement == NormPlacementSandwich {
 			metas = append(metas, normWeights("norm", D, norm)...)
@@ -160,11 +161,14 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			gateDim := plainSparseAttnGateWidth(D)
 			metas = append(metas, WeightMeta{Name: "attn_gate_w", Shape: []int{heads, gateDim}, InitZero: true})
 		}
+		if attnPostNorm == PlainAttnPostNormBeforeOutProj {
+			metas = append(metas, normWeights("post_attn_norm", D, norm)...)
+		}
 		metas = append(metas, WeightMeta{Name: "wo", Shape: []int{D, D}})
 		if spec.AttnBias {
 			metas = append(metas, WeightMeta{Name: "wo_bias", Shape: []int{D}, InitZero: true})
 		}
-		if placement == NormPlacementPost || placement == NormPlacementSandwich {
+		if attnPostNorm == PlainAttnPostNormAfterOutProj {
 			metas = append(metas, normWeights("post_attn_norm", D, norm)...)
 		}
 		if blockScales {

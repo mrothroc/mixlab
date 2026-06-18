@@ -12,6 +12,11 @@ const (
 	NormPlacementPre      = "pre"
 	NormPlacementPost     = "post"
 	NormPlacementSandwich = "sandwich"
+
+	PlainAttnPostNormInherit       = "inherit"
+	PlainAttnPostNormNone          = "none"
+	PlainAttnPostNormAfterOutProj  = "after_outproj"
+	PlainAttnPostNormBeforeOutProj = "before_outproj"
 )
 
 type NormSpec struct {
@@ -88,6 +93,40 @@ func normPlacementOrDefault(v string) string {
 	return normalizeNormPlacement(v)
 }
 
+func normalizePlainAttnPostNorm(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", "inherit":
+		return PlainAttnPostNormInherit
+	case "none", "off", "disabled", "false":
+		return PlainAttnPostNormNone
+	case "after", "after_out", "after_outproj", "after_out_proj", "after_output_projection":
+		return PlainAttnPostNormAfterOutProj
+	case "before", "before_out", "before_outproj", "before_out_proj", "before_output_projection", "pre_outproj", "pre_out_proj":
+		return PlainAttnPostNormBeforeOutProj
+	default:
+		return strings.ToLower(strings.TrimSpace(v))
+	}
+}
+
+func effectivePlainAttnPostNorm(spec BlockSpec, normPlacement string) string {
+	switch normalizePlainAttnPostNorm(spec.AttnPostNorm) {
+	case PlainAttnPostNormInherit:
+		placement := normPlacementOrDefault(normPlacement)
+		if placement == NormPlacementPost || placement == NormPlacementSandwich {
+			return PlainAttnPostNormAfterOutProj
+		}
+		return PlainAttnPostNormNone
+	case PlainAttnPostNormNone:
+		return PlainAttnPostNormNone
+	case PlainAttnPostNormAfterOutProj:
+		return PlainAttnPostNormAfterOutProj
+	case PlainAttnPostNormBeforeOutProj:
+		return PlainAttnPostNormBeforeOutProj
+	default:
+		return normalizePlainAttnPostNorm(spec.AttnPostNorm)
+	}
+}
+
 func normWeights(name string, dim int, spec NormSpec) []WeightMeta {
 	spec = normSpecOrDefault(spec)
 	switch spec.Type {
@@ -140,5 +179,13 @@ func isDefaultNormConfig(cfg *ArchConfig) bool {
 		return true
 	}
 	spec := cfg.EffectiveNormSpec()
-	return spec.Type == NormTypeRMSNorm && spec.Eps == 1e-5 && spec.Affine && cfg.EffectiveNormPlacement() == NormPlacementPre && !cfg.FFNInternalNorm
+	if spec.Type != NormTypeRMSNorm || spec.Eps != 1e-5 || !spec.Affine || cfg.EffectiveNormPlacement() != NormPlacementPre || cfg.FFNInternalNorm {
+		return false
+	}
+	for _, block := range cfg.Blocks {
+		if blockTypeKey(block) == "plain" && normalizePlainAttnPostNorm(block.AttnPostNorm) != PlainAttnPostNormInherit {
+			return false
+		}
+	}
+	return true
 }

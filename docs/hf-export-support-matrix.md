@@ -7,6 +7,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `plain` attention | Supported | Adjacent-pair RoPE by default, optional `rope_convention: "half_rotation"`, partial `rope_dims`, GQA through `kv_heads`, `qk_norm`, `qk_gain`, XSA projection, sparse attention gates, `causal`/`bidirectional`/`none` masks, and causal `window_size`. |
 | `plain.attn_bias` | Supported | Learned Q/K/V/O projection biases are exported as standard HF linear biases. With `shared_qk_reuse`, Q/K biases are also reused for relative-position projections. |
 | `plain.attn_value_gate` | Supported | The V projection is widened to value plus GELU gate; the gate multiplies merged attention output before `wo`. |
+| `plain.attn_post_norm` | Supported | Inherited post/sandwich configs keep the legacy after-`wo` norm placement. Explicit `attn_post_norm: "before_outproj"` normalizes the merged attention state before `wo`. |
 | `plain.qk_norm` | Supported | Learned per-head-dimension Q/K RMSNorm scales before RoPE or DeBERTa relative score construction. |
 | `plain.xsa` | Supported | Attention outputs are projected away from the corresponding value vector before the output projection. |
 | `plain.sparse_attn_gate` | Supported | Per-head attention outputs are gated from the first token-state channels before head merge and output projection. |
@@ -14,6 +15,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `plain.ffn_activation=swiglu` | Supported | The `plain` block's internal FFN tail uses an exported `ff_gate` projection, SiLU gate, up projection, product, and down projection. |
 | `plain.relative_attention=deberta_p2c_c2p` | Supported | DeBERTa/GPT-BERT C2P/P2C relative-bias operator semantics with Mixlab's per-block projected position tensors, `2 * bucket - 1` table rows, log-bucketed `q-k` relative positions, masks, and optional `qk_norm`/`qk_gain`. |
 | `plain.relative_attention_parameterization=shared_qk_reuse` | Supported | GPT-BERT-style shared relative embedding table exported once as `relative_embeddings`; each block reuses its exported `wk`/`wq` projections for position keys/queries. |
+| `plain.relative_attention_embedding_norm=layernorm` | Supported | The shared relative embedding table can be normalized once per forward by an exported affine `relative_layer_norm` before block-local Q/K projection reuse. |
 | `swiglu` | Supported | Bias-free SwiGLU FFN parity. |
 | `geglu` | Supported | Bias-free GEGLU FFN parity. |
 | `mlp` | Supported | `silu`, `gelu`, `relu`, and `leaky_relu_sq` activation variants. |

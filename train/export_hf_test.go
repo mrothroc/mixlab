@@ -543,11 +543,13 @@ func TestExportHFPartialAdvancedRegistryAndSupportMatrix(t *testing.T) {
 	want := map[string]hfExportSupportStatus{
 		"plain.attn_bias":                                           hfExportSupported,
 		"plain.attn_value_gate":                                     hfExportSupported,
+		"plain.attn_post_norm":                                      hfExportSupported,
 		"plain.qk_norm":                                             hfExportSupported,
 		"plain.ffn_activation=geglu":                                hfExportSupported,
 		"plain.ffn_activation=swiglu":                               hfExportSupported,
 		"plain.relative_attention=deberta_p2c_c2p":                  hfExportSupported,
 		"plain.relative_attention_parameterization=shared_qk_reuse": hfExportSupported,
+		"plain.relative_attention_embedding_norm=layernorm":         hfExportSupported,
 		"moe":            hfExportSupported,
 		"hgrn2":          hfExportGated,
 		"mlstm":          hfExportGated,

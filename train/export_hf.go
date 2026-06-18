@@ -539,6 +539,22 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 			return nil, err
 		}
 		wi = firstUnmappedWeight(used, wi+1)
+		if hfConfigUsesSharedRelativeEmbeddingNorm(cfg) {
+			if wi >= len(shapes) || shapes[wi].Name != "shared_relative_norm_scale" {
+				return nil, fmt.Errorf("weight map expected shared_relative_norm_scale at index %d", wi)
+			}
+			if err := addExpected(wi, "shared_relative_norm_scale", "relative_layer_norm.weight"); err != nil {
+				return nil, err
+			}
+			wi = firstUnmappedWeight(used, wi+1)
+			if wi >= len(shapes) || shapes[wi].Name != "shared_relative_norm_bias" {
+				return nil, fmt.Errorf("weight map expected shared_relative_norm_bias at index %d", wi)
+			}
+			if err := addExpected(wi, "shared_relative_norm_bias", "relative_layer_norm.bias"); err != nil {
+				return nil, err
+			}
+			wi = firstUnmappedWeight(used, wi+1)
+		}
 	}
 	for blockIdx, block := range cfg.Blocks {
 		prefix := fmt.Sprintf("blocks.%d", blockIdx)
@@ -562,10 +578,16 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 				{mixlab: "w_pos_query", hf: "w_pos_query.weight"},
 				{mixlab: "qk_gain", hf: "qk_gain"},
 				{mixlab: "attn_gate_w", hf: "attn_gate_w"},
-				{mixlab: "wo", hf: "wo.weight"},
-				{mixlab: "wo_bias", hf: "wo.bias"},
 			}...)
-			if normPlacement == "post" || normPlacement == "sandwich" {
+			attnPostNorm := hfEffectivePlainAttnPostNorm(block, normPlacement)
+			if attnPostNorm == "before_outproj" {
+				names = appendNormNames(names, "post_attn_norm", "post_attn_norm")
+			}
+			names = append(names,
+				hfBlockWeightName{mixlab: "wo", hf: "wo.weight"},
+				hfBlockWeightName{mixlab: "wo_bias", hf: "wo.bias"},
+			)
+			if attnPostNorm == "after_outproj" {
 				names = appendNormNames(names, "post_attn_norm", "post_attn_norm")
 			}
 			if normPlacement == "sandwich" {

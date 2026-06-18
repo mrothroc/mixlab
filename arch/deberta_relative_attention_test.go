@@ -75,6 +75,16 @@ func TestParseArchConfig_RejectsInvalidDebertaRelativeAttention(t *testing.T) {
 			block: BlockSpec{Type: "plain", Heads: 4, RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse},
 			want:  "shared_qk_reuse",
 		},
+		{
+			name:  "shared relative embedding norm without shared parameterization",
+			block: BlockSpec{Type: "plain", Heads: 4, RelativeAttention: RelativeAttentionDebertaP2CC2P, RelativeAttentionEmbeddingNorm: RelativeAttentionEmbeddingNormLayerNorm},
+			want:  "relative_attention_embedding_norm",
+		},
+		{
+			name:  "invalid attention post norm",
+			block: BlockSpec{Type: "plain", Heads: 4, AttnPostNorm: "middle"},
+			want:  "attn_post_norm",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -113,6 +123,26 @@ func TestParseArchConfig_RejectsMixedSharedRelativeWindows(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "same effective relative_attention_window") {
 		t.Fatalf("error %q does not mention shared window", err)
+	}
+}
+
+func TestParseArchConfig_RejectsMixedSharedRelativeEmbeddingNorms(t *testing.T) {
+	cfg := ArchConfig{
+		ModelDim:  48,
+		VocabSize: 256,
+		SeqLen:    16,
+		Blocks: []BlockSpec{
+			{Type: "plain", Heads: 4, RelativeAttention: RelativeAttentionDebertaP2CC2P, RelativeAttentionWindow: 16, RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse, RelativeAttentionEmbeddingNorm: RelativeAttentionEmbeddingNormLayerNorm},
+			{Type: "plain", Heads: 4, RelativeAttention: RelativeAttentionDebertaP2CC2P, RelativeAttentionWindow: 16, RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse},
+		},
+	}
+	data, _ := json.Marshal(cfg)
+	_, err := ParseArchConfig(data, "mixed_shared_relative_embedding_norms")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "same relative_attention_embedding_norm") {
+		t.Fatalf("error %q does not mention shared embedding norm", err)
 	}
 }
 
@@ -182,6 +212,55 @@ func TestDebertaSharedRelativeAttentionWeightLayout(t *testing.T) {
 	}
 	if countShared != 1 {
 		t.Fatalf("shared relative embedding count=%d want 1", countShared)
+	}
+}
+
+func TestDebertaSharedRelativeAttentionEmbeddingNormWeightLayout(t *testing.T) {
+	sharedSpec := BlockSpec{
+		Type:                              "plain",
+		Heads:                             4,
+		RelativeAttention:                 RelativeAttentionDebertaP2CC2P,
+		RelativeAttentionWindow:           3,
+		RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse,
+		RelativeAttentionEmbeddingNorm:    RelativeAttentionEmbeddingNormLayerNorm,
+	}
+	cfg := &ArchConfig{
+		ModelDim:  64,
+		VocabSize: 256,
+		SeqLen:    16,
+		Blocks:    []BlockSpec{sharedSpec, sharedSpec},
+	}
+	metas, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesFromConfig: %v", err)
+	}
+	count, err := CountWeights(DefaultFFNMultiplier, false, false, false, false, []BlockSpec{sharedSpec, sharedSpec})
+	if err != nil {
+		t.Fatalf("CountWeights: %v", err)
+	}
+	if count != len(metas) {
+		t.Fatalf("CountWeights=%d len(metas)=%d", count, len(metas))
+	}
+	want := []struct {
+		name  string
+		shape []int
+	}{
+		{SharedRelativeEmbeddingsWeightName, []int{5, 64}},
+		{SharedRelativeNormScaleWeightName, []int{64}},
+		{SharedRelativeNormBiasWeightName, []int{64}},
+	}
+	found := 0
+	for _, meta := range metas {
+		if found >= len(want) || meta.Name != want[found].name {
+			continue
+		}
+		if !sameInts(meta.Shape, want[found].shape) {
+			t.Fatalf("%s shape=%v want %v", meta.Name, meta.Shape, want[found].shape)
+		}
+		found++
+	}
+	if found != len(want) {
+		t.Fatalf("did not find shared relative embedding norm weight sequence %v in %+v", want, metas)
 	}
 }
 
@@ -312,6 +391,101 @@ func TestEmitPlainAttentionIR_DebertaSharedQKReuse(t *testing.T) {
 		if op.Code == OpMatMul && len(op.Inputs) == 2 && (op.Inputs[1] == "w4" || op.Inputs[1] == "w5") && len(op.Outputs) > 0 && strings.Contains(op.Outputs[0], "_rel_") {
 			t.Fatalf("shared relative path used unexpected per-block projection input %v for output %v", op.Inputs, op.Outputs)
 		}
+	}
+}
+
+func TestEmitPlainAttentionIR_DebertaSharedQKReuseEmbeddingNorm(t *testing.T) {
+	p := NewProgram(12)
+	spec := BlockSpec{
+		Type:                              "plain",
+		Heads:                             4,
+		KVHeads:                           2,
+		RelativeAttention:                 RelativeAttentionDebertaP2CC2P,
+		RelativeAttentionWindow:           4,
+		RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse,
+	}
+	wi, err := EmitBlock(p, spec, "x", 3, 64, 8, 2, 256, 0, EmitOptions{
+		MLPMult: DefaultFFNMultiplier,
+		sharedRelative: sharedRelativeAttentionPlan{
+			Enabled:     true,
+			Window:      4,
+			WeightIndex: 0,
+			Norm:        RelativeAttentionEmbeddingNormLayerNorm,
+			NormIndex:   1,
+			NormEps:     1e-6,
+		},
+	})
+	if err != nil {
+		t.Fatalf("EmitBlock: %v", err)
+	}
+	if wi != 10 {
+		t.Fatalf("wi=%d want 10", wi)
+	}
+	var normOut string
+	for _, op := range p.Ops {
+		if op.Code != OpLayerNorm {
+			continue
+		}
+		if len(op.Inputs) == 3 && op.Inputs[0] == "w0" && op.Inputs[1] == "w1" && op.Inputs[2] == "w2" {
+			if len(op.FloatParams) != 1 || op.FloatParams[0] != 1e-6 {
+				t.Fatalf("shared relative LayerNorm params=%v want eps 1e-6", op.FloatParams)
+			}
+			normOut = op.Outputs[0]
+			break
+		}
+	}
+	if normOut == "" {
+		t.Fatalf("missing shared relative LayerNorm op: %+v", p.Ops)
+	}
+	assertMatMulInputsForOutputSuffix(t, p, "_rel_key_flat", []string{normOut, "w5"})
+	assertMatMulInputsForOutputSuffix(t, p, "_rel_query_flat", []string{normOut, "w4"})
+}
+
+func TestPlainAttentionPostNormBeforeOutProjWeightAndIROrder(t *testing.T) {
+	spec := BlockSpec{Type: "plain", Heads: 4, AttnPostNorm: PlainAttnPostNormBeforeOutProj}
+	metas, err := blockWeightShapes(spec, 64, 8, 1, 128, DefaultFFNMultiplier, false, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes: %v", err)
+	}
+	postNormAt := -1
+	woAt := -1
+	for i, meta := range metas {
+		switch meta.Name {
+		case "post_attn_norm_scale":
+			postNormAt = i
+		case "wo":
+			woAt = i
+		}
+	}
+	if postNormAt < 0 || woAt < 0 || postNormAt >= woAt {
+		t.Fatalf("post_attn_norm_scale index=%d wo index=%d in metas=%+v", postNormAt, woAt, metas)
+	}
+
+	p := NewProgram(len(metas))
+	_, err = emitBlockIR(p, spec, "x", 0, 64, 8, 1, 128, 0, nil, DefaultFFNMultiplier, false)
+	if err != nil {
+		t.Fatalf("emitBlockIR: %v", err)
+	}
+	postNormOut := ""
+	postNormOpIndex := -1
+	woOpIndex := -1
+	for i, op := range p.Ops {
+		if op.Code == OpRMSNorm && len(op.Outputs) > 0 && strings.HasSuffix(op.Outputs[0], "_flat_post_norm") {
+			postNormOut = op.Outputs[0]
+			postNormOpIndex = i
+		}
+		if op.Code == OpMatMul && len(op.Inputs) == 2 && op.Inputs[1] == weightName(5) {
+			woOpIndex = i
+			if op.Inputs[0] != postNormOut {
+				t.Fatalf("wo MatMul inputs=%v want first input %q", op.Inputs, postNormOut)
+			}
+		}
+	}
+	if postNormOpIndex < 0 || woOpIndex < 0 {
+		t.Fatalf("missing post norm or wo op in %+v", p.Ops)
+	}
+	if postNormOpIndex >= woOpIndex {
+		t.Fatalf("post norm op index=%d should precede wo index=%d", postNormOpIndex, woOpIndex)
 	}
 }
 

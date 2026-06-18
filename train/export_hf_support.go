@@ -22,6 +22,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "plain", Status: hfExportSupported, Reason: "Core attention export with RoPE, GQA, qk_norm, qk_gain, XSA, sparse attention gates, masks, and causal windowing."},
 		{Feature: "plain.attn_bias", Status: hfExportSupported, Reason: "Q/K/V/O projection biases are mirrored in the generated PyTorch template."},
 		{Feature: "plain.attn_value_gate", Status: hfExportSupported, Reason: "Value-projection attention gates are mirrored before the output projection in the generated PyTorch template."},
+		{Feature: "plain.attn_post_norm", Status: hfExportSupported, Reason: "Attention post-norm can inherit legacy after-output placement or explicitly run before the output projection."},
 		{Feature: "plain.qk_norm", Status: hfExportSupported, Reason: "Learned Q/K RMSNorm scales are mirrored in the generated PyTorch template."},
 		{Feature: "plain.xsa", Status: hfExportSupported, Reason: "XSA output projection is mirrored in the generated PyTorch template."},
 		{Feature: "plain.sparse_attn_gate", Status: hfExportSupported, Reason: "Sparse per-head attention gates are mirrored in the generated PyTorch template."},
@@ -29,6 +30,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "plain.ffn_activation=swiglu", Status: hfExportSupported, Reason: "Plain-block SwiGLU FFN tails are mirrored with an explicit gate projection in the generated PyTorch template."},
 		{Feature: "plain.relative_attention=deberta_p2c_c2p", Status: hfExportSupported, Reason: "DeBERTa/GPT-BERT C2P/P2C relative bias uses log-bucketed q-k positions in the generated PyTorch template."},
 		{Feature: "plain.relative_attention_parameterization=shared_qk_reuse", Status: hfExportSupported, Reason: "GPT-BERT-style shared relative embedding export reuses each block's Q/K projections in the generated PyTorch template."},
+		{Feature: "plain.relative_attention_embedding_norm=layernorm", Status: hfExportSupported, Reason: "A model-level affine LayerNorm can be applied to the shared relative embedding before Q/K reuse."},
 		{Feature: "swiglu", Status: hfExportSupported, Reason: "Bias-free SwiGLU FFN export is covered by native-vs-HF parity tests."},
 		{Feature: "geglu", Status: hfExportSupported, Reason: "Bias-free GEGLU FFN export is covered by native-vs-HF parity tests."},
 		{Feature: "mlp", Status: hfExportSupported, Reason: "Bias-free MLP export supports silu, gelu, relu, and leaky_relu_sq."},
@@ -49,6 +51,9 @@ func hfExportCapabilities() []hfExportCapability {
 func hfExportBlockCapability(block BlockSpec) hfExportCapability {
 	switch strings.ToLower(strings.TrimSpace(block.Type)) {
 	case "plain":
+		if hfNormalizePlainAttnPostNorm(block.AttnPostNorm) != "inherit" {
+			return capabilityByFeature("plain.attn_post_norm")
+		}
 		if block.AttnValueGate {
 			return capabilityByFeature("plain.attn_value_gate")
 		}
@@ -59,6 +64,9 @@ func hfExportBlockCapability(block BlockSpec) hfExportCapability {
 			return capabilityByFeature("plain.ffn_activation=" + activation)
 		}
 		if hfRelativeAttentionUsesSharedQKReuse(block) {
+			if hfRelativeAttentionEmbeddingNorm(block) == "layernorm" {
+				return capabilityByFeature("plain.relative_attention_embedding_norm=layernorm")
+			}
 			return capabilityByFeature("plain.relative_attention_parameterization=shared_qk_reuse")
 		}
 		if relativeAttentionEnabledForHF(block) {
@@ -104,12 +112,71 @@ func hfRelativeAttentionUsesSharedQKReuse(block BlockSpec) bool {
 	return relativeAttentionEnabledForHF(block) && hfRelativeAttentionParameterization(block) == "shared_qk_reuse"
 }
 
+func hfRelativeAttentionEmbeddingNorm(block BlockSpec) string {
+	value := strings.ToLower(strings.TrimSpace(block.RelativeAttentionEmbeddingNorm))
+	switch value {
+	case "", "none", "off", "disabled", "false":
+		return "none"
+	case "layernorm", "layer_norm", "ln":
+		return "layernorm"
+	default:
+		return value
+	}
+}
+
+func hfNormalizePlainAttnPostNorm(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "inherit":
+		return "inherit"
+	case "none", "off", "disabled", "false":
+		return "none"
+	case "after", "after_out", "after_outproj", "after_out_proj", "after_output_projection":
+		return "after_outproj"
+	case "before", "before_out", "before_outproj", "before_out_proj", "before_output_projection", "pre_outproj", "pre_out_proj":
+		return "before_outproj"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+func hfEffectivePlainAttnPostNorm(block BlockSpec, normPlacement string) string {
+	switch hfNormalizePlainAttnPostNorm(block.AttnPostNorm) {
+	case "inherit":
+		switch strings.ToLower(strings.TrimSpace(normPlacement)) {
+		case "post", "sandwich":
+			return "after_outproj"
+		default:
+			return "none"
+		}
+	case "none":
+		return "none"
+	case "after_outproj":
+		return "after_outproj"
+	case "before_outproj":
+		return "before_outproj"
+	default:
+		return hfNormalizePlainAttnPostNorm(block.AttnPostNorm)
+	}
+}
+
 func hfConfigUsesSharedRelativeAttention(cfg *ArchConfig) bool {
 	if cfg == nil {
 		return false
 	}
 	for _, block := range cfg.Blocks {
 		if hfRelativeAttentionUsesSharedQKReuse(block) {
+			return true
+		}
+	}
+	return false
+}
+
+func hfConfigUsesSharedRelativeEmbeddingNorm(cfg *ArchConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, block := range cfg.Blocks {
+		if hfRelativeAttentionUsesSharedQKReuse(block) && hfRelativeAttentionEmbeddingNorm(block) == "layernorm" {
 			return true
 		}
 	}

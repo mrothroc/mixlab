@@ -35,11 +35,16 @@ func runNativeCPUForward(t *testing.T, cfg *ArchConfig, weights [][]float32, tok
 	if hfConfigUsesSharedRelativeAttention(cfg) {
 		sharedRelativeEmbeddings = w[wi]
 		wi++
+		if hfConfigUsesSharedRelativeEmbeddingNorm(cfg) {
+			rows := len(sharedRelativeEmbeddings) / cfg.ModelDim
+			sharedRelativeEmbeddings = layerNorm2DCPU(sharedRelativeEmbeddings, w[wi], w[wi+1], rows, cfg.ModelDim, float64(cfg.EffectiveNormSpec().Eps))
+			wi += 2
+		}
 	}
 	for blockIdx, block := range cfg.Blocks {
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
 		case "plain":
-			n := plainHFExportWeightCount(block)
+			n := plainHFExportWeightCount(block, cfg.EffectiveNormPlacement())
 			x = plainCPUForward(t, cfg, block, x, w[wi:wi+n], sharedRelativeEmbeddings)
 			wi += n
 		case "moe":
@@ -78,7 +83,12 @@ func runHFCPUForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64
 	sharedRelativeEmbeddings := []float64(nil)
 	if hfConfigUsesSharedRelativeAttention(cfg) {
 		sharedRelativeEmbeddings = weights["relative_embeddings"]
+		if hfConfigUsesSharedRelativeEmbeddingNorm(cfg) {
+			rows := len(sharedRelativeEmbeddings) / cfg.ModelDim
+			sharedRelativeEmbeddings = layerNorm2DCPU(sharedRelativeEmbeddings, weights["relative_layer_norm.weight"], weights["relative_layer_norm.bias"], rows, cfg.ModelDim, float64(cfg.EffectiveNormSpec().Eps))
+		}
 	}
+	normPlacement := cfg.EffectiveNormPlacement()
 	for i, block := range cfg.Blocks {
 		prefix := fmt.Sprintf("blocks.%d.", i)
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
@@ -117,9 +127,16 @@ func runHFCPUForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64
 			if block.SparseAttnGate {
 				blockWeights = append(blockWeights, weights[prefix+"attn_gate_w"])
 			}
+			attnPostNorm := hfEffectivePlainAttnPostNorm(block, normPlacement)
+			if attnPostNorm == "before_outproj" {
+				blockWeights = append(blockWeights, weights[prefix+"post_attn_norm.weight"])
+			}
 			blockWeights = append(blockWeights, weights[prefix+"wo.weight"])
 			if block.AttnBias {
 				blockWeights = append(blockWeights, weights[prefix+"wo.bias"])
+			}
+			if attnPostNorm == "after_outproj" {
+				blockWeights = append(blockWeights, weights[prefix+"post_attn_norm.weight"])
 			}
 			if hfPlainFFNActivationUsesGate(block) {
 				blockWeights = append(blockWeights, weights[prefix+"ff_gate.weight"])
@@ -198,7 +215,7 @@ func hfFeatureWeights(weights map[string][]float64, feature string) [][]float64 
 	return out
 }
 
-func plainHFExportWeightCount(block BlockSpec) int {
+func plainHFExportWeightCount(block BlockSpec, normPlacement string) int {
 	n := 7
 	if block.AttnBias {
 		n += 4
@@ -213,6 +230,9 @@ func plainHFExportWeightCount(block BlockSpec) int {
 		n++
 	}
 	if block.SparseAttnGate {
+		n++
+	}
+	if hfEffectivePlainAttnPostNorm(block, normPlacement) != "none" {
 		n++
 	}
 	if hfPlainFFNActivationUsesGate(block) {
@@ -432,6 +452,11 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 	if valueGate != nil {
 		mul3DInPlace(merged, valueGate)
 	}
+	attnPostNorm := hfEffectivePlainAttnPostNorm(block, cfg.EffectiveNormPlacement())
+	if attnPostNorm == "before_outproj" {
+		merged = rmsNormCPU(merged, w[woIndex])
+		woIndex++
+	}
 	projWeight := w[woIndex]
 	woIndex++
 	var projBias []float64
@@ -440,6 +465,10 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 		woIndex++
 	}
 	proj := matmul3DBiasCPU(merged, projWeight, projBias, dim, dim)
+	if attnPostNorm == "after_outproj" {
+		proj = rmsNormCPU(proj, w[woIndex])
+		woIndex++
+	}
 	x = add3D(x, proj)
 	ffWeightIndex := woIndex
 	var ffHidden [][][]float64

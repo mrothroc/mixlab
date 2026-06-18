@@ -784,6 +784,11 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	if sharedRel.Enabled {
 		sharedRel.WeightIndex = wi
 		wi++
+		sharedRel.NormEps = norm.Eps
+		if sharedRel.Norm == RelativeAttentionEmbeddingNormLayerNorm {
+			sharedRel.NormIndex = wi
+			wi += 2
+		}
 	}
 	if residMix {
 		prog.ScalarMul("x", 1.0, "x0")

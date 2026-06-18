@@ -104,7 +104,16 @@ func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, w
 			if qWeightName == "" || kWeightName == "" {
 				return "", "", wi, fmt.Errorf("shared_qk_reuse relative attention requires local q/k projection weights")
 			}
-			if err := emitDebertaRelativeProjectionIR(prog, prefix, weightName(sharedRel.WeightIndex), kWeightName, kBiasName, qWeightName, qBiasName, H, kvH, D, headDim, relativeWindow, true); err != nil {
+			relTable := weightName(sharedRel.WeightIndex)
+			if sharedRel.Norm == RelativeAttentionEmbeddingNormLayerNorm {
+				if sharedRel.NormIndex < 0 {
+					return "", "", wi, fmt.Errorf("shared_qk_reuse relative attention embedding LayerNorm requires shared norm weights")
+				}
+				relNorm := prefix + "_shared_rel_norm"
+				prog.LayerNorm(relTable, weightName(sharedRel.NormIndex), weightName(sharedRel.NormIndex+1), relNorm, sharedRel.NormEps)
+				relTable = relNorm
+			}
+			if err := emitDebertaRelativeProjectionIR(prog, prefix, relTable, kWeightName, kBiasName, qWeightName, qBiasName, H, kvH, D, headDim, relativeWindow, true); err != nil {
 				return "", "", wi, err
 			}
 		default:

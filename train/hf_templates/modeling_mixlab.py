@@ -41,6 +41,45 @@ def norm_placement(config):
     raise ValueError(f"unsupported norm_placement {value!r}")
 
 
+def normalize_attn_post_norm(value):
+    value = str(value or "inherit").strip().lower()
+    if value in ("", "inherit"):
+        return "inherit"
+    if value in ("none", "off", "disabled", "false"):
+        return "none"
+    if value in ("after", "after_out", "after_outproj", "after_out_proj", "after_output_projection"):
+        return "after_outproj"
+    if value in (
+        "before",
+        "before_out",
+        "before_outproj",
+        "before_out_proj",
+        "before_output_projection",
+        "pre_outproj",
+        "pre_out_proj",
+    ):
+        return "before_outproj"
+    return value
+
+
+def effective_attn_post_norm(block_config, placement):
+    value = normalize_attn_post_norm(block_config.get("attn_post_norm", "inherit"))
+    if value == "inherit":
+        return "after_outproj" if placement in ("post", "sandwich") else "none"
+    if value in ("none", "after_outproj", "before_outproj"):
+        return value
+    raise ValueError(f"unsupported exported attn_post_norm {value!r}")
+
+
+def normalize_relative_embedding_norm(value):
+    value = str(value or "none").strip().lower()
+    if value in ("", "none", "off", "disabled", "false"):
+        return "none"
+    if value in ("layernorm", "layer_norm", "ln"):
+        return "layernorm"
+    return value
+
+
 class MixlabLinear(nn.Module):
     def __init__(self, in_dim, out_dim, bias=False):
         super().__init__()
@@ -150,6 +189,7 @@ class MixlabPlainBlock(nn.Module):
             block_config.get("relative_attention_parameterization", "") or "per_block_projections"
         ).lower()
         self.norm_placement = norm_placement(config)
+        self.attn_post_norm = effective_attn_post_norm(block_config, self.norm_placement)
         self.ffn_internal_norm_enabled = bool(getattr(config, "ffn_internal_norm", False))
         self.ffn_activation = str(block_config.get("ffn_activation", "") or "silu").lower()
         if self.ffn_activation not in ("silu", "geglu", "swiglu"):
@@ -191,8 +231,8 @@ class MixlabPlainBlock(nn.Module):
         if self.sparse_attn_gate:
             self.attn_gate_w = nn.Parameter(torch.empty(heads, self.attn_gate_dim))
             nn.init.zeros_(self.attn_gate_w)
+        self.post_attn_norm = make_mixlab_norm(config, dim) if self.attn_post_norm != "none" else None
         self.wo = MixlabLinear(dim, dim, bias=self.attn_bias)
-        self.post_attn_norm = make_mixlab_norm(config, dim) if self.norm_placement in ("post", "sandwich") else None
         self.ffn_norm = make_mixlab_norm(config, dim) if self.norm_placement == "sandwich" else None
         ffn_dim = max(dim, int(round(dim * float(config.mlp_mult))))
         self.ff_gate = MixlabLinear(dim, ffn_dim) if self.ffn_activation in ("geglu", "swiglu") else None
@@ -344,8 +384,10 @@ class MixlabPlainBlock(nn.Module):
         ctx = ctx.transpose(1, 2).contiguous().view(bsz, seq_len, dim)
         if value_gate is not None:
             ctx = ctx * value_gate
+        if self.attn_post_norm == "before_outproj":
+            ctx = self.post_attn_norm(ctx)
         attn_delta = self.wo(ctx)
-        if self.post_attn_norm is not None:
+        if self.attn_post_norm == "after_outproj":
             attn_delta = self.post_attn_norm(attn_delta)
         x = residual + attn_delta
 
@@ -586,7 +628,9 @@ class MixlabModel(PreTrainedModel):
         modules = []
         block_configs = blocks if blocks is not None else config.blocks
         self.relative_embeddings = None
+        self.relative_layer_norm = None
         shared_relative_window = None
+        shared_relative_embedding_norm = None
         for block in block_configs:
             if block.get("type") != "plain":
                 continue
@@ -594,14 +638,28 @@ class MixlabModel(PreTrainedModel):
             param = str(block.get("relative_attention_parameterization", "") or "per_block_projections").lower()
             if rel == "deberta_p2c_c2p" and param == "shared_qk_reuse":
                 window = int(block.get("relative_attention_window", 0) or 128)
+                embedding_norm = normalize_relative_embedding_norm(block.get("relative_attention_embedding_norm", "none"))
+                if embedding_norm not in ("none", "layernorm"):
+                    raise ValueError(
+                        f"unsupported exported relative_attention_embedding_norm {embedding_norm!r}"
+                    )
                 if shared_relative_window is None:
                     shared_relative_window = window
+                    shared_relative_embedding_norm = embedding_norm
                 elif shared_relative_window != window:
                     raise ValueError("shared_qk_reuse blocks must use one relative_attention_window")
+                elif shared_relative_embedding_norm != embedding_norm:
+                    raise ValueError("shared_qk_reuse blocks must use one relative_attention_embedding_norm")
         if shared_relative_window is not None:
             rel_rows = 2 * shared_relative_window - 1
             self.relative_embeddings = nn.Parameter(torch.empty(rel_rows, config.model_dim))
             nn.init.xavier_uniform_(self.relative_embeddings)
+            if shared_relative_embedding_norm == "layernorm":
+                self.relative_layer_norm = nn.LayerNorm(
+                    config.model_dim,
+                    eps=float(getattr(config, "norm_eps", 1e-5) or 1e-5),
+                    elementwise_affine=True,
+                )
         for block in block_configs:
             block_type = block.get("type")
             if block_type == "plain":
@@ -683,9 +741,12 @@ class MixlabModel(PreTrainedModel):
         if input_ids is None:
             raise ValueError("input_ids is required")
         x = self._embed_features(input_ids)
+        relative_embeddings = self.relative_embeddings
+        if relative_embeddings is not None and self.relative_layer_norm is not None:
+            relative_embeddings = self.relative_layer_norm(relative_embeddings)
         for block in self.blocks:
             if isinstance(block, MixlabPlainBlock):
-                x = block(x, self.relative_embeddings)
+                x = block(x, relative_embeddings)
             else:
                 x = block(x)
         return self.final_norm(x)

@@ -58,6 +58,34 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// Attention post-norm explicitly before the output projection,
+			// decoupled from the global (pre) norm placement.
+			name: "attn_post_norm_before_outproj",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 2, "attn_post_norm": "before_outproj"},
+					{"type": "plain", "heads": 2, "attn_post_norm": "after_outproj"},
+					{"type": "swiglu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 4646}
+			}`,
+		},
+		{
+			// Shared DeBERTa relative embeddings with an affine LayerNorm on the
+			// shared table before per-block Q/K reuse.
+			name: "deberta_shared_qk_reuse_embedding_norm",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 5, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 2, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 4, "relative_attention_parameterization": "shared_qk_reuse", "relative_attention_embedding_norm": "layernorm"},
+					{"type": "plain", "heads": 2, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 4, "relative_attention_parameterization": "shared_qk_reuse", "relative_attention_embedding_norm": "layernorm"},
+					{"type": "swiglu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 5, "seed": 4747}
+			}`,
+		},
+		{
 			// Partial RoPE, qk_norm, sigmoid SwiGLU, tanh-approx GELU, full RoPE.
 			name: "core_rope_qknorm_glu_mlp",
 			config: `{

@@ -52,7 +52,7 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 			"source":            "mixlab",
 			"weight_map":        "weight_map.json",
 			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "swiglu", "geglu", "mlp", "moe"},
+			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "swiglu", "geglu", "mlp", "moe"},
 			"unsupported_fails": true,
 		},
 	}
@@ -89,6 +89,9 @@ func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 			if block.AttnValueGate {
 				entry["attn_value_gate"] = true
 			}
+			if mode := hfNormalizePlainAttnPostNorm(block.AttnPostNorm); mode != "inherit" {
+				entry["attn_post_norm"] = mode
+			}
 			if block.XSA {
 				entry["xsa"] = true
 			}
@@ -103,6 +106,9 @@ func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 				entry["relative_attention_window"] = effectiveHFRelativeAttentionWindow(block)
 				if hfRelativeAttentionUsesSharedQKReuse(block) {
 					entry["relative_attention_parameterization"] = "shared_qk_reuse"
+					if hfRelativeAttentionEmbeddingNorm(block) == "layernorm" {
+						entry["relative_attention_embedding_norm"] = "layernorm"
+					}
 				}
 			}
 			if activation := hfPlainFFNActivation(block); activation != "silu" {

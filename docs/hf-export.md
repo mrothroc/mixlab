@@ -70,13 +70,14 @@ HF export supports next-token and masked-LM checkpoints using sequential blocks:
 - grouped-query attention through `kv_heads`
 - `plain` attention projection biases through `attn_bias`
 - `plain` attention value gates through `attn_value_gate`
+- `plain` attention post-norm placement through `attn_post_norm`, including explicit `before_outproj`
 - learned per-head-dimension `qk_norm`
 - learned per-head `qk_gain`
 - `xsa` attention-output projection
 - `sparse_attn_gate` per-head attention output gates
 - `attention_mask` values `causal`, `bidirectional`, and `none`
 - causal `window_size` sliding attention
-- DeBERTa/GPT-BERT-style `relative_attention: "deberta_p2c_c2p"` on `plain` blocks, including log-bucketed `q-k` relative positions and optional `relative_attention_parameterization: "shared_qk_reuse"`
+- DeBERTa/GPT-BERT-style `relative_attention: "deberta_p2c_c2p"` on `plain` blocks, including log-bucketed `q-k` relative positions, optional `relative_attention_parameterization: "shared_qk_reuse"`, and optional shared-table `relative_attention_embedding_norm: "layernorm"`
 - `swiglu`, `geglu`, and `mlp` FFN blocks, including MLP activation variants `silu`, `gelu`, `relu`, and `leaky_relu_sq`
 - sequential `moe` blocks with a linear router, top-k token routing, and `swiglu`, `geglu`, or `mlp` experts
 - embedding-time `char`, `bigram`, and `trigram` feature channels
@@ -101,7 +102,7 @@ These guards are part of the export contract: a missing feature should be visibl
 
 Two layers of parity coverage exist:
 
-1. **Go oracle parity** (default suite, no extra deps). Verifies metadata, tokenizer handling, weight mapping, unsupported-feature errors, and deterministic native-vs-HF fixtures by comparing a native-forward oracle against an HF-forward oracle. Coverage includes GEGLU/MLP, `plain` gated FFN tails, configurable LayerNorm/no-affine export metadata, GQA, `qk_norm`, `qk_gain`, XSA, sparse attention gates, masks, causal windowing, DeBERTa relative attention, MoE routing and expert variants, feature channels, hybrid causal export semantics, gated recurrent policies, and a deterministically scaled trained-magnitude fixture with RMS assertions.
+1. **Go oracle parity** (default suite, no extra deps). Verifies metadata, tokenizer handling, weight mapping, unsupported-feature errors, and deterministic native-vs-HF fixtures by comparing a native-forward oracle against an HF-forward oracle. Coverage includes GEGLU/MLP, `plain` gated FFN tails, configurable LayerNorm/no-affine export metadata, GQA, attention post-norm placement, `qk_norm`, `qk_gain`, XSA, sparse attention gates, masks, causal windowing, DeBERTa relative attention, shared relative embedding LayerNorm, MoE routing and expert variants, feature channels, hybrid causal export semantics, gated recurrent policies, and a deterministically scaled trained-magnitude fixture with RMS assertions.
 
 2. **Native-vs-Python parity** (`TestExportHFNativePythonParity`, gated on `HF_PARITY=1` + MLX + the Python toolchain). This is the load-bearing FR-1 check: it exports deterministic trained-magnitude fixtures, loads each through `AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True)` and `AutoModel.from_pretrained(..., trust_remote_code=True)`, runs the *actual* embedded `modeling_mixlab.py` forward, checks padded-tokenizer batching, and asserts the CausalLM logits agree with the *actual* native MLX forward (max per-logit abs diff < 1e-3, mean next-token loss diff < 1e-4). Because nothing in this path re-implements the HF math, a future drift between the kernels and the shipped Python template fails by construction. Cases cover partial/full RoPE, `qk_norm`, sigmoid SwiGLU, tanh-approx GELU, `plain` gated FFN tails, GQA + `qk_gain` + sliding window, DeBERTa relative attention, XSA + sparse attention gates, top-k MoE (geglu/mlp experts), and bigram/trigram/char feature channels.
 

@@ -121,10 +121,12 @@ type BlockSpec struct {
 	RelativeAttention                 string       `json:"relative_attention,omitempty"`                  // plain: "", "none", or "deberta_p2c_c2p".
 	RelativeAttentionWindow           int          `json:"relative_attention_window,omitempty"`           // plain relative attention bucket size; defaults to 128.
 	RelativeAttentionParameterization string       `json:"relative_attention_parameterization,omitempty"` // plain relative attention layout: per_block_projections or shared_qk_reuse.
+	RelativeAttentionEmbeddingNorm    string       `json:"relative_attention_embedding_norm,omitempty"`   // plain shared_qk_reuse: "", "none", or "layernorm" for affine shared relative embedding LayerNorm.
 	QKGain                            float64      `json:"qk_gain,omitempty"`                             // per-head learnable QK scaling; 0 disables
 	QKNorm                            bool         `json:"qk_norm,omitempty"`                             // plain: learned RMSNorm on Q/K heads before attention scores.
 	AttnBias                          bool         `json:"attn_bias,omitempty"`                           // plain: add learned biases to Q/K/V/O projections.
 	AttnValueGate                     bool         `json:"attn_value_gate,omitempty"`                     // plain: widen V projection to value+GELU gate and gate the attention output before WO.
+	AttnPostNorm                      string       `json:"attn_post_norm,omitempty"`                      // plain: "", "inherit", "none", "after_outproj", or "before_outproj".
 	XSA                               bool         `json:"xsa,omitempty"`                                 // enable V-orthogonal projection after attention
 	WindowSize                        int          `json:"window_size,omitempty"`                         // plain: sliding causal attention width; 0 = full causal attention
 	AttentionMask                     string       `json:"attention_mask,omitempty"`                      // plain: "causal", "bidirectional", or "none"; empty resolves from training objective.

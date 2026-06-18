@@ -191,6 +191,16 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		default:
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid relative_attention_parameterization=%q (must be \"per_block_projections\" or \"shared_qk_reuse\")", source, groupName, idx, b.RelativeAttentionParameterization)
 		}
+		switch normalizeRelativeAttentionEmbeddingNorm(b.RelativeAttentionEmbeddingNorm) {
+		case RelativeAttentionEmbeddingNormNone, RelativeAttentionEmbeddingNormLayerNorm:
+		default:
+			return fmt.Errorf("config %q %s[%d] type=plain has invalid relative_attention_embedding_norm=%q (must be \"none\" or \"layernorm\")", source, groupName, idx, b.RelativeAttentionEmbeddingNorm)
+		}
+		switch normalizePlainAttnPostNorm(b.AttnPostNorm) {
+		case PlainAttnPostNormInherit, PlainAttnPostNormNone, PlainAttnPostNormAfterOutProj, PlainAttnPostNormBeforeOutProj:
+		default:
+			return fmt.Errorf("config %q %s[%d] type=plain has invalid attn_post_norm=%q (must be \"inherit\", \"none\", \"after_outproj\", or \"before_outproj\")", source, groupName, idx, b.AttnPostNorm)
+		}
 		switch normalizePlainFFNActivation(b.FFNActivation) {
 		case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
 		default:
@@ -198,6 +208,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if normalizeRelativeAttentionParameterization(b.RelativeAttentionParameterization) == RelativeAttentionParamSharedQKReuse && !relativeAttentionEnabled(b) {
 			return fmt.Errorf("config %q %s[%d] type=plain relative_attention_parameterization=\"shared_qk_reuse\" requires relative_attention=\"deberta_p2c_c2p\"", source, groupName, idx)
+		}
+		if normalizeRelativeAttentionEmbeddingNorm(b.RelativeAttentionEmbeddingNorm) != RelativeAttentionEmbeddingNormNone && !relativeAttentionUsesSharedQKReuse(b) {
+			return fmt.Errorf("config %q %s[%d] type=plain relative_attention_embedding_norm requires relative_attention_parameterization=\"shared_qk_reuse\"", source, groupName, idx)
 		}
 		if b.AttnValueGate && b.KVSource > 0 {
 			return fmt.Errorf("config %q %s[%d] type=plain cannot combine attn_value_gate with kv_source", source, groupName, idx)

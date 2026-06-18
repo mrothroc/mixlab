@@ -19,6 +19,28 @@ func rmsNormCPU(x [][][]float64, scale []float64) [][][]float64 {
 	return out
 }
 
+func layerNorm2DCPU(x, scale, bias []float64, rows, dim int, eps float64) []float64 {
+	out := make([]float64, len(x))
+	for r := 0; r < rows; r++ {
+		row := x[r*dim : (r+1)*dim]
+		mean := 0.0
+		for _, v := range row {
+			mean += v
+		}
+		mean /= float64(dim)
+		variance := 0.0
+		for _, v := range row {
+			delta := v - mean
+			variance += delta * delta
+		}
+		inv := 1.0 / math.Sqrt(variance/float64(dim)+eps)
+		for d, v := range row {
+			out[r*dim+d] = (v-mean)*inv*scale[d] + bias[d]
+		}
+	}
+	return out
+}
+
 func rmsNormHeadsCPU(x [][][][]float64, scale []float64) {
 	for b := range x {
 		for h := range x[b] {
