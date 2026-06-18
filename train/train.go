@@ -303,8 +303,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	case arch.ObjectiveMLM, arch.ObjectiveMNTP:
 		fmt.Printf("  [%s] training objective: %s\n", name, cfg.Training.EffectiveObjective())
 	case arch.ObjectiveHybrid:
-		fmt.Printf("  [%s] training objective: hybrid causal=%.2f secondary=%s\n",
-			name, cfg.Training.HybridCLMFraction, cfg.Training.EffectiveHybridSecondaryObjective())
+		fmt.Printf("  [%s] training objective: hybrid granularity=%s causal=%.2f secondary=%s\n",
+			name, cfg.Training.EffectiveHybridMixGranularity(), cfg.Training.HybridCLMFraction, cfg.Training.EffectiveHybridSecondaryObjective())
 	}
 	if len(cfg.Training.SeqLenSchedule) > 0 {
 		fmt.Printf("  [%s] seq_len schedule: max=%d active_step0=%d\n", name, seqLen, currentSeqLen)

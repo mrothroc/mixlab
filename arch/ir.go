@@ -78,6 +78,7 @@ const (
 	OpLessEq               = 85 // OP_LESS_EQ
 	OpEqual                = 86 // OP_EQUAL
 	OpLayerNorm            = 87 // OP_LAYERNORM
+	OpSelectiveCausalMask  = 88 // OP_SELECTIVE_CAUSAL_MASK
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -207,6 +208,12 @@ func (p *Program) Transpose(a string, axes []int, output string) {
 // windowSize <= 0 preserves the full causal lower triangle.
 func (p *Program) CausalMask(scores string, T, windowSize int, output string) {
 	p.AddOp(OpCausalMask, []string{scores}, []string{output}, nil, []int{T, windowSize})
+}
+
+// SelectiveCausalMask applies a causal mask only for batch rows where
+// causalRows[b] > 0. Other rows keep dense bidirectional scores.
+func (p *Program) SelectiveCausalMask(scores, causalRows string, T, windowSize int, output string) {
+	p.AddOp(OpSelectiveCausalMask, []string{scores, causalRows}, []string{output}, nil, []int{T, windowSize})
 }
 
 // CrossEntropy emits a cross-entropy loss computation.

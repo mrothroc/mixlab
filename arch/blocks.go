@@ -338,6 +338,9 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		case AttentionMaskCausal:
 			prog.CausalMask(scaled, T, windowSize, masked)
 			prog.Softmax(masked, -1, attn)
+		case AttentionMaskHybridExample:
+			prog.SelectiveCausalMask(scaled, "attention_causal_mask", T, windowSize, masked)
+			prog.Softmax(masked, -1, attn)
 		case AttentionMaskBidirectional, AttentionMaskNone:
 			prog.Softmax(scaled, -1, attn)
 		default:
@@ -827,6 +830,9 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	switch attentionMask {
 	case AttentionMaskCausal:
 		prog.CausalMask(scaled, T, windowSize, masked)
+		prog.Softmax(masked, -1, attn)
+	case AttentionMaskHybridExample:
+		prog.SelectiveCausalMask(scaled, "attention_causal_mask", T, windowSize, masked)
 		prog.Softmax(masked, -1, attn)
 	case AttentionMaskBidirectional, AttentionMaskNone:
 		prog.Softmax(scaled, -1, attn)

@@ -842,8 +842,9 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `mlm_mask_token_prob` | number | No | `0.8` | Probability that a selected MLM token is replaced with `mlm_mask_token_id`. |
 | `mlm_random_token_prob` | number | No | `0.1` | Probability that a selected MLM token is replaced with a random token id. |
 | `mlm_kept_unchanged_prob` | number | No | `0.1` | Probability that a selected MLM token is kept unchanged. The three replacement probabilities must sum to `1.0`. |
-| `hybrid_clm_fraction` | number | No | `0.5` | For `objective: "hybrid"`, deterministic per-batch probability of using causal next-token training. Must be in `[0,1]`. |
+| `hybrid_clm_fraction` | number | No | `0.5` | For `objective: "hybrid"`, deterministic probability of using causal next-token training. In per-batch mode it is applied once per batch; in per-example mode it is applied once per sequence. Must be in `[0,1]`. |
 | `hybrid_secondary_objective` | string | No | `"mntp"` | Secondary objective for hybrid training: `"mlm"` or `"mntp"`. |
+| `hybrid_mix_granularity` | string | No | `"batch"` | Hybrid mixing granularity: `"batch"` preserves the existing one-objective-per-step behavior, while `"example"` samples causal vs secondary objective independently for each sequence in the batch and applies matching per-sequence attention masks. |
 | `distillation` | object | No | Disabled | Optional internal-teacher distillation block for causal LM training. |
 | `data2vec` | object | No | Disabled | Optional online EMA representation-distillation auxiliary loss for masked objectives. |
 | `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
@@ -910,9 +911,9 @@ The Hugging Face exporter uses whichever checkpoint is passed through `-safetens
 
 ### Training objectives
 
-`objective: "causal"` preserves the existing shifted next-token objective. `objective: "mlm"` masks selected input positions and trains only those positions to predict the original token. `objective: "mntp"` predicts next tokens from bidirectional context while masking the corresponding next-token input position so the answer is not visible. `objective: "hybrid"` deterministically chooses causal or the configured secondary objective once per batch from `training.seed` and the step index.
+`objective: "causal"` preserves the existing shifted next-token objective. `objective: "mlm"` masks selected input positions and trains only those positions to predict the original token. `objective: "mntp"` predicts next tokens from bidirectional context while masking the corresponding next-token input position so the answer is not visible. `objective: "hybrid"` deterministically mixes causal and the configured secondary objective from `training.seed` and the step index. The default `hybrid_mix_granularity: "batch"` chooses one objective per batch. `hybrid_mix_granularity: "example"` chooses independently per sequence inside the batch, so `hybrid_clm_fraction: 0.0625` gives approximately 6.25% causal sequences and 93.75% masked sequences over time.
 
-Hybrid training uses objective-specific attention masks regardless of any block-level `attention_mask`: causal batches are always causal, and MLM/MNTP batches are always bidirectional. Validation, full eval, generation, and other next-token scoring paths use causal attention. `plain.window_size` is rejected for hybrid configs unless `hybrid_clm_fraction` is `1.0`, because masked secondary batches require bidirectional attention.
+Hybrid training uses objective-specific attention masks regardless of any block-level `attention_mask`: causal batches or sequences are always causal, and MLM/MNTP batches or sequences are always bidirectional. In per-example mode, `plain` attention receives a row-level mask so causal and bidirectional sequences can share one training step safely. Validation, full eval, generation, and other next-token scoring paths use causal attention. `plain.window_size` is rejected for hybrid configs unless `hybrid_clm_fraction` is `1.0`, because masked secondary batches or sequences require bidirectional attention.
 
 Masked objectives emit a training loss averaged only over rows where `loss_mask > 0`; the dense `eval_loss` and `per_token_nll` outputs remain available for evaluation/export paths. Top-level `mtp` and `training.first_byte_mask` are not supported with non-causal objectives in this version.
 

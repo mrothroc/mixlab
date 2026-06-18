@@ -11,10 +11,17 @@ const (
 	ObjectiveMLM    = "mlm"
 	ObjectiveHybrid = "hybrid"
 	ObjectiveMNTP   = "mntp"
+	// ObjectiveHybridExample is an internal concrete training objective used
+	// for per-example hybrid batches. Public configs still use objective=hybrid.
+	ObjectiveHybridExample = "hybrid_example"
 
 	AttentionMaskCausal        = "causal"
 	AttentionMaskBidirectional = "bidirectional"
 	AttentionMaskNone          = "none"
+	AttentionMaskHybridExample = "hybrid_example"
+
+	HybridMixGranularityBatch   = "batch"
+	HybridMixGranularityExample = "example"
 )
 
 func normalizeTrainingObjective(raw string) string {
@@ -31,7 +38,7 @@ func normalizeAttentionMask(raw string) string {
 
 func isMaskedTrainingObjective(objective string) bool {
 	switch normalizeTrainingObjective(objective) {
-	case ObjectiveMLM, ObjectiveMNTP:
+	case ObjectiveMLM, ObjectiveMNTP, ObjectiveHybridExample:
 		return true
 	default:
 		return false
@@ -44,6 +51,14 @@ func IsMaskedTrainingObjectiveForData2Vec(objective string) bool {
 
 func (t TrainingSpec) EffectiveObjective() string {
 	return normalizeTrainingObjective(t.Objective)
+}
+
+func (t TrainingSpec) EffectiveHybridMixGranularity() string {
+	mode := strings.ToLower(strings.TrimSpace(t.HybridMixGranularity))
+	if mode == "" {
+		return HybridMixGranularityBatch
+	}
+	return mode
 }
 
 func (t TrainingSpec) EffectiveHybridSecondaryObjective() string {
@@ -73,6 +88,15 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	case ObjectiveCausal, ObjectiveMLM, ObjectiveHybrid, ObjectiveMNTP:
 	default:
 		return fmt.Errorf("config %q has invalid training.objective=%q (must be \"causal\", \"mlm\", \"hybrid\", or \"mntp\")", source, t.Objective)
+	}
+	t.HybridMixGranularity = t.EffectiveHybridMixGranularity()
+	switch t.HybridMixGranularity {
+	case HybridMixGranularityBatch, HybridMixGranularityExample:
+	default:
+		return fmt.Errorf("config %q has invalid training.hybrid_mix_granularity=%q (must be \"batch\" or \"example\")", source, t.HybridMixGranularity)
+	}
+	if t.Objective != ObjectiveHybrid && t.HybridMixGranularity == HybridMixGranularityExample {
+		return fmt.Errorf("config %q has training.hybrid_mix_granularity=\"example\" but training.objective is %q (must be \"hybrid\")", source, t.Objective)
 	}
 	if !t.mlmMaskProbSet && t.MLMMaskProb == 0 {
 		t.MLMMaskProb = 0.15
@@ -152,6 +176,9 @@ func resolvedPlainAttentionMask(spec BlockSpec, objective string) string {
 func resolvedPlainAttentionMaskForObjective(spec BlockSpec, objective, rootObjective string) string {
 	objective = normalizeTrainingObjective(objective)
 	if normalizeTrainingObjective(rootObjective) == ObjectiveHybrid {
+		if objective == ObjectiveHybridExample {
+			return AttentionMaskHybridExample
+		}
 		if isMaskedTrainingObjective(objective) {
 			return AttentionMaskBidirectional
 		}

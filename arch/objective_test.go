@@ -281,6 +281,100 @@ func TestBuildTrainingIRProgram_HybridForcesConcreteAttentionMasks(t *testing.T)
 	}
 }
 
+func TestBuildTrainingIRProgram_HybridExampleUsesSelectiveAttentionMask(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"blocks": [{"type": "plain", "heads": 2, "attention_mask": "bidirectional"}],
+		"training": {
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"objective": "hybrid",
+			"hybrid_mix_granularity": "example",
+			"hybrid_clm_fraction": 0.0625,
+			"mlm_mask_token_id": 7,
+			"hybrid_secondary_objective": "mlm"
+		}`)
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive: true,
+		Objective:        ObjectiveHybridExample,
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(hybrid_example): %v", err)
+	}
+	if !programDeclaresInputArch(prog, "loss_mask") {
+		t.Fatal("hybrid example program missing loss_mask")
+	}
+	if !programDeclaresInputArch(prog, "attention_causal_mask") {
+		t.Fatal("hybrid example program missing attention_causal_mask")
+	}
+	if n := countOps(prog, OpSelectiveCausalMask); n != 1 {
+		t.Fatalf("OpSelectiveCausalMask count = %d, want 1", n)
+	}
+	if n := countOps(prog, OpCausalMask); n != 0 {
+		t.Fatalf("hybrid example program emitted %d plain causal masks, want 0", n)
+	}
+	if n := countOps(prog, OpMaskedCrossEntropy); n != 1 {
+		t.Fatalf("OpMaskedCrossEntropy count = %d, want 1", n)
+	}
+}
+
+func TestParseArchConfig_HybridMixGranularityValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "invalid mode",
+			body: `"blocks": [{"type": "plain", "heads": 2}],
+				"training": {
+					"steps": 1,
+					"lr": 0.001,
+					"batch_tokens": 8,
+					"objective": "hybrid",
+					"hybrid_mix_granularity": "token",
+					"mlm_mask_token_id": 7
+				}`,
+			want: "hybrid_mix_granularity",
+		},
+		{
+			name: "example non hybrid",
+			body: `"blocks": [{"type": "plain", "heads": 2}],
+				"training": {
+					"steps": 1,
+					"lr": 0.001,
+					"batch_tokens": 8,
+					"objective": "mlm",
+					"hybrid_mix_granularity": "example",
+					"mlm_mask_token_id": 7
+				}`,
+			want: "training.objective",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseArchConfig([]byte(objectiveConfigJSON(tc.body)), tc.name)
+			if err == nil {
+				t.Fatal("ParseArchConfig succeeded, want error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+
+	cfg := parseObjectiveConfig(t, `"blocks": [{"type": "plain", "heads": 2}],
+		"training": {
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"objective": "hybrid",
+			"hybrid_mix_granularity": "example",
+			"mlm_mask_token_id": 7
+		}`)
+	if got := cfg.Training.HybridMixGranularity; got != HybridMixGranularityExample {
+		t.Fatalf("hybrid_mix_granularity = %q, want %q", got, HybridMixGranularityExample)
+	}
+}
+
 func TestBuildEvalIRProgram_HybridUsesCausalAttention(t *testing.T) {
 	cfg := parseObjectiveConfig(t, `"blocks": [{"type": "plain", "heads": 2, "attention_mask": "bidirectional"}],
 		"training": {

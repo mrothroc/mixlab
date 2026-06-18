@@ -224,6 +224,7 @@ type TrainingSpec struct {
 	MLMMaskProbScheduleMode           string            `json:"mlm_mask_prob_schedule_mode,omitempty"`
 	HybridCLMFraction                 float64           `json:"hybrid_clm_fraction,omitempty"`
 	HybridSecondaryObjective          string            `json:"hybrid_secondary_objective,omitempty"`
+	HybridMixGranularity              string            `json:"hybrid_mix_granularity,omitempty"`
 	Distillation                      *DistillationSpec `json:"distillation,omitempty"`
 	Data2Vec                          *Data2VecSpec     `json:"data2vec,omitempty"`
 	ZLoss                             float64           `json:"z_loss,omitempty"`
@@ -445,6 +446,7 @@ func (t *TrainingSpec) ApplyDefaults() {
 	} else {
 		t.HybridSecondaryObjective = normalizeTrainingObjective(t.HybridSecondaryObjective)
 	}
+	t.HybridMixGranularity = t.EffectiveHybridMixGranularity()
 	if t.Data2Vec != nil {
 		t.Data2Vec.applyDefaults()
 	}

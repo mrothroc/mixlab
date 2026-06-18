@@ -2450,6 +2450,41 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, masked);
         break;
       }
+      case OP_SELECTIVE_CAUSAL_MASK: {
+        if (op.n_inputs < 2) {
+          throw std::runtime_error("OP_SELECTIVE_CAUSAL_MASK requires scores and causal row mask");
+        }
+        if (op.n_int_params < 1) {
+          throw std::runtime_error("OP_SELECTIVE_CAUSAL_MASK missing T");
+        }
+        int T = op.int_params[0];
+        int window_size = (op.n_int_params >= 2) ? op.int_params[1] : 0;
+        auto scores = get(op, 0);
+        auto causal_rows_raw = get(op, 1);
+        if (scores.ndim() != 4 || scores.shape(2) != T || scores.shape(3) != T) {
+          throw std::runtime_error("OP_SELECTIVE_CAUSAL_MASK expects scores shape [B,H,T,T]");
+        }
+        if (causal_rows_raw.ndim() != 1 || causal_rows_raw.shape(0) != scores.shape(0)) {
+          throw std::runtime_error("OP_SELECTIVE_CAUSAL_MASK causal row mask must have shape [B]");
+        }
+        auto future_mask = mx::triu(mx::ones({T, T}, mx::bool_), 1);
+        if (window_size > 0 && window_size < T) {
+          auto pos = mx::astype(mx::arange(T), mx::int32);
+          auto query_pos = mx::expand_dims(pos, 1);
+          auto key_pos = mx::expand_dims(pos, 0);
+          auto too_old = key_pos < (query_pos - mx::array(window_size - 1, mx::int32));
+          future_mask = mx::logical_or(future_mask, too_old);
+        }
+        auto row_mask = mx::greater(
+            mx::astype(causal_rows_raw, mx::int32),
+            mx::array(0, mx::int32));
+        auto row_mask4 = mx::expand_dims(mx::expand_dims(mx::expand_dims(row_mask, 1), 2), 3);
+        auto future_mask4 = mx::expand_dims(mx::expand_dims(future_mask, 0), 0);
+        auto mask = mx::logical_and(row_mask4, future_mask4);
+        auto masked = mx::where(mask, mx::full_like(scores, -1e9f), scores);
+        set_out(op, 0, masked);
+        break;
+      }
       case OP_PREFIX_CAUSAL_MASK: {
         if (op.n_int_params < 2) {
           throw std::runtime_error("OP_PREFIX_CAUSAL_MASK requires int params: selfT, prefixT");

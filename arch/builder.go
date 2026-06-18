@@ -793,6 +793,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	if maskedObjective {
 		prog.DeclareInput("loss_mask", TensorFloat32, []int{B * T})
 	}
+	if objective == ObjectiveHybridExample {
+		prog.DeclareInput("attention_causal_mask", TensorInt32, []int{B})
+	}
 	if distillationEnabled {
 		prog.DeclareInput("teacher_probs", TensorFloat32, []int{B * T, V})
 	}

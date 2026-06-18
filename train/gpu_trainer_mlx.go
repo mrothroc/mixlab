@@ -13,37 +13,39 @@ import (
 
 // mlxGPUTrainer wraps the MLX IR trainer for the training loop.
 type mlxGPUTrainer struct {
-	handle             gpu.TrainerHandle
-	prog               *gpu.Program
-	activeIRProg       *ir.Program
-	programCache       map[*ir.Program]*gpu.Program
-	handles            []int64 // GPU weight array handles
-	shapes             []WeightShape
-	baseLR             float32
-	evalLossOutputName string
-	vocabSize          int
-	charVocabSize      int
-	charMaxPerToken    int
-	bigramVocabSize    int
-	trigramVocabSize   int
-	declaredTargetSize int
-	charInput          bool
-	firstByteMaskInput bool
-	lossMaskInput      bool
-	teacherProbsInput  bool
-	data2VecInput      bool
+	handle               gpu.TrainerHandle
+	prog                 *gpu.Program
+	activeIRProg         *ir.Program
+	programCache         map[*ir.Program]*gpu.Program
+	handles              []int64 // GPU weight array handles
+	shapes               []WeightShape
+	baseLR               float32
+	evalLossOutputName   string
+	vocabSize            int
+	charVocabSize        int
+	charMaxPerToken      int
+	bigramVocabSize      int
+	trigramVocabSize     int
+	declaredTargetSize   int
+	charInput            bool
+	firstByteMaskInput   bool
+	lossMaskInput        bool
+	attentionCausalInput bool
+	teacherProbsInput    bool
+	data2VecInput        bool
 	// Pre-allocated input buffers to avoid per-step allocation.
-	tokBuf            []int32
-	tgtBuf            []int32
-	lossMaskBuf       []float32
-	teacherProbBuf    []float32
-	data2VecTargetBuf []float32
-	data2VecMaskBuf   []float32
-	charBuf           []int32
-	bigramBuf         []int32
-	trigramBuf        []int32
-	charFeatures      []int32
-	firstByteValid    []int32
+	tokBuf             []int32
+	tgtBuf             []int32
+	lossMaskBuf        []float32
+	attentionCausalBuf []int32
+	teacherProbBuf     []float32
+	data2VecTargetBuf  []float32
+	data2VecMaskBuf    []float32
+	charBuf            []int32
+	bigramBuf          []int32
+	trigramBuf         []int32
+	charFeatures       []int32
+	firstByteValid     []int32
 	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
 	lockedOSThread bool
 }
@@ -167,6 +169,7 @@ func initMLXGPUTrainer(
 	charInput := false
 	firstByteMaskInput := false
 	lossMaskInput := false
+	attentionCausalInput := false
 	teacherProbsInput := false
 	data2VecInput := false
 	for _, inp := range irProg.Inputs {
@@ -178,6 +181,9 @@ func initMLXGPUTrainer(
 		}
 		if inp.Name == "loss_mask" {
 			lossMaskInput = true
+		}
+		if inp.Name == "attention_causal_mask" {
+			attentionCausalInput = true
 		}
 		if inp.Name == "teacher_probs" {
 			teacherProbsInput = true
@@ -227,37 +233,39 @@ func initMLXGPUTrainer(
 		firstByteValid = append([]int32(nil), firstByteValid...)
 	}
 	trainer := &mlxGPUTrainer{
-		handle:             trainerHandle,
-		prog:               gpuProg,
-		activeIRProg:       irProg,
-		programCache:       map[*ir.Program]*gpu.Program{irProg: gpuProg},
-		handles:            handles,
-		shapes:             shapes,
-		baseLR:             optimizerSpec.DefaultBaseLR,
-		evalLossOutputName: preferredEvalLossOutputName(irProg),
-		vocabSize:          cfg.VocabSize,
-		charVocabSize:      cfg.CharVocabSize,
-		charMaxPerToken:    cfg.CharMaxPerToken,
-		bigramVocabSize:    cfg.BigramVocabSize,
-		trigramVocabSize:   cfg.TrigramVocabSize,
-		declaredTargetSize: declaredTargetSize,
-		charInput:          charInput,
-		firstByteMaskInput: firstByteMaskInput,
-		lossMaskInput:      lossMaskInput,
-		teacherProbsInput:  teacherProbsInput,
-		data2VecInput:      data2VecInput,
-		tokBuf:             make([]int32, batchElems),
-		tgtBuf:             make([]int32, batchElems),
-		lossMaskBuf:        make([]float32, batchElems),
-		teacherProbBuf:     make([]float32, batchElems*cfg.VocabSize),
-		data2VecTargetBuf:  make([]float32, batchElems*cfg.ModelDim),
-		data2VecMaskBuf:    make([]float32, batchElems),
-		charBuf:            make([]int32, batchElems*cfg.CharMaxPerToken),
-		bigramBuf:          make([]int32, batchElems),
-		trigramBuf:         make([]int32, batchElems),
-		charFeatures:       charFeatures,
-		firstByteValid:     firstByteValid,
-		lockedOSThread:     true,
+		handle:               trainerHandle,
+		prog:                 gpuProg,
+		activeIRProg:         irProg,
+		programCache:         map[*ir.Program]*gpu.Program{irProg: gpuProg},
+		handles:              handles,
+		shapes:               shapes,
+		baseLR:               optimizerSpec.DefaultBaseLR,
+		evalLossOutputName:   preferredEvalLossOutputName(irProg),
+		vocabSize:            cfg.VocabSize,
+		charVocabSize:        cfg.CharVocabSize,
+		charMaxPerToken:      cfg.CharMaxPerToken,
+		bigramVocabSize:      cfg.BigramVocabSize,
+		trigramVocabSize:     cfg.TrigramVocabSize,
+		declaredTargetSize:   declaredTargetSize,
+		charInput:            charInput,
+		firstByteMaskInput:   firstByteMaskInput,
+		lossMaskInput:        lossMaskInput,
+		attentionCausalInput: attentionCausalInput,
+		teacherProbsInput:    teacherProbsInput,
+		data2VecInput:        data2VecInput,
+		tokBuf:               make([]int32, batchElems),
+		tgtBuf:               make([]int32, batchElems),
+		lossMaskBuf:          make([]float32, batchElems),
+		attentionCausalBuf:   make([]int32, batchElems),
+		teacherProbBuf:       make([]float32, batchElems*cfg.VocabSize),
+		data2VecTargetBuf:    make([]float32, batchElems*cfg.ModelDim),
+		data2VecMaskBuf:      make([]float32, batchElems),
+		charBuf:              make([]int32, batchElems*cfg.CharMaxPerToken),
+		bigramBuf:            make([]int32, batchElems),
+		trigramBuf:           make([]int32, batchElems),
+		charFeatures:         charFeatures,
+		firstByteValid:       firstByteValid,
+		lockedOSThread:       true,
 	}
 	releaseOSThread = false
 	return trainer, nil
@@ -336,9 +344,13 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		t.tokBuf = make([]int32, need)
 		t.tgtBuf = make([]int32, need)
 		t.lossMaskBuf = make([]float32, need)
+		t.attentionCausalBuf = make([]int32, need)
 		t.charBuf = make([]int32, need*t.charMaxPerToken)
 		t.bigramBuf = make([]int32, need)
 		t.trigramBuf = make([]int32, need)
+	}
+	if t.attentionCausalInput && len(t.attentionCausalBuf) < batchSize {
+		t.attentionCausalBuf = make([]int32, batchSize)
 	}
 	if t.charInput && len(t.charBuf) < need*t.charMaxPerToken {
 		t.charBuf = make([]int32, need*t.charMaxPerToken)
@@ -376,6 +388,18 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		}
 		inputs = append(inputs, gpu.TensorInput{
 			Name: "loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.lossMaskBuf[:need],
+		})
+	}
+	if t.attentionCausalInput {
+		if len(batch.attentionCausal) >= batchSize {
+			copy(t.attentionCausalBuf[:batchSize], batch.attentionCausal[:batchSize])
+		} else {
+			for i := 0; i < batchSize; i++ {
+				t.attentionCausalBuf[i] = 1
+			}
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "attention_causal_mask", DType: gpu.TensorInt32, Shape: []int{batchSize}, Data: t.attentionCausalBuf[:batchSize],
 		})
 	}
 	if t.teacherProbsInput {
@@ -643,6 +667,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.charInput = programDeclaresInput(irProg, "char_ids")
 	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
 	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")
+	t.attentionCausalInput = programDeclaresInput(irProg, "attention_causal_mask")
 	t.teacherProbsInput = programDeclaresInput(irProg, "teacher_probs")
 	t.data2VecInput = programDeclaresInput(irProg, "data2vec_targets")
 	if t.charInput && len(t.charFeatures) != t.vocabSize*t.charMaxPerToken {

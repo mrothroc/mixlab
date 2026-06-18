@@ -79,6 +79,7 @@ const (
 	OpLessEq               = 85
 	OpEqual                = 86
 	OpLayerNorm            = 87
+	OpSelectiveCausalMask  = 88
 )
 
 const (

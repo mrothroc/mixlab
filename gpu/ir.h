@@ -92,6 +92,7 @@ enum OpType {
   OP_LESS_EQ = 85,
   OP_EQUAL = 86,
   OP_LAYERNORM = 87,
+  OP_SELECTIVE_CAUSAL_MASK = 88,
 };
 
 struct IRop {

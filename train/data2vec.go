@@ -101,6 +101,9 @@ func newData2VecTeacher(cfg *ArchConfig, initialWeights [][]float32, concreteObj
 }
 
 func data2VecTeacherObjective(cfg *ArchConfig, concreteObjective string) string {
+	if concreteObjective == arch.ObjectiveHybridExample && cfg != nil {
+		return cfg.Training.EffectiveHybridSecondaryObjective()
+	}
 	if arch.IsMaskedTrainingObjectiveForData2Vec(concreteObjective) {
 		return concreteObjective
 	}
@@ -176,7 +179,11 @@ func attachData2VecTargets(t *data2VecTeacher, batch objectiveBatch, objective s
 	if len(x) < need {
 		x = batch.x
 	}
-	targets, mask, err := t.targets(x, batch.y, batch.lossMask, batchSize, seqLen)
+	data2vecMask := batch.lossMask
+	if len(batch.maskedLossMask) >= need {
+		data2vecMask = batch.maskedLossMask
+	}
+	targets, mask, err := t.targets(x, batch.y, data2vecMask, batchSize, seqLen)
 	if err != nil {
 		return objectiveBatch{}, err
 	}
