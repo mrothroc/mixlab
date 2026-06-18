@@ -99,8 +99,11 @@ func runHFCPUForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64
 			if block.SparseAttnGate {
 				blockWeights = append(blockWeights, weights[prefix+"attn_gate_w"])
 			}
+			blockWeights = append(blockWeights, weights[prefix+"wo.weight"])
+			if hfPlainFFNActivationUsesGate(block) {
+				blockWeights = append(blockWeights, weights[prefix+"ff_gate.weight"])
+			}
 			blockWeights = append(blockWeights,
-				weights[prefix+"wo.weight"],
 				weights[prefix+"ff1.weight"],
 				weights[prefix+"ff2.weight"],
 			)
@@ -186,6 +189,9 @@ func plainHFExportWeightCount(block BlockSpec) int {
 		n++
 	}
 	if block.SparseAttnGate {
+		n++
+	}
+	if hfPlainFFNActivationUsesGate(block) {
 		n++
 	}
 	return n
@@ -364,15 +370,41 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 	merged := mergeHeadsCPU(ctx, dim)
 	proj := matmul3DCPU(merged, w[woIndex], dim, dim)
 	x = add3D(x, proj)
-	ff1 := matmul3DCPU(x, w[woIndex+1], dim, ffnDimForConfig(cfg))
-	for b := range ff1 {
-		for i := range ff1[b] {
-			for d := range ff1[b][i] {
-				ff1[b][i][d] = silu(ff1[b][i][d])
+	ffWeightIndex := woIndex + 1
+	var ffHidden [][][]float64
+	switch hfPlainFFNActivation(block) {
+	case "silu":
+		ffHidden = matmul3DCPU(x, w[ffWeightIndex], dim, ffnDimForConfig(cfg))
+		ffWeightIndex++
+		for b := range ffHidden {
+			for i := range ffHidden[b] {
+				for d := range ffHidden[b][i] {
+					ffHidden[b][i][d] = silu(ffHidden[b][i][d])
+				}
 			}
 		}
+	case "geglu", "swiglu":
+		gate := matmul3DCPU(x, w[ffWeightIndex], dim, ffnDimForConfig(cfg))
+		ffWeightIndex++
+		up := matmul3DCPU(x, w[ffWeightIndex], dim, ffnDimForConfig(cfg))
+		ffWeightIndex++
+		ffHidden = gate
+		for b := range ffHidden {
+			for i := range ffHidden[b] {
+				for d := range ffHidden[b][i] {
+					if hfPlainFFNActivation(block) == "geglu" {
+						ffHidden[b][i][d] = gelu(ffHidden[b][i][d])
+					} else {
+						ffHidden[b][i][d] = silu(ffHidden[b][i][d])
+					}
+					ffHidden[b][i][d] *= up[b][i][d]
+				}
+			}
+		}
+	default:
+		t.Fatalf("unsupported plain ffn_activation %q", block.FFNActivation)
 	}
-	ff2 := matmul3DCPU(ff1, w[woIndex+2], ffnDimForConfig(cfg), dim)
+	ff2 := matmul3DCPU(ffHidden, w[ffWeightIndex], ffnDimForConfig(cfg), dim)
 	return add3D(x, ff2)
 }
 

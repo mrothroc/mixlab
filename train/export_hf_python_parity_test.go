@@ -58,6 +58,19 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// Plain-block gated FFN tails: exercises ffn_activation on the
+			// attention block itself rather than standalone GLU blocks.
+			name: "plain_gated_ffn_tails",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 2, "rope_dims": 2, "ffn_activation": "geglu"},
+					{"type": "plain", "heads": 2, "ffn_activation": "swiglu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 8181}
+			}`,
+		},
+		{
 			// Affine LayerNorm in post placement: exercises LayerNorm scale+bias
 			// weights plus post_attn/post_ffn norm slots against the Python template.
 			name: "layernorm_affine_post",

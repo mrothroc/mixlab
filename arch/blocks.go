@@ -145,13 +145,19 @@ func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D,
 }
 
 func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
-	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false)
+	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU)
 }
 
-func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool) (int, error) {
+func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string) (int, error) {
 	_ = mlpMult
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
+	ffnActivation = normalizePlainFFNActivation(ffnActivation)
+	switch ffnActivation {
+	case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
+	default:
+		return wi, fmt.Errorf("invalid plain ffn_activation=%q", ffnActivation)
+	}
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
 	}
@@ -396,7 +402,9 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		prog.Add(x, proj, x)
 	}
 
-	// Feed-forward tail: ff1 -> SiLU -> ff2 -> residual
+	// Feed-forward tail: ff1 -> activation -> ff2 -> residual
+	ffGate := prefix + "_ff_gate"
+	ffGateAct := ffGate + "_act"
 	ff1 := prefix + "_ff1"
 	ffInNorm := prefix + "_ffn_x_norm"
 	ffAct := prefix + "_ff_act"
@@ -414,9 +422,25 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		}
 		ffIn = ffInNorm
 	}
-	prog.MatMul(ffIn, weightName(wi), ff1)
-	wi++
-	prog.SiLU(ff1, ffAct)
+	switch ffnActivation {
+	case PlainFFNActivationSiLU:
+		prog.MatMul(ffIn, weightName(wi), ff1)
+		wi++
+		prog.SiLU(ff1, ffAct)
+	case PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
+		prog.MatMul(ffIn, weightName(wi), ffGate)
+		wi++
+		if ffnActivation == PlainFFNActivationGEGLU {
+			prog.GELU(ffGate, ffGateAct)
+		} else {
+			prog.SiLU(ffGate, ffGateAct)
+		}
+		prog.MatMul(ffIn, weightName(wi), ff1)
+		wi++
+		prog.Mul(ffGateAct, ff1, ffAct)
+	default:
+		return wi, fmt.Errorf("invalid plain ffn_activation=%q", ffnActivation)
+	}
 	ffHidden := ffAct
 	if ffnInternalNorm {
 		var err error
@@ -733,8 +757,14 @@ func emitMLPIRNorm(prog *Program, x string, wi, idx int, activation string, leak
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, ffnActivation string) (string, int, error) {
 	_ = mlpMult
+	ffnActivation = normalizePlainFFNActivation(ffnActivation)
+	switch ffnActivation {
+	case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
+	default:
+		return "", wi, fmt.Errorf("invalid plain ffn_activation=%q", ffnActivation)
+	}
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return "", wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
 	}
@@ -876,6 +906,8 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	}
 
 	ffIn := prefix + "_ff_in"
+	ffGate := prefix + "_ff_gate"
+	ffGateAct := ffGate + "_act"
 	ff1 := prefix + "_ff1"
 	ffAct := prefix + "_ff_act"
 	ff2 := prefix + "_ff2"
@@ -883,9 +915,25 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	ff2Drop := prefix + "_ff2_dropout"
 	state := prefix + "_state"
 	prog.Add(x, proj, ffIn)
-	prog.MatMul(ffIn, weightName(wi), ff1)
-	wi++
-	prog.SiLU(ff1, ffAct)
+	switch ffnActivation {
+	case PlainFFNActivationSiLU:
+		prog.MatMul(ffIn, weightName(wi), ff1)
+		wi++
+		prog.SiLU(ff1, ffAct)
+	case PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
+		prog.MatMul(ffIn, weightName(wi), ffGate)
+		wi++
+		if ffnActivation == PlainFFNActivationGEGLU {
+			prog.GELU(ffGate, ffGateAct)
+		} else {
+			prog.SiLU(ffGate, ffGateAct)
+		}
+		prog.MatMul(ffIn, weightName(wi), ff1)
+		wi++
+		prog.Mul(ffGateAct, ff1, ffAct)
+	default:
+		return "", wi, fmt.Errorf("invalid plain ffn_activation=%q", ffnActivation)
+	}
 	prog.MatMul(ffAct, weightName(wi), ff2)
 	wi++
 	if blockScales {

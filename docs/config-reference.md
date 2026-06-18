@@ -12,7 +12,7 @@ All examples below are valid JSON fragments unless otherwise noted.
 
 These fields live at the root of the config object.
 
-For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal and masked-LM heads for supported sequential `plain` attention stacks plus `swiglu`/`geglu`/`mlp`/`moe` blocks, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, DeBERTa relative attention, configurable RMSNorm/LayerNorm for core GPT-style blocks, and embedding feature channels; unsupported blocks or config features fail explicitly.
+For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal and masked-LM heads for supported sequential `plain` attention stacks plus `swiglu`/`geglu`/`mlp`/`moe` blocks, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, DeBERTa relative attention, `plain` gated FFN tails, configurable RMSNorm/LayerNorm for core GPT-style blocks, and embedding feature channels; unsupported blocks or config features fail explicitly.
 
 | Field | Type | Required | Default | Notes |
 |------|------|----------|---------|-------|
@@ -220,7 +220,7 @@ Per-phase order:
 
 ### `plain`
 
-Self-attention block with configurable model norm, RoPE, grouped-query support via `kv_heads`, SiLU FFN tail, and residual connections. It defaults to causal attention for causal training objectives and bidirectional attention for masked objectives.
+Self-attention block with configurable model norm, RoPE, grouped-query support via `kv_heads`, configurable FFN tail, and residual connections. It defaults to causal attention for causal training objectives and bidirectional attention for masked objectives.
 
 Required fields:
 
@@ -236,6 +236,7 @@ Optional fields:
 - `rope_convention` — rotary pairing convention. Omit or set to `"adjacent_pair"` for Mixlab's default adjacent-dimension pairs `(0,1),(2,3),...`; set to `"half_rotation"` for the split-half convention used by some Hugging Face models. Only applies to standard RoPE attention and is rejected with `relative_attention`.
 - `relative_attention` — `"deberta_p2c_c2p"` enables DeBERTa/GPT-BERT-style disentangled content-to-position and position-to-content relative attention bias. Omit, set to `""`, or set to `"none"` for standard RoPE attention.
 - `relative_attention_window` — position bucket size for DeBERTa/GPT-BERT relative attention. Defaults to `128` when `relative_attention` is enabled. The learned table has `2 * relative_attention_window - 1` rows, centered at `relative_attention_window - 1`, and relative positions use GPT-BERT log bucketing rather than linear clipping.
+- `ffn_activation` — FFN tail activation inside the `plain` block. Omit or set to `"silu"` for the legacy `ff1 -> SiLU -> ff2` tail. Set to `"geglu"` for `ff_gate -> GELU` multiplied by `ff1`, or `"swiglu"` for `ff_gate -> SiLU` multiplied by `ff1`, then `ff2`. Gated tails add one `ff_gate` matrix of shape `[model_dim, round(model_dim * mlp_mult)]`.
 
 The `plain` block's relative-attention operator matches the DeBERTa/GPT-BERT C2P/P2C bucket and index semantics, while the surrounding `plain` block remains Mixlab's bias-free architecture with per-block projected position tensors rather than GPT-BERT's full shared-embedding block topology.
 - `xsa` — eXplicit Subspace Attention: after computing `y = softmax(QK^T)V`, projects `y` orthogonal to `V` at each position. Forces attention to contribute information that V doesn't already provide. Zero additional parameters. Compatible with GQA.

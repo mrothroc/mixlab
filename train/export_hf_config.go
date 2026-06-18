@@ -52,7 +52,7 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 			"source":            "mixlab",
 			"weight_map":        "weight_map.json",
 			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":  []string{"plain", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "swiglu", "geglu", "mlp", "moe"},
+			"supported_blocks":  []string{"plain", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "swiglu", "geglu", "mlp", "moe"},
 			"unsupported_fails": true,
 		},
 	}
@@ -95,6 +95,9 @@ func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 			if relativeAttentionEnabledForHF(block) {
 				entry["relative_attention"] = "deberta_p2c_c2p"
 				entry["relative_attention_window"] = effectiveHFRelativeAttentionWindow(block)
+			}
+			if activation := hfPlainFFNActivation(block); activation != "silu" {
+				entry["ffn_activation"] = activation
 			}
 			mask := hfExportAttentionMask(cfg, block, masked)
 			if mask != "" {

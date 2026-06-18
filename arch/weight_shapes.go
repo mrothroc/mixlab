@@ -157,6 +157,9 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		if placement == NormPlacementSandwich {
 			metas = append(metas, normWeights("ffn_norm", D, norm)...)
 		}
+		if plainFFNActivationUsesGate(spec.FFNActivation) {
+			metas = append(metas, WeightMeta{Name: "ff_gate", Shape: []int{D, ffn}})
+		}
 		metas = append(metas, WeightMeta{Name: "ff1", Shape: []int{D, ffn}})
 		if ffnInternalNorm {
 			metas = append(metas, normWeights("ffn_internal_norm", ffn, norm)...)

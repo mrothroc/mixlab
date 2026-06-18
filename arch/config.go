@@ -127,6 +127,7 @@ type BlockSpec struct {
 	AttentionMask           string       `json:"attention_mask,omitempty"`            // plain: "causal", "bidirectional", or "none"; empty resolves from training objective.
 	SkipAttention           bool         `json:"skip_attention,omitempty"`            // plain: bypass attention while preserving weight layout.
 	SparseAttnGate          bool         `json:"sparse_attn_gate,omitempty"`          // plain: narrow per-head output gate over the first gate_window head channels.
+	FFNActivation           string       `json:"ffn_activation,omitempty"`            // plain: "silu" (default), "geglu", or "swiglu" feed-forward tail.
 	InnerDim                int          `json:"inner_dim,omitempty"`                 // Mamba inner dimension; defaults to model_dim.
 	DK                      int          `json:"d_k,omitempty"`                       // gated_deltanet: key/query dim per head.
 	DV                      int          `json:"d_v,omitempty"`                       // gated_deltanet: value dim per head; defaults to 2*d_k.

@@ -244,6 +244,11 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 			if block.WindowSize > 0 && mask != "" && mask != "causal" {
 				return unsupportedHFExport(field+".window_size", "windowed attention export requires causal attention")
 			}
+			switch hfPlainFFNActivation(block) {
+			case "silu", "geglu", "swiglu":
+			default:
+				return unsupportedHFExport(field+".ffn_activation", fmt.Sprintf("unsupported plain ffn_activation %q", block.FFNActivation))
+			}
 		case "swiglu", "geglu":
 			// supported
 		case "mlp":
@@ -543,6 +548,9 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 			}
 			if normPlacement == "sandwich" {
 				names = appendNormNames(names, "ffn_norm", "ffn_norm")
+			}
+			if hfPlainFFNActivationUsesGate(block) {
+				names = append(names, hfBlockWeightName{mixlab: "ff_gate", hf: "ff_gate.weight"})
 			}
 			names = append(names, hfBlockWeightName{mixlab: "ff1", hf: "ff1.weight"})
 			if cfg.FFNInternalNorm {

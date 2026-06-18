@@ -186,6 +186,11 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		default:
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid relative_attention=%q (must be \"deberta_p2c_c2p\" or \"none\")", source, groupName, idx, b.RelativeAttention)
 		}
+		switch normalizePlainFFNActivation(b.FFNActivation) {
+		case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
+		default:
+			return fmt.Errorf("config %q %s[%d] type=plain has invalid ffn_activation=%q (must be \"silu\", \"geglu\", or \"swiglu\")", source, groupName, idx, b.FFNActivation)
+		}
 		if b.RelativeAttentionWindow < 0 {
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid relative_attention_window=%d (must be >= 0)", source, groupName, idx, b.RelativeAttentionWindow)
 		}

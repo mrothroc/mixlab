@@ -142,6 +142,9 @@ class MixlabPlainBlock(nn.Module):
         self.relative_attention_window = int(block_config.get("relative_attention_window", 0) or 128)
         self.norm_placement = norm_placement(config)
         self.ffn_internal_norm_enabled = bool(getattr(config, "ffn_internal_norm", False))
+        self.ffn_activation = str(block_config.get("ffn_activation", "") or "silu").lower()
+        if self.ffn_activation not in ("silu", "geglu", "swiglu"):
+            raise ValueError(f"unsupported exported plain ffn_activation {self.ffn_activation!r}")
         self.norm = make_mixlab_norm(config, dim) if self.norm_placement in ("pre", "sandwich") else None
         self.wq = MixlabLinear(dim, dim)
         self.wk = MixlabLinear(dim, self.kv_heads * self.head_dim)
@@ -174,6 +177,7 @@ class MixlabPlainBlock(nn.Module):
         self.post_attn_norm = make_mixlab_norm(config, dim) if self.norm_placement in ("post", "sandwich") else None
         self.ffn_norm = make_mixlab_norm(config, dim) if self.norm_placement == "sandwich" else None
         ffn_dim = max(dim, int(round(dim * float(config.mlp_mult))))
+        self.ff_gate = MixlabLinear(dim, ffn_dim) if self.ffn_activation in ("geglu", "swiglu") else None
         self.ff1 = MixlabLinear(dim, ffn_dim)
         self.ffn_internal_norm = make_mixlab_norm(config, ffn_dim) if self.ffn_internal_norm_enabled else None
         self.ff2 = MixlabLinear(ffn_dim, dim)
@@ -303,7 +307,15 @@ class MixlabPlainBlock(nn.Module):
         x = residual + attn_delta
 
         ff_in = self.ffn_norm(x) if self.ffn_norm is not None else x
-        ff_hidden = torch.nn.functional.silu(self.ff1(ff_in))
+        if self.ffn_activation == "silu":
+            ff_hidden = torch.nn.functional.silu(self.ff1(ff_in))
+        else:
+            gate = self.ff_gate(ff_in)
+            if self.ffn_activation == "geglu":
+                gate = torch.nn.functional.gelu(gate, approximate="tanh")
+            else:
+                gate = torch.nn.functional.silu(gate)
+            ff_hidden = gate * self.ff1(ff_in)
         if self.ffn_internal_norm is not None:
             ff_hidden = self.ffn_internal_norm(ff_hidden)
         ff = self.ff2(ff_hidden)

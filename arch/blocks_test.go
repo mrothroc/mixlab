@@ -13,6 +13,7 @@ func TestBlockWeightCount(t *testing.T) {
 		want int
 	}{
 		{BlockSpec{Type: "plain", Heads: 4}, 7},
+		{BlockSpec{Type: "plain", Heads: 4, FFNActivation: "geglu"}, 8},
 		{BlockSpec{Type: "plain", Heads: 4, QKGain: 5.25}, 8},
 		{BlockSpec{Type: "plain", Heads: 4, QKNorm: true}, 9},
 		{BlockSpec{Type: "plain", Heads: 4, KVSource: 1, QKNorm: true}, 6},

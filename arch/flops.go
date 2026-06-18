@@ -304,6 +304,10 @@ func estimatePlainBlockFLOPs(block BlockSpec, B, T, D, ffn int) int64 {
 	}
 
 	total += 2 * 2 * i64(B) * i64(T) * i64(D) * i64(ffn)
+	if plainFFNActivationUsesGate(block.FFNActivation) {
+		total += 2 * i64(B) * i64(T) * i64(D) * i64(ffn) // gate projection
+		total += i64(B) * i64(T) * i64(ffn)              // gated elementwise multiply
+	}
 	return total
 }
 

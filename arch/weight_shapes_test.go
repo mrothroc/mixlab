@@ -16,6 +16,7 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 
 	specs := []BlockSpec{
 		{Type: "plain", Heads: 4},
+		{Type: "plain", Heads: 4, FFNActivation: "geglu"},
 		{Type: "plain", Heads: 4, QKGain: 5.25},
 		{Type: "plain", Heads: 4, QKNorm: true},
 		{Type: "plain", Heads: 8, SparseAttnGate: true},
@@ -119,6 +120,24 @@ func TestBlockWeightShapes_MLP(t *testing.T) {
 	}
 	if !reflect.DeepEqual(metas, want) {
 		t.Fatalf("mlp weight shapes = %+v, want %+v", metas, want)
+	}
+}
+
+func TestBlockWeightShapes_PlainGatedFFN(t *testing.T) {
+	metas, err := blockWeightShapes(BlockSpec{Type: "plain", Heads: 4, FFNActivation: "geglu"}, 64, 32, 1, 256, 2.0, false, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes: %v", err)
+	}
+	gotNames := make([]string, len(metas))
+	for i, meta := range metas {
+		gotNames[i] = meta.Name
+	}
+	wantNames := []string{"norm_scale", "wq", "wk", "wv", "wo", "ff_gate", "ff1", "ff2"}
+	if !reflect.DeepEqual(gotNames, wantNames) {
+		t.Fatalf("names = %v, want %v", gotNames, wantNames)
+	}
+	if got, want := metas[5].Shape, []int{64, 128}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("ff_gate shape = %v, want %v", got, want)
 	}
 }
 

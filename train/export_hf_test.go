@@ -222,6 +222,43 @@ func TestExportHFNativeHFParityCPUOracle(t *testing.T) {
 	}`, [][]int{{0, 1, 2}}, [][]int{{1, 2, 3}}, nil)
 }
 
+func TestExportHFPlainGatedFFNTailParityCPUOracle(t *testing.T) {
+	for _, activation := range []string{"geglu", "swiglu"} {
+		t.Run(activation, func(t *testing.T) {
+			runExportHFParityCase(t, fmt.Sprintf(`{
+				"name": "hf_plain_%[1]s_tail",
+				"model_dim": 4,
+				"vocab_size": 9,
+				"seq_len": 4,
+				"mlp_mult": 1.25,
+				"blocks": [
+					{"type": "plain", "heads": 2, "rope_dims": 2, "ffn_activation": "%[1]s"}
+				],
+				"training": {"steps": 1, "batch_tokens": 4, "seed": 102}
+			}`, activation), [][]int{{0, 1, 2, 3}}, [][]int{{1, 2, 3, 4}}, func(t *testing.T, outDir string) {
+				var cfg map[string]any
+				readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+				blocks, ok := cfg["blocks"].([]any)
+				if !ok || len(blocks) != 1 {
+					t.Fatalf("exported blocks = %#v", cfg["blocks"])
+				}
+				block, ok := blocks[0].(map[string]any)
+				if !ok {
+					t.Fatalf("exported block = %#v", blocks[0])
+				}
+				if got := block["ffn_activation"]; got != activation {
+					t.Fatalf("exported ffn_activation=%v want %s", got, activation)
+				}
+				var mapping []hfWeightMapping
+				readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+				if !containsHFWeight(mapping, "blocks.0.ff_gate.weight") {
+					t.Fatalf("weight map missing ff_gate: %#v", mapping)
+				}
+			})
+		})
+	}
+}
+
 func TestExportHFHalfRotationRoPEParityCPUOracle(t *testing.T) {
 	runExportHFParityCase(t, `{
 		"name": "hf_half_rotation_rope",
@@ -504,7 +541,9 @@ func TestExportHFPartialAdvancedRegistryAndSupportMatrix(t *testing.T) {
 		t.Fatal("empty HF export capability registry")
 	}
 	want := map[string]hfExportSupportStatus{
-		"plain.qk_norm": hfExportSupported,
+		"plain.qk_norm":                            hfExportSupported,
+		"plain.ffn_activation=geglu":               hfExportSupported,
+		"plain.ffn_activation=swiglu":              hfExportSupported,
 		"plain.relative_attention=deberta_p2c_c2p": hfExportSupported,
 		"moe":            hfExportSupported,
 		"hgrn2":          hfExportGated,
