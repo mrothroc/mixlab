@@ -132,7 +132,7 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 				metas = append(metas, WeightMeta{Name: "k_norm_scale", Shape: []int{headDim}, IsNormScale: true, InitOne: true})
 			}
 		}
-		if relativeAttentionEnabled(spec) {
+		if relativeAttentionUsesPerBlockProjections(spec) {
 			relWindow := effectiveRelativeAttentionWindow(spec)
 			metas = append(metas,
 				WeightMeta{Name: "relative_embeddings", Shape: []int{2*relWindow - 1, D}},
@@ -816,6 +816,11 @@ func collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 	shapes = append(shapes, charWeightShapes(D, charVocabSize, charDim)...)
 	shapes = append(shapes, bigramWeightShapes(D, bigramVocabSize, bigramDim)...)
 	shapes = append(shapes, trigramWeightShapes(D, trigramVocabSize, trigramDim)...)
+	sharedRel, err := sharedRelativeAttentionWeightShapes(D, blocks)
+	if err != nil {
+		return nil, err
+	}
+	shapes = append(shapes, sharedRel...)
 
 	plan, err := newParallelResidualPlan(blocks, parallelResidual)
 	if err != nil {

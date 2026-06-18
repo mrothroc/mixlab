@@ -159,71 +159,6 @@ func countBlockRangeWeightsWithRefs(specs []BlockSpec, refs []int, start, end in
 	return total, nil
 }
 
-// CountWeights returns the total number of IR weight tensors for a given
-// architecture configuration. This is used to validate weight registration.
-//
-// Architecture layout:
-//
-//	w0 = embedding table
-//	w1 = output head projection
-//	w2 = final RMSNorm scale
-//	w3... = block weights
-func CountWeights(
-	mlpMult float64,
-	tieEmbeddings bool,
-	blockScales, residMix bool,
-	unet bool,
-	blocks []BlockSpec,
-) (int, error) {
-	return CountWeightsWithBigram(0, mlpMult, tieEmbeddings, blockScales, residMix, unet, 0, 0, blocks)
-}
-
-// CountWeightsWithBigram returns the IR weight tensor count, including
-// optional model-level bigram embedding weights.
-func CountWeightsWithBigram(
-	modelDim int,
-	mlpMult float64,
-	tieEmbeddings bool,
-	blockScales, residMix bool,
-	unet bool,
-	bigramVocabSize, bigramDim int,
-	blocks []BlockSpec,
-) (int, error) {
-	return CountWeightsWithBigramAndRecurrence(modelDim, mlpMult, tieEmbeddings, blockScales, residMix, unet, bigramVocabSize, bigramDim, blocks, nil)
-}
-
-// CountWeightsWithBigramAndRecurrence returns the IR weight tensor count,
-// including optional bigram embeddings and sequential block weight tying.
-func CountWeightsWithBigramAndRecurrence(
-	modelDim int,
-	mlpMult float64,
-	tieEmbeddings bool,
-	blockScales, residMix bool,
-	unet bool,
-	bigramVocabSize, bigramDim int,
-	blocks []BlockSpec,
-	recurrence []int,
-) (int, error) {
-	return CountWeightsWithBigramRecurrenceAndParallel(modelDim, mlpMult, tieEmbeddings, blockScales, residMix, unet, false, bigramVocabSize, bigramDim, blocks, recurrence)
-}
-
-// CountWeightsWithBigramRecurrenceAndParallel returns the IR weight tensor
-// count, including optional bigram embeddings, sequential block weight tying,
-// and parallel residual block pairs.
-func CountWeightsWithBigramRecurrenceAndParallel(
-	modelDim int,
-	mlpMult float64,
-	tieEmbeddings bool,
-	blockScales, residMix bool,
-	unet bool,
-	parallelResidual bool,
-	bigramVocabSize, bigramDim int,
-	blocks []BlockSpec,
-	recurrence []int,
-) (int, error) {
-	return countWeightsWithBigramRecurrenceParallelHeadLayout(modelDim, mlpMult, !tieEmbeddings, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, blocks, recurrence)
-}
-
 func countWeightsWithBigramRecurrenceParallelHeadLayout(
 	modelDim int,
 	mlpMult float64,
@@ -238,6 +173,11 @@ func countWeightsWithBigramRecurrenceParallelHeadLayout(
 	_ = mlpMult
 	total := fixedWeightCountWithHead(reserveHead)
 	total += bigramWeightCount(modelDim, bigramVocabSize, bigramDim)
+	sharedRelCount, err := sharedRelativeAttentionWeightCount(blocks)
+	if err != nil {
+		return 0, err
+	}
+	total += sharedRelCount
 
 	plan, err := newParallelResidualPlan(blocks, parallelResidual)
 	if err != nil {
@@ -423,7 +363,7 @@ func emitStreamIRWithDropout(prog *Program, specs []BlockSpec, stream, original 
 	return wi, nil
 }
 
-func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool, dropout, attnDropout float32, norm NormSpec, normPlacement string, ffnInternalNorm bool) (int, error) {
+func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool, dropout, attnDropout float32, norm NormSpec, normPlacement string, ffnInternalNorm bool, sharedRel sharedRelativeAttentionPlan) (int, error) {
 	spec := specs[blockIdx]
 	blockWI := wi
 	originalBlock := refs[blockIdx] == blockIdx
@@ -438,7 +378,7 @@ func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 	if needsResidMix(spec, residMix) {
 		bodyWI = applyResidMixIR(prog, stream, original, bodyWI, D, *opIdx)
 	}
-	nextWI, err := emitBlockIRWithDropoutOptions(prog, spec, stream, bodyWI, D, T, B, V, *opIdx, blockIdx, streamSeqLens, kvCache, mlpMult, blockScales, dropout, attnDropout, norm, normPlacement, ffnInternalNorm)
+	nextWI, err := emitBlockIRWithDropoutOptions(prog, spec, stream, bodyWI, D, T, B, V, *opIdx, blockIdx, streamSeqLens, kvCache, mlpMult, blockScales, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, sharedRel)
 	if err != nil {
 		return wi, err
 	}
@@ -457,10 +397,10 @@ func emitBlockIR(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, i
 }
 
 func emitBlockIRWithDropout(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx, blockIndex int, streamSeqLens map[string]int, kvCache map[int]BlockKVOutputs, mlpMult float64, blockScales bool, dropout, attnDropout float32) (int, error) {
-	return emitBlockIRWithDropoutOptions(prog, spec, stream, wi, D, T, B, V, idx, blockIndex, streamSeqLens, kvCache, mlpMult, blockScales, dropout, attnDropout, defaultNormSpec(), NormPlacementPre, false)
+	return emitBlockIRWithDropoutOptions(prog, spec, stream, wi, D, T, B, V, idx, blockIndex, streamSeqLens, kvCache, mlpMult, blockScales, dropout, attnDropout, defaultNormSpec(), NormPlacementPre, false, sharedRelativeAttentionPlan{WeightIndex: -1})
 }
 
-func emitBlockIRWithDropoutOptions(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx, blockIndex int, streamSeqLens map[string]int, kvCache map[int]BlockKVOutputs, mlpMult float64, blockScales bool, dropout, attnDropout float32, norm NormSpec, normPlacement string, ffnInternalNorm bool) (int, error) {
+func emitBlockIRWithDropoutOptions(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx, blockIndex int, streamSeqLens map[string]int, kvCache map[int]BlockKVOutputs, mlpMult float64, blockScales bool, dropout, attnDropout float32, norm NormSpec, normPlacement string, ffnInternalNorm bool, sharedRel sharedRelativeAttentionPlan) (int, error) {
 	reg, err := lookupBlock(spec)
 	if err != nil {
 		return wi, err
@@ -479,6 +419,7 @@ func emitBlockIRWithDropoutOptions(prog *Program, spec BlockSpec, stream string,
 		FFNInternalNorm: ffnInternalNorm,
 		BlockIndex:      blockIndex,
 		KVCache:         kvCache,
+		sharedRelative:  sharedRel,
 	})
 }
 
@@ -836,6 +777,14 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		featureBase = "x"
 	}
 	wi = emitTrigramIR(prog, featureBase, B, T, D, wi, trigramVocabSize, trigramDim)
+	sharedRel, err := newSharedRelativeAttentionPlan(blocks)
+	if err != nil {
+		return nil, err
+	}
+	if sharedRel.Enabled {
+		sharedRel.WeightIndex = wi
+		wi++
+	}
 	if residMix {
 		prog.ScalarMul("x", 1.0, "x0")
 	}
@@ -859,7 +808,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	case unet:
 		numEncoder, numSkip := unetLayout(len(blocks))
 		for i := range blocks[:numEncoder] {
-			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, sharedRel)
 			if err != nil {
 				return nil, err
 			}
@@ -887,7 +836,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 				prog.Add("x", skipScaled, "x")
 			}
 			blockIdx := numEncoder + decIdx
-			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, sharedRel)
 			if err != nil {
 				return nil, err
 			}
@@ -895,14 +844,14 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			opIdx++
 		}
 	case len(executionOrder) > 0:
-		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan, norm, normPlacement, ffnInternalNorm)
+		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan, norm, normPlacement, ffnInternalNorm, sharedRel)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		if hiddenCapture != nil {
 			for i := 0; i < len(blocks); i++ {
-				wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm)
+				wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, sharedRel)
 				if err != nil {
 					return nil, err
 				}
@@ -912,7 +861,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			}
 			break
 		}
-		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan, norm, normPlacement, ffnInternalNorm)
+		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan, norm, normPlacement, ffnInternalNorm, sharedRel)
 		if err != nil {
 			return nil, err
 		}

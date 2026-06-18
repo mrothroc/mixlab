@@ -541,10 +541,11 @@ func TestExportHFPartialAdvancedRegistryAndSupportMatrix(t *testing.T) {
 		t.Fatal("empty HF export capability registry")
 	}
 	want := map[string]hfExportSupportStatus{
-		"plain.qk_norm":                            hfExportSupported,
-		"plain.ffn_activation=geglu":               hfExportSupported,
-		"plain.ffn_activation=swiglu":              hfExportSupported,
-		"plain.relative_attention=deberta_p2c_c2p": hfExportSupported,
+		"plain.qk_norm":                                             hfExportSupported,
+		"plain.ffn_activation=geglu":                                hfExportSupported,
+		"plain.ffn_activation=swiglu":                               hfExportSupported,
+		"plain.relative_attention=deberta_p2c_c2p":                  hfExportSupported,
+		"plain.relative_attention_parameterization=shared_qk_reuse": hfExportSupported,
 		"moe":            hfExportSupported,
 		"hgrn2":          hfExportGated,
 		"mlstm":          hfExportGated,

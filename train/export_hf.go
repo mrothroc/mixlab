@@ -235,6 +235,15 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 			default:
 				return unsupportedHFExport(field+".relative_attention", fmt.Sprintf("unsupported relative_attention %q", block.RelativeAttention))
 			}
+			switch hfRelativeAttentionParameterization(block) {
+			case "per_block_projections":
+			case "shared_qk_reuse":
+				if !relativeAttentionEnabledForHF(block) {
+					return unsupportedHFExport(field+".relative_attention_parameterization", "shared_qk_reuse requires relative_attention=deberta_p2c_c2p")
+				}
+			default:
+				return unsupportedHFExport(field+".relative_attention_parameterization", fmt.Sprintf("unsupported relative_attention_parameterization %q", block.RelativeAttentionParameterization))
+			}
 			mask := strings.ToLower(strings.TrimSpace(block.AttentionMask))
 			switch mask {
 			case "", "causal", "bidirectional", "none":
@@ -522,6 +531,15 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 			wi = firstUnmappedWeight(used, wi+1)
 		}
 	}
+	if hfConfigUsesSharedRelativeAttention(cfg) {
+		if wi >= len(shapes) || shapes[wi].Name != "shared_relative_embeddings" {
+			return nil, fmt.Errorf("weight map expected shared_relative_embeddings at index %d", wi)
+		}
+		if err := addExpected(wi, "shared_relative_embeddings", "relative_embeddings"); err != nil {
+			return nil, err
+		}
+		wi = firstUnmappedWeight(used, wi+1)
+	}
 	for blockIdx, block := range cfg.Blocks {
 		prefix := fmt.Sprintf("blocks.%d", blockIdx)
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
@@ -564,7 +582,7 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 				if wi >= len(shapes) {
 					return nil, fmt.Errorf("weight map exhausted while mapping plain block %d", blockIdx)
 				}
-				if (name.mixlab == "relative_embeddings" || name.mixlab == "w_pos_key" || name.mixlab == "w_pos_query") && !relativeAttentionEnabledForHF(block) {
+				if (name.mixlab == "relative_embeddings" || name.mixlab == "w_pos_key" || name.mixlab == "w_pos_query") && (!relativeAttentionEnabledForHF(block) || hfRelativeAttentionUsesSharedQKReuse(block)) {
 					continue
 				}
 				if (name.mixlab == "q_norm_scale" || name.mixlab == "k_norm_scale") && !block.QKNorm {

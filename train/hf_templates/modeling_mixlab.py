@@ -140,6 +140,9 @@ class MixlabPlainBlock(nn.Module):
         self.attn_gate_dim = min(dim, 12)
         self.relative_attention = str(block_config.get("relative_attention", "") or "none").lower()
         self.relative_attention_window = int(block_config.get("relative_attention_window", 0) or 128)
+        self.relative_attention_parameterization = str(
+            block_config.get("relative_attention_parameterization", "") or "per_block_projections"
+        ).lower()
         self.norm_placement = norm_placement(config)
         self.ffn_internal_norm_enabled = bool(getattr(config, "ffn_internal_norm", False))
         self.ffn_activation = str(block_config.get("ffn_activation", "") or "silu").lower()
@@ -158,13 +161,21 @@ class MixlabPlainBlock(nn.Module):
         self.w_pos_key = None
         self.w_pos_query = None
         if self.relative_attention == "deberta_p2c_c2p":
+            if self.relative_attention_parameterization not in ("per_block_projections", "shared_qk_reuse"):
+                raise ValueError(
+                    f"unsupported exported relative_attention_parameterization "
+                    f"{self.relative_attention_parameterization!r}"
+                )
             rel_rows = 2 * self.relative_attention_window - 1
-            self.relative_embeddings = nn.Parameter(torch.empty(rel_rows, dim))
-            self.w_pos_key = MixlabLinear(dim, dim)
-            self.w_pos_query = MixlabLinear(dim, dim)
-            nn.init.xavier_uniform_(self.relative_embeddings)
+            if self.relative_attention_parameterization == "per_block_projections":
+                self.relative_embeddings = nn.Parameter(torch.empty(rel_rows, dim))
+                self.w_pos_key = MixlabLinear(dim, dim)
+                self.w_pos_query = MixlabLinear(dim, dim)
+                nn.init.xavier_uniform_(self.relative_embeddings)
         elif self.relative_attention not in ("", "none"):
             raise ValueError(f"unsupported exported relative_attention {self.relative_attention!r}")
+        elif self.relative_attention_parameterization == "shared_qk_reuse":
+            raise ValueError("shared_qk_reuse requires relative_attention='deberta_p2c_c2p'")
         self.qk_gain = None
         if float(block_config.get("qk_gain", 0.0) or 0.0) > 0.0:
             self.qk_gain = nn.Parameter(torch.empty(heads))
@@ -217,11 +228,29 @@ class MixlabPlainBlock(nn.Module):
         x = x[:, :, None, :, :].expand(bsz, kv_heads, self.kv_group_size, seq_len, head_dim)
         return x.reshape(bsz, self.heads, seq_len, head_dim)
 
-    def _deberta_relative_bias(self, q, k, seq_len):
-        rel_key = self.w_pos_key(self.relative_embeddings)
-        rel_query = self.w_pos_query(self.relative_embeddings)
+    def _repeat_relative_kv(self, x):
+        if self.kv_group_size == 1:
+            return x
+        kv_heads, rel_rows, head_dim = x.shape
+        x = x[:, None, :, :].expand(kv_heads, self.kv_group_size, rel_rows, head_dim)
+        return x.reshape(self.heads, rel_rows, head_dim)
+
+    def _deberta_relative_bias(self, q, k, seq_len, shared_relative_embeddings=None):
+        if self.relative_attention_parameterization == "shared_qk_reuse":
+            if shared_relative_embeddings is None:
+                raise ValueError("shared_qk_reuse requires model-level relative embeddings")
+            rel_source = shared_relative_embeddings
+            rel_key = self.wk(rel_source)
+            rel_query = self.wq(rel_source)
+        else:
+            rel_key = self.w_pos_key(self.relative_embeddings)
+            rel_query = self.w_pos_query(self.relative_embeddings)
         rel_rows = 2 * self.relative_attention_window - 1
-        rel_key = rel_key.view(rel_rows, self.heads, self.head_dim).permute(1, 0, 2)
+        if self.relative_attention_parameterization == "shared_qk_reuse":
+            rel_key = rel_key.view(rel_rows, self.kv_heads, self.head_dim).permute(1, 0, 2)
+            rel_key = self._repeat_relative_kv(rel_key)
+        else:
+            rel_key = rel_key.view(rel_rows, self.heads, self.head_dim).permute(1, 0, 2)
         rel_query = rel_query.view(rel_rows, self.heads, self.head_dim).permute(1, 0, 2)
         pos = torch.arange(seq_len, device=q.device)
         rel = pos.view(seq_len, 1) - pos.view(1, seq_len)
@@ -254,7 +283,7 @@ class MixlabPlainBlock(nn.Module):
         max_bucket = bucket_size - 1
         return torch.clamp(bucket_pos, -max_bucket, max_bucket).long()
 
-    def forward(self, x):
+    def forward(self, x, shared_relative_embeddings=None):
         residual = x
         x_norm = self.norm(x) if self.norm is not None else x
         bsz, seq_len, dim = x_norm.shape
@@ -269,7 +298,7 @@ class MixlabPlainBlock(nn.Module):
             k = self.k_norm(k)
         if self.relative_attention == "deberta_p2c_c2p":
             scores = torch.matmul(q, k.transpose(-1, -2))
-            scores = scores + self._deberta_relative_bias(q, k, seq_len)
+            scores = scores + self._deberta_relative_bias(q, k, seq_len, shared_relative_embeddings)
             scores = scores / math.sqrt(float(self.head_dim * 3))
         else:
             cos_t, sin_t = self._rope_tables(seq_len, q.device, q.dtype)
@@ -542,6 +571,23 @@ class MixlabModel(PreTrainedModel):
             self.trigram_scale = nn.Parameter(torch.ones(1))
         modules = []
         block_configs = blocks if blocks is not None else config.blocks
+        self.relative_embeddings = None
+        shared_relative_window = None
+        for block in block_configs:
+            if block.get("type") != "plain":
+                continue
+            rel = str(block.get("relative_attention", "") or "none").lower()
+            param = str(block.get("relative_attention_parameterization", "") or "per_block_projections").lower()
+            if rel == "deberta_p2c_c2p" and param == "shared_qk_reuse":
+                window = int(block.get("relative_attention_window", 0) or 128)
+                if shared_relative_window is None:
+                    shared_relative_window = window
+                elif shared_relative_window != window:
+                    raise ValueError("shared_qk_reuse blocks must use one relative_attention_window")
+        if shared_relative_window is not None:
+            rel_rows = 2 * shared_relative_window - 1
+            self.relative_embeddings = nn.Parameter(torch.empty(rel_rows, config.model_dim))
+            nn.init.xavier_uniform_(self.relative_embeddings)
         for block in block_configs:
             block_type = block.get("type")
             if block_type == "plain":
@@ -624,7 +670,10 @@ class MixlabModel(PreTrainedModel):
             raise ValueError("input_ids is required")
         x = self._embed_features(input_ids)
         for block in self.blocks:
-            x = block(x)
+            if isinstance(block, MixlabPlainBlock):
+                x = block(x, self.relative_embeddings)
+            else:
+                x = block(x)
         return self.final_norm(x)
 
     def forward(self, input_ids=None, **kwargs):

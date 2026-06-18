@@ -140,6 +140,18 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// GPT-BERT-style shared DeBERTa relative embeddings with per-block Q/K reuse.
+			name: "deberta_shared_qk_reuse",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 5, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 2, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 4, "relative_attention_parameterization": "shared_qk_reuse"},
+					{"type": "swiglu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 5, "seed": 92}
+			}`,
+		},
+		{
 			// Hybrid export registers both causal and masked-LM heads. The
 			// parity script compares the causal head against native logits and
 			// also loads/runs AutoModelForMaskedLM when advertised.

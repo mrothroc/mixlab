@@ -31,11 +31,16 @@ func runNativeCPUForward(t *testing.T, cfg *ArchConfig, weights [][]float32, tok
 		x, next = addTrigramFeaturesCPU(t, cfg, x, tokens, w, wi)
 		wi = next
 	}
+	var sharedRelativeEmbeddings []float64
+	if hfConfigUsesSharedRelativeAttention(cfg) {
+		sharedRelativeEmbeddings = w[wi]
+		wi++
+	}
 	for blockIdx, block := range cfg.Blocks {
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
 		case "plain":
 			n := plainHFExportWeightCount(block)
-			x = plainCPUForward(t, cfg, block, x, w[wi:wi+n])
+			x = plainCPUForward(t, cfg, block, x, w[wi:wi+n], sharedRelativeEmbeddings)
 			wi += n
 		case "moe":
 			n := moeHFExportWeightCount(block)
@@ -70,6 +75,10 @@ func runHFCPUForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64
 	if cfg.TrigramVocabSize > 0 {
 		x, _ = addTrigramFeaturesCPU(t, cfg, x, tokens, hfFeatureWeights(weights, "trigram"))
 	}
+	sharedRelativeEmbeddings := []float64(nil)
+	if hfConfigUsesSharedRelativeAttention(cfg) {
+		sharedRelativeEmbeddings = weights["relative_embeddings"]
+	}
 	for i, block := range cfg.Blocks {
 		prefix := fmt.Sprintf("blocks.%d.", i)
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
@@ -86,7 +95,7 @@ func runHFCPUForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64
 					weights[prefix+"k_norm.weight"],
 				)
 			}
-			if relativeAttentionEnabledForHF(block) {
+			if relativeAttentionEnabledForHF(block) && !hfRelativeAttentionUsesSharedQKReuse(block) {
 				blockWeights = append(blockWeights,
 					weights[prefix+"relative_embeddings"],
 					weights[prefix+"w_pos_key.weight"],
@@ -107,7 +116,7 @@ func runHFCPUForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64
 				weights[prefix+"ff1.weight"],
 				weights[prefix+"ff2.weight"],
 			)
-			x = plainCPUForward(t, cfg, block, x, blockWeights)
+			x = plainCPUForward(t, cfg, block, x, blockWeights, sharedRelativeEmbeddings)
 		case "swiglu":
 			x = gatedGLUCPUForward(t, cfg, x, [][]float64{
 				weights[prefix+"norm.weight"],
@@ -182,7 +191,7 @@ func plainHFExportWeightCount(block BlockSpec) int {
 	if block.QKNorm {
 		n += 2
 	}
-	if relativeAttentionEnabledForHF(block) {
+	if relativeAttentionEnabledForHF(block) && !hfRelativeAttentionUsesSharedQKReuse(block) {
 		n += 3
 	}
 	if block.QKGain > 0 {
@@ -234,7 +243,7 @@ func embedCPU(table []float64, vocab, dim int, tokens [][]int) [][][]float64 {
 	return out
 }
 
-func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]float64, w [][]float64) [][][]float64 {
+func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]float64, w [][]float64, sharedRelativeEmbeddings []float64) [][][]float64 {
 	t.Helper()
 	batch := len(x)
 	seqLen := len(x[0])
@@ -287,8 +296,12 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 	var relKey, relQuery [][][]float64
 	relWindow := effectiveHFRelativeAttentionWindow(block)
 	if relativeAttentionEnabledForHF(block) {
-		relKey, relQuery = relativeAttentionProjectionCPU(t, block, w[woIndex], w[woIndex+1], w[woIndex+2], dim, heads, headDim, relWindow)
-		woIndex += 3
+		if hfRelativeAttentionUsesSharedQKReuse(block) {
+			relKey, relQuery = sharedRelativeAttentionProjectionCPU(t, block, sharedRelativeEmbeddings, w[2], w[1], dim, heads, kvHeads, headDim, relWindow)
+		} else {
+			relKey, relQuery = relativeAttentionProjectionCPU(t, block, w[woIndex], w[woIndex+1], w[woIndex+2], dim, heads, headDim, relWindow)
+			woIndex += 3
+		}
 	}
 	if block.QKGain > 0 {
 		qkGain = w[woIndex]
@@ -418,6 +431,34 @@ func relativeAttentionProjectionCPU(t *testing.T, block BlockSpec, embeddings, w
 	for r := 0; r < rows; r++ {
 		for h := 0; h < heads; h++ {
 			copy(key[h][r], keyFlat[r*dim+h*headDim:r*dim+(h+1)*headDim])
+			copy(query[h][r], queryFlat[r*dim+h*headDim:r*dim+(h+1)*headDim])
+		}
+	}
+	_ = block
+	return key, query
+}
+
+func sharedRelativeAttentionProjectionCPU(t *testing.T, block BlockSpec, embeddings, wk, wq []float64, dim, heads, kvHeads, headDim, window int) ([][][]float64, [][][]float64) {
+	t.Helper()
+	if embeddings == nil {
+		t.Fatal("missing shared relative embeddings")
+	}
+	if kvHeads <= 0 {
+		kvHeads = heads
+	}
+	if heads%kvHeads != 0 {
+		t.Fatalf("invalid shared relative heads=%d kv_heads=%d", heads, kvHeads)
+	}
+	rows := 2*window - 1
+	keyFlat := matmul2DCPU(embeddings, wk, rows, dim, kvHeads*headDim)
+	queryFlat := matmul2DCPU(embeddings, wq, rows, dim, dim)
+	key := make3D(heads, rows, headDim)
+	query := make3D(heads, rows, headDim)
+	groupSize := heads / kvHeads
+	for r := 0; r < rows; r++ {
+		for h := 0; h < heads; h++ {
+			srcH := h / groupSize
+			copy(key[h][r], keyFlat[r*kvHeads*headDim+srcH*headDim:r*kvHeads*headDim+(srcH+1)*headDim])
 			copy(query[h][r], queryFlat[r*dim+h*headDim:r*dim+(h+1)*headDim])
 		}
 	}

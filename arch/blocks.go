@@ -55,100 +55,19 @@ func emitQKNormIR(prog *Program, qh, kh string, wi int, qkNorm, normalizeK bool)
 	return qNorm, kNorm, wi
 }
 
-func emitRoPEForConvention(prog *Program, q, k, qOut, kOut string, T, headDim, ropeDims int, convention string) {
-	if normalizeRopeConvention(convention) == RopeConventionHalfRotation {
-		prog.RoPEWithConvention(q, k, qOut, kOut, T, headDim, ropeDims, 10000.0, convention)
-		return
-	}
-	prog.RoPE(q, k, qOut, kOut, T, headDim, ropeDims, 10000.0)
-}
-
-func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, wi, B, H, D, T, headDim int, baseScale float32, qkGain float64, ropeDims int, ropeConvention, relativeAttention string, relativeWindow int) (string, string, int, error) {
-	relMode := normalizeRelativeAttention(relativeAttention)
-	qForScores := qh
-	kForScores := kh
-	scoreScale := baseScale
-	keyForCache := kh
-	switch relMode {
-	case "", RelativeAttentionNone:
-		qRot := prefix + "_q_rot"
-		kRot := prefix + "_k_rot"
-		emitRoPEForConvention(prog, qh, kh, qRot, kRot, T, headDim, ropeDims, ropeConvention)
-		qForScores = qRot
-		kForScores = kRot
-		keyForCache = kRot
-	case RelativeAttentionDebertaP2CC2P:
-		if relativeWindow <= 0 {
-			relativeWindow = defaultRelativeAttentionWindow
-		}
-		if D != H*headDim {
-			return "", "", wi, fmt.Errorf("invalid relative attention dimensions D=%d H=%d head_dim=%d", D, H, headDim)
-		}
-		relRows := 2*relativeWindow - 1
-		relKeyFlat := prefix + "_rel_key_flat"
-		relQueryFlat := prefix + "_rel_query_flat"
-		relKey3 := prefix + "_rel_key3"
-		relQuery3 := prefix + "_rel_query3"
-		relKeyH := prefix + "_rel_key_h"
-		relQueryH := prefix + "_rel_query_h"
-		prog.MatMul(weightName(wi), weightName(wi+1), relKeyFlat)
-		prog.MatMul(weightName(wi), weightName(wi+2), relQueryFlat)
-		wi += 3
-		prog.Reshape(relKeyFlat, []int{relRows, H, headDim}, relKey3)
-		prog.Reshape(relQueryFlat, []int{relRows, H, headDim}, relQuery3)
-		prog.Transpose(relKey3, []int{1, 0, 2}, relKeyH)
-		prog.Transpose(relQuery3, []int{1, 0, 2}, relQueryH)
-		scoreScale = float32(1.0 / math.Sqrt(float64(headDim*3)))
-	default:
-		return "", "", wi, fmt.Errorf("invalid relative_attention=%q", relativeAttention)
-	}
-
-	kt := prefix + "_kt"
-	scores := prefix + "_scores"
-	scaled := scores + "_scaled"
-	prog.Transpose(kForScores, []int{0, 1, 3, 2}, kt)
-	prog.MatMul(qForScores, kt, scores)
-	prog.ScalarMul(scores, scoreScale, scaled)
-
-	if relMode == RelativeAttentionDebertaP2CC2P {
-		if relativeWindow <= 0 {
-			relativeWindow = defaultRelativeAttentionWindow
-		}
-		relKeyH := prefix + "_rel_key_h"
-		relQueryH := prefix + "_rel_query_h"
-		relBias := prefix + "_deberta_rel_bias"
-		relBiasScaled := relBias + "_scaled"
-		scoresWithRel := prefix + "_scores_deberta"
-		prog.DebertaRelativeBias(qh, kh, relKeyH, relQueryH, relBias, B, T, H, headDim, relativeWindow)
-		prog.ScalarMul(relBias, scoreScale, relBiasScaled)
-		prog.Add(scaled, relBiasScaled, scoresWithRel)
-		scaled = scoresWithRel
-	}
-
-	if qkGain > 0 {
-		gain := scores + "_qk_gain"
-		gained := scores + "_gained"
-		prog.Reshape(weightName(wi), []int{1, H, 1, 1}, gain)
-		wi++
-		prog.Mul(scaled, gain, gained)
-		scaled = gained
-	}
-	return scaled, keyForCache, wi, nil
-}
-
 func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
-	return emitPlainAttentionIRWithKVOptionsEx(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, false, ropeDims, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, kvSource, kvCache, blockIndex)
+	return emitPlainAttentionIRWithKVOptionsEx(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, false, ropeDims, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, "", kvSource, kvCache, blockIndex)
 }
 
-func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
-	return emitPlainAttentionIRWithKVOptionsExConvention(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, RopeConventionAdjacentPair, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, kvSource, kvCache, blockIndex)
+func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
+	return emitPlainAttentionIRWithKVOptionsExConvention(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, RopeConventionAdjacentPair, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex)
 }
 
-func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
-	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU)
+func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
+	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, sharedRelativeAttentionPlan{WeightIndex: -1})
 }
 
-func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string) (int, error) {
+func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, sharedRel sharedRelativeAttentionPlan) (int, error) {
 	_ = mlpMult
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
@@ -229,7 +148,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 				wi++ // k_norm_scale
 			}
 		}
-		if normalizeRelativeAttention(relativeAttention) == RelativeAttentionDebertaP2CC2P {
+		if normalizeRelativeAttention(relativeAttention) == RelativeAttentionDebertaP2CC2P && normalizeRelativeAttentionParameterization(relativeParameterization) == RelativeAttentionParamPerBlockProjections {
 			wi += 3 // relative embeddings + position projections
 		}
 		if qkGain > 0 {
@@ -256,7 +175,8 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		}
 
 		// Q projection
-		prog.MatMul(xAttn, weightName(wi), q)
+		qWeightName := weightName(wi)
+		prog.MatMul(xAttn, qWeightName, q)
 		wi++
 		prog.Reshape(q, []int{B, T, H, headDim}, q4)
 		prog.Transpose(q4, []int{0, 2, 1, 3}, qh)
@@ -273,7 +193,8 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 			vh = src.V
 		} else {
 			// K/V projections
-			prog.MatMul(xAttn, weightName(wi), k)
+			kWeightName := weightName(wi)
+			prog.MatMul(xAttn, kWeightName, k)
 			wi++
 			prog.MatMul(xAttn, weightName(wi), v)
 			wi++
@@ -303,7 +224,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 
 			qh, kh, wi = emitQKNormIR(prog, qh, kh, wi, qkNorm, true)
 			var keyForCache string
-			scaled, keyForCache, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow)
+			scaled, keyForCache, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, kvH, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow, relativeParameterization, qWeightName, kWeightName, sharedRel)
 			if err != nil {
 				return wi, err
 			}
@@ -757,7 +678,7 @@ func emitMLPIRNorm(prog *Program, x string, wi, idx int, activation string, leak
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, ffnActivation string) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, ffnActivation string, sharedRel sharedRelativeAttentionPlan) (string, int, error) {
 	_ = mlpMult
 	ffnActivation = normalizePlainFFNActivation(ffnActivation)
 	switch ffnActivation {
@@ -820,9 +741,11 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	projScaled := prefix + "_proj_scaled"
 	projDrop := prefix + "_proj_dropout"
 
-	prog.MatMul(xNorm, weightName(wi), q)
+	qWeightName := weightName(wi)
+	prog.MatMul(xNorm, qWeightName, q)
 	wi++
-	prog.MatMul(xNorm, weightName(wi), k)
+	kWeightName := weightName(wi)
+	prog.MatMul(xNorm, kWeightName, k)
 	wi++
 	prog.MatMul(xNorm, weightName(wi), v)
 	wi++
@@ -853,7 +776,7 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	}
 
 	qh, kh, wi = emitQKNormIR(prog, qh, kh, wi, qkNorm, true)
-	scaled, _, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow)
+	scaled, _, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, kvH, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow, relativeParameterization, qWeightName, kWeightName, sharedRel)
 	if err != nil {
 		return "", wi, err
 	}

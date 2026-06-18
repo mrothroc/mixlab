@@ -236,9 +236,10 @@ Optional fields:
 - `rope_convention` — rotary pairing convention. Omit or set to `"adjacent_pair"` for Mixlab's default adjacent-dimension pairs `(0,1),(2,3),...`; set to `"half_rotation"` for the split-half convention used by some Hugging Face models. Only applies to standard RoPE attention and is rejected with `relative_attention`.
 - `relative_attention` — `"deberta_p2c_c2p"` enables DeBERTa/GPT-BERT-style disentangled content-to-position and position-to-content relative attention bias. Omit, set to `""`, or set to `"none"` for standard RoPE attention.
 - `relative_attention_window` — position bucket size for DeBERTa/GPT-BERT relative attention. Defaults to `128` when `relative_attention` is enabled. The learned table has `2 * relative_attention_window - 1` rows, centered at `relative_attention_window - 1`, and relative positions use GPT-BERT log bucketing rather than linear clipping.
+- `relative_attention_parameterization` — relative-attention weight layout. Omit, set to `""`, or set to `"per_block_projections"` for the legacy Mixlab layout where every relative-attention block owns `relative_embeddings`, `w_pos_key`, and `w_pos_query`. Set to `"shared_qk_reuse"` for GPT-BERT-style sharing: the model owns one `shared_relative_embeddings` table and each block reuses its own `wk` and `wq` projections for position keys/queries. Shared mode requires all participating blocks to use the same effective `relative_attention_window`.
 - `ffn_activation` — FFN tail activation inside the `plain` block. Omit or set to `"silu"` for the legacy `ff1 -> SiLU -> ff2` tail. Set to `"geglu"` for `ff_gate -> GELU` multiplied by `ff1`, or `"swiglu"` for `ff_gate -> SiLU` multiplied by `ff1`, then `ff2`. Gated tails add one `ff_gate` matrix of shape `[model_dim, round(model_dim * mlp_mult)]`.
 
-The `plain` block's relative-attention operator matches the DeBERTa/GPT-BERT C2P/P2C bucket and index semantics, while the surrounding `plain` block remains Mixlab's bias-free architecture with per-block projected position tensors rather than GPT-BERT's full shared-embedding block topology.
+The `plain` block's relative-attention operator matches the DeBERTa/GPT-BERT C2P/P2C bucket and index semantics. The default `per_block_projections` layout remains Mixlab's original bias-free architecture with per-block projected position tensors. `shared_qk_reuse` switches only the relative-attention parameterization to the GPT-BERT-style shared embedding table and Q/K projection reuse; it does not add a value gate.
 - `xsa` — eXplicit Subspace Attention: after computing `y = softmax(QK^T)V`, projects `y` orthogonal to `V` at each position. Forces attention to contribute information that V doesn't already provide. Zero additional parameters. Compatible with GQA.
 - `attention_mask` — `"causal"`, `"bidirectional"`, or `"none"`. Omit to resolve from `training.objective`: causal objectives use `"causal"` and masked objectives use `"bidirectional"`. For `training.objective: "hybrid"`, Mixlab ignores block-level `attention_mask` during training and chooses the mask from the concrete per-batch objective: causal batches use `"causal"` and MLM/MNTP batches use `"bidirectional"`. `"bidirectional"` and `"none"` both use dense softmax with no triangular mask.
 - `window_size` — sliding causal attention width. `0` means full causal attention. Valid only when the resolved `attention_mask` is `"causal"`.
@@ -257,6 +258,12 @@ DeBERTa relative attention example:
 {"type": "plain", "heads": 8, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 128}
 ```
 
+GPT-BERT-style shared relative embedding example:
+
+```json
+{"type": "plain", "heads": 8, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 32, "relative_attention_parameterization": "shared_qk_reuse"}
+```
+
 KV sharing example:
 
 ```json
@@ -271,6 +278,7 @@ Notes:
 
 - DeBERTa relative attention is mutually exclusive with `rope_dims` in v1.
 - `kv_source` cannot be used by a relative-attention block, and a relative-attention block cannot be used as a KV source.
+- `shared_qk_reuse` uses one model-level relative embedding table; all shared relative-attention blocks must use the same effective `relative_attention_window`.
 
 ### `swiglu`
 

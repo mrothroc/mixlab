@@ -74,7 +74,7 @@ HF export supports next-token and masked-LM checkpoints using sequential blocks:
 - `sparse_attn_gate` per-head attention output gates
 - `attention_mask` values `causal`, `bidirectional`, and `none`
 - causal `window_size` sliding attention
-- DeBERTa/GPT-BERT-style `relative_attention: "deberta_p2c_c2p"` on `plain` blocks, including log-bucketed `q-k` relative positions
+- DeBERTa/GPT-BERT-style `relative_attention: "deberta_p2c_c2p"` on `plain` blocks, including log-bucketed `q-k` relative positions and optional `relative_attention_parameterization: "shared_qk_reuse"`
 - `swiglu`, `geglu`, and `mlp` FFN blocks, including MLP activation variants `silu`, `gelu`, `relu`, and `leaky_relu_sq`
 - sequential `moe` blocks with a linear router, top-k token routing, and `swiglu`, `geglu`, or `mlp` experts
 - embedding-time `char`, `bigram`, and `trigram` feature channels

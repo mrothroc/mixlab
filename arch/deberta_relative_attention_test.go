@@ -65,6 +65,16 @@ func TestParseArchConfig_RejectsInvalidDebertaRelativeAttention(t *testing.T) {
 			block: BlockSpec{Type: "plain", Heads: 5, RelativeAttention: RelativeAttentionDebertaP2CC2P},
 			want:  "divisible",
 		},
+		{
+			name:  "invalid parameterization",
+			block: BlockSpec{Type: "plain", Heads: 4, RelativeAttention: RelativeAttentionDebertaP2CC2P, RelativeAttentionParameterization: "bogus"},
+			want:  "relative_attention_parameterization",
+		},
+		{
+			name:  "shared parameterization without relative attention",
+			block: BlockSpec{Type: "plain", Heads: 4, RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse},
+			want:  "shared_qk_reuse",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,6 +96,26 @@ func TestParseArchConfig_RejectsInvalidDebertaRelativeAttention(t *testing.T) {
 	}
 }
 
+func TestParseArchConfig_RejectsMixedSharedRelativeWindows(t *testing.T) {
+	cfg := ArchConfig{
+		ModelDim:  48,
+		VocabSize: 256,
+		SeqLen:    16,
+		Blocks: []BlockSpec{
+			{Type: "plain", Heads: 4, RelativeAttention: RelativeAttentionDebertaP2CC2P, RelativeAttentionWindow: 16, RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse},
+			{Type: "plain", Heads: 4, RelativeAttention: RelativeAttentionDebertaP2CC2P, RelativeAttentionWindow: 32, RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse},
+		},
+	}
+	data, _ := json.Marshal(cfg)
+	_, err := ParseArchConfig(data, "mixed_shared_relative_windows")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "same effective relative_attention_window") {
+		t.Fatalf("error %q does not mention shared window", err)
+	}
+}
+
 func TestParseArchConfig_RejectsKVSourceFromDebertaRelativeAttention(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  48,
@@ -103,6 +133,82 @@ func TestParseArchConfig_RejectsKVSourceFromDebertaRelativeAttention(t *testing.
 	}
 	if !strings.Contains(err.Error(), "source block uses relative_attention") {
 		t.Fatalf("error %q does not mention relative_attention source", err)
+	}
+}
+
+func TestDebertaSharedRelativeAttentionWeightLayout(t *testing.T) {
+	sharedSpec := BlockSpec{
+		Type:                              "plain",
+		Heads:                             4,
+		RelativeAttention:                 RelativeAttentionDebertaP2CC2P,
+		RelativeAttentionWindow:           3,
+		RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse,
+	}
+	n, err := BlockWeightCount(sharedSpec, false, false)
+	if err != nil {
+		t.Fatalf("BlockWeightCount: %v", err)
+	}
+	if n != 7 {
+		t.Fatalf("shared block weight count=%d want 7", n)
+	}
+	blockMetas, err := blockWeightShapes(sharedSpec, 64, 16, 1, 256, DefaultFFNMultiplier, false, false)
+	if err != nil {
+		t.Fatalf("blockWeightShapes: %v", err)
+	}
+	for _, meta := range blockMetas {
+		switch meta.Name {
+		case "relative_embeddings", "w_pos_key", "w_pos_query":
+			t.Fatalf("shared block unexpectedly has per-block relative weight %q", meta.Name)
+		}
+	}
+	cfg := &ArchConfig{
+		ModelDim:  64,
+		VocabSize: 256,
+		SeqLen:    16,
+		Blocks:    []BlockSpec{sharedSpec, sharedSpec},
+	}
+	metas, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesFromConfig: %v", err)
+	}
+	countShared := 0
+	for _, meta := range metas {
+		if meta.Name == SharedRelativeEmbeddingsWeightName {
+			countShared++
+			if got, want := meta.Shape, []int{5, 64}; !sameInts(got, want) {
+				t.Fatalf("shared relative shape=%v want %v", got, want)
+			}
+		}
+	}
+	if countShared != 1 {
+		t.Fatalf("shared relative embedding count=%d want 1", countShared)
+	}
+}
+
+func TestDebertaSharedRelativeAttentionGPTBERTParamDelta(t *testing.T) {
+	const (
+		D       = 384
+		window  = 32
+		layers  = 12
+		wantCut = 3805056
+	)
+	perBlock := make([]BlockSpec, layers)
+	shared := make([]BlockSpec, layers)
+	for i := 0; i < layers; i++ {
+		perBlock[i] = BlockSpec{Type: "plain", Heads: 6, RelativeAttention: RelativeAttentionDebertaP2CC2P, RelativeAttentionWindow: window}
+		shared[i] = BlockSpec{Type: "plain", Heads: 6, RelativeAttention: RelativeAttentionDebertaP2CC2P, RelativeAttentionWindow: window, RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse}
+	}
+	perBlockMetas, err := CollectWeightShapesFromConfig(&ArchConfig{ModelDim: D, VocabSize: 1024, SeqLen: 64, Blocks: perBlock})
+	if err != nil {
+		t.Fatalf("CollectWeightShapesFromConfig per-block: %v", err)
+	}
+	sharedMetas, err := CollectWeightShapesFromConfig(&ArchConfig{ModelDim: D, VocabSize: 1024, SeqLen: 64, Blocks: shared})
+	if err != nil {
+		t.Fatalf("CollectWeightShapesFromConfig shared: %v", err)
+	}
+	gotCut := paramCount(perBlockMetas) - paramCount(sharedMetas)
+	if gotCut != wantCut {
+		t.Fatalf("param delta=%d want %d", gotCut, wantCut)
 	}
 }
 
@@ -177,6 +283,38 @@ func TestEmitPlainAttentionIR_DebertaRelativeAttention(t *testing.T) {
 	}
 }
 
+func TestEmitPlainAttentionIR_DebertaSharedQKReuse(t *testing.T) {
+	p := NewProgram(8)
+	spec := BlockSpec{
+		Type:                              "plain",
+		Heads:                             4,
+		KVHeads:                           2,
+		RelativeAttention:                 RelativeAttentionDebertaP2CC2P,
+		RelativeAttentionWindow:           4,
+		RelativeAttentionParameterization: RelativeAttentionParamSharedQKReuse,
+	}
+	wi, err := EmitBlock(p, spec, "x", 1, 64, 8, 2, 256, 0, EmitOptions{
+		MLPMult:        DefaultFFNMultiplier,
+		sharedRelative: sharedRelativeAttentionPlan{Enabled: true, Window: 4, WeightIndex: 0},
+	})
+	if err != nil {
+		t.Fatalf("EmitBlock: %v", err)
+	}
+	if wi != 8 {
+		t.Fatalf("wi=%d want 8", wi)
+	}
+	if got := countOps(p, OpDebertaRelativeBias); got != 1 {
+		t.Fatalf("DebertaRelativeBias ops=%d want 1", got)
+	}
+	assertMatMulInputsForOutputSuffix(t, p, "_rel_key_flat", []string{"w0", "w3"})
+	assertMatMulInputsForOutputSuffix(t, p, "_rel_query_flat", []string{"w0", "w2"})
+	for _, op := range p.Ops {
+		if op.Code == OpMatMul && len(op.Inputs) == 2 && (op.Inputs[1] == "w4" || op.Inputs[1] == "w5") && len(op.Outputs) > 0 && strings.Contains(op.Outputs[0], "_rel_") {
+			t.Fatalf("shared relative path used unexpected per-block projection input %v for output %v", op.Inputs, op.Outputs)
+		}
+	}
+}
+
 func TestEmitPlainAttentionIR_DebertaRelativeBidirectionalNoCausalMask(t *testing.T) {
 	p := NewProgram(10)
 	_, err := emitBlockIR(p, BlockSpec{
@@ -194,6 +332,37 @@ func TestEmitPlainAttentionIR_DebertaRelativeBidirectionalNoCausalMask(t *testin
 	if got := countOps(p, OpCausalMask); got != 0 {
 		t.Fatalf("CausalMask ops=%d want 0", got)
 	}
+}
+
+func paramCount(metas []WeightMeta) int {
+	total := 0
+	for _, meta := range metas {
+		n := 1
+		for _, dim := range meta.Shape {
+			n *= dim
+		}
+		total += n
+	}
+	return total
+}
+
+func assertMatMulInputsForOutputSuffix(t *testing.T, p *Program, suffix string, want []string) {
+	t.Helper()
+	for _, op := range p.Ops {
+		if op.Code != OpMatMul || len(op.Outputs) == 0 || !strings.HasSuffix(op.Outputs[0], suffix) {
+			continue
+		}
+		if len(op.Inputs) != len(want) {
+			t.Fatalf("%s inputs=%v want %v", suffix, op.Inputs, want)
+		}
+		for i := range want {
+			if op.Inputs[i] != want[i] {
+				t.Fatalf("%s inputs=%v want %v", suffix, op.Inputs, want)
+			}
+		}
+		return
+	}
+	t.Fatalf("missing OpMatMul output suffix %q", suffix)
 }
 
 func sameInts(a, b []int) bool {

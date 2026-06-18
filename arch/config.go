@@ -104,50 +104,51 @@ type CustomOpSpec = OpSpec
 
 // BlockSpec describes a single model block.
 type BlockSpec struct {
-	Type                    string       `json:"type"`
-	Name                    string       `json:"name,omitempty"` // custom block name (required for type=custom)
-	WeightGroup             string       `json:"weight_group,omitempty"`
-	ParallelResidual        *bool        `json:"parallel_residual,omitempty"` // enable/disable parallel residual for this block pair start
-	NumExperts              int          `json:"num_experts,omitempty"`       // moe: number of routed FFN experts.
-	TopK                    int          `json:"top_k,omitempty"`             // moe: number of experts selected per token; defaults to min(2,num_experts).
-	ExpertBlock             *BlockSpec   `json:"expert_block,omitempty"`      // moe: FFN expert block spec (swiglu/geglu/mlp).
-	Router                  string       `json:"router,omitempty"`            // moe: router type; v1 supports "linear".
-	LoadBalanceLossWeight   float64      `json:"load_balance_loss_weight,omitempty"`
-	Heads                   int          `json:"heads"`
-	KVHeads                 int          `json:"kv_heads,omitempty"`
-	KVSource                int          `json:"kv_source,omitempty"`                 // -1 or 0 = compute own KV; positive = reuse KV from block N (1-indexed)
-	RopeDims                int          `json:"rope_dims,omitempty"`                 // RoPE rotation dims per head; 0 or head_dim = full RoPE
-	RopeConvention          string       `json:"rope_convention,omitempty"`           // plain: "", "adjacent_pair", or "half_rotation".
-	RelativeAttention       string       `json:"relative_attention,omitempty"`        // plain: "", "none", or "deberta_p2c_c2p".
-	RelativeAttentionWindow int          `json:"relative_attention_window,omitempty"` // plain relative attention bucket size; defaults to 128.
-	QKGain                  float64      `json:"qk_gain,omitempty"`                   // per-head learnable QK scaling; 0 disables
-	QKNorm                  bool         `json:"qk_norm,omitempty"`                   // plain: learned RMSNorm on Q/K heads before attention scores.
-	XSA                     bool         `json:"xsa,omitempty"`                       // enable V-orthogonal projection after attention
-	WindowSize              int          `json:"window_size,omitempty"`               // plain: sliding causal attention width; 0 = full causal attention
-	AttentionMask           string       `json:"attention_mask,omitempty"`            // plain: "causal", "bidirectional", or "none"; empty resolves from training objective.
-	SkipAttention           bool         `json:"skip_attention,omitempty"`            // plain: bypass attention while preserving weight layout.
-	SparseAttnGate          bool         `json:"sparse_attn_gate,omitempty"`          // plain: narrow per-head output gate over the first gate_window head channels.
-	FFNActivation           string       `json:"ffn_activation,omitempty"`            // plain: "silu" (default), "geglu", or "swiglu" feed-forward tail.
-	InnerDim                int          `json:"inner_dim,omitempty"`                 // Mamba inner dimension; defaults to model_dim.
-	DK                      int          `json:"d_k,omitempty"`                       // gated_deltanet: key/query dim per head.
-	DV                      int          `json:"d_v,omitempty"`                       // gated_deltanet: value dim per head; defaults to 2*d_k.
-	DState                  int          `json:"d_state,omitempty"`                   // hgrn2: matrix-state key/query dim per head; defaults to model_dim/heads.
-	KVShare                 *bool        `json:"kv_share,omitempty"`                  // gated_deltanet: share the K/V projection when true (default).
-	ScanChunkSize           *int         `json:"scan_chunk_size,omitempty"`           // gated_deltanet/mamba3-canonical: chunk size for chunked scan; 0 keeps the naive/full scan.
-	StateSize               int          `json:"state_size,omitempty"`                // Mamba-3 canonical state expansion; defaults to 16.
-	NGroups                 int          `json:"n_groups,omitempty"`                  // Mamba-3 canonical grouped/MIMO axis; defaults to 4.
-	DTRank                  int          `json:"dt_rank,omitempty"`                   // Mamba-3 canonical low-rank dt/lambda/theta rank; defaults to max(inner/16,1).
-	ConvKernel              int          `json:"conv_kernel,omitempty"`               // Mamba-3 canonical causal conv width; defaults to 4.
-	UseConv                 *bool        `json:"use_conv,omitempty"`                  // Mamba-3 canonical short conv toggle; defaults to true.
-	DTMin                   float64      `json:"dt_min,omitempty"`                    // Mamba-3 canonical dt init lower bound; defaults to 0.001.
-	DTMax                   float64      `json:"dt_max,omitempty"`                    // Mamba-3 canonical dt init upper bound; defaults to 0.1.
-	NumLatents              int          `json:"num_latents,omitempty"`               // Perceiver/bottleneck latent count.
-	SourceStream            string       `json:"source_stream,omitempty"`             // cross_attention: stream providing K/V.
-	Decay                   float64      `json:"decay,omitempty"`                     // RetNet: initial decay rate in (0,1); defaults to 0.95.
-	Activation              string       `json:"activation,omitempty"`                // mlp: "silu" (default), "gelu", "relu", "leaky_relu_sq".
-	LeakySlope              float64      `json:"leaky_slope,omitempty"`               // mlp leaky_relu_sq negative slope; defaults to 0.5.
-	Weights                 []WeightSpec `json:"weights,omitempty"`                   // custom block weight declarations
-	Ops                     []OpSpec     `json:"ops,omitempty"`                       // custom block operation sequence
+	Type                              string       `json:"type"`
+	Name                              string       `json:"name,omitempty"` // custom block name (required for type=custom)
+	WeightGroup                       string       `json:"weight_group,omitempty"`
+	ParallelResidual                  *bool        `json:"parallel_residual,omitempty"` // enable/disable parallel residual for this block pair start
+	NumExperts                        int          `json:"num_experts,omitempty"`       // moe: number of routed FFN experts.
+	TopK                              int          `json:"top_k,omitempty"`             // moe: number of experts selected per token; defaults to min(2,num_experts).
+	ExpertBlock                       *BlockSpec   `json:"expert_block,omitempty"`      // moe: FFN expert block spec (swiglu/geglu/mlp).
+	Router                            string       `json:"router,omitempty"`            // moe: router type; v1 supports "linear".
+	LoadBalanceLossWeight             float64      `json:"load_balance_loss_weight,omitempty"`
+	Heads                             int          `json:"heads"`
+	KVHeads                           int          `json:"kv_heads,omitempty"`
+	KVSource                          int          `json:"kv_source,omitempty"`                           // -1 or 0 = compute own KV; positive = reuse KV from block N (1-indexed)
+	RopeDims                          int          `json:"rope_dims,omitempty"`                           // RoPE rotation dims per head; 0 or head_dim = full RoPE
+	RopeConvention                    string       `json:"rope_convention,omitempty"`                     // plain: "", "adjacent_pair", or "half_rotation".
+	RelativeAttention                 string       `json:"relative_attention,omitempty"`                  // plain: "", "none", or "deberta_p2c_c2p".
+	RelativeAttentionWindow           int          `json:"relative_attention_window,omitempty"`           // plain relative attention bucket size; defaults to 128.
+	RelativeAttentionParameterization string       `json:"relative_attention_parameterization,omitempty"` // plain relative attention layout: per_block_projections or shared_qk_reuse.
+	QKGain                            float64      `json:"qk_gain,omitempty"`                             // per-head learnable QK scaling; 0 disables
+	QKNorm                            bool         `json:"qk_norm,omitempty"`                             // plain: learned RMSNorm on Q/K heads before attention scores.
+	XSA                               bool         `json:"xsa,omitempty"`                                 // enable V-orthogonal projection after attention
+	WindowSize                        int          `json:"window_size,omitempty"`                         // plain: sliding causal attention width; 0 = full causal attention
+	AttentionMask                     string       `json:"attention_mask,omitempty"`                      // plain: "causal", "bidirectional", or "none"; empty resolves from training objective.
+	SkipAttention                     bool         `json:"skip_attention,omitempty"`                      // plain: bypass attention while preserving weight layout.
+	SparseAttnGate                    bool         `json:"sparse_attn_gate,omitempty"`                    // plain: narrow per-head output gate over the first gate_window head channels.
+	FFNActivation                     string       `json:"ffn_activation,omitempty"`                      // plain: "silu" (default), "geglu", or "swiglu" feed-forward tail.
+	InnerDim                          int          `json:"inner_dim,omitempty"`                           // Mamba inner dimension; defaults to model_dim.
+	DK                                int          `json:"d_k,omitempty"`                                 // gated_deltanet: key/query dim per head.
+	DV                                int          `json:"d_v,omitempty"`                                 // gated_deltanet: value dim per head; defaults to 2*d_k.
+	DState                            int          `json:"d_state,omitempty"`                             // hgrn2: matrix-state key/query dim per head; defaults to model_dim/heads.
+	KVShare                           *bool        `json:"kv_share,omitempty"`                            // gated_deltanet: share the K/V projection when true (default).
+	ScanChunkSize                     *int         `json:"scan_chunk_size,omitempty"`                     // gated_deltanet/mamba3-canonical: chunk size for chunked scan; 0 keeps the naive/full scan.
+	StateSize                         int          `json:"state_size,omitempty"`                          // Mamba-3 canonical state expansion; defaults to 16.
+	NGroups                           int          `json:"n_groups,omitempty"`                            // Mamba-3 canonical grouped/MIMO axis; defaults to 4.
+	DTRank                            int          `json:"dt_rank,omitempty"`                             // Mamba-3 canonical low-rank dt/lambda/theta rank; defaults to max(inner/16,1).
+	ConvKernel                        int          `json:"conv_kernel,omitempty"`                         // Mamba-3 canonical causal conv width; defaults to 4.
+	UseConv                           *bool        `json:"use_conv,omitempty"`                            // Mamba-3 canonical short conv toggle; defaults to true.
+	DTMin                             float64      `json:"dt_min,omitempty"`                              // Mamba-3 canonical dt init lower bound; defaults to 0.001.
+	DTMax                             float64      `json:"dt_max,omitempty"`                              // Mamba-3 canonical dt init upper bound; defaults to 0.1.
+	NumLatents                        int          `json:"num_latents,omitempty"`                         // Perceiver/bottleneck latent count.
+	SourceStream                      string       `json:"source_stream,omitempty"`                       // cross_attention: stream providing K/V.
+	Decay                             float64      `json:"decay,omitempty"`                               // RetNet: initial decay rate in (0,1); defaults to 0.95.
+	Activation                        string       `json:"activation,omitempty"`                          // mlp: "silu" (default), "gelu", "relu", "leaky_relu_sq".
+	LeakySlope                        float64      `json:"leaky_slope,omitempty"`                         // mlp leaky_relu_sq negative slope; defaults to 0.5.
+	Weights                           []WeightSpec `json:"weights,omitempty"`                             // custom block weight declarations
+	Ops                               []OpSpec     `json:"ops,omitempty"`                                 // custom block operation sequence
 
 	loadBalanceLossWeightSet bool
 }
@@ -798,6 +799,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 	if err := validateKVSources(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateSharedRelativeAttention(cfg, source); err != nil {
 		return nil, err
 	}
 	if err := validateParallelResidual(cfg, source); err != nil {

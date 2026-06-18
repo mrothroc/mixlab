@@ -82,7 +82,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **Internal distillation**: Use `distillation_tiny.json` after training teacher checkpoints with matching `vocab_size` and `seq_len`.
 - **EMA representation distillation**: Use `data2vec_hybrid_tiny.json` for experimental online data2vec-style hidden-state targets on masked objective steps. The current implementation prioritizes correctness and uses CPU EMA weight refreshes.
 - **Averaged checkpoints**: Use `swa_ema_tiny.json` to keep both live final and SWA/EMA averaged weights.
-- **Relative attention**: Use `deberta_relative_tiny.json` for DeBERTa-style P2C/C2P position bias.
+- **Relative attention**: Use `deberta_relative_tiny.json` for DeBERTa-style P2C/C2P position bias. Add `relative_attention_parameterization: "shared_qk_reuse"` when you want GPT-BERT-style shared relative embeddings instead of per-block position projection weights.
 - **Character/byte features**: Use `char_features_plain.json` with data prepared using `-char-vocab-size 257`.
 - **Large-batch optimizer**: Use `lamb_plain_tiny.json` as a minimal whole-model LAMB starting point.
 - **Sparse feed-forward experts**: Use `moe_tiny.json` for top-k routed MoE blocks with load balancing.

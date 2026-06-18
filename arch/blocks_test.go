@@ -736,7 +736,7 @@ func TestEmitPlainAttentionIR_KVSourceQKNormNormalizesAndRotatesQuery(t *testing
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithKVOptions source: %v", err)
 	}
-	wi, err = emitPlainAttentionIRWithKVOptionsEx(p, "x", wi, 8, 4, 128, 64, 2, 1, DefaultFFNMultiplier, false, 0, 0, false, 0, true, 0, false, false, 0, AttentionMaskCausal, "", 0, 1, cache, 2)
+	wi, err = emitPlainAttentionIRWithKVOptionsEx(p, "x", wi, 8, 4, 128, 64, 2, 1, DefaultFFNMultiplier, false, 0, 0, false, 0, true, 0, false, false, 0, AttentionMaskCausal, "", 0, "", 1, cache, 2)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithKVOptionsEx shared qk_norm: %v", err)
 	}

@@ -11,6 +11,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `plain.ffn_activation=geglu` | Supported | The `plain` block's internal FFN tail uses an exported `ff_gate` projection, tanh-approx GELU gate, up projection, product, and down projection. |
 | `plain.ffn_activation=swiglu` | Supported | The `plain` block's internal FFN tail uses an exported `ff_gate` projection, SiLU gate, up projection, product, and down projection. |
 | `plain.relative_attention=deberta_p2c_c2p` | Supported | DeBERTa/GPT-BERT C2P/P2C relative-bias operator semantics with Mixlab's per-block projected position tensors, `2 * bucket - 1` table rows, log-bucketed `q-k` relative positions, masks, and optional `qk_norm`/`qk_gain`. |
+| `plain.relative_attention_parameterization=shared_qk_reuse` | Supported | GPT-BERT-style shared relative embedding table exported once as `relative_embeddings`; each block reuses its exported `wk`/`wq` projections for position keys/queries. |
 | `swiglu` | Supported | Bias-free SwiGLU FFN parity. |
 | `geglu` | Supported | Bias-free GEGLU FFN parity. |
 | `mlp` | Supported | `silu`, `gelu`, `relu`, and `leaky_relu_sq` activation variants. |

@@ -186,10 +186,18 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		default:
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid relative_attention=%q (must be \"deberta_p2c_c2p\" or \"none\")", source, groupName, idx, b.RelativeAttention)
 		}
+		switch normalizeRelativeAttentionParameterization(b.RelativeAttentionParameterization) {
+		case RelativeAttentionParamPerBlockProjections, RelativeAttentionParamSharedQKReuse:
+		default:
+			return fmt.Errorf("config %q %s[%d] type=plain has invalid relative_attention_parameterization=%q (must be \"per_block_projections\" or \"shared_qk_reuse\")", source, groupName, idx, b.RelativeAttentionParameterization)
+		}
 		switch normalizePlainFFNActivation(b.FFNActivation) {
 		case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
 		default:
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid ffn_activation=%q (must be \"silu\", \"geglu\", or \"swiglu\")", source, groupName, idx, b.FFNActivation)
+		}
+		if normalizeRelativeAttentionParameterization(b.RelativeAttentionParameterization) == RelativeAttentionParamSharedQKReuse && !relativeAttentionEnabled(b) {
+			return fmt.Errorf("config %q %s[%d] type=plain relative_attention_parameterization=\"shared_qk_reuse\" requires relative_attention=\"deberta_p2c_c2p\"", source, groupName, idx)
 		}
 		if b.RelativeAttentionWindow < 0 {
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid relative_attention_window=%d (must be >= 0)", source, groupName, idx, b.RelativeAttentionWindow)
@@ -330,6 +338,16 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		default:
 			return fmt.Errorf("config %q %s[%d] type=moe expert_block.type must be swiglu, geglu, or mlp (got %q)", source, groupName, idx, expert.Type)
 		}
+	}
+	return nil
+}
+
+func validateSharedRelativeAttention(cfg *ArchConfig, source string) error {
+	if _, err := newSharedRelativeAttentionPlan(cfg.Blocks); err != nil {
+		if _, ok := err.(*sharedRelativeWindowMismatchError); ok {
+			return fmt.Errorf("config %q blocks with relative_attention_parameterization=\"shared_qk_reuse\" must use the same effective relative_attention_window", source)
+		}
+		return fmt.Errorf("config %q %w", source, err)
 	}
 	return nil
 }

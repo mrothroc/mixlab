@@ -26,6 +26,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "plain.ffn_activation=geglu", Status: hfExportSupported, Reason: "Plain-block GeGLU FFN tails are mirrored with an explicit gate projection in the generated PyTorch template."},
 		{Feature: "plain.ffn_activation=swiglu", Status: hfExportSupported, Reason: "Plain-block SwiGLU FFN tails are mirrored with an explicit gate projection in the generated PyTorch template."},
 		{Feature: "plain.relative_attention=deberta_p2c_c2p", Status: hfExportSupported, Reason: "DeBERTa/GPT-BERT C2P/P2C relative bias uses log-bucketed q-k positions in the generated PyTorch template."},
+		{Feature: "plain.relative_attention_parameterization=shared_qk_reuse", Status: hfExportSupported, Reason: "GPT-BERT-style shared relative embedding export reuses each block's Q/K projections in the generated PyTorch template."},
 		{Feature: "swiglu", Status: hfExportSupported, Reason: "Bias-free SwiGLU FFN export is covered by native-vs-HF parity tests."},
 		{Feature: "geglu", Status: hfExportSupported, Reason: "Bias-free GEGLU FFN export is covered by native-vs-HF parity tests."},
 		{Feature: "mlp", Status: hfExportSupported, Reason: "Bias-free MLP export supports silu, gelu, relu, and leaky_relu_sq."},
@@ -48,6 +49,9 @@ func hfExportBlockCapability(block BlockSpec) hfExportCapability {
 	case "plain":
 		if activation := hfPlainFFNActivation(block); activation == "geglu" || activation == "swiglu" {
 			return capabilityByFeature("plain.ffn_activation=" + activation)
+		}
+		if hfRelativeAttentionUsesSharedQKReuse(block) {
+			return capabilityByFeature("plain.relative_attention_parameterization=shared_qk_reuse")
 		}
 		if relativeAttentionEnabledForHF(block) {
 			return capabilityByFeature("plain.relative_attention=deberta_p2c_c2p")
@@ -78,4 +82,28 @@ func capabilityByFeature(feature string) hfExportCapability {
 
 func relativeAttentionEnabledForHF(block BlockSpec) bool {
 	return strings.EqualFold(strings.TrimSpace(block.RelativeAttention), "deberta_p2c_c2p")
+}
+
+func hfRelativeAttentionParameterization(block BlockSpec) string {
+	value := strings.ToLower(strings.TrimSpace(block.RelativeAttentionParameterization))
+	if value == "" {
+		return "per_block_projections"
+	}
+	return value
+}
+
+func hfRelativeAttentionUsesSharedQKReuse(block BlockSpec) bool {
+	return relativeAttentionEnabledForHF(block) && hfRelativeAttentionParameterization(block) == "shared_qk_reuse"
+}
+
+func hfConfigUsesSharedRelativeAttention(cfg *ArchConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	for _, block := range cfg.Blocks {
+		if hfRelativeAttentionUsesSharedQKReuse(block) {
+			return true
+		}
+	}
+	return false
 }
