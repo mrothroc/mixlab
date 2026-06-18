@@ -31,6 +31,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "plain.relative_attention=deberta_p2c_c2p", Status: hfExportSupported, Reason: "DeBERTa/GPT-BERT C2P/P2C relative bias uses log-bucketed q-k positions in the generated PyTorch template."},
 		{Feature: "plain.relative_attention_parameterization=shared_qk_reuse", Status: hfExportSupported, Reason: "GPT-BERT-style shared relative embedding export reuses each block's Q/K projections in the generated PyTorch template."},
 		{Feature: "plain.relative_attention_embedding_norm=layernorm", Status: hfExportSupported, Reason: "A model-level affine LayerNorm can be applied to the shared relative embedding before Q/K reuse."},
+		{Feature: "mlm_head=bert", Status: hfExportSupported, Reason: "BERT-style masked LM transform head is exported with tied embedding output weight plus output bias."},
 		{Feature: "swiglu", Status: hfExportSupported, Reason: "Bias-free SwiGLU FFN export is covered by native-vs-HF parity tests."},
 		{Feature: "geglu", Status: hfExportSupported, Reason: "Bias-free GEGLU FFN export is covered by native-vs-HF parity tests."},
 		{Feature: "mlp", Status: hfExportSupported, Reason: "Bias-free MLP export supports silu, gelu, relu, and leaky_relu_sq."},

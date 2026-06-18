@@ -18,6 +18,8 @@ class MixlabConfig(PretrainedConfig):
         blocks=None,
         masked_blocks=None,
         logit_softcap=0.0,
+        mlm_head="linear",
+        hidden_dropout=0.0,
         char_vocab_size=0,
         char_dim=0,
         char_max_per_token=0,
@@ -46,6 +48,8 @@ class MixlabConfig(PretrainedConfig):
         self.blocks = blocks or []
         self.masked_blocks = masked_blocks or []
         self.logit_softcap = logit_softcap
+        self.mlm_head = mlm_head
+        self.hidden_dropout = hidden_dropout
         self.char_vocab_size = char_vocab_size
         self.char_dim = char_dim
         self.char_max_per_token = char_max_per_token

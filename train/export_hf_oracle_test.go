@@ -14,8 +14,42 @@ func runNativeCPUForward(t *testing.T, cfg *ArchConfig, weights [][]float32, tok
 	for i := range weights {
 		w[i] = toFloat64(weights[i])
 	}
+	x := runNativeCPUHidden(t, cfg, w, tokens)
+	return matmul3DCPU(x, w[1], cfg.ModelDim, cfg.VocabSize)
+}
+
+func runNativeCPUMaskedForward(t *testing.T, cfg *ArchConfig, weights [][]float32, tokens [][]int) [][][]float64 {
+	t.Helper()
+	w := make([][]float64, len(weights))
+	for i := range weights {
+		w[i] = toFloat64(weights[i])
+	}
+	x := runNativeCPUHidden(t, cfg, w, tokens)
+	if cfg.EffectiveMLMHead() == "bert" {
+		shapes, err := computeWeightShapes(cfg)
+		if err != nil {
+			t.Fatalf("computeWeightShapes: %v", err)
+		}
+		denseIdx := weightShapeIndex(shapes, "mlm_head_dense")
+		biasIdx := weightShapeIndex(shapes, "mlm_head_dense_bias")
+		outBiasIdx := weightShapeIndex(shapes, "mlm_head_output_bias")
+		if denseIdx < 0 || biasIdx < 0 || outBiasIdx < 0 {
+			t.Fatalf("missing BERT MLM head weights: dense=%d bias=%d out_bias=%d", denseIdx, biasIdx, outBiasIdx)
+		}
+		return bertMLMHeadCPU(cfg, x, w[denseIdx], w[biasIdx], w[0], w[outBiasIdx])
+	}
+	return matmul3DCPU(x, w[1], cfg.ModelDim, cfg.VocabSize)
+}
+
+func runNativeCPUHidden(t *testing.T, cfg *ArchConfig, w [][]float64, tokens [][]int) [][][]float64 {
+	t.Helper()
 	x := embedCPU(w[0], cfg.VocabSize, cfg.ModelDim, tokens)
 	wi := 3
+	finalNormIdx := 2
+	if cfg.TieEmbeddings {
+		wi = 2
+		finalNormIdx = 1
+	}
 	if cfg.CharVocabSize > 0 {
 		var next int
 		x, next = addCharFeaturesCPU(t, cfg, x, tokens, w, wi)
@@ -64,11 +98,25 @@ func runNativeCPUForward(t *testing.T, cfg *ArchConfig, weights [][]float32, tok
 			t.Fatalf("unsupported native parity block %q at %d", block.Type, blockIdx)
 		}
 	}
-	x = rmsNormCPU(x, w[2])
-	return matmul3DCPU(x, w[1], cfg.ModelDim, cfg.VocabSize)
+	return rmsNormCPU(x, w[finalNormIdx])
 }
 
 func runHFCPUForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64, tokens [][]int) [][][]float64 {
+	t.Helper()
+	x := runHFCPUHidden(t, cfg, weights, tokens)
+	return matmul3DCPU(x, weights["lm_head_weight"], cfg.ModelDim, cfg.VocabSize)
+}
+
+func runHFCPUMaskedForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64, tokens [][]int) [][][]float64 {
+	t.Helper()
+	x := runHFCPUHidden(t, cfg, weights, tokens)
+	if cfg.EffectiveMLMHead() == "bert" {
+		return bertMLMHeadCPU(cfg, x, weights["mlm_head_dense.weight"], weights["mlm_head_dense.bias"], weights["embed_tokens.weight"], weights["mlm_head_output_bias"])
+	}
+	return matmul3DCPU(x, weights["lm_head_weight"], cfg.ModelDim, cfg.VocabSize)
+}
+
+func runHFCPUHidden(t *testing.T, cfg *ArchConfig, weights map[string][]float64, tokens [][]int) [][][]float64 {
 	t.Helper()
 	x := embedCPU(weights["embed_tokens.weight"], cfg.VocabSize, cfg.ModelDim, tokens)
 	if cfg.CharVocabSize > 0 {
@@ -202,8 +250,27 @@ func runHFCPUForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64
 			t.Fatalf("unsupported HF parity block %q at %d", block.Type, i)
 		}
 	}
-	x = rmsNormCPU(x, weights["final_norm.weight"])
-	return matmul3DCPU(x, weights["lm_head_weight"], cfg.ModelDim, cfg.VocabSize)
+	return rmsNormCPU(x, weights["final_norm.weight"])
+}
+
+func bertMLMHeadCPU(cfg *ArchConfig, hidden [][][]float64, denseW, denseBias, embed, outputBias []float64) [][][]float64 {
+	x := layerNorm3DNoAffineCPU(hidden, float64(cfg.EffectiveNormSpec().Eps))
+	x = matmul3DBiasCPU(x, denseW, denseBias, cfg.ModelDim, cfg.ModelDim)
+	gelu3DInPlace(x)
+	x = layerNorm3DNoAffineCPU(x, float64(cfg.EffectiveNormSpec().Eps))
+	out := make3D(len(x), len(x[0]), cfg.VocabSize)
+	for b := range x {
+		for t := range x[b] {
+			for v := 0; v < cfg.VocabSize; v++ {
+				sum := outputBias[v]
+				for d := 0; d < cfg.ModelDim; d++ {
+					sum += x[b][t][d] * embed[v*cfg.ModelDim+d]
+				}
+				out[b][t][v] = sum
+			}
+		}
+	}
+	return out
 }
 
 func hfFeatureWeights(weights map[string][]float64, feature string) [][]float64 {

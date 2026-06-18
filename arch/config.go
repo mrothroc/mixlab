@@ -41,6 +41,7 @@ type ArchConfig struct {
 	Dropout                  float32      `json:"dropout,omitempty"`
 	AttnDropout              float32      `json:"attn_dropout,omitempty"`
 	HiddenDropout            float32      `json:"hidden_dropout,omitempty"`
+	MLMHead                  string       `json:"mlm_head,omitempty"`
 	NormType                 string       `json:"norm_type,omitempty"`
 	NormEps                  float32      `json:"norm_eps,omitempty"`
 	NormAffine               *bool        `json:"norm_affine,omitempty"`
@@ -820,6 +821,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 	if err := validateTrainingObjective(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateMLMHead(cfg, source); err != nil {
 		return nil, err
 	}
 	if err := validateTrainingDistillation(cfg, source); err != nil {

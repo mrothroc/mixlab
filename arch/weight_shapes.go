@@ -708,16 +708,18 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	}
 	backoutMetas := backoutWeightShapes(cfg.Backout)
 	data2VecMetas := data2VecWeightShapes(cfg.ModelDim, cfg.Training.Data2Vec)
-	if len(smearMetas) == 0 && len(backoutMetas) == 0 && len(data2VecMetas) == 0 {
+	mlmHeadMetas := mlmHeadWeightShapes(cfg.ModelDim, cfg.VocabSize, cfg.EffectiveMLMHead())
+	if len(smearMetas) == 0 && len(backoutMetas) == 0 && len(data2VecMetas) == 0 && len(mlmHeadMetas) == 0 {
 		return metas, nil
 	}
 	fixed := fixedWeightCountWithHeadAndNorm(cfg.ReservesUntiedHeadWeight(), cfg.EffectiveNormSpec())
-	out := make([]WeightMeta, 0, len(metas)+len(smearMetas)+len(backoutMetas)+len(data2VecMetas))
+	out := make([]WeightMeta, 0, len(metas)+len(smearMetas)+len(backoutMetas)+len(data2VecMetas)+len(mlmHeadMetas))
 	out = append(out, metas[:fixed]...)
 	out = append(out, smearMetas...)
 	out = append(out, metas[fixed:]...)
 	out = append(out, backoutMetas...)
 	out = append(out, data2VecMetas...)
+	out = append(out, mlmHeadMetas...)
 	return out, nil
 }
 

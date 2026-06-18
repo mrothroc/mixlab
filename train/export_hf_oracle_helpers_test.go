@@ -41,6 +41,30 @@ func layerNorm2DCPU(x, scale, bias []float64, rows, dim int, eps float64) []floa
 	return out
 }
 
+func layerNorm3DNoAffineCPU(x [][][]float64, eps float64) [][][]float64 {
+	out := make3D(len(x), len(x[0]), len(x[0][0]))
+	for b := range x {
+		for t := range x[b] {
+			row := x[b][t]
+			mean := 0.0
+			for _, v := range row {
+				mean += v
+			}
+			mean /= float64(len(row))
+			variance := 0.0
+			for _, v := range row {
+				delta := v - mean
+				variance += delta * delta
+			}
+			inv := 1.0 / math.Sqrt(variance/float64(len(row))+eps)
+			for d, v := range row {
+				out[b][t][d] = (v - mean) * inv
+			}
+		}
+	}
+	return out
+}
+
 func rmsNormHeadsCPU(x [][][][]float64, scale []float64) {
 	for b := range x {
 		for h := range x[b] {

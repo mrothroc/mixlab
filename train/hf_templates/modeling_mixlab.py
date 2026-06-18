@@ -660,6 +660,21 @@ class MixlabModel(PreTrainedModel):
                     eps=float(getattr(config, "norm_eps", 1e-5) or 1e-5),
                     elementwise_affine=True,
                 )
+        self.mlm_head = str(getattr(config, "mlm_head", "linear") or "linear").lower()
+        self.mlm_head_norm1 = None
+        self.mlm_head_dense = None
+        self.mlm_head_norm2 = None
+        self.mlm_head_dropout = None
+        self.mlm_head_output_bias = None
+        if self.mlm_head == "bert":
+            eps = float(getattr(config, "norm_eps", 1e-5) or 1e-5)
+            self.mlm_head_norm1 = nn.LayerNorm(config.model_dim, eps=eps, elementwise_affine=False)
+            self.mlm_head_dense = MixlabLinear(config.model_dim, config.model_dim, bias=True)
+            self.mlm_head_norm2 = nn.LayerNorm(config.model_dim, eps=eps, elementwise_affine=False)
+            self.mlm_head_dropout = nn.Dropout(float(getattr(config, "hidden_dropout", 0.0) or 0.0))
+            self.mlm_head_output_bias = nn.Parameter(torch.zeros(config.vocab_size))
+        elif self.mlm_head not in ("", "linear", "none", "default"):
+            raise ValueError(f"unsupported exported mlm_head {self.mlm_head!r}")
         for block in block_configs:
             block_type = block.get("type")
             if block_type == "plain":
@@ -754,6 +769,16 @@ class MixlabModel(PreTrainedModel):
     def forward(self, input_ids=None, **kwargs):
         return BaseModelOutput(last_hidden_state=self.forward_hidden(input_ids))
 
+    def bert_mlm_logits(self, hidden):
+        if self.mlm_head != "bert":
+            raise ValueError("bert_mlm_logits requires mlm_head='bert'")
+        x = self.mlm_head_norm1(hidden)
+        x = self.mlm_head_dense(x)
+        x = torch.nn.functional.gelu(x, approximate="tanh")
+        x = self.mlm_head_norm2(x)
+        x = self.mlm_head_dropout(x)
+        return torch.matmul(x, self.embed_tokens.weight.transpose(0, 1)) + self.mlm_head_output_bias
+
 
 class MixlabForCausalLM(MixlabModel):
     _tied_weights_keys = []
@@ -792,7 +817,10 @@ class MixlabForMaskedLM(MixlabModel):
 
     def forward(self, input_ids=None, labels=None, **kwargs):
         x = self.forward_hidden(input_ids)
-        logits = torch.matmul(x, self.lm_head_weight)
+        if getattr(self.config, "mlm_head", "linear") == "bert":
+            logits = self.bert_mlm_logits(x)
+        else:
+            logits = torch.matmul(x, self.lm_head_weight)
         if getattr(self.config, "logit_softcap", 0.0):
             cap = float(self.config.logit_softcap)
             logits = torch.tanh(logits / cap) * cap

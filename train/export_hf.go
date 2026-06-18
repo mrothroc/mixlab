@@ -40,6 +40,8 @@ type hfConfigJSON struct {
 	NormPlacement         string            `json:"norm_placement,omitempty"`
 	FFNInternalNorm       bool              `json:"ffn_internal_norm,omitempty"`
 	LogitSoftcap          float32           `json:"logit_softcap,omitempty"`
+	MLMHead               string            `json:"mlm_head,omitempty"`
+	HiddenDropout         float32           `json:"hidden_dropout,omitempty"`
 	CharVocabSize         int               `json:"char_vocab_size,omitempty"`
 	CharDim               int               `json:"char_dim,omitempty"`
 	CharMaxPerToken       int               `json:"char_max_per_token,omitempty"`
@@ -741,6 +743,21 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 			}
 		default:
 			return nil, fmt.Errorf("unsupported HF export block type %q", block.Type)
+		}
+	}
+	if cfg.EffectiveMLMHead() == "bert" {
+		for _, name := range []hfBlockWeightName{
+			{mixlab: "mlm_head_dense", hf: "mlm_head_dense.weight"},
+			{mixlab: "mlm_head_dense_bias", hf: "mlm_head_dense.bias"},
+			{mixlab: "mlm_head_output_bias", hf: "mlm_head_output_bias"},
+		} {
+			if wi >= len(shapes) {
+				return nil, fmt.Errorf("weight map exhausted while mapping BERT MLM head")
+			}
+			if err := addExpected(wi, name.mixlab, name.hf); err != nil {
+				return nil, err
+			}
+			wi = firstUnmappedWeight(used, wi+1)
 		}
 	}
 	if wi != len(shapes) {

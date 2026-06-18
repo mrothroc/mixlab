@@ -201,6 +201,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		useTiedHead,
 		objective,
 		cfg.Training.EffectiveObjective(),
+		cfg.EffectiveMLMHead(),
 		firstByteMask,
 		zLoss,
 		cfg.smearEmbeddingOptions(),

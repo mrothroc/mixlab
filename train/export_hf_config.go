@@ -33,6 +33,8 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 		NormPlacement:         cfg.EffectiveNormPlacement(),
 		FFNInternalNorm:       cfg.FFNInternalNorm,
 		LogitSoftcap:          cfg.LogitSoftcap,
+		MLMHead:               hfExportMLMHead(cfg),
+		HiddenDropout:         cfg.EffectiveHiddenDropout(),
 		CharVocabSize:         cfg.CharVocabSize,
 		CharDim:               cfg.EffectiveCharDim(),
 		CharMaxPerToken:       cfg.EffectiveCharMaxPerToken(),
@@ -52,11 +54,18 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 			"source":            "mixlab",
 			"weight_map":        "weight_map.json",
 			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "swiglu", "geglu", "mlp", "moe"},
+			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe"},
 			"unsupported_fails": true,
 		},
 	}
 	return writeJSONFile(path, doc)
+}
+
+func hfExportMLMHead(cfg *ArchConfig) string {
+	if cfg == nil || cfg.EffectiveMLMHead() != "bert" {
+		return ""
+	}
+	return "bert"
 }
 
 func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {

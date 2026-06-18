@@ -586,6 +586,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		logitSoftcap, dropout, attnDropout, blocks, recurrence, executionOrder, mtp, reserveHead, useTiedHead,
 		objective,
 		objective,
+		MLMHeadLinear,
 		false,
 		0,
 		disabledSmearEmbeddingOptions(),
@@ -619,6 +620,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	useTiedHead bool,
 	objective string,
 	rootObjective string,
+	mlmHead string,
 	firstByteMask bool,
 	zLoss float64,
 	smearOpts smearEmbeddingOptions,
@@ -646,6 +648,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	V := vocabSize
 	objective = normalizeTrainingObjective(objective)
 	rootObjective = normalizeTrainingObjective(rootObjective)
+	mlmHead = normalizeMLMHead(mlmHead)
 	blocks = resolveBlockAttentionMasksForObjective(blocks, objective, rootObjective)
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
@@ -713,6 +716,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	if !useTiedHead && !reserveHead {
 		return nil, fmt.Errorf("untied LM head requires reserved head weight")
 	}
+	if mlmHead == MLMHeadBERT && !tieEmbeddings {
+		return nil, fmt.Errorf("mlm_head=\"bert\" requires tie_embeddings=true")
+	}
 
 	nWeights, err := countWeightsWithFeaturesRecurrenceParallelHeadLayoutNorm(D, V, T, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence, norm, normPlacement, ffnInternalNorm)
 	if err != nil {
@@ -725,6 +731,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	nWeights += len(smearWeights)
 	nWeights += len(backoutWeightShapes(backoutSpec))
 	nWeights += data2VecWeightCount(data2vec)
+	nWeights += mlmHeadWeightCount(D, V, mlmHead)
 
 	prog := NewProgram(nWeights)
 	maskedObjective := isMaskedTrainingObjective(objective)
@@ -889,14 +896,25 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 
 	// Output head projection
-	if useTiedHead {
-		prog.Transpose(weightName(0), []int{1, 0}, "tied_head")
-		prog.MatMul("x_final_norm", "tied_head", "logits")
+	logitsState := "logits"
+	if maskedObjective && mlmHead == MLMHeadBERT {
+		var err error
+		logitsState, wi, err = emitBERTMLMHeadIR(prog, "x_final_norm", wi, D, V, norm.Eps, dropout)
+		if err != nil {
+			return nil, err
+		}
 	} else {
-		prog.MatMul("x_final_norm", weightName(1), "logits")
+		if useTiedHead {
+			prog.Transpose(weightName(0), []int{1, 0}, "tied_head")
+			prog.MatMul("x_final_norm", "tied_head", "logits")
+		} else {
+			prog.MatMul("x_final_norm", weightName(1), "logits")
+		}
+		if mlmHead == MLMHeadBERT {
+			wi += mlmHeadWeightCount(D, V, mlmHead)
+		}
 	}
 
-	logitsState := "logits"
 	if logitSoftcap > 0 {
 		prog.ScalarMul(logitsState, 1.0/logitSoftcap, "logits_softcap_scaled")
 		prog.Tanh("logits_softcap_scaled", "logits_softcap_tanh")

@@ -216,6 +216,28 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// BERT-style masked-LM transform head: the parity script compares
+			// causal logits and loads/runs the real exported AutoModelForMaskedLM
+			// path so the generated Python transform stack is exercised.
+			name: "bert_mlm_head",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 5, "mlp_mult": 2.0,
+				"tie_embeddings": true,
+				"mlm_head": "bert",
+				"blocks": [
+					{"type": "plain", "heads": 2, "attn_bias": true, "attn_value_gate": true},
+					{"type": "swiglu"}
+				],
+				"training": {
+					"steps": 1,
+					"batch_tokens": 5,
+					"seed": 9494,
+					"objective": "mlm",
+					"mlm_mask_token_id": 1
+				}
+			}`,
+		},
+		{
 			// XSA projection and sparse per-head attention output gate.
 			name: "xsa_sparse_gate",
 			config: `{

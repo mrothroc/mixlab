@@ -118,6 +118,94 @@ func TestExportHFPureMaskedObjectiveRegistersMaskedLM(t *testing.T) {
 	}
 }
 
+func TestExportHFBERTMLMHeadMetadataAndWeights(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+		"name": "hf_bert_mlm_head",
+		"model_dim": 8,
+		"vocab_size": 11,
+		"seq_len": 4,
+		"mlp_mult": 1.0,
+		"tie_embeddings": true,
+		"mlm_head": "bert",
+		"dropout": 0.1,
+		"blocks": [{"type": "plain", "heads": 2}],
+		"training": {
+			"steps": 1,
+			"batch_tokens": 4,
+			"seed": 717,
+			"objective": "mlm",
+			"mlm_mask_token_id": 1
+		}
+	}`)
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+
+	var doc hfConfigJSON
+	readJSON(t, filepath.Join(outDir, "config.json"), &doc)
+	if doc.MLMHead != "bert" {
+		t.Fatalf("config mlm_head=%q, want bert", doc.MLMHead)
+	}
+	if doc.HiddenDropout != 0.1 {
+		t.Fatalf("config hidden_dropout=%g, want 0.1", doc.HiddenDropout)
+	}
+	if !containsAnyString(doc.Mixlab["supported_blocks"], "mlm_head=bert") {
+		t.Fatalf("supported_blocks missing mlm_head=bert: %#v", doc.Mixlab["supported_blocks"])
+	}
+
+	var mapping []hfWeightMapping
+	readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+	for _, name := range []string{
+		"lm_head_weight",
+		"mlm_head_dense.weight",
+		"mlm_head_dense.bias",
+		"mlm_head_output_bias",
+	} {
+		if !hfMappingContains(mapping, name) {
+			t.Fatalf("weight_map missing %s", name)
+		}
+	}
+	hfWeights, err := loadHFWeightsForParity(filepath.Join(outDir, "model.safetensors"))
+	if err != nil {
+		t.Fatalf("load HF weights: %v", err)
+	}
+	for _, name := range []string{
+		"lm_head_weight",
+		"mlm_head_dense.weight",
+		"mlm_head_dense.bias",
+		"mlm_head_output_bias",
+	} {
+		if hfWeights[name] == nil {
+			t.Fatalf("model.safetensors missing %s", name)
+		}
+	}
+	cfg, err := LoadArchConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadArchConfig: %v", err)
+	}
+	nativeShapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	nativeWeights, err := loadSafetensorsWeights(weightsPath, nativeShapes)
+	if err != nil {
+		t.Fatalf("load native weights: %v", err)
+	}
+	tokens := [][]int{{0, 1, 2, 3}}
+	nativeLogits := runNativeCPUMaskedForward(t, cfg, nativeWeights, tokens)
+	hfLogits := runHFCPUMaskedForward(t, cfg, hfWeights, tokens)
+	if diff := maxAbsDiff3D(nativeLogits, hfLogits); diff >= 1e-3 {
+		t.Fatalf("BERT MLM head native/export logits max diff=%g, want < 1e-3", diff)
+	}
+}
+
 func TestExportHFMaskedLMSetsTokenizerMaskToken(t *testing.T) {
 	dir := t.TempDir()
 	// mlm_mask_token_id=6 maps to vocab token "c" in the fixture tokenizer, so a
@@ -162,6 +250,28 @@ func TestExportHFMaskedLMSetsTokenizerMaskToken(t *testing.T) {
 	if got := specialMap["mask_token"]; got != "c" {
 		t.Fatalf("special_tokens_map mask_token=%v, want \"c\"", got)
 	}
+}
+
+func hfMappingContains(mapping []hfWeightMapping, hfName string) bool {
+	for _, item := range mapping {
+		if item.HF == hfName {
+			return true
+		}
+	}
+	return false
+}
+
+func containsAnyString(values any, want string) bool {
+	list, ok := values.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range list {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestExportHFCausalOmitsTokenizerMaskToken(t *testing.T) {
