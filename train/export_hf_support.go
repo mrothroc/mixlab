@@ -20,6 +20,8 @@ type hfExportCapability struct {
 func hfExportCapabilities() []hfExportCapability {
 	return []hfExportCapability{
 		{Feature: "plain", Status: hfExportSupported, Reason: "Core attention export with RoPE, GQA, qk_norm, qk_gain, XSA, sparse attention gates, masks, and causal windowing."},
+		{Feature: "plain.attn_bias", Status: hfExportSupported, Reason: "Q/K/V/O projection biases are mirrored in the generated PyTorch template."},
+		{Feature: "plain.attn_value_gate", Status: hfExportSupported, Reason: "Value-projection attention gates are mirrored before the output projection in the generated PyTorch template."},
 		{Feature: "plain.qk_norm", Status: hfExportSupported, Reason: "Learned Q/K RMSNorm scales are mirrored in the generated PyTorch template."},
 		{Feature: "plain.xsa", Status: hfExportSupported, Reason: "XSA output projection is mirrored in the generated PyTorch template."},
 		{Feature: "plain.sparse_attn_gate", Status: hfExportSupported, Reason: "Sparse per-head attention gates are mirrored in the generated PyTorch template."},
@@ -47,6 +49,12 @@ func hfExportCapabilities() []hfExportCapability {
 func hfExportBlockCapability(block BlockSpec) hfExportCapability {
 	switch strings.ToLower(strings.TrimSpace(block.Type)) {
 	case "plain":
+		if block.AttnValueGate {
+			return capabilityByFeature("plain.attn_value_gate")
+		}
+		if block.AttnBias {
+			return capabilityByFeature("plain.attn_bias")
+		}
 		if activation := hfPlainFFNActivation(block); activation == "geglu" || activation == "swiglu" {
 			return capabilityByFeature("plain.ffn_activation=" + activation)
 		}

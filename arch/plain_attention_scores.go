@@ -13,7 +13,7 @@ func emitRoPEForConvention(prog *Program, q, k, qOut, kOut string, T, headDim, r
 	prog.RoPE(q, k, qOut, kOut, T, headDim, ropeDims, 10000.0)
 }
 
-func emitDebertaRelativeProjectionIR(prog *Program, prefix, tableName, keyProjectionName, queryProjectionName string, H, kvH, D, headDim, relativeWindow int, sharedQKReuse bool) error {
+func emitDebertaRelativeProjectionIR(prog *Program, prefix, tableName, keyProjectionName, keyBiasName, queryProjectionName, queryBiasName string, H, kvH, D, headDim, relativeWindow int, sharedQKReuse bool) error {
 	if relativeWindow <= 0 {
 		relativeWindow = defaultRelativeAttentionWindow
 	}
@@ -26,14 +26,26 @@ func emitDebertaRelativeProjectionIR(prog *Program, prefix, tableName, keyProjec
 	relRows := 2*relativeWindow - 1
 	relKeyFlat := prefix + "_rel_key_flat"
 	relQueryFlat := prefix + "_rel_query_flat"
+	relKeyProjected := relKeyFlat
+	relQueryProjected := relQueryFlat
 	relKeyH := prefix + "_rel_key_h"
 	relQueryH := prefix + "_rel_query_h"
 	prog.MatMul(tableName, keyProjectionName, relKeyFlat)
 	prog.MatMul(tableName, queryProjectionName, relQueryFlat)
+	if keyBiasName != "" {
+		relKeyBiased := relKeyFlat + "_biased"
+		prog.Add(relKeyFlat, keyBiasName, relKeyBiased)
+		relKeyProjected = relKeyBiased
+	}
+	if queryBiasName != "" {
+		relQueryBiased := relQueryFlat + "_biased"
+		prog.Add(relQueryFlat, queryBiasName, relQueryBiased)
+		relQueryProjected = relQueryBiased
+	}
 	if sharedQKReuse {
 		relKeyKV3 := prefix + "_rel_key_kv3"
 		relKeyKVH := prefix + "_rel_key_kvh"
-		prog.Reshape(relKeyFlat, []int{relRows, kvH, headDim}, relKeyKV3)
+		prog.Reshape(relKeyProjected, []int{relRows, kvH, headDim}, relKeyKV3)
 		prog.Transpose(relKeyKV3, []int{1, 0, 2}, relKeyKVH)
 		if kvH == H {
 			prog.ScalarMul(relKeyKVH, 1.0, relKeyH)
@@ -49,16 +61,16 @@ func emitDebertaRelativeProjectionIR(prog *Program, prefix, tableName, keyProjec
 		}
 	} else {
 		relKey3 := prefix + "_rel_key3"
-		prog.Reshape(relKeyFlat, []int{relRows, H, headDim}, relKey3)
+		prog.Reshape(relKeyProjected, []int{relRows, H, headDim}, relKey3)
 		prog.Transpose(relKey3, []int{1, 0, 2}, relKeyH)
 	}
 	relQuery3 := prefix + "_rel_query3"
-	prog.Reshape(relQueryFlat, []int{relRows, H, headDim}, relQuery3)
+	prog.Reshape(relQueryProjected, []int{relRows, H, headDim}, relQuery3)
 	prog.Transpose(relQuery3, []int{1, 0, 2}, relQueryH)
 	return nil
 }
 
-func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, wi, B, H, kvH, D, T, headDim int, baseScale float32, qkGain float64, ropeDims int, ropeConvention, relativeAttention string, relativeWindow int, relativeParameterization string, qWeightName, kWeightName string, sharedRel sharedRelativeAttentionPlan) (string, string, int, error) {
+func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, wi, B, H, kvH, D, T, headDim int, baseScale float32, qkGain float64, ropeDims int, ropeConvention, relativeAttention string, relativeWindow int, relativeParameterization string, qWeightName, qBiasName, kWeightName, kBiasName string, sharedRel sharedRelativeAttentionPlan) (string, string, int, error) {
 	relMode := normalizeRelativeAttention(relativeAttention)
 	qForScores := qh
 	kForScores := kh
@@ -78,7 +90,7 @@ func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, w
 		}
 		switch normalizeRelativeAttentionParameterization(relativeParameterization) {
 		case RelativeAttentionParamPerBlockProjections:
-			if err := emitDebertaRelativeProjectionIR(prog, prefix, weightName(wi), weightName(wi+1), weightName(wi+2), H, H, D, headDim, relativeWindow, false); err != nil {
+			if err := emitDebertaRelativeProjectionIR(prog, prefix, weightName(wi), weightName(wi+1), "", weightName(wi+2), "", H, H, D, headDim, relativeWindow, false); err != nil {
 				return "", "", wi, err
 			}
 			wi += 3
@@ -92,7 +104,7 @@ func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, w
 			if qWeightName == "" || kWeightName == "" {
 				return "", "", wi, fmt.Errorf("shared_qk_reuse relative attention requires local q/k projection weights")
 			}
-			if err := emitDebertaRelativeProjectionIR(prog, prefix, weightName(sharedRel.WeightIndex), kWeightName, qWeightName, H, kvH, D, headDim, relativeWindow, true); err != nil {
+			if err := emitDebertaRelativeProjectionIR(prog, prefix, weightName(sharedRel.WeightIndex), kWeightName, kBiasName, qWeightName, qBiasName, H, kvH, D, headDim, relativeWindow, true); err != nil {
 				return "", "", wi, err
 			}
 		default:

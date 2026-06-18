@@ -550,8 +550,11 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 			}
 			names = append(names, []hfBlockWeightName{
 				{mixlab: "wq", hf: "wq.weight"},
+				{mixlab: "wq_bias", hf: "wq.bias"},
 				{mixlab: "wk", hf: "wk.weight"},
+				{mixlab: "wk_bias", hf: "wk.bias"},
 				{mixlab: "wv", hf: "wv.weight"},
+				{mixlab: "wv_bias", hf: "wv.bias"},
 				{mixlab: "q_norm_scale", hf: "q_norm.weight"},
 				{mixlab: "k_norm_scale", hf: "k_norm.weight"},
 				{mixlab: "relative_embeddings", hf: "relative_embeddings"},
@@ -560,6 +563,7 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 				{mixlab: "qk_gain", hf: "qk_gain"},
 				{mixlab: "attn_gate_w", hf: "attn_gate_w"},
 				{mixlab: "wo", hf: "wo.weight"},
+				{mixlab: "wo_bias", hf: "wo.bias"},
 			}...)
 			if normPlacement == "post" || normPlacement == "sandwich" {
 				names = appendNormNames(names, "post_attn_norm", "post_attn_norm")
@@ -587,6 +591,12 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 				}
 				if (name.mixlab == "q_norm_scale" || name.mixlab == "k_norm_scale") && !block.QKNorm {
 					continue
+				}
+				switch name.mixlab {
+				case "wq_bias", "wk_bias", "wv_bias", "wo_bias":
+					if !block.AttnBias {
+						continue
+					}
 				}
 				if name.mixlab == "qk_gain" && shapes[wi].Name != "qk_gain" {
 					continue

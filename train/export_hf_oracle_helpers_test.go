@@ -52,6 +52,21 @@ func matmul3DCPU(x [][][]float64, w []float64, inDim, outDim int) [][][]float64 
 	return out
 }
 
+func matmul3DBiasCPU(x [][][]float64, w, bias []float64, inDim, outDim int) [][][]float64 {
+	out := matmul3DCPU(x, w, inDim, outDim)
+	if bias == nil {
+		return out
+	}
+	for b := range out {
+		for t := range out[b] {
+			for d := 0; d < outDim; d++ {
+				out[b][t][d] += bias[d]
+			}
+		}
+	}
+	return out
+}
+
 func matmul2DCPU(x []float64, w []float64, rows, inDim, outDim int) []float64 {
 	out := make([]float64, rows*outDim)
 	for r := 0; r < rows; r++ {
@@ -61,6 +76,19 @@ func matmul2DCPU(x []float64, w []float64, rows, inDim, outDim int) []float64 {
 				sum += x[r*inDim+i] * w[i*outDim+o]
 			}
 			out[r*outDim+o] = sum
+		}
+	}
+	return out
+}
+
+func matmul2DBiasCPU(x []float64, w, bias []float64, rows, inDim, outDim int) []float64 {
+	out := matmul2DCPU(x, w, rows, inDim, outDim)
+	if bias == nil {
+		return out
+	}
+	for r := 0; r < rows; r++ {
+		for d := 0; d < outDim; d++ {
+			out[r*outDim+d] += bias[d]
 		}
 	}
 	return out
@@ -105,6 +133,16 @@ func flatten3DCPU(x [][][]float64) []float64 {
 	for b := range x {
 		for t := range x[b] {
 			out = append(out, x[b][t]...)
+		}
+	}
+	return out
+}
+
+func slice3DLastDimCPU(x [][][]float64, start, end int) [][][]float64 {
+	out := make3D(len(x), len(x[0]), end-start)
+	for b := range x {
+		for t := range x[b] {
+			copy(out[b][t], x[b][t][start:end])
 		}
 	}
 	return out
@@ -187,6 +225,26 @@ func add3D(a, b [][][]float64) [][][]float64 {
 		}
 	}
 	return out
+}
+
+func mul3DInPlace(a, b [][][]float64) {
+	for i := range a {
+		for j := range a[i] {
+			for k := range a[i][j] {
+				a[i][j][k] *= b[i][j][k]
+			}
+		}
+	}
+}
+
+func gelu3DInPlace(a [][][]float64) {
+	for i := range a {
+		for j := range a[i] {
+			for k := range a[i][j] {
+				a[i][j][k] = gelu(a[i][j][k])
+			}
+		}
+	}
 }
 
 func cpuCrossEntropy(logits [][][]float64, targets [][]int) float64 {

@@ -44,6 +44,20 @@ func TestExportHFNativePythonParity(t *testing.T) {
 		config string
 	}{
 		{
+			// Q/K/V/O projection biases plus a GELU value gate on the attention
+			// output, including a GQA block, against the Python template.
+			name: "attn_bias_value_gate",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 4, "kv_heads": 2, "attn_bias": true, "attn_value_gate": true},
+					{"type": "plain", "heads": 2, "attn_bias": true},
+					{"type": "swiglu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 3737}
+			}`,
+		},
+		{
 			// Partial RoPE, qk_norm, sigmoid SwiGLU, tanh-approx GELU, full RoPE.
 			name: "core_rope_qknorm_glu_mlp",
 			config: `{

@@ -42,13 +42,17 @@ def norm_placement(config):
 
 
 class MixlabLinear(nn.Module):
-    def __init__(self, in_dim, out_dim):
+    def __init__(self, in_dim, out_dim, bias=False):
         super().__init__()
         self.weight = nn.Parameter(torch.empty(in_dim, out_dim))
+        self.bias = nn.Parameter(torch.zeros(out_dim)) if bias else None
         nn.init.xavier_uniform_(self.weight)
 
     def forward(self, x):
-        return torch.matmul(x, self.weight)
+        out = torch.matmul(x, self.weight)
+        if self.bias is not None:
+            out = out + self.bias
+        return out
 
 
 def rotate_adjacent_rope(x, rope_dims, cos_t=None, sin_t=None, base=10000.0):
@@ -135,6 +139,8 @@ class MixlabPlainBlock(nn.Module):
             self.effective_rope_dims = self.head_dim
         self.attention_mask = str(block_config.get("attention_mask", "") or "causal").lower()
         self.window_size = int(block_config.get("window_size", 0) or 0)
+        self.attn_bias = bool(block_config.get("attn_bias", False))
+        self.attn_value_gate = bool(block_config.get("attn_value_gate", False))
         self.xsa = bool(block_config.get("xsa", False))
         self.sparse_attn_gate = bool(block_config.get("sparse_attn_gate", False))
         self.attn_gate_dim = min(dim, 12)
@@ -149,9 +155,10 @@ class MixlabPlainBlock(nn.Module):
         if self.ffn_activation not in ("silu", "geglu", "swiglu"):
             raise ValueError(f"unsupported exported plain ffn_activation {self.ffn_activation!r}")
         self.norm = make_mixlab_norm(config, dim) if self.norm_placement in ("pre", "sandwich") else None
-        self.wq = MixlabLinear(dim, dim)
-        self.wk = MixlabLinear(dim, self.kv_heads * self.head_dim)
-        self.wv = MixlabLinear(dim, self.kv_heads * self.head_dim)
+        self.wq = MixlabLinear(dim, dim, bias=self.attn_bias)
+        self.wk = MixlabLinear(dim, self.kv_heads * self.head_dim, bias=self.attn_bias)
+        self.value_dim = self.kv_heads * self.head_dim
+        self.wv = MixlabLinear(dim, self.value_dim + (dim if self.attn_value_gate else 0), bias=self.attn_bias)
         self.q_norm = None
         self.k_norm = None
         if bool(block_config.get("qk_norm", False)):
@@ -184,7 +191,7 @@ class MixlabPlainBlock(nn.Module):
         if self.sparse_attn_gate:
             self.attn_gate_w = nn.Parameter(torch.empty(heads, self.attn_gate_dim))
             nn.init.zeros_(self.attn_gate_w)
-        self.wo = MixlabLinear(dim, dim)
+        self.wo = MixlabLinear(dim, dim, bias=self.attn_bias)
         self.post_attn_norm = make_mixlab_norm(config, dim) if self.norm_placement in ("post", "sandwich") else None
         self.ffn_norm = make_mixlab_norm(config, dim) if self.norm_placement == "sandwich" else None
         ffn_dim = max(dim, int(round(dim * float(config.mlp_mult))))
@@ -290,7 +297,12 @@ class MixlabPlainBlock(nn.Module):
 
         q = self.wq(x_norm).view(bsz, seq_len, self.heads, self.head_dim).transpose(1, 2)
         k = self.wk(x_norm).view(bsz, seq_len, self.kv_heads, self.head_dim).transpose(1, 2)
-        v = self.wv(x_norm).view(bsz, seq_len, self.kv_heads, self.head_dim).transpose(1, 2)
+        v_proj = self.wv(x_norm)
+        value_gate = None
+        if self.attn_value_gate:
+            v_proj, value_gate = torch.split(v_proj, [self.value_dim, dim], dim=-1)
+            value_gate = torch.nn.functional.gelu(value_gate, approximate="tanh")
+        v = v_proj.view(bsz, seq_len, self.kv_heads, self.head_dim).transpose(1, 2)
         k = self._repeat_kv(k)
         v = self._repeat_kv(v)
         if self.q_norm is not None:
@@ -330,6 +342,8 @@ class MixlabPlainBlock(nn.Module):
             gate = torch.sigmoid(torch.matmul(gate_in, self.attn_gate_w.transpose(0, 1)))
             ctx = ctx * gate.transpose(1, 2).unsqueeze(-1)
         ctx = ctx.transpose(1, 2).contiguous().view(bsz, seq_len, dim)
+        if value_gate is not None:
+            ctx = ctx * value_gate
         attn_delta = self.wo(ctx)
         if self.post_attn_norm is not None:
             attn_delta = self.post_attn_norm(attn_delta)

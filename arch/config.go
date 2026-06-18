@@ -123,6 +123,8 @@ type BlockSpec struct {
 	RelativeAttentionParameterization string       `json:"relative_attention_parameterization,omitempty"` // plain relative attention layout: per_block_projections or shared_qk_reuse.
 	QKGain                            float64      `json:"qk_gain,omitempty"`                             // per-head learnable QK scaling; 0 disables
 	QKNorm                            bool         `json:"qk_norm,omitempty"`                             // plain: learned RMSNorm on Q/K heads before attention scores.
+	AttnBias                          bool         `json:"attn_bias,omitempty"`                           // plain: add learned biases to Q/K/V/O projections.
+	AttnValueGate                     bool         `json:"attn_value_gate,omitempty"`                     // plain: widen V projection to value+GELU gate and gate the attention output before WO.
 	XSA                               bool         `json:"xsa,omitempty"`                                 // enable V-orthogonal projection after attention
 	WindowSize                        int          `json:"window_size,omitempty"`                         // plain: sliding causal attention width; 0 = full causal attention
 	AttentionMask                     string       `json:"attention_mask,omitempty"`                      // plain: "causal", "bidirectional", or "none"; empty resolves from training objective.

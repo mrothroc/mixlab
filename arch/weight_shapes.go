@@ -119,11 +119,24 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			metas = append(metas, normWeights("norm", D, norm)...)
 		}
 		metas = append(metas, WeightMeta{Name: "wq", Shape: []int{D, D}})
+		if spec.AttnBias {
+			metas = append(metas, WeightMeta{Name: "wq_bias", Shape: []int{D}, InitZero: true})
+		}
 		if spec.KVSource <= 0 {
+			valueProjDim := kvProjDim
+			if spec.AttnValueGate {
+				valueProjDim += D
+			}
 			metas = append(metas,
 				WeightMeta{Name: "wk", Shape: []int{D, kvProjDim}},
-				WeightMeta{Name: "wv", Shape: []int{D, kvProjDim}},
 			)
+			if spec.AttnBias {
+				metas = append(metas, WeightMeta{Name: "wk_bias", Shape: []int{kvProjDim}, InitZero: true})
+			}
+			metas = append(metas, WeightMeta{Name: "wv", Shape: []int{D, valueProjDim}})
+			if spec.AttnBias {
+				metas = append(metas, WeightMeta{Name: "wv_bias", Shape: []int{valueProjDim}, InitZero: true})
+			}
 		}
 		if spec.QKNorm {
 			headDim := D / heads
@@ -148,6 +161,9 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			metas = append(metas, WeightMeta{Name: "attn_gate_w", Shape: []int{heads, gateDim}, InitZero: true})
 		}
 		metas = append(metas, WeightMeta{Name: "wo", Shape: []int{D, D}})
+		if spec.AttnBias {
+			metas = append(metas, WeightMeta{Name: "wo_bias", Shape: []int{D}, InitZero: true})
+		}
 		if placement == NormPlacementPost || placement == NormPlacementSandwich {
 			metas = append(metas, normWeights("post_attn_norm", D, norm)...)
 		}

@@ -52,7 +52,7 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 			"source":            "mixlab",
 			"weight_map":        "weight_map.json",
 			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":  []string{"plain", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "swiglu", "geglu", "mlp", "moe"},
+			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "swiglu", "geglu", "mlp", "moe"},
 			"unsupported_fails": true,
 		},
 	}
@@ -82,6 +82,12 @@ func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 			}
 			if block.QKNorm {
 				entry["qk_norm"] = true
+			}
+			if block.AttnBias {
+				entry["attn_bias"] = true
+			}
+			if block.AttnValueGate {
+				entry["attn_value_gate"] = true
 			}
 			if block.XSA {
 				entry["xsa"] = true

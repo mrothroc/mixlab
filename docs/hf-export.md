@@ -68,6 +68,8 @@ HF export supports next-token and masked-LM checkpoints using sequential blocks:
 - configurable core norms through `norm_type`, `norm_eps`, `norm_affine`, `norm_placement`, and `ffn_internal_norm` for sequential `plain`, `swiglu`, `geglu`, and `mlp` blocks
 - `plain` FFN tails with the default `silu` activation or gated `ffn_activation: "geglu"` / `"swiglu"`
 - grouped-query attention through `kv_heads`
+- `plain` attention projection biases through `attn_bias`
+- `plain` attention value gates through `attn_value_gate`
 - learned per-head-dimension `qk_norm`
 - learned per-head `qk_gain`
 - `xsa` attention-output projection

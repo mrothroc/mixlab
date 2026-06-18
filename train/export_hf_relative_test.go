@@ -2,9 +2,50 @@ package train
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestExportHFAttnBiasValueGateSharedRelativeParityCPUOracle(t *testing.T) {
+	runExportHFParityCase(t, `{
+		"name": "hf_attn_bias_value_gate_shared_relative",
+		"model_dim": 8,
+		"vocab_size": 11,
+		"seq_len": 4,
+		"mlp_mult": 1.0,
+		"blocks": [
+			{"type": "plain", "heads": 4, "kv_heads": 2, "attention_mask": "bidirectional", "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 2, "relative_attention_parameterization": "shared_qk_reuse", "attn_bias": true, "attn_value_gate": true, "qk_gain": 1.1}
+		],
+		"training": {"steps": 1, "batch_tokens": 4, "seed": 211}
+	}`, [][]int{{0, 1, 2, 3}}, [][]int{{1, 2, 3, 4}}, func(t *testing.T, outDir string) {
+		var cfg map[string]any
+		readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+		blocks, ok := cfg["blocks"].([]any)
+		if !ok || len(blocks) != 1 {
+			t.Fatalf("config blocks=%#v", cfg["blocks"])
+		}
+		block, ok := blocks[0].(map[string]any)
+		if !ok {
+			t.Fatalf("config block=%#v", blocks[0])
+		}
+		if block["attn_bias"] != true || block["attn_value_gate"] != true {
+			t.Fatalf("exported block missing attention flags: %#v", block)
+		}
+		var mapping []hfWeightMapping
+		readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+		for _, name := range []string{"blocks.0.wq.bias", "blocks.0.wk.bias", "blocks.0.wv.bias", "blocks.0.wo.bias"} {
+			if !containsHFWeight(mapping, name) {
+				t.Fatalf("weight_map missing %s: %#v", name, mapping)
+			}
+		}
+		for _, item := range mapping {
+			if item.HF == "blocks.0.wv.weight" && !reflect.DeepEqual(item.Shape, []int{8, 12}) {
+				t.Fatalf("wv weight shape=%v want [8 12]", item.Shape)
+			}
+		}
+	})
+}
 
 func TestExportHFDebertaSharedQKReuseParityCPUOracle(t *testing.T) {
 	runExportHFParityCase(t, `{

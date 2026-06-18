@@ -199,6 +199,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		if normalizeRelativeAttentionParameterization(b.RelativeAttentionParameterization) == RelativeAttentionParamSharedQKReuse && !relativeAttentionEnabled(b) {
 			return fmt.Errorf("config %q %s[%d] type=plain relative_attention_parameterization=\"shared_qk_reuse\" requires relative_attention=\"deberta_p2c_c2p\"", source, groupName, idx)
 		}
+		if b.AttnValueGate && b.KVSource > 0 {
+			return fmt.Errorf("config %q %s[%d] type=plain cannot combine attn_value_gate with kv_source", source, groupName, idx)
+		}
 		if b.RelativeAttentionWindow < 0 {
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid relative_attention_window=%d (must be >= 0)", source, groupName, idx, b.RelativeAttentionWindow)
 		}

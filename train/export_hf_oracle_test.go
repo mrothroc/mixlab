@@ -86,8 +86,17 @@ func runHFCPUForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64
 			blockWeights := [][]float64{
 				weights[prefix+"norm.weight"],
 				weights[prefix+"wq.weight"],
-				weights[prefix+"wk.weight"],
-				weights[prefix+"wv.weight"],
+			}
+			if block.AttnBias {
+				blockWeights = append(blockWeights, weights[prefix+"wq.bias"])
+			}
+			blockWeights = append(blockWeights, weights[prefix+"wk.weight"])
+			if block.AttnBias {
+				blockWeights = append(blockWeights, weights[prefix+"wk.bias"])
+			}
+			blockWeights = append(blockWeights, weights[prefix+"wv.weight"])
+			if block.AttnBias {
+				blockWeights = append(blockWeights, weights[prefix+"wv.bias"])
 			}
 			if block.QKNorm {
 				blockWeights = append(blockWeights,
@@ -109,6 +118,9 @@ func runHFCPUForward(t *testing.T, cfg *ArchConfig, weights map[string][]float64
 				blockWeights = append(blockWeights, weights[prefix+"attn_gate_w"])
 			}
 			blockWeights = append(blockWeights, weights[prefix+"wo.weight"])
+			if block.AttnBias {
+				blockWeights = append(blockWeights, weights[prefix+"wo.bias"])
+			}
 			if hfPlainFFNActivationUsesGate(block) {
 				blockWeights = append(blockWeights, weights[prefix+"ff_gate.weight"])
 			}
@@ -188,6 +200,9 @@ func hfFeatureWeights(weights map[string][]float64, feature string) [][]float64 
 
 func plainHFExportWeightCount(block BlockSpec) int {
 	n := 7
+	if block.AttnBias {
+		n += 4
+	}
 	if block.QKNorm {
 		n += 2
 	}
@@ -259,15 +274,48 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 	}
 	groupSize := heads / kvHeads
 	xNorm := rmsNormCPU(x, w[0])
-	q := matmul3DCPU(xNorm, w[1], dim, dim)
-	k := matmul3DCPU(xNorm, w[2], dim, kvHeads*headDim)
-	v := matmul3DCPU(xNorm, w[3], dim, kvHeads*headDim)
+	wi := 1
+	qWeight := w[wi]
+	wi++
+	var qBias []float64
+	if block.AttnBias {
+		qBias = w[wi]
+		wi++
+	}
+	kWeight := w[wi]
+	wi++
+	var kBias []float64
+	if block.AttnBias {
+		kBias = w[wi]
+		wi++
+	}
+	vWeight := w[wi]
+	wi++
+	var vBias []float64
+	if block.AttnBias {
+		vBias = w[wi]
+		wi++
+	}
+	valueDim := kvHeads * headDim
+	vProjDim := valueDim
+	if block.AttnValueGate {
+		vProjDim += dim
+	}
+	q := matmul3DBiasCPU(xNorm, qWeight, qBias, dim, dim)
+	k := matmul3DBiasCPU(xNorm, kWeight, kBias, dim, valueDim)
+	vProj := matmul3DBiasCPU(xNorm, vWeight, vBias, dim, vProjDim)
+	v := slice3DLastDimCPU(vProj, 0, valueDim)
+	var valueGate [][][]float64
+	if block.AttnValueGate {
+		valueGate = slice3DLastDimCPU(vProj, valueDim, valueDim+dim)
+		gelu3DInPlace(valueGate)
+	}
 	qh := splitHeadsCPU(q, heads, headDim)
 	khKV := splitHeadsCPU(k, kvHeads, headDim)
 	vhKV := splitHeadsCPU(v, kvHeads, headDim)
 	kh := repeatKVHeadsCPU(khKV, heads, groupSize)
 	vh := repeatKVHeadsCPU(vhKV, heads, groupSize)
-	woIndex := 4
+	woIndex := wi
 	if block.QKNorm {
 		rmsNormHeadsCPU(qh, w[woIndex])
 		woIndex++
@@ -297,7 +345,7 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 	relWindow := effectiveHFRelativeAttentionWindow(block)
 	if relativeAttentionEnabledForHF(block) {
 		if hfRelativeAttentionUsesSharedQKReuse(block) {
-			relKey, relQuery = sharedRelativeAttentionProjectionCPU(t, block, sharedRelativeEmbeddings, w[2], w[1], dim, heads, kvHeads, headDim, relWindow)
+			relKey, relQuery = sharedRelativeAttentionProjectionCPU(t, block, sharedRelativeEmbeddings, kWeight, kBias, qWeight, qBias, dim, heads, kvHeads, headDim, relWindow)
 		} else {
 			relKey, relQuery = relativeAttentionProjectionCPU(t, block, w[woIndex], w[woIndex+1], w[woIndex+2], dim, heads, headDim, relWindow)
 			woIndex += 3
@@ -381,9 +429,19 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 		}
 	}
 	merged := mergeHeadsCPU(ctx, dim)
-	proj := matmul3DCPU(merged, w[woIndex], dim, dim)
+	if valueGate != nil {
+		mul3DInPlace(merged, valueGate)
+	}
+	projWeight := w[woIndex]
+	woIndex++
+	var projBias []float64
+	if block.AttnBias {
+		projBias = w[woIndex]
+		woIndex++
+	}
+	proj := matmul3DBiasCPU(merged, projWeight, projBias, dim, dim)
 	x = add3D(x, proj)
-	ffWeightIndex := woIndex + 1
+	ffWeightIndex := woIndex
 	var ffHidden [][][]float64
 	switch hfPlainFFNActivation(block) {
 	case "silu":
@@ -438,7 +496,7 @@ func relativeAttentionProjectionCPU(t *testing.T, block BlockSpec, embeddings, w
 	return key, query
 }
 
-func sharedRelativeAttentionProjectionCPU(t *testing.T, block BlockSpec, embeddings, wk, wq []float64, dim, heads, kvHeads, headDim, window int) ([][][]float64, [][][]float64) {
+func sharedRelativeAttentionProjectionCPU(t *testing.T, block BlockSpec, embeddings, wk, wkBias, wq, wqBias []float64, dim, heads, kvHeads, headDim, window int) ([][][]float64, [][][]float64) {
 	t.Helper()
 	if embeddings == nil {
 		t.Fatal("missing shared relative embeddings")
@@ -450,8 +508,8 @@ func sharedRelativeAttentionProjectionCPU(t *testing.T, block BlockSpec, embeddi
 		t.Fatalf("invalid shared relative heads=%d kv_heads=%d", heads, kvHeads)
 	}
 	rows := 2*window - 1
-	keyFlat := matmul2DCPU(embeddings, wk, rows, dim, kvHeads*headDim)
-	queryFlat := matmul2DCPU(embeddings, wq, rows, dim, dim)
+	keyFlat := matmul2DBiasCPU(embeddings, wk, wkBias, rows, dim, kvHeads*headDim)
+	queryFlat := matmul2DBiasCPU(embeddings, wq, wqBias, rows, dim, dim)
 	key := make3D(heads, rows, headDim)
 	query := make3D(heads, rows, headDim)
 	groupSize := heads / kvHeads

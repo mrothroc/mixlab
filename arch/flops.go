@@ -285,6 +285,17 @@ func estimatePlainBlockFLOPs(block BlockSpec, B, T, D, ffn int) int64 {
 		default:
 			total += 3 * 2 * i64(B) * i64(T) * i64(D) * i64(D)
 		}
+		if block.AttnValueGate && block.KVSource <= 0 {
+			total += 2 * i64(B) * i64(T) * i64(D) * i64(D) // extra gate projection from widened V
+			total += i64(B) * i64(T) * i64(D)              // attention output gate multiply
+		}
+		if block.AttnBias {
+			biasAdds := int64(2) // Q and output projection biases
+			if block.KVSource <= 0 {
+				biasAdds += 2 // K and value/value-gate projection biases
+			}
+			total += biasAdds * i64(B) * i64(T) * i64(D)
+		}
 		if block.QKNorm {
 			qkNormTensors := int64(1)
 			if block.KVSource <= 0 {

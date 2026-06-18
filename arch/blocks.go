@@ -64,10 +64,26 @@ func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D,
 }
 
 func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
-	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, sharedRelativeAttentionPlan{WeightIndex: -1})
+	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, false, false, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, sharedRelativeAttentionPlan{WeightIndex: -1})
 }
 
-func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, sharedRel sharedRelativeAttentionPlan) (int, error) {
+func emitLinearProjectionIR(prog *Program, input string, wi int, useBias bool, output string) (weightNameUsed, biasNameUsed string, nextWI int) {
+	weightNameUsed = weightName(wi)
+	wi++
+	matmulOut := output
+	if useBias {
+		matmulOut = output + "_matmul"
+	}
+	prog.MatMul(input, weightNameUsed, matmulOut)
+	if useBias {
+		biasNameUsed = weightName(wi)
+		wi++
+		prog.Add(matmulOut, biasNameUsed, output)
+	}
+	return weightNameUsed, biasNameUsed, wi
+}
+
+func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, sharedRel sharedRelativeAttentionPlan) (int, error) {
 	_ = mlpMult
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
@@ -93,6 +109,10 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 	if windowSize > 0 && attentionMask != AttentionMaskCausal {
 		return wi, fmt.Errorf("window_size requires causal attention mask")
 	}
+	reuseKV := kvSource > 0
+	if attnValueGate && reuseKV {
+		return wi, fmt.Errorf("attn_value_gate cannot be combined with kv_source")
+	}
 	kvH, err := normalizePlainKVHeads(H, kvH)
 	if err != nil {
 		return wi, err
@@ -101,13 +121,15 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 	scale := float32(1.0 / math.Sqrt(float64(headDim)))
 	kvProjDim := kvH * headDim
 	groupSize := H / kvH
-	reuseKV := kvSource > 0
 
 	prefix := tmpName(x+"_attn", idx)
 	xNorm := prefix + "_x_norm"
 	q := prefix + "_q"
 	k := prefix + "_k"
 	v := prefix + "_v"
+	vRaw := prefix + "_v_raw"
+	valueGate := prefix + "_value_gate"
+	valueGateAct := valueGate + "_act"
 	q4 := q + "4"
 	k4 := k + "4"
 	v4 := v + "4"
@@ -130,6 +152,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 	ctxGated := prefix + "_ctx_gated"
 	ctxT := prefix + "_ctx_t"
 	flat := prefix + "_flat"
+	flatGated := prefix + "_flat_value_gated"
 	proj := prefix + "_proj"
 	projScaled := prefix + "_proj_scaled"
 	projDrop := prefix + "_proj_dropout"
@@ -139,8 +162,14 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 			wi += len(normWeights("norm", D, norm))
 		}
 		wi += 2 // q, output projection
+		if attnBias {
+			wi += 2 // q and output projection biases
+		}
 		if !reuseKV {
 			wi += 2 // k, v
+			if attnBias {
+				wi += 2 // k and value/value-gate projection biases
+			}
 		}
 		if qkNorm {
 			wi++ // q_norm_scale
@@ -175,9 +204,8 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		}
 
 		// Q projection
-		qWeightName := weightName(wi)
-		prog.MatMul(xAttn, qWeightName, q)
-		wi++
+		qWeightName, qBiasName, nextWI := emitLinearProjectionIR(prog, xAttn, wi, attnBias, q)
+		wi = nextWI
 		prog.Reshape(q, []int{B, T, H, headDim}, q4)
 		prog.Transpose(q4, []int{0, 2, 1, 3}, qh)
 
@@ -193,11 +221,18 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 			vh = src.V
 		} else {
 			// K/V projections
-			kWeightName := weightName(wi)
-			prog.MatMul(xAttn, kWeightName, k)
-			wi++
-			prog.MatMul(xAttn, weightName(wi), v)
-			wi++
+			kWeightName, kBiasName, nextWI := emitLinearProjectionIR(prog, xAttn, wi, attnBias, k)
+			wi = nextWI
+			if attnValueGate {
+				_, _, nextWI = emitLinearProjectionIR(prog, xAttn, wi, attnBias, vRaw)
+				wi = nextWI
+				prog.Slice(vRaw, 0, kvProjDim, 1, 1, v)
+				prog.Slice(vRaw, kvProjDim, kvProjDim+D, 1, 1, valueGate)
+				prog.GELU(valueGate, valueGateAct)
+			} else {
+				_, _, nextWI = emitLinearProjectionIR(prog, xAttn, wi, attnBias, v)
+				wi = nextWI
+			}
 
 			prog.Reshape(k, []int{B, T, kvH, headDim}, k4)
 			prog.Transpose(k4, []int{0, 2, 1, 3}, kh)
@@ -224,7 +259,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 
 			qh, kh, wi = emitQKNormIR(prog, qh, kh, wi, qkNorm, true)
 			var keyForCache string
-			scaled, keyForCache, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, kvH, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow, relativeParameterization, qWeightName, kWeightName, sharedRel)
+			scaled, keyForCache, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, kvH, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow, relativeParameterization, qWeightName, qBiasName, kWeightName, kBiasName, sharedRel)
 			if err != nil {
 				return wi, err
 			}
@@ -298,10 +333,13 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		}
 		prog.Transpose(ctx, []int{0, 2, 1, 3}, ctxT)
 		prog.Reshape(ctxT, []int{B * T, D}, flat)
+		if attnValueGate {
+			prog.Mul(flat, valueGateAct, flatGated)
+			flat = flatGated
+		}
 
 		// Output projection + residual
-		prog.MatMul(flat, weightName(wi), proj)
-		wi++
+		_, _, wi = emitLinearProjectionIR(prog, flat, wi, attnBias, proj)
 		if normPlacement == NormPlacementPost || normPlacement == NormPlacementSandwich {
 			postProj := proj + "_post_norm"
 			var err error
@@ -678,7 +716,7 @@ func emitMLPIRNorm(prog *Program, x string, wi, idx int, activation string, leak
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, ffnActivation string, sharedRel sharedRelativeAttentionPlan) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, ffnActivation string, sharedRel sharedRelativeAttentionPlan) (string, int, error) {
 	_ = mlpMult
 	ffnActivation = normalizePlainFFNActivation(ffnActivation)
 	switch ffnActivation {
@@ -715,6 +753,9 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	q := prefix + "_q"
 	k := prefix + "_k"
 	v := prefix + "_v"
+	vRaw := prefix + "_v_raw"
+	valueGate := prefix + "_value_gate"
+	valueGateAct := valueGate + "_act"
 	q4 := q + "4"
 	k4 := k + "4"
 	v4 := v + "4"
@@ -737,18 +778,21 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	ctxGated := prefix + "_ctx_gated"
 	ctxT := prefix + "_ctx_t"
 	flat := prefix + "_flat"
+	flatGated := prefix + "_flat_value_gated"
 	proj := prefix + "_proj"
 	projScaled := prefix + "_proj_scaled"
 	projDrop := prefix + "_proj_dropout"
 
-	qWeightName := weightName(wi)
-	prog.MatMul(xNorm, qWeightName, q)
-	wi++
-	kWeightName := weightName(wi)
-	prog.MatMul(xNorm, kWeightName, k)
-	wi++
-	prog.MatMul(xNorm, weightName(wi), v)
-	wi++
+	qWeightName, qBiasName, wi := emitLinearProjectionIR(prog, xNorm, wi, attnBias, q)
+	kWeightName, kBiasName, wi := emitLinearProjectionIR(prog, xNorm, wi, attnBias, k)
+	if attnValueGate {
+		_, _, wi = emitLinearProjectionIR(prog, xNorm, wi, attnBias, vRaw)
+		prog.Slice(vRaw, 0, kvProjDim, 1, 1, v)
+		prog.Slice(vRaw, kvProjDim, kvProjDim+D, 1, 1, valueGate)
+		prog.GELU(valueGate, valueGateAct)
+	} else {
+		_, _, wi = emitLinearProjectionIR(prog, xNorm, wi, attnBias, v)
+	}
 
 	prog.Reshape(q, []int{B, T, H, headDim}, q4)
 	prog.Transpose(q4, []int{0, 2, 1, 3}, qh)
@@ -776,7 +820,7 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	}
 
 	qh, kh, wi = emitQKNormIR(prog, qh, kh, wi, qkNorm, true)
-	scaled, _, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, kvH, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow, relativeParameterization, qWeightName, kWeightName, sharedRel)
+	scaled, _, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, kvH, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow, relativeParameterization, qWeightName, qBiasName, kWeightName, kBiasName, sharedRel)
 	if err != nil {
 		return "", wi, err
 	}
@@ -815,9 +859,12 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	}
 	prog.Transpose(ctx, []int{0, 2, 1, 3}, ctxT)
 	prog.Reshape(ctxT, []int{B * T, D}, flat)
+	if attnValueGate {
+		prog.Mul(flat, valueGateAct, flatGated)
+		flat = flatGated
+	}
 
-	prog.MatMul(flat, weightName(wi), proj)
-	wi++
+	_, _, wi = emitLinearProjectionIR(prog, flat, wi, attnBias, proj)
 	if blockScales {
 		prog.Mul(proj, weightName(wi), projScaled)
 		wi++

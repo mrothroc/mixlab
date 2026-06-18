@@ -249,7 +249,7 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 			heads = 4
 		}
 		var err error
-		firstState, _, err = emitPlainAttentionParallelDeltaIRWithDropoutEx(prog, stream, xNorm, bodyWI, heads, firstSpec.KVHeads, D, T, B, *opIdx, mlpMult, blockScales, dropout, attnDropout, firstSpec.QKGain, firstSpec.QKNorm, firstSpec.RopeDims, firstSpec.RopeConvention, firstSpec.XSA, firstSpec.SparseAttnGate, firstSpec.WindowSize, firstSpec.AttentionMask, firstSpec.RelativeAttention, firstSpec.RelativeAttentionWindow, firstSpec.RelativeAttentionParameterization, firstSpec.FFNActivation, sharedRel)
+		firstState, _, err = emitPlainAttentionParallelDeltaIRWithDropoutEx(prog, stream, xNorm, bodyWI, heads, firstSpec.KVHeads, D, T, B, *opIdx, mlpMult, blockScales, dropout, attnDropout, firstSpec.QKGain, firstSpec.QKNorm, firstSpec.RopeDims, firstSpec.RopeConvention, firstSpec.AttnBias, firstSpec.AttnValueGate, firstSpec.XSA, firstSpec.SparseAttnGate, firstSpec.WindowSize, firstSpec.AttentionMask, firstSpec.RelativeAttention, firstSpec.RelativeAttentionWindow, firstSpec.RelativeAttentionParameterization, firstSpec.FFNActivation, sharedRel)
 		if err != nil {
 			return wi, err
 		}
