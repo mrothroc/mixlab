@@ -401,17 +401,17 @@ func applyResidMixIR(prog *Program, x, x0 string, wi, D, idx int) int {
 
 // emitStreamIR emits all blocks in a stream against the named hidden state.
 func emitStreamIR(prog *Program, specs []BlockSpec, stream, original string, wi, D, T, B, V int, opIdx *int, mlpMult float64, blockScales, residMix bool) (int, error) {
-	return emitStreamIRWithDropout(prog, specs, stream, original, wi, D, T, B, V, opIdx, mlpMult, blockScales, residMix, 0)
+	return emitStreamIRWithDropout(prog, specs, stream, original, wi, D, T, B, V, opIdx, mlpMult, blockScales, residMix, 0, 0)
 }
 
-func emitStreamIRWithDropout(prog *Program, specs []BlockSpec, stream, original string, wi, D, T, B, V int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
+func emitStreamIRWithDropout(prog *Program, specs []BlockSpec, stream, original string, wi, D, T, B, V int, opIdx *int, mlpMult float64, blockScales, residMix bool, dropout, attnDropout float32) (int, error) {
 	kvCache := make(map[int]BlockKVOutputs, len(specs))
 	for i, spec := range specs {
 		var err error
 		if needsResidMix(spec, residMix) {
 			wi = applyResidMixIR(prog, stream, original, wi, D, *opIdx)
 		}
-		wi, err = emitBlockIRWithDropout(prog, spec, stream, wi, D, T, B, V, *opIdx, i, nil, kvCache, mlpMult, blockScales, dropout)
+		wi, err = emitBlockIRWithDropout(prog, spec, stream, wi, D, T, B, V, *opIdx, i, nil, kvCache, mlpMult, blockScales, dropout, attnDropout)
 		if err != nil {
 			return wi, err
 		}
@@ -420,7 +420,7 @@ func emitStreamIRWithDropout(prog *Program, specs []BlockSpec, stream, original 
 	return wi, nil
 }
 
-func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool, dropout float32) (int, error) {
+func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool, dropout, attnDropout float32) (int, error) {
 	spec := specs[blockIdx]
 	blockWI := wi
 	originalBlock := refs[blockIdx] == blockIdx
@@ -435,7 +435,7 @@ func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 	if needsResidMix(spec, residMix) {
 		bodyWI = applyResidMixIR(prog, stream, original, bodyWI, D, *opIdx)
 	}
-	nextWI, err := emitBlockIRWithDropout(prog, spec, stream, bodyWI, D, T, B, V, *opIdx, blockIdx, streamSeqLens, kvCache, mlpMult, blockScales, dropout)
+	nextWI, err := emitBlockIRWithDropout(prog, spec, stream, bodyWI, D, T, B, V, *opIdx, blockIdx, streamSeqLens, kvCache, mlpMult, blockScales, dropout, attnDropout)
 	if err != nil {
 		return wi, err
 	}
@@ -450,10 +450,10 @@ func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 // emitBlockIR dispatches a single block emission.
 // streamSeqLens maps stream names to their sequence lengths (used by cross_attention).
 func emitBlockIR(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, streamSeqLens map[string]int, mlpMult float64, blockScales bool) (int, error) { //nolint:unparam // B is fixed at IR build time by design
-	return emitBlockIRWithDropout(prog, spec, stream, wi, D, T, B, V, idx, idx, streamSeqLens, nil, mlpMult, blockScales, 0)
+	return emitBlockIRWithDropout(prog, spec, stream, wi, D, T, B, V, idx, idx, streamSeqLens, nil, mlpMult, blockScales, 0, 0)
 }
 
-func emitBlockIRWithDropout(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx, blockIndex int, streamSeqLens map[string]int, kvCache map[int]BlockKVOutputs, mlpMult float64, blockScales bool, dropout float32) (int, error) {
+func emitBlockIRWithDropout(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx, blockIndex int, streamSeqLens map[string]int, kvCache map[int]BlockKVOutputs, mlpMult float64, blockScales bool, dropout, attnDropout float32) (int, error) {
 	reg, err := lookupBlock(spec)
 	if err != nil {
 		return wi, err
@@ -466,6 +466,7 @@ func emitBlockIRWithDropout(prog *Program, spec BlockSpec, stream string, wi, D,
 		MLPMult:       mlpMult,
 		BlockScales:   blockScales,
 		Dropout:       dropout,
+		AttnDropout:   attnDropout,
 		BlockIndex:    blockIndex,
 		KVCache:       kvCache,
 	})
@@ -583,7 +584,7 @@ func buildIRProgramWithDropout(
 ) (*Program, error) {
 	return buildIRProgramWithDropoutAndNgrams(
 		modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix,
-		unet, parallelResidual, bigramVocabSize, bigramDim, 0, 0, logitSoftcap, dropout, blocks, recurrence,
+		unet, parallelResidual, bigramVocabSize, bigramDim, 0, 0, logitSoftcap, dropout, dropout, blocks, recurrence,
 	)
 }
 
@@ -597,14 +598,14 @@ func buildIRProgramWithDropoutAndNgrams(
 	bigramVocabSize, bigramDim int,
 	trigramVocabSize, trigramDim int,
 	logitSoftcap float32,
-	dropout float32,
+	dropout, attnDropout float32,
 	blocks []BlockSpec,
 	recurrence []int,
 ) (*Program, error) {
 	return buildIRProgramWithDropoutNgramsAndOrder(
 		modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix,
 		unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
-		logitSoftcap, dropout, blocks, recurrence, nil, nil, !tieEmbeddings, tieEmbeddings,
+		logitSoftcap, dropout, attnDropout, blocks, recurrence, nil, nil, !tieEmbeddings, tieEmbeddings,
 		ObjectiveCausal,
 	)
 }
@@ -619,7 +620,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 	bigramVocabSize, bigramDim int,
 	trigramVocabSize, trigramDim int,
 	logitSoftcap float32,
-	dropout float32,
+	dropout, attnDropout float32,
 	blocks []BlockSpec,
 	recurrence []int,
 	executionOrder []int,
@@ -631,7 +632,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		modelDim, vocabSize, seqLen, batchSize, mlpMult, tieEmbeddings, blockScales, residMix,
 		unet, parallelResidual, 0, 0, 0, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
-		logitSoftcap, dropout, blocks, recurrence, executionOrder, mtp, reserveHead, useTiedHead,
+		logitSoftcap, dropout, attnDropout, blocks, recurrence, executionOrder, mtp, reserveHead, useTiedHead,
 		objective,
 		objective,
 		false,
@@ -655,7 +656,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	bigramVocabSize, bigramDim int,
 	trigramVocabSize, trigramDim int,
 	logitSoftcap float32,
-	dropout float32,
+	dropout, attnDropout float32,
 	blocks []BlockSpec,
 	recurrence []int,
 	executionOrder []int,
@@ -674,6 +675,12 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
+	}
+	if dropout < 0 || dropout > 1 {
+		return nil, fmt.Errorf("invalid dropout=%g", dropout)
+	}
+	if attnDropout < 0 || attnDropout > 1 {
+		return nil, fmt.Errorf("invalid attn_dropout=%g", attnDropout)
 	}
 
 	B := batchSize
@@ -831,7 +838,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	case unet:
 		numEncoder, numSkip := unetLayout(len(blocks))
 		for i := range blocks[:numEncoder] {
-			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout)
 			if err != nil {
 				return nil, err
 			}
@@ -859,7 +866,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 				prog.Add("x", skipScaled, "x")
 			}
 			blockIdx := numEncoder + decIdx
-			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout)
 			if err != nil {
 				return nil, err
 			}
@@ -867,14 +874,14 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			opIdx++
 		}
 	case len(executionOrder) > 0:
-		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, &backoutPlan)
+		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		if hiddenCapture != nil {
 			for i := 0; i < len(blocks); i++ {
-				wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout)
+				wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout)
 				if err != nil {
 					return nil, err
 				}
@@ -884,7 +891,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			}
 			break
 		}
-		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, &backoutPlan)
+		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan)
 		if err != nil {
 			return nil, err
 		}

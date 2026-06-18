@@ -191,6 +191,49 @@ func TestNegativeTargetValLoss(t *testing.T) {
 	}
 }
 
+func TestInvalidSplitDropoutFields(t *testing.T) {
+	tests := []struct {
+		name    string
+		field   string
+		wantErr string
+	}{
+		{name: "attn", field: `"attn_dropout": 1.1,`, wantErr: "attn_dropout"},
+		{name: "hidden", field: `"hidden_dropout": -0.1,`, wantErr: "hidden_dropout"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := []byte(`{
+				"name": "bad_dropout",
+				"model_dim": 128,
+				"vocab_size": 1024,
+				"seq_len": 128,
+				` + tt.field + `
+				"blocks": [{"type": "plain", "heads": 4}],
+				"training": {"steps": 100, "lr": 0.0003, "batch_tokens": 1024}
+			}`)
+			_, err := ParseArchConfig(raw, "bad_dropout")
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ParseArchConfig error=%v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestInvalidWeightInit(t *testing.T) {
+	raw := []byte(`{
+		"name": "bad_weight_init",
+		"model_dim": 128,
+		"vocab_size": 1024,
+		"seq_len": 128,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 100, "lr": 0.0003, "batch_tokens": 1024, "weight_init": "weird"}
+	}`)
+	_, err := ParseArchConfig(raw, "bad_weight_init")
+	if err == nil || !strings.Contains(err.Error(), "weight_init") {
+		t.Fatalf("ParseArchConfig error=%v, want weight_init validation error", err)
+	}
+}
+
 func TestNegativeHardwareTFLOPs(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  128,

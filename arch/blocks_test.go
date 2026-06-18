@@ -671,7 +671,7 @@ func TestEmitPlainAttentionIR_KVSourceReusesCachedTensors(t *testing.T) {
 	p := NewProgram(12)
 	cache := make(map[int]BlockKVOutputs)
 
-	wi, err := emitPlainAttentionIRWithKVOptions(p, "x", 0, 8, 4, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, false, 0, 0, false, false, 0, AttentionMaskCausal, "", 0, 0, cache, 0)
+	wi, err := emitPlainAttentionIRWithKVOptions(p, "x", 0, 8, 4, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, 0, false, 0, 0, false, false, 0, AttentionMaskCausal, "", 0, 0, cache, 0)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithKVOptions source: %v", err)
 	}
@@ -683,7 +683,7 @@ func TestEmitPlainAttentionIR_KVSourceReusesCachedTensors(t *testing.T) {
 		t.Fatalf("cached kv = %+v, want {K:x_attn_0_k_rot V:x_attn_0_vh}", got)
 	}
 
-	wi, err = emitPlainAttentionIRWithKVOptions(p, "x", wi, 8, 4, 128, 64, 2, 1, DefaultFFNMultiplier, false, 0, false, 0, 0, false, false, 0, AttentionMaskCausal, "", 0, 1, cache, 2)
+	wi, err = emitPlainAttentionIRWithKVOptions(p, "x", wi, 8, 4, 128, 64, 2, 1, DefaultFFNMultiplier, false, 0, 0, false, 0, 0, false, false, 0, AttentionMaskCausal, "", 0, 1, cache, 2)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithKVOptions shared: %v", err)
 	}
@@ -731,11 +731,11 @@ func TestEmitPlainAttentionIR_KVSourceQKNormNormalizesAndRotatesQuery(t *testing
 	p := NewProgram(13)
 	cache := make(map[int]BlockKVOutputs)
 
-	wi, err := emitPlainAttentionIRWithKVOptions(p, "x", 0, 8, 4, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, false, 0, 0, false, false, 0, AttentionMaskCausal, "", 0, 0, cache, 0)
+	wi, err := emitPlainAttentionIRWithKVOptions(p, "x", 0, 8, 4, 128, 64, 2, 0, DefaultFFNMultiplier, false, 0, 0, false, 0, 0, false, false, 0, AttentionMaskCausal, "", 0, 0, cache, 0)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithKVOptions source: %v", err)
 	}
-	wi, err = emitPlainAttentionIRWithKVOptionsEx(p, "x", wi, 8, 4, 128, 64, 2, 1, DefaultFFNMultiplier, false, 0, false, 0, true, 0, false, false, 0, AttentionMaskCausal, "", 0, 1, cache, 2)
+	wi, err = emitPlainAttentionIRWithKVOptionsEx(p, "x", wi, 8, 4, 128, 64, 2, 1, DefaultFFNMultiplier, false, 0, 0, false, 0, true, 0, false, false, 0, AttentionMaskCausal, "", 0, 1, cache, 2)
 	if err != nil {
 		t.Fatalf("emitPlainAttentionIRWithKVOptionsEx shared qk_norm: %v", err)
 	}

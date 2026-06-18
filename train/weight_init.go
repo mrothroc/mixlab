@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strings"
 
 	ir "github.com/mrothroc/mixlab/arch"
 )
@@ -20,6 +21,8 @@ type WeightShape struct {
 	InitDtBias    bool
 	DtMin         float64
 	DtMax         float64
+	GPTBERTScale  float32
+	ModelDim      int
 }
 
 func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
@@ -46,6 +49,8 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 			InitDtBias:    m.InitDtBias,
 			DtMin:         m.DtMin,
 			DtMax:         m.DtMax,
+			GPTBERTScale:  m.GPTBERTScale,
+			ModelDim:      cfg.ModelDim,
 		}
 	}
 	return shapes, nil
@@ -53,6 +58,7 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 
 func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightInitStd float32) [][]float32 {
 	rng := rand.New(rand.NewSource(seed))
+	weightInit = strings.ToLower(strings.TrimSpace(weightInit))
 	weights := make([][]float32, len(shapes))
 	for i, ws := range shapes {
 		n := 1
@@ -78,7 +84,8 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 				}
 			}
 		case len(ws.Shape) >= 2:
-			if weightInit == "normal" {
+			switch weightInit {
+			case "normal":
 				std := float64(weightInitStd)
 				if std <= 0 {
 					std = 0.02
@@ -86,7 +93,16 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 				for j := range data {
 					data[j] = float32(rng.NormFloat64() * std)
 				}
-			} else {
+			case "gptbert":
+				std := gptBERTInitStd(ws)
+				scale := float64(1.0)
+				if ws.GPTBERTScale > 0 {
+					scale = float64(ws.GPTBERTScale)
+				}
+				for j := range data {
+					data[j] = float32(truncatedNormal(rng, std) * scale)
+				}
+			default:
 				fanIn := ws.Shape[0]
 				fanOut := ws.Shape[1]
 				limit := float64(math.Sqrt(6.0 / float64(fanIn+fanOut)))
@@ -98,6 +114,50 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 		weights[i] = data
 	}
 	return weights
+}
+
+func gptBERTInitStd(ws WeightShape) float64 {
+	hidden := ws.ModelDim
+	if hidden <= 0 {
+		hidden = inferModelDim(ws.Shape)
+	}
+	if hidden <= 0 {
+		hidden = 1
+	}
+	return math.Sqrt(2.0 / (5.0 * float64(hidden)))
+}
+
+func inferModelDim(shape []int) int {
+	if len(shape) == 0 {
+		return 0
+	}
+	if len(shape) == 1 {
+		return shape[0]
+	}
+	a, b := shape[0], shape[1]
+	if a <= 0 {
+		return b
+	}
+	if b <= 0 {
+		return a
+	}
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func truncatedNormal(rng *rand.Rand, std float64) float64 {
+	if std <= 0 {
+		return 0
+	}
+	limit := 2 * std
+	for {
+		v := rng.NormFloat64() * std
+		if v >= -limit && v <= limit {
+			return v
+		}
+	}
 }
 
 func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool {

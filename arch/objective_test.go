@@ -1,6 +1,7 @@
 package arch
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
@@ -121,8 +122,37 @@ func TestTrainingRecipeKnobValidationAndDefaults(t *testing.T) {
 	if got := cfg.Training.EffectiveMLMMaskProbForStep(5); got != 0.15 {
 		t.Fatalf("mask prob step5=%g, want 0.15", got)
 	}
+	if cfg.Training.MLMMaskProbScheduleMode != "step" {
+		t.Fatalf("mlm_mask_prob_schedule_mode=%q, want step", cfg.Training.MLMMaskProbScheduleMode)
+	}
 	if cfg.Training.EarlyStop == nil || cfg.Training.EarlyStop.Patience != 3 {
 		t.Fatalf("early_stop=%+v, want patience 3", cfg.Training.EarlyStop)
+	}
+}
+
+func TestEffectiveMLMMaskProbScheduleLinear(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"training": {
+		"batch_tokens": 8,
+		"mlm_mask_prob": 0.9,
+		"mlm_mask_prob_schedule": [[0,0.3],[10,0.15]],
+		"mlm_mask_prob_schedule_mode": "linear"
+	}`)
+	if got := cfg.Training.MLMMaskProbScheduleMode; got != "linear" {
+		t.Fatalf("mlm_mask_prob_schedule_mode=%q, want linear", got)
+	}
+	tests := []struct {
+		step int
+		want float64
+	}{
+		{step: 0, want: 0.3},
+		{step: 5, want: 0.225},
+		{step: 10, want: 0.15},
+		{step: 20, want: 0.15},
+	}
+	for _, tt := range tests {
+		if got := cfg.Training.EffectiveMLMMaskProbForStep(tt.step); math.Abs(got-tt.want) > 1e-12 {
+			t.Fatalf("EffectiveMLMMaskProbForStep(%d)=%g, want %g", tt.step, got, tt.want)
+		}
 	}
 }
 
@@ -138,6 +168,7 @@ func TestTrainingRecipeKnobValidationErrors(t *testing.T) {
 		{name: "seq schedule divides batch", body: `"training": {"batch_tokens": 8, "seq_len_schedule": [[0,3]]}`, wantErr: "must be divisible"},
 		{name: "mask schedule integer step", body: `"training": {"batch_tokens": 8, "mlm_mask_prob_schedule": [[0.5,0.2]]}`, wantErr: "step must be an integer"},
 		{name: "mask schedule probability", body: `"training": {"batch_tokens": 8, "mlm_mask_prob_schedule": [[0,1.5]]}`, wantErr: "must be in [0,1]"},
+		{name: "mask schedule mode", body: `"training": {"batch_tokens": 8, "mlm_mask_prob_schedule": [[0,0.2]], "mlm_mask_prob_schedule_mode": "spline"}`, wantErr: "mlm_mask_prob_schedule_mode"},
 		{name: "early stop metric", body: `"training": {"batch_tokens": 8, "early_stop": {"metric": "train", "patience": 2}}`, wantErr: "early_stop.metric"},
 		{name: "early stop patience", body: `"training": {"batch_tokens": 8, "early_stop": {"patience": -1}}`, wantErr: "early_stop.patience"},
 		{name: "early stop val gt", body: `"training": {"batch_tokens": 8, "early_stop": {"val_gt": -1}}`, wantErr: "early_stop.val_gt"},

@@ -30,6 +30,9 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 | `bigram_vocab_size` | integer | No | Disabled | Enables model-level hashed bigram embeddings when `> 1`. `0` disables. `1` is invalid. |
 | `bigram_dim` | integer | No | `model_dim` when bigrams enabled | Bigram embedding dimension. `0` inherits `model_dim`. Ignored when `bigram_vocab_size == 0`. |
 | `tie_embeddings` | boolean | No | `false` | Shares token embedding and output head weights. |
+| `dropout` | number | No | `0` | Legacy training dropout applied to both hidden/residual projections and attention probabilities unless `hidden_dropout` or `attn_dropout` override it. Must be in `[0,1]`. Eval, generation, parity, and HF export run with dropout disabled. |
+| `hidden_dropout` | number | No | `dropout` | Training dropout on attention output projections, FFN output projections, and MoE deltas. Explicit `0` disables hidden dropout even when `dropout` is nonzero. |
+| `attn_dropout` | number | No | `dropout` | Training dropout on `plain` attention probabilities after softmax and before multiplying by values. Explicit `0` disables attention-probability dropout even when `dropout` is nonzero. |
 | `block_scales` | boolean | No | `false` | Adds learned per-channel scales to `plain` attention and MLP residual branches, plus the MLP branch in `swiglu`, `geglu`, and `moe`. |
 | `resid_mix` | boolean | No | `false` | Adds learned mixing of the current state and original input on `plain` blocks. |
 | `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu/geglu/moe)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Cannot be combined with `unet`. |
@@ -829,6 +832,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `z_loss` | number | No | `0` | Training-only logit z-regularization weight. When positive, Mixlab adds `z_loss * mean(logsumexp(logits)^2)` to optimizer loss while keeping `eval_loss` and `per_token_nll` as the primary task loss. Must be finite and `>= 0`. |
 | `mlm_mask_prob` | number | No | `0.15` | Probability of selecting each eligible token for masked-objective loss. Must be in `[0,1]`. |
 | `mlm_mask_prob_schedule` | array | No | Disabled | Stepwise mask-probability schedule as `[[step, probability], ...]`. Entries must start at step `0`, use strictly increasing integer steps, and probabilities in `[0,1]`. Overrides `mlm_mask_prob` on MLM/MNTP/hybrid masked steps. |
+| `mlm_mask_prob_schedule_mode` | string | No | `"step"` | Schedule interpolation mode: `"step"` holds each entry until the next step, while `"linear"` linearly interpolates between adjacent entries and holds the final probability afterward. |
 | `mlm_mask_token_id` | integer | Required for `mlm`, `mntp`, `hybrid` | None | Token id used as the mask replacement. Must be in `[0, vocab_size)`. |
 | `mlm_mask_token_prob` | number | No | `0.8` | Probability that a selected MLM token is replaced with `mlm_mask_token_id`. |
 | `mlm_random_token_prob` | number | No | `0.1` | Probability that a selected MLM token is replaced with a random token id. |
@@ -855,8 +859,8 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `optimizer` | string | No | `"muon"` | Optimizer selector: `"muon"`/`"muon_eq_r"`/`"normuon"` use Muon variants for matrix weights and AdamW for embed/head/scalar groups; `"adamw"` uses AdamW for all groups; `"lamb"` uses LAMB for all groups. |
 | `compute_dtype` | string | No | `"float32"` | MLX training compute dtype: `"float32"` or experimental `"bf16"`. BF16 keeps fp32 master weights and optimizer state, and currently supports `plain`, `swiglu`, `geglu`, `mlp`, and `moe` blocks. Unsupported blocks and QAT fail fast instead of silently falling back. |
 | `qat` | string | No | `"none"` | Quantization-aware training mode for rank-2 weights during the training forward pass. `"none"` disables it, `"int8"` applies per-row fake int8 quantization, and `"int6"` applies a coarser fake quantization with STE. |
-| `weight_init` | string | No | `"xavier_uniform"` | Initialization for rank ≥ 2 weights: `"xavier_uniform"` or `"normal"`. 1D weights are always ones (norms) or zeros. |
-| `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` initialization. Ignored when `weight_init` is `"xavier_uniform"`. |
+| `weight_init` | string | No | `"xavier_uniform"` | Initialization for rank ≥ 2 weights: `"xavier_uniform"`, `"normal"`, or `"gptbert"`. 1D weights are always ones (norms) or zeros unless a special block initializer says otherwise. |
+| `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` initialization. Ignored when `weight_init` is `"xavier_uniform"` or `"gptbert"`. |
 | `grad_clip` | number | No | `0` | Max grad norm. `0` means no clipping. Must be `>= 0`. |
 | `weight_decay` | number | No | `0.01` | Global fallback weight decay. Must be `>= 0`. |
 | `cautious_weight_decay` | boolean | No | `false` | When true, applies weight decay only to elements where parameter and gradient signs agree. This is an optimizer modifier for AdamW, LAMB, Muon, MuonEq-R, NorMuon, and SGD paths, not a separate optimizer kind. |
@@ -907,7 +911,9 @@ Hybrid training uses objective-specific attention masks regardless of any block-
 
 Masked objectives emit a training loss averaged only over rows where `loss_mask > 0`; the dense `eval_loss` and `per_token_nll` outputs remain available for evaluation/export paths. Top-level `mtp` and `training.first_byte_mask` are not supported with non-causal objectives in this version.
 
-`mlm_mask_prob_schedule` changes the mask ratio as a deterministic stepwise schedule. For example, `[[0, 0.30], [5000, 0.15]]` uses a 30% mask rate until step 5000, then 15%. It applies to MLM, MNTP, and masked hybrid batches; causal hybrid batches ignore it because they do not use masked-objective rows.
+`mlm_mask_prob_schedule` changes the mask ratio deterministically. With the default `"step"` mode, `[[0, 0.30], [5000, 0.15]]` uses a 30% mask rate until step 5000, then 15%. With `"linear"` mode, Mixlab interpolates between adjacent entries, so the same schedule gradually decays from 30% to 15% over the first 5000 steps. It applies to MLM, MNTP, and masked hybrid batches; causal hybrid batches ignore it because they do not use masked-objective rows.
+
+`weight_init: "gptbert"` uses truncated normal initialization with `std = sqrt(2 / (5 * model_dim))`. Output projections in `plain`, `swiglu`, `geglu`, `mlp`, and MoE expert FFNs are additionally scaled by `sqrt(1 / (2 * (1 + block_index)))`, where `block_index` is the zero-based top-level block position.
 
 `seq_len_schedule` changes the training graph shape at configured step boundaries while keeping `batch_tokens` fixed. Mixlab caches one program per active scheduled shape/objective combination and switches at boundaries; validation, full eval, generation, and final unmasked loss use the top-level maximum `seq_len`. This v1 schedule is intentionally disabled with fixed-teacher distillation and active data2vec because those teacher runtimes are built around the configured sequence length.
 

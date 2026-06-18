@@ -39,6 +39,8 @@ type ArchConfig struct {
 	TrigramDim               int          `json:"trigram_dim,omitempty"`
 	LogitSoftcap             float32      `json:"logit_softcap,omitempty"`
 	Dropout                  float32      `json:"dropout,omitempty"`
+	AttnDropout              float32      `json:"attn_dropout,omitempty"`
+	HiddenDropout            float32      `json:"hidden_dropout,omitempty"`
 	MTP                      *MTPSpec     `json:"mtp,omitempty"`
 	Backout                  *BackoutSpec `json:"backout,omitempty"`
 	Data                     DataSpec     `json:"data,omitempty"`
@@ -59,6 +61,8 @@ type ArchConfig struct {
 	recurrencePhasesSet           bool
 	executionOrderSet             bool
 	recurrencePhaseActivationsSet bool
+	attnDropoutSet                bool
+	hiddenDropoutSet              bool
 
 	CharFeatureIDs    []int32 `json:"-"`
 	CharFeatureSource string  `json:"-"`
@@ -71,68 +75,6 @@ type DataSpec struct {
 
 // Types and validation helpers for recurrence_phases live in
 // arch/config_recurrence_phases.go.
-
-// EffectiveBigramDim returns the configured bigram embedding dimension,
-// defaulting to model_dim when bigram embeddings are enabled but bigram_dim is unset.
-func (c *ArchConfig) EffectiveBigramDim() int {
-	if c == nil || c.BigramVocabSize <= 0 {
-		return 0
-	}
-	if c.BigramDim <= 0 {
-		return c.ModelDim
-	}
-	return c.BigramDim
-}
-
-// EffectiveCharDim returns the configured character feature embedding
-// dimension, defaulting to model_dim when char features are enabled but
-// char_dim is unset.
-func (c *ArchConfig) EffectiveCharDim() int {
-	if c == nil || c.CharVocabSize <= 0 {
-		return 0
-	}
-	if c.CharDim <= 0 {
-		return c.ModelDim
-	}
-	return c.CharDim
-}
-
-// EffectiveCharMaxPerToken returns the fixed sparse char-slot count used for
-// each token id, defaulting to 16 when char features are enabled.
-func (c *ArchConfig) EffectiveCharMaxPerToken() int {
-	if c == nil || c.CharVocabSize <= 0 {
-		return 0
-	}
-	if c.CharMaxPerToken <= 0 {
-		return 16
-	}
-	return c.CharMaxPerToken
-}
-
-// EffectiveTrigramDim returns the configured trigram embedding dimension,
-// defaulting to bigram_dim or model_dim when trigram embeddings are enabled
-// but trigram_dim is unset.
-func (c *ArchConfig) EffectiveTrigramDim() int {
-	if c == nil || c.TrigramVocabSize <= 0 {
-		return 0
-	}
-	if c.TrigramDim > 0 {
-		return c.TrigramDim
-	}
-	if c.BigramDim > 0 {
-		return c.BigramDim
-	}
-	return c.ModelDim
-}
-
-// EffectiveMLPMult returns the configured FFN expansion multiplier,
-// defaulting to 2.67 when unset.
-func (c *ArchConfig) EffectiveMLPMult() float64 {
-	if c == nil || c.MLPMult <= 0 {
-		return 2.67
-	}
-	return c.MLPMult
-}
 
 // WeightSpec declares a named weight for a custom block with symbolic shape.
 type WeightSpec struct {
@@ -274,6 +216,7 @@ type TrainingSpec struct {
 	MLMRandomTokenProb                float64           `json:"mlm_random_token_prob,omitempty"`
 	MLMKeptUnchangedProb              float64           `json:"mlm_kept_unchanged_prob,omitempty"`
 	MLMMaskProbSchedule               [][]float64       `json:"mlm_mask_prob_schedule,omitempty"`
+	MLMMaskProbScheduleMode           string            `json:"mlm_mask_prob_schedule_mode,omitempty"`
 	HybridCLMFraction                 float64           `json:"hybrid_clm_fraction,omitempty"`
 	HybridSecondaryObjective          string            `json:"hybrid_secondary_objective,omitempty"`
 	Distillation                      *DistillationSpec `json:"distillation,omitempty"`
@@ -324,7 +267,7 @@ type TrainingSpec struct {
 	ComputeDType        string  `json:"compute_dtype,omitempty"`
 	QAT                 string  `json:"qat,omitempty"` // "none" (default), "int8", or "int6"
 	QATStart            int     `json:"qat_start,omitempty"`
-	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default) or "normal"
+	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default), "normal", or "gptbert"
 	WeightInitStd       float32 `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
 	EmbedWeightDecay    float32 `json:"embed_weight_decay,omitempty"`
 	MatrixWeightDecay   float32 `json:"matrix_weight_decay,omitempty"`
@@ -554,6 +497,7 @@ func (t *TrainingSpec) ApplyDefaults() {
 	}
 	t.Optimizer = strings.ToLower(strings.TrimSpace(t.Optimizer))
 	t.ComputeDType = strings.ToLower(strings.TrimSpace(t.ComputeDType))
+	t.WeightInit = strings.ToLower(strings.TrimSpace(t.WeightInit))
 	if t.EmbedWeightDecay == 0 {
 		t.EmbedWeightDecay = t.WeightDecay
 	}
@@ -647,6 +591,12 @@ func ParseArchConfig(data []byte, source string) (*ArchConfig, error) {
 	if err := dec.Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config %q: %w (check field names against docs/config-reference.md)", source, err)
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, fmt.Errorf("parse config %q: %w", source, err)
+	}
+	_, cfg.attnDropoutSet = fields["attn_dropout"]
+	_, cfg.hiddenDropoutSet = fields["hidden_dropout"]
 	warnDeprecatedMamba3Blocks(cfg.Blocks)
 	return validateConfig(&cfg, source)
 }
@@ -747,6 +697,12 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Dropout < 0 || cfg.Dropout > 1 {
 		return nil, fmt.Errorf("config %q has invalid dropout=%g (must be in [0,1])", source, cfg.Dropout)
+	}
+	if cfg.AttnDropout < 0 || cfg.AttnDropout > 1 {
+		return nil, fmt.Errorf("config %q has invalid attn_dropout=%g (must be in [0,1])", source, cfg.AttnDropout)
+	}
+	if cfg.HiddenDropout < 0 || cfg.HiddenDropout > 1 {
+		return nil, fmt.Errorf("config %q has invalid hidden_dropout=%g (must be in [0,1])", source, cfg.HiddenDropout)
 	}
 	if cfg.MTP != nil {
 		if cfg.MTP.nSet && cfg.MTP.N < 1 {
@@ -850,6 +806,11 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	case "", "adamw", "muon", "muon_eq_r", "normuon", "lamb":
 	default:
 		return nil, fmt.Errorf("config %q has invalid training.optimizer=%q (must be \"adamw\", \"muon\", \"muon_eq_r\", \"normuon\", or \"lamb\")", source, cfg.Training.Optimizer)
+	}
+	switch cfg.Training.WeightInit {
+	case "", "xavier_uniform", "normal", "gptbert":
+	default:
+		return nil, fmt.Errorf("config %q has invalid training.weight_init=%q (must be \"xavier_uniform\", \"normal\", or \"gptbert\")", source, cfg.Training.WeightInit)
 	}
 	switch cfg.Training.EffectiveComputeDType() {
 	case "float32", "bf16":

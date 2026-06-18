@@ -45,6 +45,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 			DistillationInactive: true,
 			Data2VecInactive:     true,
 			ZLossInactive:        true,
+			DropoutInactive:      true,
 		}, nil, cfg.RecurrencePhases[len(cfg.RecurrencePhases)-1].Order, false)
 	}
 	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
@@ -54,6 +55,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		DistillationInactive: true,
 		Data2VecInactive:     true,
 		ZLossInactive:        true,
+		DropoutInactive:      true,
 	}, nil, false)
 }
 
@@ -66,6 +68,7 @@ type TrainingProgramState struct {
 	DistillationInactive bool
 	Data2VecInactive     bool
 	ZLossInactive        bool
+	DropoutInactive      bool
 	Objective            string
 	HiddenCaptureTopK    int
 	HiddenCapturePrefix  string
@@ -162,6 +165,12 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	if objective == ObjectiveCausal && strings.TrimSpace(state.Objective) == "" {
 		objective = cfg.Training.DefaultConcreteObjective()
 	}
+	hiddenDropout := cfg.EffectiveHiddenDropout()
+	attnDropout := cfg.EffectiveAttnDropout()
+	if state.DropoutInactive {
+		hiddenDropout = 0
+		attnDropout = 0
+	}
 
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		cfg.ModelDim,
@@ -182,7 +191,8 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		cfg.TrigramVocabSize,
 		cfg.EffectiveTrigramDim(),
 		cfg.LogitSoftcap,
-		cfg.Dropout,
+		hiddenDropout,
+		attnDropout,
 		cfg.Blocks,
 		cfg.Recurrence,
 		executionOrder,
@@ -217,6 +227,7 @@ func BuildData2VecTeacherIRProgramFromConfig(cfg *ArchConfig, objective string) 
 		DistillationInactive: true,
 		Data2VecInactive:     true,
 		ZLossInactive:        true,
+		DropoutInactive:      true,
 		Objective:            objective,
 		HiddenCaptureTopK:    cfg.Training.Data2Vec.TopKLayers,
 		HiddenCapturePrefix:  "data2vec",

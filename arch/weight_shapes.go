@@ -3,6 +3,7 @@ package arch
 import (
 	"fmt"
 	"math"
+	"strings"
 )
 
 // DefaultFFNMultiplier is the default FFN hidden dimension as a multiple of
@@ -22,6 +23,7 @@ type WeightMeta struct {
 	InitDtBias    bool
 	DtMin         float64
 	DtMax         float64
+	GPTBERTScale  float32
 }
 
 // ffnDim computes the FFN hidden dimension, clamped to at least D.
@@ -358,6 +360,7 @@ func streamWeightShapesWithRefs(specs []BlockSpec, refs []int, D, T, B, V int, m
 		if err != nil {
 			return nil, err
 		}
+		annotateGPTBERTOutputScale(metas, spec, i)
 		all = append(all, metas...)
 	}
 	return all, nil
@@ -397,6 +400,7 @@ func streamWeightShapesWithRefsAndParallel(specs []BlockSpec, refs []int, D, T, 
 		if err != nil {
 			return nil, err
 		}
+		annotateGPTBERTOutputScale(metas, spec, i)
 		all = append(all, metas...)
 	}
 	return all, nil
@@ -412,9 +416,35 @@ func blockRangeWeightShapesWithRefs(specs []BlockSpec, refs []int, start, end, D
 		if err != nil {
 			return nil, err
 		}
+		annotateGPTBERTOutputScale(metas, specs[i], i)
 		all = append(all, metas...)
 	}
 	return all, nil
+}
+
+func annotateGPTBERTOutputScale(metas []WeightMeta, spec BlockSpec, blockIndex int) {
+	if blockIndex < 0 {
+		blockIndex = 0
+	}
+	scale := float32(math.Sqrt(1.0 / (2.0 * float64(blockIndex+1))))
+	for i := range metas {
+		if isGPTBERTOutputProjectionName(spec, metas[i].Name) {
+			metas[i].GPTBERTScale = scale
+		}
+	}
+}
+
+func isGPTBERTOutputProjectionName(spec BlockSpec, name string) bool {
+	switch blockTypeKey(spec) {
+	case "plain":
+		return name == "wo" || name == "ff2"
+	case "swiglu", "geglu", "mlp":
+		return name == "w_down"
+	case "moe":
+		return strings.HasSuffix(name, "_w_down")
+	default:
+		return false
+	}
 }
 
 func bigramWeightShapes(modelDim, bigramVocabSize, bigramDim int) []WeightMeta {

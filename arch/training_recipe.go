@@ -35,6 +35,9 @@ func (t TrainingSpec) EffectiveMLMMaskProbForStep(step int) float64 {
 	if len(t.MLMMaskProbSchedule) == 0 {
 		return t.MLMMaskProb
 	}
+	if strings.EqualFold(strings.TrimSpace(t.MLMMaskProbScheduleMode), "linear") {
+		return t.effectiveLinearMLMMaskProbForStep(step)
+	}
 	out := t.MLMMaskProb
 	for _, pair := range t.MLMMaskProbSchedule {
 		if len(pair) != 2 {
@@ -46,6 +49,31 @@ func (t TrainingSpec) EffectiveMLMMaskProbForStep(step int) float64 {
 		out = pair[1]
 	}
 	return out
+}
+
+func (t TrainingSpec) effectiveLinearMLMMaskProbForStep(step int) float64 {
+	sched := t.MLMMaskProbSchedule
+	if len(sched) == 0 {
+		return t.MLMMaskProb
+	}
+	if step <= int(sched[0][0]) {
+		return sched[0][1]
+	}
+	for i := 1; i < len(sched); i++ {
+		prevStep := int(sched[i-1][0])
+		nextStep := int(sched[i][0])
+		prevProb := sched[i-1][1]
+		nextProb := sched[i][1]
+		if step < nextStep {
+			den := nextStep - prevStep
+			if den <= 0 {
+				return nextProb
+			}
+			progress := float64(step-prevStep) / float64(den)
+			return prevProb + (nextProb-prevProb)*progress
+		}
+	}
+	return sched[len(sched)-1][1]
 }
 
 func validateTrainingRecipeKnobs(cfg *ArchConfig, source string) error {
@@ -135,6 +163,15 @@ func validateSeqLenSchedule(cfg *ArchConfig, source string) error {
 }
 
 func validateMLMMaskProbSchedule(cfg *ArchConfig, source string) error {
+	mode := strings.ToLower(strings.TrimSpace(cfg.Training.MLMMaskProbScheduleMode))
+	switch mode {
+	case "", "step":
+		cfg.Training.MLMMaskProbScheduleMode = "step"
+	case "linear":
+		cfg.Training.MLMMaskProbScheduleMode = "linear"
+	default:
+		return fmt.Errorf("config %q has invalid training.mlm_mask_prob_schedule_mode=%q (must be \"step\" or \"linear\")", source, cfg.Training.MLMMaskProbScheduleMode)
+	}
 	sched := cfg.Training.MLMMaskProbSchedule
 	if len(sched) == 0 {
 		return nil

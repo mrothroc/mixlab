@@ -146,6 +146,78 @@ func TestInitWeightData_NormalInitDefaultStd(t *testing.T) {
 	}
 }
 
+func TestComputeWeightShapesMarksGPTBERTOutputProjections(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "gptbert_init_shapes",
+		"model_dim": 32,
+		"vocab_size": 128,
+		"seq_len": 8,
+		"blocks": [
+			{"type": "plain", "heads": 4},
+			{"type": "geglu"}
+		],
+		"training": {"steps": 10, "lr": 0.001, "batch_tokens": 16, "weight_init": "gptbert"}
+	}`), "gptbert_init_shapes")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	scales := map[string]float32{}
+	for _, ws := range shapes {
+		if ws.GPTBERTScale > 0 {
+			scales[ws.Name] = ws.GPTBERTScale
+		}
+	}
+	wantPlainScale := float32(math.Sqrt(1.0 / 2.0))
+	wantGEGLUScale := float32(math.Sqrt(1.0 / 4.0))
+	if math.Abs(float64(scales["wo"]-wantPlainScale)) > 1e-6 {
+		t.Fatalf("wo GPTBERTScale=%g, want %g", scales["wo"], wantPlainScale)
+	}
+	if math.Abs(float64(scales["ff2"]-wantPlainScale)) > 1e-6 {
+		t.Fatalf("ff2 GPTBERTScale=%g, want %g", scales["ff2"], wantPlainScale)
+	}
+	if math.Abs(float64(scales["w_down"]-wantGEGLUScale)) > 1e-6 {
+		t.Fatalf("w_down GPTBERTScale=%g, want %g", scales["w_down"], wantGEGLUScale)
+	}
+	if _, ok := scales["w_gate"]; ok {
+		t.Fatalf("w_gate should not be depth-scaled")
+	}
+}
+
+func TestInitWeightData_GPTBERTTruncatedDepthScaled(t *testing.T) {
+	shapes := []WeightShape{
+		{Name: "wq", Shape: []int{512, 512}, ModelDim: 512},
+		{Name: "wo", Shape: []int{512, 512}, ModelDim: 512, GPTBERTScale: 0.5},
+	}
+	weights := initWeightData(shapes, 42, "gptbert", 0)
+	baseStd := math.Sqrt(2.0 / (5.0 * 512.0))
+	for i, v := range weights[0] {
+		if math.Abs(float64(v)) > 2*baseStd+1e-7 {
+			t.Fatalf("unscaled gptbert weight[%d]=%g outside truncated bound", i, v)
+		}
+	}
+	for i, v := range weights[1] {
+		if math.Abs(float64(v)) > baseStd+1e-7 {
+			t.Fatalf("scaled gptbert weight[%d]=%g outside scaled truncated bound", i, v)
+		}
+	}
+	ratio := rms(weights[1]) / rms(weights[0])
+	if math.Abs(ratio-0.5) > 0.04 {
+		t.Fatalf("scaled/unscaled RMS ratio=%g, want about 0.5", ratio)
+	}
+}
+
+func rms(xs []float32) float64 {
+	var sumSq float64
+	for _, x := range xs {
+		sumSq += float64(x) * float64(x)
+	}
+	return math.Sqrt(sumSq / float64(len(xs)))
+}
+
 func TestInitWeightData_XavierIsDefault(t *testing.T) {
 	shapes := []WeightShape{
 		{Name: "wq", Shape: []int{8, 8}},

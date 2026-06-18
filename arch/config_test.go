@@ -85,6 +85,47 @@ func TestParseArchConfigDataNoShardShuffle(t *testing.T) {
 	}
 }
 
+func TestParseArchConfigSplitDropoutOverrides(t *testing.T) {
+	raw := []byte(`{
+		"name": "test_split_dropout",
+		"model_dim": 128,
+		"vocab_size": 1024,
+		"seq_len": 128,
+		"dropout": 0.1,
+		"hidden_dropout": 0.0,
+		"attn_dropout": 0.2,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 100, "lr": 0.0003, "batch_tokens": 1024}
+	}`)
+	got, err := ParseArchConfig(raw, "test_split_dropout")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if got.EffectiveHiddenDropout() != 0 {
+		t.Fatalf("EffectiveHiddenDropout = %g, want explicit 0", got.EffectiveHiddenDropout())
+	}
+	if got.EffectiveAttnDropout() != 0.2 {
+		t.Fatalf("EffectiveAttnDropout = %g, want 0.2", got.EffectiveAttnDropout())
+	}
+
+	legacyRaw := []byte(`{
+		"name": "test_legacy_dropout",
+		"model_dim": 128,
+		"vocab_size": 1024,
+		"seq_len": 128,
+		"dropout": 0.15,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 100, "lr": 0.0003, "batch_tokens": 1024}
+	}`)
+	legacy, err := ParseArchConfig(legacyRaw, "test_legacy_dropout")
+	if err != nil {
+		t.Fatalf("ParseArchConfig legacy: %v", err)
+	}
+	if legacy.EffectiveHiddenDropout() != 0.15 || legacy.EffectiveAttnDropout() != 0.15 {
+		t.Fatalf("legacy effective dropout hidden=%g attn=%g, want 0.15/0.15", legacy.EffectiveHiddenDropout(), legacy.EffectiveAttnDropout())
+	}
+}
+
 func TestParseArchConfig_QKGain(t *testing.T) {
 	cfg := ArchConfig{
 		Name:      "test_qk_gain",
