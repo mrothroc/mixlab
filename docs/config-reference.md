@@ -12,7 +12,7 @@ All examples below are valid JSON fragments unless otherwise noted.
 
 These fields live at the root of the config object.
 
-For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal and masked-LM heads for supported sequential `plain` attention stacks plus `swiglu`/`geglu`/`mlp`/`moe` blocks, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, DeBERTa relative attention, and embedding feature channels; unsupported blocks or config features fail explicitly.
+For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal and masked-LM heads for supported sequential `plain` attention stacks plus `swiglu`/`geglu`/`mlp`/`moe` blocks, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, DeBERTa relative attention, configurable RMSNorm/LayerNorm for core GPT-style blocks, and embedding feature channels; unsupported blocks or config features fail explicitly.
 
 | Field | Type | Required | Default | Notes |
 |------|------|----------|---------|-------|
@@ -33,12 +33,17 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 | `dropout` | number | No | `0` | Legacy training dropout applied to both hidden/residual projections and attention probabilities unless `hidden_dropout` or `attn_dropout` override it. Must be in `[0,1]`. Eval, generation, parity, and HF export run with dropout disabled. |
 | `hidden_dropout` | number | No | `dropout` | Training dropout on attention output projections, FFN output projections, and MoE deltas. Explicit `0` disables hidden dropout even when `dropout` is nonzero. |
 | `attn_dropout` | number | No | `dropout` | Training dropout on `plain` attention probabilities after softmax and before multiplying by values. Explicit `0` disables attention-probability dropout even when `dropout` is nonzero. |
+| `norm_type` | string | No | `"rmsnorm"` | Normalization used by supported GPT-style blocks and the final model norm. `"rmsnorm"` preserves the legacy layout; `"layernorm"` emits LayerNorm. |
+| `norm_eps` | number | No | `1e-5` | Epsilon for supported block/final norms. Must be `> 0`. |
+| `norm_affine` | boolean | No | `true` | Whether LayerNorm uses learned scale/bias. `false` is supported for `norm_type: "layernorm"`; RMSNorm remains affine-only. |
+| `norm_placement` | string | No | `"pre"` | Supported values are `"pre"`, `"post"`, and `"sandwich"`. `"post"` normalizes each sublayer delta before residual add; `"sandwich"` uses both pre-input and post-delta norms. V1 supports non-default placement on sequential `plain`, `swiglu`, `geglu`, and `mlp` blocks. |
+| `ffn_internal_norm` | boolean | No | `false` | Adds an internal norm to supported FFN paths before the down projection: after the activation/product in `swiglu`/`geglu`, after activation in `mlp`, and after the `plain` FFN tail activation. |
 | `block_scales` | boolean | No | `false` | Adds learned per-channel scales to `plain` attention and MLP residual branches, plus the MLP branch in `swiglu`, `geglu`, and `moe`. |
 | `resid_mix` | boolean | No | `false` | Adds learned mixing of the current state and original input on `plain` blocks. |
 | `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu/geglu/moe)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Cannot be combined with `unet`. |
 | `unet` | boolean | No | `false` | Splits the `blocks` list into encoder/decoder halves with learned skip connections. |
 | `mtp` | object | No | Disabled | Enables parameter-free multi-token prediction during training. See [MTP section](#multi-token-prediction-mtp). |
-| `backout` | object | No | Disabled | Enables final-latent residual subtraction before the final RMSNorm. See [Backout section](#backout). |
+| `backout` | object | No | Disabled | Enables final-latent residual subtraction before the final model norm. See [Backout section](#backout). |
 | `blocks` | array | Yes | None | Ordered block list. Must contain at least one block. |
 | `recurrence` | integer array | No | Disabled | Weight-sharing map for `blocks`; length must equal `blocks`, references must point to the same or earlier block with the same type. |
 | `recurrence_phases` | array | No | Disabled | Explicit multi-phase block-execution schedule. See [Recurrence phases section](#recurrence-phases). |
@@ -137,7 +142,7 @@ Other tokenizers can write their own `char_features.bin` by emitting a matching 
 
 ## Backout
 
-`backout` captures the residual stream after a configured physical block and subtracts a learned scalar-weighted copy immediately before the final RMSNorm and LM head. When omitted, the emitted IR and weight layout stay unchanged.
+`backout` captures the residual stream after a configured physical block and subtracts a learned scalar-weighted copy immediately before the final model norm and LM head. When omitted, the emitted IR and weight layout stay unchanged.
 
 ```json
 {
@@ -215,7 +220,7 @@ Per-phase order:
 
 ### `plain`
 
-Self-attention block with RMSNorm, RoPE, grouped-query support via `kv_heads`, SiLU FFN tail, and residual connections. It defaults to causal attention for causal training objectives and bidirectional attention for masked objectives.
+Self-attention block with configurable model norm, RoPE, grouped-query support via `kv_heads`, SiLU FFN tail, and residual connections. It defaults to causal attention for causal training objectives and bidirectional attention for masked objectives.
 
 Required fields:
 
@@ -268,7 +273,7 @@ Notes:
 
 ### `swiglu`
 
-Feed-forward-only block with RMSNorm, SwiGLU gating, and residual connection.
+Feed-forward-only block with configurable model norm, SwiGLU gating, and residual connection.
 
 Required fields:
 
@@ -286,7 +291,7 @@ Example:
 
 ### `geglu`
 
-Feed-forward-only block with RMSNorm, GEGLU gating, and residual connection.
+Feed-forward-only block with configurable model norm, GEGLU gating, and residual connection.
 It has the same weight layout as `swiglu`, but gates with `GELU(x @ w_gate)` instead of `sigmoid(x @ w_gate)`.
 
 Required fields:
@@ -305,7 +310,7 @@ Example:
 
 ### `mlp`
 
-Feed-forward-only block with RMSNorm, one up projection, configurable activation, one down projection, and residual connection.
+Feed-forward-only block with configurable model norm, one up projection, configurable activation, one down projection, and residual connection.
 
 Required fields:
 

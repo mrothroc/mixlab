@@ -23,6 +23,27 @@ func validateParallelResidual(cfg *ArchConfig, source string) error {
 	return nil
 }
 
+func validateNormPolicy(cfg *ArchConfig, source string) error {
+	if isDefaultNormConfig(cfg) {
+		return nil
+	}
+	if cfg.ParallelResidual {
+		return fmt.Errorf("config %q non-default norm settings are not supported with parallel_residual in this release", source)
+	}
+	if cfg.UNet {
+		return fmt.Errorf("config %q non-default norm settings are not supported with unet in this release", source)
+	}
+	for i, block := range cfg.Blocks {
+		switch blockTypeKey(block) {
+		case "plain", "swiglu", "geglu", "mlp":
+			// supported by the configurable normalization path.
+		default:
+			return fmt.Errorf("config %q non-default norm settings are not supported with blocks[%d].type=%q in this release", source, i, block.Type)
+		}
+	}
+	return nil
+}
+
 func validateRecurrence(cfg *ArchConfig, source string) error {
 	if cfg.Recurrence == nil {
 		return nil

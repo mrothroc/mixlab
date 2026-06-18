@@ -295,27 +295,10 @@ func countWeightsWithNgramsRecurrenceAndParallel(
 	return total + trigramWeightCount(modelDim, trigramVocabSize, trigramDim), nil
 }
 
-func countWeightsWithNgramsRecurrenceParallelHeadLayout(
+func countWeightsWithFeaturesRecurrenceParallelHeadLayoutNorm(
 	modelDim int,
-	mlpMult float64,
-	reserveHead bool,
-	blockScales, residMix bool,
-	unet bool,
-	parallelResidual bool,
-	bigramVocabSize, bigramDim int,
-	trigramVocabSize, trigramDim int,
-	blocks []BlockSpec,
-	recurrence []int,
-) (int, error) {
-	total, err := countWeightsWithBigramRecurrenceParallelHeadLayout(modelDim, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, blocks, recurrence)
-	if err != nil {
-		return 0, err
-	}
-	return total + trigramWeightCount(modelDim, trigramVocabSize, trigramDim), nil
-}
-
-func countWeightsWithFeaturesRecurrenceParallelHeadLayout(
-	modelDim int,
+	vocabSize int,
+	seqLen int,
 	mlpMult float64,
 	reserveHead bool,
 	blockScales, residMix bool,
@@ -326,12 +309,23 @@ func countWeightsWithFeaturesRecurrenceParallelHeadLayout(
 	trigramVocabSize, trigramDim int,
 	blocks []BlockSpec,
 	recurrence []int,
+	norm NormSpec,
+	normPlacement string,
+	ffnInternalNorm bool,
 ) (int, error) {
-	total, err := countWeightsWithNgramsRecurrenceParallelHeadLayout(modelDim, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
+	refs, err := normalizeWeightRefs(blocks, recurrence)
+	if err != nil {
+		return 0, fmt.Errorf("blocks: %w", err)
+	}
+	metas, err := collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
+		modelDim, vocabSize, seqLen, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual,
+		charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
+		blocks, refs, norm, normPlacement, ffnInternalNorm,
+	)
 	if err != nil {
 		return 0, err
 	}
-	return total + charWeightCount(modelDim, charVocabSize, charDim), nil
+	return len(metas), nil
 }
 
 // CountWeightsWithNgramsRecurrenceAndParallel returns the IR weight tensor
@@ -369,7 +363,16 @@ func fixedWeightCountWithHead(reserveHead bool) int {
 	return 3 // embed + head + final_norm
 }
 
-func finalNormWeightIndexWithHead(reserveHead bool) int {
+func fixedWeightCountWithHeadAndNorm(reserveHead bool, norm NormSpec) int {
+	total := 1 // embed
+	if reserveHead {
+		total++
+	}
+	return total + len(normWeights("final_norm", 1, normSpecOrDefault(norm)))
+}
+
+func finalNormWeightIndexWithHeadAndNorm(reserveHead bool, norm NormSpec) int {
+	_ = norm
 	if !reserveHead {
 		return 1
 	}
@@ -420,7 +423,7 @@ func emitStreamIRWithDropout(prog *Program, specs []BlockSpec, stream, original 
 	return wi, nil
 }
 
-func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool, dropout, attnDropout float32) (int, error) {
+func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, blockIdx int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix bool, dropout, attnDropout float32, norm NormSpec, normPlacement string, ffnInternalNorm bool) (int, error) {
 	spec := specs[blockIdx]
 	blockWI := wi
 	originalBlock := refs[blockIdx] == blockIdx
@@ -435,7 +438,7 @@ func emitSequentialBlockWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 	if needsResidMix(spec, residMix) {
 		bodyWI = applyResidMixIR(prog, stream, original, bodyWI, D, *opIdx)
 	}
-	nextWI, err := emitBlockIRWithDropout(prog, spec, stream, bodyWI, D, T, B, V, *opIdx, blockIdx, streamSeqLens, kvCache, mlpMult, blockScales, dropout, attnDropout)
+	nextWI, err := emitBlockIRWithDropoutOptions(prog, spec, stream, bodyWI, D, T, B, V, *opIdx, blockIdx, streamSeqLens, kvCache, mlpMult, blockScales, dropout, attnDropout, norm, normPlacement, ffnInternalNorm)
 	if err != nil {
 		return wi, err
 	}
@@ -454,6 +457,10 @@ func emitBlockIR(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, i
 }
 
 func emitBlockIRWithDropout(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx, blockIndex int, streamSeqLens map[string]int, kvCache map[int]BlockKVOutputs, mlpMult float64, blockScales bool, dropout, attnDropout float32) (int, error) {
+	return emitBlockIRWithDropoutOptions(prog, spec, stream, wi, D, T, B, V, idx, blockIndex, streamSeqLens, kvCache, mlpMult, blockScales, dropout, attnDropout, defaultNormSpec(), NormPlacementPre, false)
+}
+
+func emitBlockIRWithDropoutOptions(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx, blockIndex int, streamSeqLens map[string]int, kvCache map[int]BlockKVOutputs, mlpMult float64, blockScales bool, dropout, attnDropout float32, norm NormSpec, normPlacement string, ffnInternalNorm bool) (int, error) {
 	reg, err := lookupBlock(spec)
 	if err != nil {
 		return wi, err
@@ -462,13 +469,16 @@ func emitBlockIRWithDropout(prog *Program, spec BlockSpec, stream string, wi, D,
 		return wi, fmt.Errorf("block type %q has no emitter", spec.Type)
 	}
 	return reg.Emitter(prog, spec, stream, wi, D, T, B, V, idx, EmitOptions{
-		StreamSeqLens: streamSeqLens,
-		MLPMult:       mlpMult,
-		BlockScales:   blockScales,
-		Dropout:       dropout,
-		AttnDropout:   attnDropout,
-		BlockIndex:    blockIndex,
-		KVCache:       kvCache,
+		StreamSeqLens:   streamSeqLens,
+		MLPMult:         mlpMult,
+		BlockScales:     blockScales,
+		Dropout:         dropout,
+		AttnDropout:     attnDropout,
+		Norm:            normSpecOrDefault(norm),
+		NormPlacement:   normPlacementOrDefault(normPlacement),
+		FFNInternalNorm: ffnInternalNorm,
+		BlockIndex:      blockIndex,
+		KVCache:         kvCache,
 	})
 }
 
@@ -642,6 +652,9 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		nil,
 		nil,
 		nil,
+		defaultNormSpec(),
+		NormPlacementPre,
+		false,
 	)
 }
 
@@ -672,6 +685,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	distillation *DistillationSpec,
 	data2vec *Data2VecSpec,
 	hiddenCapture *data2VecHiddenCapture,
+	norm NormSpec,
+	normPlacement string,
+	ffnInternalNorm bool,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -690,6 +706,8 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	objective = normalizeTrainingObjective(objective)
 	rootObjective = normalizeTrainingObjective(rootObjective)
 	blocks = resolveBlockAttentionMasksForObjective(blocks, objective, rootObjective)
+	norm = normSpecOrDefault(norm)
+	normPlacement = normPlacementOrDefault(normPlacement)
 
 	if B <= 0 || T <= 0 {
 		return nil, fmt.Errorf("invalid shape B=%d T=%d", B, T)
@@ -755,7 +773,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		return nil, fmt.Errorf("untied LM head requires reserved head weight")
 	}
 
-	nWeights, err := countWeightsWithFeaturesRecurrenceParallelHeadLayout(D, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence)
+	nWeights, err := countWeightsWithFeaturesRecurrenceParallelHeadLayoutNorm(D, V, T, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence, norm, normPlacement, ffnInternalNorm)
 	if err != nil {
 		return nil, err
 	}
@@ -790,7 +808,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	// Embedding lookup
 	wi := 0
 	prog.Embed(weightName(wi), "tokens", "x_embed")
-	wi = fixedWeightCountWithHead(reserveHead)
+	wi = fixedWeightCountWithHeadAndNorm(reserveHead, norm)
 	embedState := "x_embed"
 	if smearOpts.Enabled {
 		embedState, wi, err = emitSmearEmbeddingIR(prog, embedState, T, D, wi, smearOpts)
@@ -838,7 +856,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	case unet:
 		numEncoder, numSkip := unetLayout(len(blocks))
 		for i := range blocks[:numEncoder] {
-			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm)
 			if err != nil {
 				return nil, err
 			}
@@ -866,7 +884,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 				prog.Add("x", skipScaled, "x")
 			}
 			blockIdx := numEncoder + decIdx
-			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm)
 			if err != nil {
 				return nil, err
 			}
@@ -874,14 +892,14 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			opIdx++
 		}
 	case len(executionOrder) > 0:
-		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan)
+		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan, norm, normPlacement, ffnInternalNorm)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		if hiddenCapture != nil {
 			for i := 0; i < len(blocks); i++ {
-				wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout)
+				wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm)
 				if err != nil {
 					return nil, err
 				}
@@ -891,7 +909,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			}
 			break
 		}
-		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan)
+		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan, norm, normPlacement, ffnInternalNorm)
 		if err != nil {
 			return nil, err
 		}
@@ -905,7 +923,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 
 	// Final normalization
-	prog.RMSNorm("x", weightName(finalNormWeightIndexWithHead(reserveHead)), "x_final_norm", 1e-5)
+	if _, err := emitNamedNormIR(prog, "x", finalNormWeightIndexWithHeadAndNorm(reserveHead, norm), "x_final_norm", norm); err != nil {
+		return nil, err
+	}
 	prog.Reshape("x_final_norm", []int{B, T, D}, "x_hidden")
 	if data2VecEnabled {
 		wi = emitData2VecPredictorIR(prog, data2vec, wi)

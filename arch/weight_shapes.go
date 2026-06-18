@@ -68,7 +68,37 @@ func blockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, blockSca
 	return reg.WeightShapes(spec, D, T, B, V)
 }
 
+func blockWeightShapesWithEmitOptions(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
+	reg, err := lookupBlock(spec)
+	if err != nil {
+		return nil, err
+	}
+	if reg.weightShapesWithOptions != nil {
+		return reg.weightShapesWithOptions(spec, D, T, B, V, opts)
+	}
+	if reg.WeightShapes == nil {
+		return nil, fmt.Errorf("block type %q has no weight shaper", spec.Type)
+	}
+	return reg.WeightShapes(spec, D, T, B, V)
+}
+
 func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, blockScales, residMix bool) ([]WeightMeta, error) {
+	return builtinBlockWeightShapesWithOptions(spec, D, T, B, V, EmitOptions{
+		MLPMult:       mlpMult,
+		BlockScales:   blockScales,
+		ResidMix:      residMix,
+		Norm:          defaultNormSpec(),
+		NormPlacement: NormPlacementPre,
+	})
+}
+
+func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
+	mlpMult := opts.MLPMult
+	blockScales := opts.BlockScales
+	residMix := opts.ResidMix
+	norm := normSpecOrDefault(opts.Norm)
+	placement := normPlacementOrDefault(opts.NormPlacement)
+	ffnInternalNorm := opts.FFNInternalNorm
 	switch blockTypeName(spec.Type) {
 	case "plain":
 		heads := spec.Heads
@@ -84,10 +114,11 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 		}
 		kvProjDim := kvHeads * (D / heads)
 		ffn := ffnDim(D, mlpMult)
-		metas := []WeightMeta{
-			{Name: "norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
-			{Name: "wq", Shape: []int{D, D}},
+		var metas []WeightMeta
+		if placement == NormPlacementPre || placement == NormPlacementSandwich {
+			metas = append(metas, normWeights("norm", D, norm)...)
 		}
+		metas = append(metas, WeightMeta{Name: "wq", Shape: []int{D, D}})
 		if spec.KVSource <= 0 {
 			metas = append(metas,
 				WeightMeta{Name: "wk", Shape: []int{D, kvProjDim}},
@@ -117,13 +148,23 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 			metas = append(metas, WeightMeta{Name: "attn_gate_w", Shape: []int{heads, gateDim}, InitZero: true})
 		}
 		metas = append(metas, WeightMeta{Name: "wo", Shape: []int{D, D}})
+		if placement == NormPlacementPost || placement == NormPlacementSandwich {
+			metas = append(metas, normWeights("post_attn_norm", D, norm)...)
+		}
 		if blockScales {
 			metas = append(metas, WeightMeta{Name: "attn_scale", Shape: []int{D}, InitOne: true})
 		}
-		metas = append(metas,
-			WeightMeta{Name: "ff1", Shape: []int{D, ffn}},
-			WeightMeta{Name: "ff2", Shape: []int{ffn, D}},
-		)
+		if placement == NormPlacementSandwich {
+			metas = append(metas, normWeights("ffn_norm", D, norm)...)
+		}
+		metas = append(metas, WeightMeta{Name: "ff1", Shape: []int{D, ffn}})
+		if ffnInternalNorm {
+			metas = append(metas, normWeights("ffn_internal_norm", ffn, norm)...)
+		}
+		metas = append(metas, WeightMeta{Name: "ff2", Shape: []int{ffn, D}})
+		if placement == NormPlacementPost || placement == NormPlacementSandwich {
+			metas = append(metas, normWeights("post_ffn_norm", D, norm)...)
+		}
 		if blockScales {
 			metas = append(metas, WeightMeta{Name: "mlp_scale", Shape: []int{D}, InitOne: true})
 		}
@@ -134,11 +175,20 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 
 	case "swiglu", "geglu":
 		ffn := ffnDim(D, mlpMult)
-		metas := []WeightMeta{
-			{Name: "ffn_norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
-			{Name: "w_gate", Shape: []int{D, ffn}},
-			{Name: "w_up", Shape: []int{D, ffn}},
-			{Name: "w_down", Shape: []int{ffn, D}},
+		var metas []WeightMeta
+		if placement == NormPlacementPre || placement == NormPlacementSandwich {
+			metas = append(metas, normWeights("ffn_norm", D, norm)...)
+		}
+		metas = append(metas,
+			WeightMeta{Name: "w_gate", Shape: []int{D, ffn}},
+			WeightMeta{Name: "w_up", Shape: []int{D, ffn}},
+		)
+		if ffnInternalNorm {
+			metas = append(metas, normWeights("ffn_internal_norm", ffn, norm)...)
+		}
+		metas = append(metas, WeightMeta{Name: "w_down", Shape: []int{ffn, D}})
+		if placement == NormPlacementPost || placement == NormPlacementSandwich {
+			metas = append(metas, normWeights("post_ffn_norm", D, norm)...)
 		}
 		if blockScales {
 			metas = append(metas, WeightMeta{Name: "mlp_scale", Shape: []int{D}, InitOne: true})
@@ -147,11 +197,19 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 
 	case "mlp":
 		ffn := ffnDim(D, mlpMult)
-		return []WeightMeta{
-			{Name: "ffn_norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
-			{Name: "w_up", Shape: []int{D, ffn}},
-			{Name: "w_down", Shape: []int{ffn, D}},
-		}, nil
+		var metas []WeightMeta
+		if placement == NormPlacementPre || placement == NormPlacementSandwich {
+			metas = append(metas, normWeights("ffn_norm", D, norm)...)
+		}
+		metas = append(metas, WeightMeta{Name: "w_up", Shape: []int{D, ffn}})
+		if ffnInternalNorm {
+			metas = append(metas, normWeights("ffn_internal_norm", ffn, norm)...)
+		}
+		metas = append(metas, WeightMeta{Name: "w_down", Shape: []int{ffn, D}})
+		if placement == NormPlacementPost || placement == NormPlacementSandwich {
+			metas = append(metas, normWeights("post_ffn_norm", D, norm)...)
+		}
+		return metas, nil
 
 	case "perceiver", "bottleneck":
 		L := spec.NumLatents
@@ -350,22 +408,6 @@ func builtinBlockWeightShapes(spec BlockSpec, D, T, B, V int, mlpMult float64, b
 	}
 }
 
-func streamWeightShapesWithRefs(specs []BlockSpec, refs []int, D, T, B, V int, mlpMult float64, blockScales, residMix bool) ([]WeightMeta, error) {
-	var all []WeightMeta
-	for i, spec := range specs {
-		if refs[i] != i {
-			continue
-		}
-		metas, err := blockWeightShapes(spec, D, T, B, V, mlpMult, blockScales, residMix)
-		if err != nil {
-			return nil, err
-		}
-		annotateGPTBERTOutputScale(metas, spec, i)
-		all = append(all, metas...)
-	}
-	return all, nil
-}
-
 func parallelBlockWeightShapes(spec BlockSpec, pairedSecond bool, D, T, B, V int, mlpMult float64, blockScales, residMix bool) ([]WeightMeta, error) {
 	metas, err := blockWeightShapes(spec, D, T, B, V, mlpMult, blockScales, residMix)
 	if err != nil {
@@ -380,13 +422,25 @@ func parallelBlockWeightShapes(spec BlockSpec, pairedSecond bool, D, T, B, V int
 	return metas, nil
 }
 
-func streamWeightShapesWithRefsAndParallel(specs []BlockSpec, refs []int, D, T, B, V int, mlpMult float64, blockScales, residMix, parallelResidual bool) ([]WeightMeta, error) {
+func streamWeightShapesWithRefsAndParallelOptions(specs []BlockSpec, refs []int, D, T, B, V int, opts EmitOptions, parallelResidual bool) ([]WeightMeta, error) {
 	plan, err := newParallelResidualPlan(specs, parallelResidual)
 	if err != nil {
 		return nil, err
 	}
 	if !plan.any {
-		return streamWeightShapesWithRefs(specs, refs, D, T, B, V, mlpMult, blockScales, residMix)
+		var all []WeightMeta
+		for i, spec := range specs {
+			if refs[i] != i {
+				continue
+			}
+			metas, err := blockWeightShapesWithEmitOptions(spec, D, T, B, V, opts)
+			if err != nil {
+				return nil, err
+			}
+			annotateGPTBERTOutputScale(metas, spec, i)
+			all = append(all, metas...)
+		}
+		return all, nil
 	}
 	if err := validateParallelResidualRefs(plan, refs); err != nil {
 		return nil, err
@@ -396,7 +450,7 @@ func streamWeightShapesWithRefsAndParallel(specs []BlockSpec, refs []int, D, T, 
 		if refs[i] != i {
 			continue
 		}
-		metas, err := parallelBlockWeightShapes(spec, plan.secondAt(i), D, T, B, V, mlpMult, blockScales, residMix)
+		metas, err := parallelBlockWeightShapes(spec, plan.secondAt(i), D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
 		if err != nil {
 			return nil, err
 		}
@@ -600,7 +654,7 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if err != nil {
 		return nil, fmt.Errorf("blocks: %w", err)
 	}
-	metas, err := collectWeightShapesWithRefsHeadLayoutFeatures(
+	metas, err := collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 		cfg.ModelDim,
 		cfg.VocabSize,
 		cfg.SeqLen,
@@ -618,6 +672,9 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 		cfg.EffectiveTrigramDim(),
 		cfg.Blocks,
 		refs,
+		cfg.EffectiveNormSpec(),
+		cfg.EffectiveNormPlacement(),
+		cfg.FFNInternalNorm,
 	)
 	if err != nil {
 		return nil, err
@@ -631,7 +688,7 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if len(smearMetas) == 0 && len(backoutMetas) == 0 && len(data2VecMetas) == 0 {
 		return metas, nil
 	}
-	fixed := fixedWeightCountWithHead(cfg.ReservesUntiedHeadWeight())
+	fixed := fixedWeightCountWithHeadAndNorm(cfg.ReservesUntiedHeadWeight(), cfg.EffectiveNormSpec())
 	out := make([]WeightMeta, 0, len(metas)+len(smearMetas)+len(backoutMetas)+len(data2VecMetas))
 	out = append(out, metas[:fixed]...)
 	out = append(out, smearMetas...)
@@ -684,6 +741,25 @@ func collectWeightShapesWithRefsHeadLayoutFeatures(
 	blocks []BlockSpec,
 	refs []int,
 ) ([]WeightMeta, error) {
+	return collectWeightShapesWithRefsHeadLayoutFeaturesNorm(modelDim, vocabSize, seqLen, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, refs, defaultNormSpec(), NormPlacementPre, false)
+}
+
+func collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
+	modelDim, vocabSize, seqLen int,
+	mlpMult float64,
+	reserveHead bool,
+	blockScales, residMix bool,
+	unet bool,
+	parallelResidual bool,
+	charVocabSize, charDim int,
+	bigramVocabSize, bigramDim int,
+	trigramVocabSize, trigramDim int,
+	blocks []BlockSpec,
+	refs []int,
+	norm NormSpec,
+	normPlacement string,
+	ffnInternalNorm bool,
+) ([]WeightMeta, error) {
 	D := modelDim
 	V := vocabSize
 	T := seqLen
@@ -723,15 +799,17 @@ func collectWeightShapesWithRefsHeadLayoutFeatures(
 	if len(refs) != len(blocks) {
 		return nil, fmt.Errorf("invalid weight refs length=%d for blocks length=%d", len(refs), len(blocks))
 	}
+	norm = normSpecOrDefault(norm)
+	normPlacement = normPlacementOrDefault(normPlacement)
 
 	var shapes []WeightMeta
 
-	// Fixed weights: embed + optional head + final_norm.
+	// Fixed weights: embed + optional head + final norm.
 	shapes = append(shapes, WeightMeta{Name: "embed", Shape: []int{V, D}})
 	if reserveHead {
 		shapes = append(shapes, WeightMeta{Name: "head", Shape: []int{D, V}})
 	}
-	shapes = append(shapes, WeightMeta{Name: "final_norm", Shape: []int{D}, IsNormScale: true, InitOne: true})
+	shapes = append(shapes, normWeights("final_norm", D, norm)...)
 	shapes = append(shapes, charWeightShapes(D, charVocabSize, charDim)...)
 	shapes = append(shapes, bigramWeightShapes(D, bigramVocabSize, bigramDim)...)
 	shapes = append(shapes, trigramWeightShapes(D, trigramVocabSize, trigramDim)...)
@@ -762,7 +840,14 @@ func collectWeightShapesWithRefsHeadLayoutFeatures(
 		}
 		shapes = append(shapes, dec...)
 	} else {
-		blk, err := streamWeightShapesWithRefsAndParallel(blocks, refs, D, T, 1, V, mlpMult, blockScales, residMix, parallelResidual)
+		blk, err := streamWeightShapesWithRefsAndParallelOptions(blocks, refs, D, T, 1, V, EmitOptions{
+			MLPMult:         mlpMult,
+			BlockScales:     blockScales,
+			ResidMix:        residMix,
+			Norm:            norm,
+			NormPlacement:   normPlacement,
+			FFNInternalNorm: ffnInternalNorm,
+		}, parallelResidual)
 		if err != nil {
 			return nil, fmt.Errorf("blocks: %w", err)
 		}

@@ -145,7 +145,13 @@ func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D,
 }
 
 func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
+	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false)
+}
+
+func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool) (int, error) {
 	_ = mlpMult
+	norm = normSpecOrDefault(norm)
+	normPlacement = normPlacementOrDefault(normPlacement)
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
 	}
@@ -204,7 +210,10 @@ func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, 
 	projDrop := prefix + "_proj_dropout"
 
 	if skipAttention {
-		wi += 3 // norm, q, output projection
+		if normPlacement == NormPlacementPre || normPlacement == NormPlacementSandwich {
+			wi += len(normWeights("norm", D, norm))
+		}
+		wi += 2 // q, output projection
 		if !reuseKV {
 			wi += 2 // k, v
 		}
@@ -223,16 +232,25 @@ func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, 
 		if sparseAttnGate {
 			wi++ // narrow per-head attention output gate
 		}
+		if normPlacement == NormPlacementPost || normPlacement == NormPlacementSandwich {
+			wi += len(normWeights("post_attn_norm", D, norm))
+		}
 		if blockScales {
 			wi++ // attention residual scale
 		}
 	} else {
-		// Pre-attention RMSNorm
-		prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
-		wi++
+		xAttn := x
+		if normPlacement == NormPlacementPre || normPlacement == NormPlacementSandwich {
+			var err error
+			wi, err = emitNamedNormIR(prog, x, wi, xNorm, norm)
+			if err != nil {
+				return wi, err
+			}
+			xAttn = xNorm
+		}
 
 		// Q projection
-		prog.MatMul(xNorm, weightName(wi), q)
+		prog.MatMul(xAttn, weightName(wi), q)
 		wi++
 		prog.Reshape(q, []int{B, T, H, headDim}, q4)
 		prog.Transpose(q4, []int{0, 2, 1, 3}, qh)
@@ -249,9 +267,9 @@ func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, 
 			vh = src.V
 		} else {
 			// K/V projections
-			prog.MatMul(xNorm, weightName(wi), k)
+			prog.MatMul(xAttn, weightName(wi), k)
 			wi++
-			prog.MatMul(xNorm, weightName(wi), v)
+			prog.MatMul(xAttn, weightName(wi), v)
 			wi++
 
 			prog.Reshape(k, []int{B, T, kvH, headDim}, k4)
@@ -354,6 +372,15 @@ func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, 
 		// Output projection + residual
 		prog.MatMul(flat, weightName(wi), proj)
 		wi++
+		if normPlacement == NormPlacementPost || normPlacement == NormPlacementSandwich {
+			postProj := proj + "_post_norm"
+			var err error
+			wi, err = emitNamedNormIR(prog, proj, wi, postProj, norm)
+			if err != nil {
+				return wi, err
+			}
+			proj = postProj
+		}
 		if blockScales {
 			prog.Mul(proj, weightName(wi), projScaled)
 			wi++
@@ -368,15 +395,44 @@ func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, 
 
 	// Feed-forward tail: ff1 -> SiLU -> ff2 -> residual
 	ff1 := prefix + "_ff1"
+	ffInNorm := prefix + "_ffn_x_norm"
 	ffAct := prefix + "_ff_act"
+	ffActNorm := ffAct + "_internal_norm"
 	ff2 := prefix + "_ff2"
+	ff2PostNorm := ff2 + "_post_norm"
 	ff2Scaled := prefix + "_ff2_scaled"
 	ff2Drop := prefix + "_ff2_dropout"
-	prog.MatMul(x, weightName(wi), ff1)
+	ffIn := x
+	if normPlacement == NormPlacementSandwich {
+		var err error
+		wi, err = emitNamedNormIR(prog, x, wi, ffInNorm, norm)
+		if err != nil {
+			return wi, err
+		}
+		ffIn = ffInNorm
+	}
+	prog.MatMul(ffIn, weightName(wi), ff1)
 	wi++
 	prog.SiLU(ff1, ffAct)
-	prog.MatMul(ffAct, weightName(wi), ff2)
+	ffHidden := ffAct
+	if ffnInternalNorm {
+		var err error
+		wi, err = emitNamedNormIR(prog, ffAct, wi, ffActNorm, norm)
+		if err != nil {
+			return wi, err
+		}
+		ffHidden = ffActNorm
+	}
+	prog.MatMul(ffHidden, weightName(wi), ff2)
 	wi++
+	if normPlacement == NormPlacementPost || normPlacement == NormPlacementSandwich {
+		var err error
+		wi, err = emitNamedNormIR(prog, ff2, wi, ff2PostNorm, norm)
+		if err != nil {
+			return wi, err
+		}
+		ff2 = ff2PostNorm
+	}
 	if blockScales {
 		prog.Mul(ff2, weightName(wi), ff2Scaled)
 		wi++
@@ -531,23 +587,37 @@ func emitGEGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float6
 }
 
 func emitGatedGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool, dropout float32, blockName, gateActivation string) (int, error) {
+	return emitGatedGLUIRWithDropoutNorm(prog, x, wi, idx, mlpMult, blockScales, dropout, blockName, gateActivation, defaultNormSpec(), NormPlacementPre, false)
+}
+
+func emitGatedGLUIRWithDropoutNorm(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool, dropout float32, blockName, gateActivation string, norm NormSpec, normPlacement string, ffnInternalNorm bool) (int, error) {
 	_ = mlpMult
+	norm = normSpecOrDefault(norm)
+	normPlacement = normPlacementOrDefault(normPlacement)
 	prefix := tmpName(x+"_"+blockName, idx)
 	xNorm := prefix + "_x_norm"
 	gate := prefix + "_gate"
 	gateAct := gate + "_act"
 	up := prefix + "_up"
 	ff := prefix + "_ff"
+	ffNorm := ff + "_internal_norm"
 	ffDown := prefix + "_down"
+	ffPostNorm := ffDown + "_post_norm"
 	ffScaled := prefix + "_scaled"
 	ffDrop := prefix + "_dropout"
 
-	// Pre-block RMSNorm
-	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
-	wi++
+	ffIn := x
+	if normPlacement == NormPlacementPre || normPlacement == NormPlacementSandwich {
+		var err error
+		wi, err = emitNamedNormIR(prog, x, wi, xNorm, norm)
+		if err != nil {
+			return wi, err
+		}
+		ffIn = xNorm
+	}
 
 	// Gated GLU: activation(gate_proj(x)) * up_proj(x), then down_proj.
-	prog.MatMul(xNorm, weightName(wi), gate)
+	prog.MatMul(ffIn, weightName(wi), gate)
 	wi++
 	switch gateActivation {
 	case "sigmoid":
@@ -557,11 +627,28 @@ func emitGatedGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult flo
 	default:
 		return wi, fmt.Errorf("unsupported gated GLU activation %q", gateActivation)
 	}
-	prog.MatMul(xNorm, weightName(wi), up)
+	prog.MatMul(ffIn, weightName(wi), up)
 	wi++
 	prog.Mul(gateAct, up, ff)
-	prog.MatMul(ff, weightName(wi), ffDown)
+	ffHidden := ff
+	if ffnInternalNorm {
+		var err error
+		wi, err = emitNamedNormIR(prog, ff, wi, ffNorm, norm)
+		if err != nil {
+			return wi, err
+		}
+		ffHidden = ffNorm
+	}
+	prog.MatMul(ffHidden, weightName(wi), ffDown)
 	wi++
+	if normPlacement == NormPlacementPost || normPlacement == NormPlacementSandwich {
+		var err error
+		wi, err = emitNamedNormIR(prog, ffDown, wi, ffPostNorm, norm)
+		if err != nil {
+			return wi, err
+		}
+		ffDown = ffPostNorm
+	}
 	if blockScales {
 		prog.Mul(ffDown, weightName(wi), ffScaled)
 		wi++
@@ -576,25 +663,29 @@ func emitGatedGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult flo
 	return wi, nil
 }
 
-// emitMLPIR emits a two-matrix feed-forward block:
-// RMSNorm -> up projection -> activation -> down projection -> residual add.
-//
-// Weight layout (3 weights per block):
-//
-//	w[wi+0] = RMSNorm scale
-//	w[wi+1] = up projection
-//	w[wi+2] = down projection
-func emitMLPIR(prog *Program, x string, wi, idx int, activation string, leakySlope float64) (int, error) {
+func emitMLPIRNorm(prog *Program, x string, wi, idx int, activation string, leakySlope float64, mlpMult float64, norm NormSpec, normPlacement string, ffnInternalNorm bool) (int, error) {
+	_ = mlpMult
+	norm = normSpecOrDefault(norm)
+	normPlacement = normPlacementOrDefault(normPlacement)
 	prefix := tmpName(x+"_mlp", idx)
 	xNorm := prefix + "_x_norm"
 	up := prefix + "_up"
 	act := prefix + "_act"
+	actNorm := act + "_internal_norm"
 	leaky := prefix + "_leaky"
 	down := prefix + "_down"
+	downPostNorm := down + "_post_norm"
 
-	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
-	wi++
-	prog.MatMul(xNorm, weightName(wi), up)
+	ffIn := x
+	if normPlacement == NormPlacementPre || normPlacement == NormPlacementSandwich {
+		var err error
+		wi, err = emitNamedNormIR(prog, x, wi, xNorm, norm)
+		if err != nil {
+			return wi, err
+		}
+		ffIn = xNorm
+	}
+	prog.MatMul(ffIn, weightName(wi), up)
 	wi++
 
 	switch strings.ToLower(strings.TrimSpace(activation)) {
@@ -615,8 +706,25 @@ func emitMLPIR(prog *Program, x string, wi, idx int, activation string, leakySlo
 		return wi, fmt.Errorf("unsupported mlp activation %q", activation)
 	}
 
-	prog.MatMul(act, weightName(wi), down)
+	ffHidden := act
+	if ffnInternalNorm {
+		var err error
+		wi, err = emitNamedNormIR(prog, act, wi, actNorm, norm)
+		if err != nil {
+			return wi, err
+		}
+		ffHidden = actNorm
+	}
+	prog.MatMul(ffHidden, weightName(wi), down)
 	wi++
+	if normPlacement == NormPlacementPost || normPlacement == NormPlacementSandwich {
+		var err error
+		wi, err = emitNamedNormIR(prog, down, wi, downPostNorm, norm)
+		if err != nil {
+			return wi, err
+		}
+		down = downPostNorm
+	}
 	prog.Add(x, down, x)
 
 	return wi, nil

@@ -7,14 +7,17 @@ import (
 
 // EmitOptions carries optional context for block emitters.
 type EmitOptions struct {
-	StreamSeqLens map[string]int
-	MLPMult       float64
-	BlockScales   bool
-	ResidMix      bool
-	Dropout       float32
-	AttnDropout   float32
-	BlockIndex    int
-	KVCache       map[int]BlockKVOutputs
+	StreamSeqLens   map[string]int
+	MLPMult         float64
+	BlockScales     bool
+	ResidMix        bool
+	Dropout         float32
+	AttnDropout     float32
+	Norm            NormSpec
+	NormPlacement   string
+	FFNInternalNorm bool
+	BlockIndex      int
+	KVCache         map[int]BlockKVOutputs
 }
 
 // BlockKVOutputs tracks the named K/V tensors emitted by a plain attention block.
@@ -102,51 +105,43 @@ func init() {
 			if heads <= 0 {
 				heads = 4
 			}
-			return emitPlainAttentionIRWithKVOptionsExConvention(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, opts.AttnDropout, spec.SkipAttention, spec.QKGain, spec.QKNorm, spec.RopeDims, spec.RopeConvention, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.KVSource, opts.KVCache, opts.BlockIndex)
+			return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, opts.AttnDropout, spec.SkipAttention, spec.QKGain, spec.QKNorm, spec.RopeDims, spec.RopeConvention, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.KVSource, opts.KVCache, opts.BlockIndex, opts.Norm, opts.NormPlacement, opts.FFNInternalNorm)
 		},
 		WeightCount: plainWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
 			return builtinBlockWeightShapes(spec, D, T, B, V, DefaultFFNMultiplier, false, false)
 		},
-		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
-			return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
-		},
+		weightShapesWithOptions: builtinBlockWeightShapesWithOptions,
 	})
 	RegisterBlock("swiglu", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
-			return emitSwiGLUIRWithDropout(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout)
+			return emitGatedGLUIRWithDropoutNorm(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, "swiglu", "sigmoid", opts.Norm, opts.NormPlacement, opts.FFNInternalNorm)
 		},
 		WeightCount: swigluWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
 			return builtinBlockWeightShapes(spec, D, T, B, V, DefaultFFNMultiplier, false, false)
 		},
-		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
-			return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
-		},
+		weightShapesWithOptions: builtinBlockWeightShapesWithOptions,
 	})
 	RegisterBlock("geglu", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
-			return emitGEGLUIRWithDropout(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout)
+			return emitGatedGLUIRWithDropoutNorm(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, "geglu", "gelu", opts.Norm, opts.NormPlacement, opts.FFNInternalNorm)
 		},
 		WeightCount: swigluWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
 			return builtinBlockWeightShapes(spec, D, T, B, V, DefaultFFNMultiplier, false, false)
 		},
-		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
-			return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
-		},
+		weightShapesWithOptions: builtinBlockWeightShapesWithOptions,
 	})
 	RegisterBlock("mlp", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
-			return emitMLPIR(prog, stream, wi, idx, spec.Activation, spec.LeakySlope)
+			return emitMLPIRNorm(prog, stream, wi, idx, spec.Activation, spec.LeakySlope, opts.MLPMult, opts.Norm, opts.NormPlacement, opts.FFNInternalNorm)
 		},
 		WeightCount: mlpWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
 			return builtinBlockWeightShapes(spec, D, T, B, V, DefaultFFNMultiplier, false, false)
 		},
-		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
-			return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
-		},
+		weightShapesWithOptions: builtinBlockWeightShapesWithOptions,
 	})
 	RegisterBlock("moe", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {

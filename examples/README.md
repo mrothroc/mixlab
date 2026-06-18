@@ -55,6 +55,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [char_features_plain.json](char_features_plain.json) | Char feature embedding | Tokenizer-level ByteLevel char feature channel |
 | [softcap_plain.json](softcap_plain.json) | Logit softcap | Bounded logits before loss |
 | [qk_norm_tiny.json](qk_norm_tiny.json) | QK-norm attention | Learned per-head-dimension Q/K RMSNorm |
+| [layernorm_sandwich_tiny.json](layernorm_sandwich_tiny.json) | LayerNorm sandwich stack | HF-exportable GPT-BERT-style norms and GEGLU |
 | [mlm_tiny.json](mlm_tiny.json) | Bidirectional transformer | Masked language modeling objective |
 | [hybrid_tiny.json](hybrid_tiny.json) | Hybrid transformer | Per-batch causal plus masked-objective training |
 | [distillation_tiny.json](distillation_tiny.json) | Teacher distillation | Causal LM with internal teacher ensemble loss |

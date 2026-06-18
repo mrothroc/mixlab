@@ -58,6 +58,37 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// Affine LayerNorm in post placement: exercises LayerNorm scale+bias
+			// weights plus post_attn/post_ffn norm slots against the Python template.
+			name: "layernorm_affine_post",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"norm_type": "layernorm", "norm_placement": "post",
+				"blocks": [
+					{"type": "plain", "heads": 2},
+					{"type": "geglu"},
+					{"type": "mlp", "activation": "gelu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 5151}
+			}`,
+		},
+		{
+			// No-affine LayerNorm, sandwich placement, FFN-internal norm: exercises
+			// every norm slot with weight-free LayerNorm ops against the template.
+			name: "layernorm_noaffine_sandwich_internal",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"norm_type": "layernorm", "norm_affine": false,
+				"norm_placement": "sandwich", "ffn_internal_norm": true,
+				"blocks": [
+					{"type": "plain", "heads": 2},
+					{"type": "swiglu"},
+					{"type": "mlp", "activation": "silu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 6262}
+			}`,
+		},
+		{
 			// Half-rotation (GPT-NeoX/Llama) RoPE convention, partial and full.
 			name: "rope_half_rotation",
 			config: `{

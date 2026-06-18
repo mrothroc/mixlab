@@ -208,6 +208,9 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		distillation,
 		data2vec,
 		newData2VecHiddenCapture(state.HiddenCaptureTopK, len(cfg.Blocks), state.HiddenCapturePrefix),
+		cfg.EffectiveNormSpec(),
+		cfg.EffectiveNormPlacement(),
+		cfg.FFNInternalNorm,
 	)
 }
 

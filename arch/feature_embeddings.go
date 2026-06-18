@@ -32,20 +32,6 @@ func trigramWeightCount(modelDim, trigramVocabSize, trigramDim int) int {
 	return count
 }
 
-func charWeightCount(modelDim, charVocabSize, charDim int) int {
-	if charVocabSize <= 0 {
-		return 0
-	}
-	if charDim <= 0 {
-		charDim = modelDim
-	}
-	count := 2 // char table + learned scale
-	if charDim != modelDim {
-		count++
-	}
-	return count
-}
-
 func emitCharIR(prog *Program, baseState string, B, T, D, wi, charVocabSize, charDim, charMaxPerToken int) int {
 	if charVocabSize <= 0 {
 		return wi

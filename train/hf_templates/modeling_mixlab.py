@@ -21,6 +21,26 @@ class MixlabRMSNorm(nn.Module):
         return x * inv_rms * self.weight
 
 
+def make_mixlab_norm(config, dim):
+    norm_type = str(getattr(config, "norm_type", "rmsnorm") or "rmsnorm").lower()
+    eps = float(getattr(config, "norm_eps", 1e-5) or 1e-5)
+    affine = bool(getattr(config, "norm_affine", True))
+    if norm_type in ("rmsnorm", "rms_norm", "rms"):
+        if not affine:
+            raise ValueError("norm_affine=False is not supported with rmsnorm")
+        return MixlabRMSNorm(dim, eps=eps)
+    if norm_type in ("layernorm", "layer_norm", "layer"):
+        return nn.LayerNorm(dim, eps=eps, elementwise_affine=affine)
+    raise ValueError(f"unsupported norm_type {norm_type!r}")
+
+
+def norm_placement(config):
+    value = str(getattr(config, "norm_placement", "pre") or "pre").lower()
+    if value in ("pre", "post", "sandwich"):
+        return value
+    raise ValueError(f"unsupported norm_placement {value!r}")
+
+
 class MixlabLinear(nn.Module):
     def __init__(self, in_dim, out_dim):
         super().__init__()
@@ -120,7 +140,9 @@ class MixlabPlainBlock(nn.Module):
         self.attn_gate_dim = min(dim, 12)
         self.relative_attention = str(block_config.get("relative_attention", "") or "none").lower()
         self.relative_attention_window = int(block_config.get("relative_attention_window", 0) or 128)
-        self.norm = MixlabRMSNorm(dim)
+        self.norm_placement = norm_placement(config)
+        self.ffn_internal_norm_enabled = bool(getattr(config, "ffn_internal_norm", False))
+        self.norm = make_mixlab_norm(config, dim) if self.norm_placement in ("pre", "sandwich") else None
         self.wq = MixlabLinear(dim, dim)
         self.wk = MixlabLinear(dim, self.kv_heads * self.head_dim)
         self.wv = MixlabLinear(dim, self.kv_heads * self.head_dim)
@@ -149,9 +171,13 @@ class MixlabPlainBlock(nn.Module):
             self.attn_gate_w = nn.Parameter(torch.empty(heads, self.attn_gate_dim))
             nn.init.zeros_(self.attn_gate_w)
         self.wo = MixlabLinear(dim, dim)
+        self.post_attn_norm = make_mixlab_norm(config, dim) if self.norm_placement in ("post", "sandwich") else None
+        self.ffn_norm = make_mixlab_norm(config, dim) if self.norm_placement == "sandwich" else None
         ffn_dim = max(dim, int(round(dim * float(config.mlp_mult))))
         self.ff1 = MixlabLinear(dim, ffn_dim)
+        self.ffn_internal_norm = make_mixlab_norm(config, ffn_dim) if self.ffn_internal_norm_enabled else None
         self.ff2 = MixlabLinear(ffn_dim, dim)
+        self.post_ffn_norm = make_mixlab_norm(config, dim) if self.norm_placement in ("post", "sandwich") else None
         # NB: the causal mask and RoPE tables are computed dynamically in
         # forward() rather than cached as buffers. `from_pretrained` initializes
         # custom models on the meta device, where value-dependent buffers built
@@ -226,7 +252,7 @@ class MixlabPlainBlock(nn.Module):
 
     def forward(self, x):
         residual = x
-        x_norm = self.norm(x)
+        x_norm = self.norm(x) if self.norm is not None else x
         bsz, seq_len, dim = x_norm.shape
 
         q = self.wq(x_norm).view(bsz, seq_len, self.heads, self.head_dim).transpose(1, 2)
@@ -271,9 +297,18 @@ class MixlabPlainBlock(nn.Module):
             gate = torch.sigmoid(torch.matmul(gate_in, self.attn_gate_w.transpose(0, 1)))
             ctx = ctx * gate.transpose(1, 2).unsqueeze(-1)
         ctx = ctx.transpose(1, 2).contiguous().view(bsz, seq_len, dim)
-        x = residual + self.wo(ctx)
+        attn_delta = self.wo(ctx)
+        if self.post_attn_norm is not None:
+            attn_delta = self.post_attn_norm(attn_delta)
+        x = residual + attn_delta
 
-        ff = self.ff2(torch.nn.functional.silu(self.ff1(x)))
+        ff_in = self.ffn_norm(x) if self.ffn_norm is not None else x
+        ff_hidden = torch.nn.functional.silu(self.ff1(ff_in))
+        if self.ffn_internal_norm is not None:
+            ff_hidden = self.ffn_internal_norm(ff_hidden)
+        ff = self.ff2(ff_hidden)
+        if self.post_ffn_norm is not None:
+            ff = self.post_ffn_norm(ff)
         return x + ff
 
 
@@ -362,13 +397,16 @@ class MixlabSwiGLUBlock(nn.Module):
         dim = config.model_dim
         ffn_dim = max(dim, int(round(dim * float(config.mlp_mult))))
         self.gate_activation = gate_activation
-        self.norm = MixlabRMSNorm(dim)
+        self.norm_placement = norm_placement(config)
+        self.norm = make_mixlab_norm(config, dim) if self.norm_placement in ("pre", "sandwich") else None
         self.w_gate = MixlabLinear(dim, ffn_dim)
         self.w_up = MixlabLinear(dim, ffn_dim)
+        self.internal_norm = make_mixlab_norm(config, ffn_dim) if bool(getattr(config, "ffn_internal_norm", False)) else None
         self.w_down = MixlabLinear(ffn_dim, dim)
+        self.post_norm = make_mixlab_norm(config, dim) if self.norm_placement in ("post", "sandwich") else None
 
     def forward(self, x):
-        x_norm = self.norm(x)
+        x_norm = self.norm(x) if self.norm is not None else x
         gate = self.w_gate(x_norm)
         if self.gate_activation == "sigmoid":
             gate = torch.sigmoid(gate)
@@ -377,7 +415,12 @@ class MixlabSwiGLUBlock(nn.Module):
         else:
             raise ValueError(f"unsupported exported gate activation {self.gate_activation!r}")
         gated = gate * self.w_up(x_norm)
-        return x + self.w_down(gated)
+        if self.internal_norm is not None:
+            gated = self.internal_norm(gated)
+        delta = self.w_down(gated)
+        if self.post_norm is not None:
+            delta = self.post_norm(delta)
+        return x + delta
 
 
 class MixlabMLPBlock(nn.Module):
@@ -387,12 +430,15 @@ class MixlabMLPBlock(nn.Module):
         ffn_dim = max(dim, int(round(dim * float(config.mlp_mult))))
         self.activation = str(block_config.get("activation", "") or "silu").lower()
         self.leaky_slope = float(block_config.get("leaky_slope", 0.0) or 0.5)
-        self.norm = MixlabRMSNorm(dim)
+        self.norm_placement = norm_placement(config)
+        self.norm = make_mixlab_norm(config, dim) if self.norm_placement in ("pre", "sandwich") else None
         self.w_up = MixlabLinear(dim, ffn_dim)
+        self.internal_norm = make_mixlab_norm(config, ffn_dim) if bool(getattr(config, "ffn_internal_norm", False)) else None
         self.w_down = MixlabLinear(ffn_dim, dim)
+        self.post_norm = make_mixlab_norm(config, dim) if self.norm_placement in ("post", "sandwich") else None
 
     def forward(self, x):
-        x_norm = self.norm(x)
+        x_norm = self.norm(x) if self.norm is not None else x
         up = self.w_up(x_norm)
         if self.activation == "silu":
             act = torch.nn.functional.silu(up)
@@ -405,7 +451,12 @@ class MixlabMLPBlock(nn.Module):
             act = act * act
         else:
             raise ValueError(f"unsupported exported MLP activation {self.activation!r}")
-        return x + self.w_down(act)
+        if self.internal_norm is not None:
+            act = self.internal_norm(act)
+        delta = self.w_down(act)
+        if self.post_norm is not None:
+            delta = self.post_norm(delta)
+        return x + delta
 
 
 def load_char_lookup(config):
@@ -494,7 +545,7 @@ class MixlabModel(PreTrainedModel):
             else:
                 raise ValueError(f"unsupported exported Mixlab block type {block_type!r}")
         self.blocks = nn.ModuleList(modules)
-        self.final_norm = MixlabRMSNorm(config.model_dim)
+        self.final_norm = make_mixlab_norm(config, config.model_dim)
         self.post_init()
 
     def get_input_embeddings(self):

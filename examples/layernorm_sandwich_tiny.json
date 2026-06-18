@@ -1,0 +1,26 @@
+{
+  "name": "layernorm_sandwich_tiny",
+  "model_dim": 128,
+  "vocab_size": 32000,
+  "seq_len": 128,
+  "mlp_mult": 4.0,
+  "norm_type": "layernorm",
+  "norm_affine": false,
+  "norm_eps": 1e-7,
+  "norm_placement": "sandwich",
+  "ffn_internal_norm": true,
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "geglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "geglu"}
+  ],
+  "training": {
+    "steps": 1000,
+    "lr": 0.0003,
+    "batch_tokens": 1024,
+    "seed": 42,
+    "weight_init": "gptbert",
+    "warmup_ratio": 0.02
+  }
+}

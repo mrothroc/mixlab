@@ -34,6 +34,11 @@ type hfConfigJSON struct {
 	SeqLen                int               `json:"seq_len"`
 	MaxPositionEmbeddings int               `json:"max_position_embeddings"`
 	MLPMult               float64           `json:"mlp_mult"`
+	NormType              string            `json:"norm_type,omitempty"`
+	NormEps               float32           `json:"norm_eps,omitempty"`
+	NormAffine            bool              `json:"norm_affine"`
+	NormPlacement         string            `json:"norm_placement,omitempty"`
+	FFNInternalNorm       bool              `json:"ffn_internal_norm,omitempty"`
 	LogitSoftcap          float32           `json:"logit_softcap,omitempty"`
 	CharVocabSize         int               `json:"char_vocab_size,omitempty"`
 	CharDim               int               `json:"char_dim,omitempty"`
@@ -56,6 +61,11 @@ type hfWeightMapping struct {
 	Mixlab string `json:"mixlab"`
 	HF     string `json:"hf"`
 	Shape  []int  `json:"shape"`
+}
+
+type hfBlockWeightName struct {
+	mixlab string
+	hf     string
 }
 
 type hfTokenizerSource struct {
@@ -420,7 +430,41 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 	if err := addByName("head", "lm_head_weight"); err != nil {
 		return nil, err
 	}
-	if err := addByName("final_norm", "final_norm.weight"); err != nil {
+	normSpec := cfg.EffectiveNormSpec()
+	normPlacement := cfg.EffectiveNormPlacement()
+	addNormByName := func(base, hfPrefix string) error {
+		switch strings.ToLower(strings.TrimSpace(normSpec.Type)) {
+		case "", "rmsnorm":
+			return addByName(rmsNormWeightName(base), hfPrefix+".weight")
+		case "layernorm":
+			if !normSpec.Affine {
+				return nil
+			}
+			if err := addByName(base+"_scale", hfPrefix+".weight"); err != nil {
+				return err
+			}
+			return addByName(base+"_bias", hfPrefix+".bias")
+		default:
+			return fmt.Errorf("unsupported HF export norm_type %q", normSpec.Type)
+		}
+	}
+	appendNormNames := func(names []hfBlockWeightName, base, hfPrefix string) []hfBlockWeightName {
+		switch strings.ToLower(strings.TrimSpace(normSpec.Type)) {
+		case "", "rmsnorm":
+			return append(names, hfBlockWeightName{mixlab: rmsNormWeightName(base), hf: hfPrefix + ".weight"})
+		case "layernorm":
+			if !normSpec.Affine {
+				return names
+			}
+			return append(names,
+				hfBlockWeightName{mixlab: base + "_scale", hf: hfPrefix + ".weight"},
+				hfBlockWeightName{mixlab: base + "_bias", hf: hfPrefix + ".bias"},
+			)
+		default:
+			return names
+		}
+	}
+	if err := addNormByName("final_norm", "final_norm"); err != nil {
 		return nil, err
 	}
 
@@ -477,11 +521,11 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 		prefix := fmt.Sprintf("blocks.%d", blockIdx)
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
 		case "plain":
-			names := []struct {
-				mixlab string
-				hf     string
-			}{
-				{mixlab: "norm_scale", hf: "norm.weight"},
+			var names []hfBlockWeightName
+			if normPlacement == "pre" || normPlacement == "sandwich" {
+				names = appendNormNames(names, "norm", "norm")
+			}
+			names = append(names, []hfBlockWeightName{
 				{mixlab: "wq", hf: "wq.weight"},
 				{mixlab: "wk", hf: "wk.weight"},
 				{mixlab: "wv", hf: "wv.weight"},
@@ -493,8 +537,20 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 				{mixlab: "qk_gain", hf: "qk_gain"},
 				{mixlab: "attn_gate_w", hf: "attn_gate_w"},
 				{mixlab: "wo", hf: "wo.weight"},
-				{mixlab: "ff1", hf: "ff1.weight"},
-				{mixlab: "ff2", hf: "ff2.weight"},
+			}...)
+			if normPlacement == "post" || normPlacement == "sandwich" {
+				names = appendNormNames(names, "post_attn_norm", "post_attn_norm")
+			}
+			if normPlacement == "sandwich" {
+				names = appendNormNames(names, "ffn_norm", "ffn_norm")
+			}
+			names = append(names, hfBlockWeightName{mixlab: "ff1", hf: "ff1.weight"})
+			if cfg.FFNInternalNorm {
+				names = appendNormNames(names, "ffn_internal_norm", "ffn_internal_norm")
+			}
+			names = append(names, hfBlockWeightName{mixlab: "ff2", hf: "ff2.weight"})
+			if normPlacement == "post" || normPlacement == "sandwich" {
+				names = appendNormNames(names, "post_ffn_norm", "post_ffn_norm")
 			}
 			for _, name := range names {
 				if wi >= len(shapes) {
@@ -518,14 +574,20 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 				wi = firstUnmappedWeight(used, wi+1)
 			}
 		case "swiglu", "geglu":
-			names := []struct {
-				mixlab string
-				hf     string
-			}{
-				{mixlab: "ffn_norm_scale", hf: "norm.weight"},
+			var names []hfBlockWeightName
+			if normPlacement == "pre" || normPlacement == "sandwich" {
+				names = appendNormNames(names, "ffn_norm", "norm")
+			}
+			names = append(names, []hfBlockWeightName{
 				{mixlab: "w_gate", hf: "w_gate.weight"},
 				{mixlab: "w_up", hf: "w_up.weight"},
-				{mixlab: "w_down", hf: "w_down.weight"},
+			}...)
+			if cfg.FFNInternalNorm {
+				names = appendNormNames(names, "ffn_internal_norm", "internal_norm")
+			}
+			names = append(names, hfBlockWeightName{mixlab: "w_down", hf: "w_down.weight"})
+			if normPlacement == "post" || normPlacement == "sandwich" {
+				names = appendNormNames(names, "post_ffn_norm", "post_norm")
 			}
 			for _, name := range names {
 				if wi >= len(shapes) {
@@ -537,13 +599,17 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 				wi = firstUnmappedWeight(used, wi+1)
 			}
 		case "mlp":
-			names := []struct {
-				mixlab string
-				hf     string
-			}{
-				{mixlab: "ffn_norm_scale", hf: "norm.weight"},
-				{mixlab: "w_up", hf: "w_up.weight"},
-				{mixlab: "w_down", hf: "w_down.weight"},
+			var names []hfBlockWeightName
+			if normPlacement == "pre" || normPlacement == "sandwich" {
+				names = appendNormNames(names, "ffn_norm", "norm")
+			}
+			names = append(names, hfBlockWeightName{mixlab: "w_up", hf: "w_up.weight"})
+			if cfg.FFNInternalNorm {
+				names = appendNormNames(names, "ffn_internal_norm", "internal_norm")
+			}
+			names = append(names, hfBlockWeightName{mixlab: "w_down", hf: "w_down.weight"})
+			if normPlacement == "post" || normPlacement == "sandwich" {
+				names = appendNormNames(names, "post_ffn_norm", "post_norm")
 			}
 			for _, name := range names {
 				if wi >= len(shapes) {
@@ -623,6 +689,13 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 		return nil, fmt.Errorf("HF weight map did not consume all weights: next_unmapped=%d total=%d", wi, len(shapes))
 	}
 	return out, nil
+}
+
+func rmsNormWeightName(base string) string {
+	if base == "final_norm" || strings.HasSuffix(base, "_scale") {
+		return base
+	}
+	return base + "_scale"
 }
 
 func firstUnmappedWeight(used []bool, start int) int {

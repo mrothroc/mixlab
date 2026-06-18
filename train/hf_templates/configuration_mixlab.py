@@ -10,6 +10,11 @@ class MixlabConfig(PretrainedConfig):
         vocab_size=0,
         seq_len=0,
         mlp_mult=2.67,
+        norm_type="rmsnorm",
+        norm_eps=1e-5,
+        norm_affine=True,
+        norm_placement="pre",
+        ffn_internal_norm=False,
         blocks=None,
         masked_blocks=None,
         logit_softcap=0.0,
@@ -33,6 +38,11 @@ class MixlabConfig(PretrainedConfig):
         self.seq_len = seq_len
         self.max_position_embeddings = seq_len
         self.mlp_mult = mlp_mult
+        self.norm_type = norm_type
+        self.norm_eps = norm_eps
+        self.norm_affine = norm_affine
+        self.norm_placement = norm_placement
+        self.ffn_internal_norm = ffn_internal_norm
         self.blocks = blocks or []
         self.masked_blocks = masked_blocks or []
         self.logit_softcap = logit_softcap

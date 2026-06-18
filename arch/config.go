@@ -41,6 +41,11 @@ type ArchConfig struct {
 	Dropout                  float32      `json:"dropout,omitempty"`
 	AttnDropout              float32      `json:"attn_dropout,omitempty"`
 	HiddenDropout            float32      `json:"hidden_dropout,omitempty"`
+	NormType                 string       `json:"norm_type,omitempty"`
+	NormEps                  float32      `json:"norm_eps,omitempty"`
+	NormAffine               *bool        `json:"norm_affine,omitempty"`
+	NormPlacement            string       `json:"norm_placement,omitempty"`
+	FFNInternalNorm          bool         `json:"ffn_internal_norm,omitempty"`
 	MTP                      *MTPSpec     `json:"mtp,omitempty"`
 	Backout                  *BackoutSpec `json:"backout,omitempty"`
 	Data                     DataSpec     `json:"data,omitempty"`
@@ -704,6 +709,27 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.HiddenDropout < 0 || cfg.HiddenDropout > 1 {
 		return nil, fmt.Errorf("config %q has invalid hidden_dropout=%g (must be in [0,1])", source, cfg.HiddenDropout)
 	}
+	cfg.NormType = normalizeNormType(cfg.NormType)
+	switch cfg.NormType {
+	case NormTypeRMSNorm, NormTypeLayerNorm:
+	default:
+		return nil, fmt.Errorf("config %q has invalid norm_type=%q (must be \"rmsnorm\" or \"layernorm\")", source, cfg.NormType)
+	}
+	if cfg.NormEps < 0 {
+		return nil, fmt.Errorf("config %q has invalid norm_eps=%g (must be > 0)", source, cfg.NormEps)
+	}
+	if cfg.NormEps == 0 {
+		cfg.NormEps = 1e-5
+	}
+	if cfg.NormAffine != nil && !*cfg.NormAffine && cfg.NormType == NormTypeRMSNorm {
+		return nil, fmt.Errorf("config %q norm_affine=false requires norm_type=\"layernorm\" in this release", source)
+	}
+	cfg.NormPlacement = normalizeNormPlacement(cfg.NormPlacement)
+	switch cfg.NormPlacement {
+	case NormPlacementPre, NormPlacementPost, NormPlacementSandwich:
+	default:
+		return nil, fmt.Errorf("config %q has invalid norm_placement=%q (must be \"pre\", \"post\", or \"sandwich\")", source, cfg.NormPlacement)
+	}
 	if cfg.MTP != nil {
 		if cfg.MTP.nSet && cfg.MTP.N < 1 {
 			return nil, fmt.Errorf("config %q has invalid mtp.n=%d (must be >= 1)", source, cfg.MTP.N)
@@ -772,6 +798,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 	if err := validateParallelResidual(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateNormPolicy(cfg, source); err != nil {
 		return nil, err
 	}
 
