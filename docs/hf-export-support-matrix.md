@@ -16,6 +16,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `plain.relative_attention=deberta_p2c_c2p` | Supported | DeBERTa/GPT-BERT C2P/P2C relative-bias operator semantics with Mixlab's per-block projected position tensors, `2 * bucket - 1` table rows, log-bucketed `q-k` relative positions, masks, and optional `qk_norm`/`qk_gain`. |
 | `plain.relative_attention_parameterization=shared_qk_reuse` | Supported | GPT-BERT-style shared relative embedding table exported once as `relative_embeddings`; each block reuses its exported `wk`/`wq` projections for position keys/queries. |
 | `plain.relative_attention_embedding_norm=layernorm` | Supported | The shared relative embedding table can be normalized once per forward by an exported affine `relative_layer_norm` before block-local Q/K projection reuse. |
+| `layer_aggregation="dwa"` | Supported | GPT-BERT-style dense weighted aggregation exports one `dwa_alphas.N` tensor per supported residual aggregation point and mirrors native accumulator semantics in the generated template. |
 | `swiglu` | Supported | Bias-free SwiGLU FFN parity. |
 | `geglu` | Supported | Bias-free GEGLU FFN parity. |
 | `mlp` | Supported | `silu`, `gelu`, `relu`, and `leaky_relu_sq` activation variants. |

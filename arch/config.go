@@ -47,6 +47,7 @@ type ArchConfig struct {
 	NormAffine               *bool        `json:"norm_affine,omitempty"`
 	NormPlacement            string       `json:"norm_placement,omitempty"`
 	FFNInternalNorm          bool         `json:"ffn_internal_norm,omitempty"`
+	LayerAggregation         string       `json:"layer_aggregation,omitempty"`
 	MTP                      *MTPSpec     `json:"mtp,omitempty"`
 	Backout                  *BackoutSpec `json:"backout,omitempty"`
 	Data                     DataSpec     `json:"data,omitempty"`
@@ -813,6 +814,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 	if err := validateNormPolicy(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateLayerAggregation(cfg, source); err != nil {
 		return nil, err
 	}
 

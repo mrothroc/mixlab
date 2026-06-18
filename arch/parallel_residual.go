@@ -287,7 +287,7 @@ func emitParallelBlockPairWithRecurrenceDropout(prog *Program, specs []BlockSpec
 	return wi, nil
 }
 
-func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout, attnDropout float32, backout *backoutBuildPlan, norm NormSpec, normPlacement string, ffnInternalNorm bool, sharedRel sharedRelativeAttentionPlan) (int, error) {
+func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, start, end int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout, attnDropout float32, backout *backoutBuildPlan, norm NormSpec, normPlacement string, ffnInternalNorm bool, sharedRel sharedRelativeAttentionPlan, layerAgg *layerAggregationBuildState) (int, error) {
 	plan, err := newParallelResidualPlan(specs, parallelResidual)
 	if err != nil {
 		return wi, err
@@ -310,7 +310,7 @@ func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 			i += 2
 			continue
 		}
-		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, refs, weightStarts, kvCache, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, sharedRel)
+		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, refs, weightStarts, kvCache, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, sharedRel, layerAgg)
 		if err != nil {
 			return wi, err
 		}
@@ -323,7 +323,7 @@ func emitSequentialRangeWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 	return wi, nil
 }
 
-func emitSequentialOrderWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, order []int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout, attnDropout float32, backout *backoutBuildPlan, norm NormSpec, normPlacement string, ffnInternalNorm bool, sharedRel sharedRelativeAttentionPlan) (int, error) {
+func emitSequentialOrderWithRecurrenceDropout(prog *Program, specs []BlockSpec, refs []int, weightStarts []int, kvCache map[int]BlockKVOutputs, order []int, stream, original string, wi, D, T, B, V int, opIdx *int, streamSeqLens map[string]int, mlpMult float64, blockScales, residMix, parallelResidual bool, dropout, attnDropout float32, backout *backoutBuildPlan, norm NormSpec, normPlacement string, ffnInternalNorm bool, sharedRel sharedRelativeAttentionPlan, layerAgg *layerAggregationBuildState) (int, error) {
 	plan, err := newParallelResidualPlan(specs, parallelResidual)
 	if err != nil {
 		return wi, err
@@ -361,7 +361,7 @@ func emitSequentialOrderWithRecurrenceDropout(prog *Program, specs []BlockSpec, 
 			pos += 2
 			continue
 		}
-		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, refs, weightStarts, kvCache, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, sharedRel)
+		wi, err = emitSequentialBlockWithRecurrenceDropout(prog, specs, refs, weightStarts, kvCache, i, stream, original, wi, D, T, B, V, opIdx, streamSeqLens, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, sharedRel, layerAgg)
 		if err != nil {
 			return wi, err
 		}

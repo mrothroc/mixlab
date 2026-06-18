@@ -34,6 +34,7 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 | `hidden_dropout` | number | No | `dropout` | Training dropout on attention output projections, FFN output projections, and MoE deltas. Explicit `0` disables hidden dropout even when `dropout` is nonzero. |
 | `attn_dropout` | number | No | `dropout` | Training dropout on `plain` attention probabilities after softmax and before multiplying by values. Explicit `0` disables attention-probability dropout even when `dropout` is nonzero. |
 | `mlm_head` | string | No | `"linear"` | Masked-objective prediction head. `"linear"` keeps the legacy bare LM head. `"bert"` uses `LayerNorm(affine=false) -> Linear(D,D)+bias -> GELU -> LayerNorm(affine=false) -> Dropout -> tied embedding output + bias` for MLM/MNTP/hybrid masked steps and `AutoModelForMaskedLM` export. Requires `tie_embeddings: true` and a masked objective path. |
+| `layer_aggregation` | string | No | `"none"` | Optional dense weighted aggregation over static embeddings and previous sublayer outputs. `"dwa"` enables GPT-BERT-style DWA on supported sequential blocks. See [Dense Weighted Aggregation](#dense-weighted-aggregation-dwa). |
 | `norm_type` | string | No | `"rmsnorm"` | Normalization used by supported GPT-style blocks and the final model norm. `"rmsnorm"` preserves the legacy layout; `"layernorm"` emits LayerNorm. |
 | `norm_eps` | number | No | `1e-5` | Epsilon for supported block/final norms. Must be `> 0`. |
 | `norm_affine` | boolean | No | `true` | Whether LayerNorm uses learned scale/bias. `false` is supported for `norm_type: "layernorm"`; RMSNorm remains affine-only. |
@@ -120,6 +121,27 @@ mixlab -mode prepare -input data.txt -output data/example \
 ```
 
 Other tokenizers can write their own `char_features.bin` by emitting a matching header + uint16 payload — the engine does not validate how the ids were derived.
+
+## Dense Weighted Aggregation (DWA)
+
+`layer_aggregation: "dwa"` enables GPT-BERT-style dense weighted aggregation. The model keeps an accumulator containing the static embedding state and every completed supported sublayer residual output. At aggregation point `k`, Mixlab adds a trainable `dwa_alpha_k` vector of length `k + 2`, initialized to all zeros except the last element set to `1.0`, and replaces the running hidden state with the weighted sum of the accumulator.
+
+Aggregation points are:
+
+- `plain`: after the attention residual and after the FFN residual
+- `swiglu`, `geglu`, `mlp`, `moe`: after the block residual
+
+V1 supports DWA on normal sequential `plain`/`swiglu`/`geglu`/`mlp`/`moe` stacks. It rejects recurrence, recurrence phases, custom execution order, U-Net, parallel residual, `kv_source`, `skip_attention`, and recurrent/custom block types until those paths have explicit parity coverage. DWA alpha weights are appended after normal model weights so existing base weight indices remain stable.
+
+```json
+{
+  "layer_aggregation": "dwa",
+  "blocks": [
+    {"type": "plain", "heads": 6},
+    {"type": "geglu"}
+  ]
+}
+```
 
 ## Multi-Token Prediction (MTP)
 

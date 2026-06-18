@@ -64,7 +64,7 @@ func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D,
 }
 
 func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
-	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, false, false, "", xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, sharedRelativeAttentionPlan{WeightIndex: -1})
+	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, false, false, "", xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, sharedRelativeAttentionPlan{WeightIndex: -1}, nil)
 }
 
 func emitLinearProjectionIR(prog *Program, input string, wi int, useBias bool, output string) (weightNameUsed, biasNameUsed string, nextWI int) {
@@ -83,7 +83,7 @@ func emitLinearProjectionIR(prog *Program, input string, wi int, useBias bool, o
 	return weightNameUsed, biasNameUsed, wi
 }
 
-func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, attnPostNormMode string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, sharedRel sharedRelativeAttentionPlan) (int, error) {
+func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, attnPostNormMode string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, sharedRel sharedRelativeAttentionPlan, layerAgg *layerAggregationBuildState) (int, error) {
 	_ = mlpMult
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
@@ -369,6 +369,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 			proj = projDrop
 		}
 		prog.Add(x, proj, x)
+		layerAgg.apply(prog, x)
 	}
 
 	// Feed-forward tail: ff1 -> activation -> ff2 -> residual
@@ -439,6 +440,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		ff2 = ff2Drop
 	}
 	prog.Add(x, ff2, x)
+	layerAgg.apply(prog, x)
 
 	return wi, nil
 }
@@ -583,10 +585,10 @@ func emitGEGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float6
 }
 
 func emitGatedGLUIRWithDropout(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool, dropout float32, blockName, gateActivation string) (int, error) {
-	return emitGatedGLUIRWithDropoutNorm(prog, x, wi, idx, mlpMult, blockScales, dropout, blockName, gateActivation, defaultNormSpec(), NormPlacementPre, false)
+	return emitGatedGLUIRWithDropoutNorm(prog, x, wi, idx, mlpMult, blockScales, dropout, blockName, gateActivation, defaultNormSpec(), NormPlacementPre, false, nil)
 }
 
-func emitGatedGLUIRWithDropoutNorm(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool, dropout float32, blockName, gateActivation string, norm NormSpec, normPlacement string, ffnInternalNorm bool) (int, error) {
+func emitGatedGLUIRWithDropoutNorm(prog *Program, x string, wi, idx int, mlpMult float64, blockScales bool, dropout float32, blockName, gateActivation string, norm NormSpec, normPlacement string, ffnInternalNorm bool, layerAgg *layerAggregationBuildState) (int, error) {
 	_ = mlpMult
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
@@ -655,11 +657,12 @@ func emitGatedGLUIRWithDropoutNorm(prog *Program, x string, wi, idx int, mlpMult
 		ffDown = ffDrop
 	}
 	prog.Add(x, ffDown, x)
+	layerAgg.apply(prog, x)
 
 	return wi, nil
 }
 
-func emitMLPIRNorm(prog *Program, x string, wi, idx int, activation string, leakySlope float64, mlpMult float64, norm NormSpec, normPlacement string, ffnInternalNorm bool) (int, error) {
+func emitMLPIRNorm(prog *Program, x string, wi, idx int, activation string, leakySlope float64, mlpMult float64, norm NormSpec, normPlacement string, ffnInternalNorm bool, layerAgg *layerAggregationBuildState) (int, error) {
 	_ = mlpMult
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
@@ -722,6 +725,7 @@ func emitMLPIRNorm(prog *Program, x string, wi, idx int, activation string, leak
 		down = downPostNorm
 	}
 	prog.Add(x, down, x)
+	layerAgg.apply(prog, x)
 
 	return wi, nil
 }

@@ -86,6 +86,23 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// Dense Weighted Aggregation: each sublayer residual point becomes a
+			// learned weighted sum of all prior sublayer outputs + embeddings.
+			// Mixed plain (2 points) and FFN blocks (1 point each).
+			name: "layer_aggregation_dwa",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"layer_aggregation": "dwa",
+				"blocks": [
+					{"type": "plain", "heads": 2, "rope_dims": 2},
+					{"type": "swiglu"},
+					{"type": "plain", "heads": 2},
+					{"type": "mlp", "activation": "gelu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 5252}
+			}`,
+		},
+		{
 			// Partial RoPE, qk_norm, sigmoid SwiGLU, tanh-approx GELU, full RoPE.
 			name: "core_rope_qknorm_glu_mlp",
 			config: `{

@@ -34,6 +34,7 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 		FFNInternalNorm:       cfg.FFNInternalNorm,
 		LogitSoftcap:          cfg.LogitSoftcap,
 		MLMHead:               hfExportMLMHead(cfg),
+		LayerAggregation:      hfExportLayerAggregation(cfg),
 		HiddenDropout:         cfg.EffectiveHiddenDropout(),
 		CharVocabSize:         cfg.CharVocabSize,
 		CharDim:               cfg.EffectiveCharDim(),
@@ -54,7 +55,7 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 			"source":            "mixlab",
 			"weight_map":        "weight_map.json",
 			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe"},
+			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe"},
 			"unsupported_fails": true,
 		},
 	}
@@ -66,6 +67,13 @@ func hfExportMLMHead(cfg *ArchConfig) string {
 		return ""
 	}
 	return "bert"
+}
+
+func hfExportLayerAggregation(cfg *ArchConfig) string {
+	if cfg == nil || cfg.EffectiveLayerAggregation() != "dwa" {
+		return ""
+	}
+	return "dwa"
 }
 
 func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {

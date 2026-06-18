@@ -3,7 +3,6 @@ package train
 import (
 	"fmt"
 	"math"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -75,28 +74,44 @@ func runNativeCPUHidden(t *testing.T, cfg *ArchConfig, w [][]float64, tokens [][
 			wi += 2
 		}
 	}
+	dwa := newNativeDWACPUState(t, cfg, w, x)
 	for blockIdx, block := range cfg.Blocks {
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
 		case "plain":
 			n := plainHFExportWeightCount(block, cfg.EffectiveNormPlacement())
-			x = plainCPUForward(t, cfg, block, x, w[wi:wi+n], sharedRelativeEmbeddings)
+			x = plainCPUForward(t, cfg, block, x, w[wi:wi+n], sharedRelativeEmbeddings, dwa)
 			wi += n
 		case "moe":
 			n := moeHFExportWeightCount(block)
 			x = moeCPUForward(t, cfg, block, x, w[wi:wi+n])
+			if dwa != nil {
+				x = dwa.apply(t, x)
+			}
 			wi += n
 		case "swiglu":
 			x = gatedGLUCPUForward(t, cfg, x, w[wi:wi+4], "sigmoid")
+			if dwa != nil {
+				x = dwa.apply(t, x)
+			}
 			wi += 4
 		case "geglu":
 			x = gatedGLUCPUForward(t, cfg, x, w[wi:wi+4], "gelu")
+			if dwa != nil {
+				x = dwa.apply(t, x)
+			}
 			wi += 4
 		case "mlp":
 			x = mlpCPUForward(t, cfg, block, x, w[wi:wi+3])
+			if dwa != nil {
+				x = dwa.apply(t, x)
+			}
 			wi += 3
 		default:
 			t.Fatalf("unsupported native parity block %q at %d", block.Type, blockIdx)
 		}
+	}
+	if dwa != nil {
+		dwa.finish(t)
 	}
 	return rmsNormCPU(x, w[finalNormIdx])
 }
@@ -136,6 +151,7 @@ func runHFCPUHidden(t *testing.T, cfg *ArchConfig, weights map[string][]float64,
 			sharedRelativeEmbeddings = layerNorm2DCPU(sharedRelativeEmbeddings, weights["relative_layer_norm.weight"], weights["relative_layer_norm.bias"], rows, cfg.ModelDim, float64(cfg.EffectiveNormSpec().Eps))
 		}
 	}
+	dwa := newHFDWACPUState(t, cfg, weights, x)
 	normPlacement := cfg.EffectiveNormPlacement()
 	for i, block := range cfg.Blocks {
 		prefix := fmt.Sprintf("blocks.%d.", i)
@@ -193,7 +209,7 @@ func runHFCPUHidden(t *testing.T, cfg *ArchConfig, weights map[string][]float64,
 				weights[prefix+"ff1.weight"],
 				weights[prefix+"ff2.weight"],
 			)
-			x = plainCPUForward(t, cfg, block, x, blockWeights, sharedRelativeEmbeddings)
+			x = plainCPUForward(t, cfg, block, x, blockWeights, sharedRelativeEmbeddings, dwa)
 		case "swiglu":
 			x = gatedGLUCPUForward(t, cfg, x, [][]float64{
 				weights[prefix+"norm.weight"],
@@ -201,6 +217,9 @@ func runHFCPUHidden(t *testing.T, cfg *ArchConfig, weights map[string][]float64,
 				weights[prefix+"w_up.weight"],
 				weights[prefix+"w_down.weight"],
 			}, "sigmoid")
+			if dwa != nil {
+				x = dwa.apply(t, x)
+			}
 		case "geglu":
 			x = gatedGLUCPUForward(t, cfg, x, [][]float64{
 				weights[prefix+"norm.weight"],
@@ -208,12 +227,18 @@ func runHFCPUHidden(t *testing.T, cfg *ArchConfig, weights map[string][]float64,
 				weights[prefix+"w_up.weight"],
 				weights[prefix+"w_down.weight"],
 			}, "gelu")
+			if dwa != nil {
+				x = dwa.apply(t, x)
+			}
 		case "mlp":
 			x = mlpCPUForward(t, cfg, block, x, [][]float64{
 				weights[prefix+"norm.weight"],
 				weights[prefix+"w_up.weight"],
 				weights[prefix+"w_down.weight"],
 			})
+			if dwa != nil {
+				x = dwa.apply(t, x)
+			}
 		case "moe":
 			blockWeights := [][]float64{
 				weights[prefix+"norm.weight"],
@@ -246,9 +271,15 @@ func runHFCPUHidden(t *testing.T, cfg *ArchConfig, weights map[string][]float64,
 				}
 			}
 			x = moeCPUForward(t, cfg, block, x, blockWeights)
+			if dwa != nil {
+				x = dwa.apply(t, x)
+			}
 		default:
 			t.Fatalf("unsupported HF parity block %q at %d", block.Type, i)
 		}
+	}
+	if dwa != nil {
+		dwa.finish(t)
 	}
 	return rmsNormCPU(x, weights["final_norm.weight"])
 }
@@ -345,8 +376,114 @@ func embedCPU(table []float64, vocab, dim int, tokens [][]int) [][][]float64 {
 	return out
 }
 
-func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]float64, w [][]float64, sharedRelativeEmbeddings []float64) [][][]float64 {
+type dwaCPUState struct {
+	alphas  [][]float64
+	history [][][][]float64
+	step    int
+}
+
+func newNativeDWACPUState(t *testing.T, cfg *ArchConfig, w [][]float64, static [][][]float64) *dwaCPUState {
 	t.Helper()
+	if cfg.EffectiveLayerAggregation() != "dwa" {
+		return nil
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes for DWA oracle: %v", err)
+	}
+	count, err := hfLayerAggregationPointCount(cfg)
+	if err != nil {
+		t.Fatalf("hfLayerAggregationPointCount: %v", err)
+	}
+	alphas := make([][]float64, count)
+	for i := 0; i < count; i++ {
+		idx := weightShapeIndex(shapes, fmt.Sprintf("dwa_alpha_%d", i))
+		if idx < 0 {
+			t.Fatalf("missing native DWA alpha %d", i)
+		}
+		alphas[i] = w[idx]
+	}
+	return newDWACPUState(alphas, static)
+}
+
+func newHFDWACPUState(t *testing.T, cfg *ArchConfig, weights map[string][]float64, static [][][]float64) *dwaCPUState {
+	t.Helper()
+	if cfg.EffectiveLayerAggregation() != "dwa" {
+		return nil
+	}
+	count, err := hfLayerAggregationPointCount(cfg)
+	if err != nil {
+		t.Fatalf("hfLayerAggregationPointCount: %v", err)
+	}
+	alphas := make([][]float64, count)
+	for i := 0; i < count; i++ {
+		name := fmt.Sprintf("dwa_alphas.%d", i)
+		alpha := weights[name]
+		if alpha == nil {
+			t.Fatalf("missing HF DWA alpha %q", name)
+		}
+		alphas[i] = alpha
+	}
+	return newDWACPUState(alphas, static)
+}
+
+func newDWACPUState(alphas [][]float64, static [][][]float64) *dwaCPUState {
+	return &dwaCPUState{
+		alphas:  alphas,
+		history: [][][][]float64{clone3D(static)},
+	}
+}
+
+func (s *dwaCPUState) apply(t *testing.T, x [][][]float64) [][][]float64 {
+	t.Helper()
+	if s == nil {
+		return x
+	}
+	if s.step >= len(s.alphas) {
+		t.Fatalf("DWA consumed too many states: step=%d alphas=%d", s.step, len(s.alphas))
+	}
+	s.history = append(s.history, clone3D(x))
+	alpha := s.alphas[s.step]
+	if len(alpha) != len(s.history) {
+		t.Fatalf("DWA alpha %d len=%d want %d", s.step, len(alpha), len(s.history))
+	}
+	out := make3D(len(x), len(x[0]), len(x[0][0]))
+	for h, state := range s.history {
+		for b := range state {
+			for i := range state[b] {
+				for d := range state[b][i] {
+					out[b][i][d] += alpha[h] * state[b][i][d]
+				}
+			}
+		}
+	}
+	s.step++
+	return out
+}
+
+func (s *dwaCPUState) finish(t *testing.T) {
+	t.Helper()
+	if s != nil && s.step != len(s.alphas) {
+		t.Fatalf("DWA consumed %d alpha vectors, want %d", s.step, len(s.alphas))
+	}
+}
+
+func clone3D(x [][][]float64) [][][]float64 {
+	out := make3D(len(x), len(x[0]), len(x[0][0]))
+	for b := range x {
+		for i := range x[b] {
+			copy(out[b][i], x[b][i])
+		}
+	}
+	return out
+}
+
+func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]float64, w [][]float64, sharedRelativeEmbeddings []float64, dwas ...*dwaCPUState) [][][]float64 {
+	t.Helper()
+	var dwa *dwaCPUState
+	if len(dwas) > 0 {
+		dwa = dwas[0]
+	}
 	batch := len(x)
 	seqLen := len(x[0])
 	dim := cfg.ModelDim
@@ -537,6 +674,9 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 		woIndex++
 	}
 	x = add3D(x, proj)
+	if dwa != nil {
+		x = dwa.apply(t, x)
+	}
 	ffWeightIndex := woIndex
 	var ffHidden [][][]float64
 	switch hfPlainFFNActivation(block) {
@@ -572,7 +712,11 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 		t.Fatalf("unsupported plain ffn_activation %q", block.FFNActivation)
 	}
 	ff2 := matmul3DCPU(ffHidden, w[ffWeightIndex], ffnDimForConfig(cfg), dim)
-	return add3D(x, ff2)
+	x = add3D(x, ff2)
+	if dwa != nil {
+		x = dwa.apply(t, x)
+	}
+	return x
 }
 
 func relativeAttentionProjectionCPU(t *testing.T, block BlockSpec, embeddings, wPosKey, wPosQuery []float64, dim, heads, headDim, window int) ([][][]float64, [][][]float64) {
@@ -665,174 +809,6 @@ func absInt(v int) int {
 		return -v
 	}
 	return v
-}
-
-func moeCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]float64, w [][]float64) [][][]float64 {
-	t.Helper()
-	batch := len(x)
-	seqLen := len(x[0])
-	rows := batch * seqLen
-	dim := cfg.ModelDim
-	experts := block.NumExperts
-	topK := effectiveHFMoETopK(block)
-	xNorm := rmsNormCPU(x, w[0])
-	flat := flatten3DCPU(xNorm)
-	router := matmul2DCPU(flat, w[1], rows, dim, experts)
-	probs := softmaxRowsFloat64(router, rows, experts)
-	expert := BlockSpec{Type: "swiglu"}
-	if block.ExpertBlock != nil {
-		expert = *block.ExpertBlock
-	}
-	expertType := strings.ToLower(strings.TrimSpace(expert.Type))
-	if expertType == "" {
-		expertType = "swiglu"
-	}
-	perExpert := 3
-	if expertType == "mlp" {
-		perExpert = 2
-	}
-	deltaFlat := make([]float64, rows*dim)
-	ffn := ffnDimForConfig(cfg)
-	for r := 0; r < rows; r++ {
-		order := make([]int, experts)
-		for e := 0; e < experts; e++ {
-			order[e] = e
-		}
-		sort.SliceStable(order, func(i, j int) bool {
-			return probs[r*experts+order[i]] > probs[r*experts+order[j]]
-		})
-		denom := 0.0
-		for k := 0; k < topK; k++ {
-			denom += probs[r*experts+order[k]]
-		}
-		if denom == 0 {
-			denom = 1
-		}
-		row := flat[r*dim : (r+1)*dim]
-		for k := 0; k < topK; k++ {
-			e := order[k]
-			weight := probs[r*experts+e] / denom
-			base := 2 + e*perExpert
-			var expertOut []float64
-			switch expertType {
-			case "swiglu", "geglu":
-				gate := matmulRowFloat64(row, w[base], dim, ffn)
-				up := matmulRowFloat64(row, w[base+1], dim, ffn)
-				for i := range gate {
-					if expertType == "swiglu" {
-						gate[i] = sigmoid(gate[i])
-					} else {
-						gate[i] = gelu(gate[i])
-					}
-					gate[i] *= up[i]
-				}
-				expertOut = matmulRowFloat64(gate, w[base+2], ffn, dim)
-			case "mlp":
-				up := matmulRowFloat64(row, w[base], dim, ffn)
-				act := strings.ToLower(strings.TrimSpace(expert.Activation))
-				if act == "" {
-					act = "silu"
-				}
-				slope := expert.LeakySlope
-				if slope == 0 {
-					slope = 0.5
-				}
-				for i := range up {
-					switch act {
-					case "silu":
-						up[i] = silu(up[i])
-					case "gelu":
-						up[i] = gelu(up[i])
-					case "relu":
-						if up[i] < 0 {
-							up[i] = 0
-						}
-					case "leaky_relu_sq":
-						if up[i] < 0 {
-							up[i] *= slope
-						}
-						up[i] *= up[i]
-					default:
-						t.Fatalf("unsupported MoE MLP activation %q", act)
-					}
-				}
-				expertOut = matmulRowFloat64(up, w[base+1], ffn, dim)
-			default:
-				t.Fatalf("unsupported MoE expert type %q", expertType)
-			}
-			for d := 0; d < dim; d++ {
-				deltaFlat[r*dim+d] += weight * expertOut[d]
-			}
-		}
-	}
-	return add3D(x, unflatten3DCPU(deltaFlat, batch, seqLen, dim))
-}
-
-func gatedGLUCPUForward(t *testing.T, cfg *ArchConfig, x [][][]float64, w [][]float64, gateActivation string) [][][]float64 {
-	t.Helper()
-	dim := cfg.ModelDim
-	ffn := ffnDimForConfig(cfg)
-	xNorm := rmsNormCPU(x, w[0])
-	gate := matmul3DCPU(xNorm, w[1], dim, ffn)
-	up := matmul3DCPU(xNorm, w[2], dim, ffn)
-	for b := range gate {
-		for i := range gate[b] {
-			for d := range gate[b][i] {
-				switch gateActivation {
-				case "sigmoid":
-					gate[b][i][d] = sigmoid(gate[b][i][d]) * up[b][i][d]
-				case "gelu":
-					gate[b][i][d] = gelu(gate[b][i][d]) * up[b][i][d]
-				default:
-					t.Fatalf("unsupported gate activation %q", gateActivation)
-				}
-			}
-		}
-	}
-	down := matmul3DCPU(gate, w[3], ffn, dim)
-	return add3D(x, down)
-}
-
-func mlpCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]float64, w [][]float64) [][][]float64 {
-	t.Helper()
-	dim := cfg.ModelDim
-	ffn := ffnDimForConfig(cfg)
-	xNorm := rmsNormCPU(x, w[0])
-	up := matmul3DCPU(xNorm, w[1], dim, ffn)
-	act := strings.ToLower(strings.TrimSpace(block.Activation))
-	if act == "" {
-		act = "silu"
-	}
-	slope := block.LeakySlope
-	if slope == 0 {
-		slope = 0.5
-	}
-	for b := range up {
-		for i := range up[b] {
-			for d := range up[b][i] {
-				switch act {
-				case "silu":
-					up[b][i][d] = silu(up[b][i][d])
-				case "gelu":
-					up[b][i][d] = gelu(up[b][i][d])
-				case "relu":
-					if up[b][i][d] < 0 {
-						up[b][i][d] = 0
-					}
-				case "leaky_relu_sq":
-					v := up[b][i][d]
-					if v < 0 {
-						v *= slope
-					}
-					up[b][i][d] = v * v
-				default:
-					t.Fatalf("unsupported mlp activation %q", act)
-				}
-			}
-		}
-	}
-	down := matmul3DCPU(up, w[2], ffn, dim)
-	return add3D(x, down)
 }
 
 func addCharFeaturesCPU(t *testing.T, cfg *ArchConfig, x [][][]float64, tokens [][]int, w [][]float64, wi ...int) ([][][]float64, int) {

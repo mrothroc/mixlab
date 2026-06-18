@@ -149,7 +149,7 @@ func moeWeightShapesWithOptions(spec BlockSpec, D int, mlpMult float64, blockSca
 	return metas, nil
 }
 
-func emitMoEIR(prog *Program, spec BlockSpec, x string, wi, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32) (int, error) {
+func emitMoEIR(prog *Program, spec BlockSpec, x string, wi, D, T, B, idx int, mlpMult float64, blockScales bool, dropout float32, layerAgg *layerAggregationBuildState) (int, error) {
 	prefix := tmpName(x+"_moe", idx)
 	xNorm := prefix + "_x_norm"
 	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
@@ -160,6 +160,7 @@ func emitMoEIR(prog *Program, spec BlockSpec, x string, wi, D, T, B, idx int, ml
 		return wi, err
 	}
 	prog.Add(x, delta, x)
+	layerAgg.apply(prog, x)
 	return nextWI, nil
 }
 

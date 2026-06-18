@@ -634,6 +634,35 @@ func TestNativeHFTrainedParityCPUOracle(t *testing.T) {
 	}`, [][]int{{0, 1, 2}}, [][]int{{1, 2, 3}}, nil, scaleHFExportWeightsToTrainedMagnitude)
 }
 
+func TestNativeHFDWALayerAggregationParityCPUOracle(t *testing.T) {
+	runExportHFParityCase(t, `{
+		"name": "hf_dwa_parity",
+		"model_dim": 4,
+		"vocab_size": 7,
+		"seq_len": 3,
+		"mlp_mult": 1.0,
+		"layer_aggregation": "dwa",
+		"blocks": [
+			{"type": "plain", "heads": 2, "rope_dims": 2},
+			{"type": "geglu"}
+		],
+		"training": {"steps": 1, "batch_tokens": 3, "seed": 606}
+	}`, [][]int{{0, 1, 2}}, [][]int{{1, 2, 3}}, func(t *testing.T, outDir string) {
+		var cfg hfConfigJSON
+		readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+		if cfg.LayerAggregation != "dwa" {
+			t.Fatalf("config layer_aggregation=%q, want dwa", cfg.LayerAggregation)
+		}
+		var mapping []hfWeightMapping
+		readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+		for _, name := range []string{"dwa_alphas.0", "dwa_alphas.1", "dwa_alphas.2"} {
+			if !containsHFWeight(mapping, name) {
+				t.Fatalf("weight_map missing %s", name)
+			}
+		}
+	})
+}
+
 func TestScaleHFExportWeightsToTrainedMagnitude(t *testing.T) {
 	cfg, err := ParseArchConfig([]byte(`{
 		"name": "hf_trained_magnitude_fixture",
@@ -817,88 +846,6 @@ const (
 	trainedFixtureMinRMS        = 0.15
 	trainedFixtureMinScaleRatio = 1.50
 )
-
-func scaleHFExportWeightsToTrainedMagnitude(weights [][]float32, shapes []WeightShape) error {
-	if len(weights) != len(shapes) {
-		return fmt.Errorf("weights=%d shapes=%d", len(weights), len(shapes))
-	}
-	scaled := 0
-	for i, ws := range shapes {
-		if !isTrainedMagnitudeCandidate(ws) {
-			continue
-		}
-		before := weightRMS(weights[i])
-		addDeterministicTrainedStructure(weights[i], i)
-		afterStructure := weightRMS(weights[i])
-		if afterStructure == 0 {
-			return fmt.Errorf("weight %d %q has zero RMS after deterministic structure", i, ws.Name)
-		}
-		target := trainedMagnitudeTargetRMS(ws)
-		if target < trainedFixtureMinRMS {
-			target = trainedFixtureMinRMS
-		}
-		if minScaled := before * trainedFixtureMinScaleRatio; minScaled > target {
-			target = minScaled
-		}
-		scale := target / afterStructure
-		for j := range weights[i] {
-			weights[i][j] *= float32(scale)
-		}
-		after := weightRMS(weights[i])
-		if after < trainedFixtureMinRMS*0.99 {
-			return fmt.Errorf("weight %d %q RMS=%g below trained-magnitude floor %g", i, ws.Name, after, trainedFixtureMinRMS)
-		}
-		if before > 0 && after < before*trainedFixtureMinScaleRatio*0.99 {
-			return fmt.Errorf("weight %d %q RMS before=%g after=%g did not leave init scale", i, ws.Name, before, after)
-		}
-		scaled++
-	}
-	if scaled == 0 {
-		return fmt.Errorf("no tensors eligible for trained-magnitude scaling")
-	}
-	return nil
-}
-
-func isTrainedMagnitudeCandidate(ws WeightShape) bool {
-	if len(ws.Shape) < 2 || ws.InitZero || ws.InitOne || ws.IsNormScale || ws.InitDtBias || ws.InitLogArange {
-		return false
-	}
-	return true
-}
-
-func trainedMagnitudeTargetRMS(ws WeightShape) float64 {
-	name := strings.ToLower(ws.Name)
-	switch {
-	case strings.Contains(name, "embed") || strings.Contains(name, "table"):
-		return 0.35
-	case strings.Contains(name, "ff") || strings.Contains(name, "gate") || strings.Contains(name, "up") || strings.Contains(name, "down"):
-		return 0.40
-	case strings.Contains(name, "router"):
-		return 0.25
-	case strings.Contains(name, "pos") || strings.Contains(name, "relative"):
-		return 0.30
-	default:
-		return 0.30
-	}
-}
-
-func addDeterministicTrainedStructure(w []float32, weightIndex int) {
-	for j := range w {
-		s := math.Sin(float64((weightIndex+1)*(j+3))) + 0.5*math.Cos(float64((weightIndex+7)*(j+1)))
-		w[j] += float32(0.05 * s)
-	}
-}
-
-func weightRMS(w []float32) float64 {
-	if len(w) == 0 {
-		return 0
-	}
-	sum := 0.0
-	for _, v := range w {
-		sum += float64(v) * float64(v)
-	}
-	return math.Sqrt(sum / float64(len(w)))
-}
 
 func writeSyntheticCharFeaturesForExportTest(t *testing.T, path string, cfg *ArchConfig) {
 	t.Helper()

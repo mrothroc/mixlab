@@ -71,6 +71,24 @@ func TestInitWeightData_InitValue(t *testing.T) {
 	}
 }
 
+func TestInitWeightData_DWAAlphaInitializesToLastState(t *testing.T) {
+	weights := initWeightData([]WeightShape{
+		{Name: "dwa_alpha_0", Shape: []int{2}, InitMode: "dwa_alpha"},
+		{Name: "dwa_alpha_1", Shape: []int{3}, InitMode: "dwa_alpha"},
+	}, 123, "", 0)
+	for i, got := range weights {
+		for j, v := range got {
+			want := float32(0)
+			if j == len(got)-1 {
+				want = 1
+			}
+			if v != want {
+				t.Fatalf("weights[%d][%d]=%g, want %g; full=%v", i, j, v, want, got)
+			}
+		}
+	}
+}
+
 func TestInitWeightData_Mamba3CanonicalSpecialInits(t *testing.T) {
 	weights := initWeightData([]WeightShape{
 		{Name: "A_log", Shape: []int{2, 4}, InitLogArange: true},

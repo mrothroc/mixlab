@@ -94,6 +94,47 @@ class MixlabLinear(nn.Module):
         return out
 
 
+class MixlabDWAState:
+    def __init__(self, alphas, static_embeddings):
+        self.alphas = alphas
+        self.history = [static_embeddings]
+        self.step = 0
+
+    def apply(self, x):
+        if self.step >= len(self.alphas):
+            raise ValueError("DWA alpha count is smaller than the emitted residual-point count")
+        self.history.append(x)
+        alpha = self.alphas[self.step].to(device=x.device, dtype=x.dtype)
+        if alpha.numel() != len(self.history):
+            raise ValueError(
+                f"DWA alpha {self.step} has {alpha.numel()} entries, expected {len(self.history)}"
+            )
+        out = self.history[0] * alpha[0]
+        for idx in range(1, len(self.history)):
+            out = out + self.history[idx] * alpha[idx]
+        self.step += 1
+        return out
+
+    def finish(self):
+        if self.step != len(self.alphas):
+            raise ValueError(
+                f"DWA consumed {self.step} alpha vectors, expected {len(self.alphas)}"
+            )
+
+
+def count_dwa_points(block_configs):
+    count = 0
+    for block in block_configs:
+        block_type = str(block.get("type", "") or "").lower()
+        if block_type == "plain":
+            count += 2
+        elif block_type in ("swiglu", "geglu", "mlp", "moe"):
+            count += 1
+        else:
+            raise ValueError(f"unsupported exported DWA block type {block_type!r}")
+    return count
+
+
 def rotate_adjacent_rope(x, rope_dims, cos_t=None, sin_t=None, base=10000.0):
     head_dim = x.shape[-1]
     if rope_dims is None or rope_dims <= 0 or rope_dims >= head_dim:
@@ -330,7 +371,7 @@ class MixlabPlainBlock(nn.Module):
         max_bucket = bucket_size - 1
         return torch.clamp(bucket_pos, -max_bucket, max_bucket).long()
 
-    def forward(self, x, shared_relative_embeddings=None):
+    def forward(self, x, shared_relative_embeddings=None, dwa=None):
         residual = x
         x_norm = self.norm(x) if self.norm is not None else x
         bsz, seq_len, dim = x_norm.shape
@@ -390,6 +431,8 @@ class MixlabPlainBlock(nn.Module):
         if self.attn_post_norm == "after_outproj":
             attn_delta = self.post_attn_norm(attn_delta)
         x = residual + attn_delta
+        if dwa is not None:
+            x = dwa.apply(x)
 
         ff_in = self.ffn_norm(x) if self.ffn_norm is not None else x
         if self.ffn_activation == "silu":
@@ -406,7 +449,10 @@ class MixlabPlainBlock(nn.Module):
         ff = self.ff2(ff_hidden)
         if self.post_ffn_norm is not None:
             ff = self.post_ffn_norm(ff)
-        return x + ff
+        x = x + ff
+        if dwa is not None:
+            x = dwa.apply(x)
+        return x
 
 
 class MixlabMoEExpert(nn.Module):
@@ -468,7 +514,7 @@ class MixlabMoEBlock(nn.Module):
         expert_config = block_config.get("expert_block") or {"type": "swiglu"}
         self.experts = nn.ModuleList([MixlabMoEExpert(config, expert_config) for _ in range(self.num_experts)])
 
-    def forward(self, x):
+    def forward(self, x, dwa=None):
         x_norm = self.norm(x)
         router_logits = torch.matmul(x_norm, self.router_w)
         probs = torch.softmax(router_logits, dim=-1)
@@ -485,7 +531,10 @@ class MixlabMoEBlock(nn.Module):
             expert_out = expert(flat_x.index_select(0, selected))
             weight = flat_dispatch.index_select(0, selected)[:, expert_id].unsqueeze(-1)
             flat_delta.index_add_(0, selected, expert_out * weight)
-        return x + flat_delta.view_as(x)
+        x = x + flat_delta.view_as(x)
+        if dwa is not None:
+            x = dwa.apply(x)
+        return x
 
 
 class MixlabSwiGLUBlock(nn.Module):
@@ -502,7 +551,7 @@ class MixlabSwiGLUBlock(nn.Module):
         self.w_down = MixlabLinear(ffn_dim, dim)
         self.post_norm = make_mixlab_norm(config, dim) if self.norm_placement in ("post", "sandwich") else None
 
-    def forward(self, x):
+    def forward(self, x, dwa=None):
         x_norm = self.norm(x) if self.norm is not None else x
         gate = self.w_gate(x_norm)
         if self.gate_activation == "sigmoid":
@@ -517,7 +566,10 @@ class MixlabSwiGLUBlock(nn.Module):
         delta = self.w_down(gated)
         if self.post_norm is not None:
             delta = self.post_norm(delta)
-        return x + delta
+        x = x + delta
+        if dwa is not None:
+            x = dwa.apply(x)
+        return x
 
 
 class MixlabMLPBlock(nn.Module):
@@ -534,7 +586,7 @@ class MixlabMLPBlock(nn.Module):
         self.w_down = MixlabLinear(ffn_dim, dim)
         self.post_norm = make_mixlab_norm(config, dim) if self.norm_placement in ("post", "sandwich") else None
 
-    def forward(self, x):
+    def forward(self, x, dwa=None):
         x_norm = self.norm(x) if self.norm is not None else x
         up = self.w_up(x_norm)
         if self.activation == "silu":
@@ -553,7 +605,10 @@ class MixlabMLPBlock(nn.Module):
         delta = self.w_down(act)
         if self.post_norm is not None:
             delta = self.post_norm(delta)
-        return x + delta
+        x = x + delta
+        if dwa is not None:
+            x = dwa.apply(x)
+        return x
 
 
 def load_char_lookup(config):
@@ -627,6 +682,17 @@ class MixlabModel(PreTrainedModel):
             self.trigram_scale = nn.Parameter(torch.ones(1))
         modules = []
         block_configs = blocks if blocks is not None else config.blocks
+        self.layer_aggregation = str(getattr(config, "layer_aggregation", "") or "none").lower()
+        if self.layer_aggregation in ("", "none"):
+            self.layer_aggregation = "none"
+        if self.layer_aggregation not in ("none", "dwa"):
+            raise ValueError(f"unsupported exported layer_aggregation {self.layer_aggregation!r}")
+        self.dwa_alphas = nn.ParameterList()
+        if self.layer_aggregation == "dwa":
+            for idx in range(count_dwa_points(block_configs)):
+                alpha = torch.zeros(idx + 2)
+                alpha[-1] = 1.0
+                self.dwa_alphas.append(nn.Parameter(alpha))
         self.relative_embeddings = None
         self.relative_layer_norm = None
         shared_relative_window = None
@@ -756,14 +822,17 @@ class MixlabModel(PreTrainedModel):
         if input_ids is None:
             raise ValueError("input_ids is required")
         x = self._embed_features(input_ids)
+        dwa = MixlabDWAState(self.dwa_alphas, x) if self.layer_aggregation == "dwa" else None
         relative_embeddings = self.relative_embeddings
         if relative_embeddings is not None and self.relative_layer_norm is not None:
             relative_embeddings = self.relative_layer_norm(relative_embeddings)
         for block in self.blocks:
             if isinstance(block, MixlabPlainBlock):
-                x = block(x, relative_embeddings)
+                x = block(x, relative_embeddings, dwa)
             else:
-                x = block(x)
+                x = block(x, dwa)
+        if dwa is not None:
+            dwa.finish()
         return self.final_norm(x)
 
     def forward(self, input_ids=None, **kwargs):

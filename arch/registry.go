@@ -20,6 +20,7 @@ type EmitOptions struct {
 	KVCache         map[int]BlockKVOutputs
 
 	sharedRelative sharedRelativeAttentionPlan
+	layerAgg       *layerAggregationBuildState
 }
 
 // BlockKVOutputs tracks the named K/V tensors emitted by a plain attention block.
@@ -107,7 +108,7 @@ func init() {
 			if heads <= 0 {
 				heads = 4
 			}
-			return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, opts.AttnDropout, spec.SkipAttention, spec.QKGain, spec.QKNorm, spec.RopeDims, spec.RopeConvention, spec.AttnBias, spec.AttnValueGate, spec.AttnPostNorm, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.RelativeAttentionParameterization, spec.KVSource, opts.KVCache, opts.BlockIndex, opts.Norm, opts.NormPlacement, opts.FFNInternalNorm, spec.FFNActivation, opts.sharedRelative)
+			return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, opts.AttnDropout, spec.SkipAttention, spec.QKGain, spec.QKNorm, spec.RopeDims, spec.RopeConvention, spec.AttnBias, spec.AttnValueGate, spec.AttnPostNorm, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.RelativeAttentionParameterization, spec.KVSource, opts.KVCache, opts.BlockIndex, opts.Norm, opts.NormPlacement, opts.FFNInternalNorm, spec.FFNActivation, opts.sharedRelative, opts.layerAgg)
 		},
 		WeightCount: plainWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
@@ -117,7 +118,7 @@ func init() {
 	})
 	RegisterBlock("swiglu", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
-			return emitGatedGLUIRWithDropoutNorm(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, "swiglu", "sigmoid", opts.Norm, opts.NormPlacement, opts.FFNInternalNorm)
+			return emitGatedGLUIRWithDropoutNorm(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, "swiglu", "sigmoid", opts.Norm, opts.NormPlacement, opts.FFNInternalNorm, opts.layerAgg)
 		},
 		WeightCount: swigluWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
@@ -127,7 +128,7 @@ func init() {
 	})
 	RegisterBlock("geglu", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
-			return emitGatedGLUIRWithDropoutNorm(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, "geglu", "gelu", opts.Norm, opts.NormPlacement, opts.FFNInternalNorm)
+			return emitGatedGLUIRWithDropoutNorm(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, "geglu", "gelu", opts.Norm, opts.NormPlacement, opts.FFNInternalNorm, opts.layerAgg)
 		},
 		WeightCount: swigluWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
@@ -137,7 +138,7 @@ func init() {
 	})
 	RegisterBlock("mlp", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
-			return emitMLPIRNorm(prog, stream, wi, idx, spec.Activation, spec.LeakySlope, opts.MLPMult, opts.Norm, opts.NormPlacement, opts.FFNInternalNorm)
+			return emitMLPIRNorm(prog, stream, wi, idx, spec.Activation, spec.LeakySlope, opts.MLPMult, opts.Norm, opts.NormPlacement, opts.FFNInternalNorm, opts.layerAgg)
 		},
 		WeightCount: mlpWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
@@ -147,7 +148,7 @@ func init() {
 	})
 	RegisterBlock("moe", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
-			return emitMoEIR(prog, spec, stream, wi, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout)
+			return emitMoEIR(prog, spec, stream, wi, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, opts.layerAgg)
 		},
 		WeightCount:  moeWeightCount,
 		WeightShapes: moeWeightShapes,

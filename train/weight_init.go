@@ -186,6 +186,11 @@ func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool
 		return true
 	}
 	switch ws.InitMode {
+	case "dwa_alpha":
+		if len(data) > 0 {
+			data[len(data)-1] = 1
+		}
+		return true
 	case "torch_linear_uniform":
 		if len(ws.Shape) < 2 || ws.Shape[0] <= 0 {
 			return false

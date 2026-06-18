@@ -709,17 +709,22 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	backoutMetas := backoutWeightShapes(cfg.Backout)
 	data2VecMetas := data2VecWeightShapes(cfg.ModelDim, cfg.Training.Data2Vec)
 	mlmHeadMetas := mlmHeadWeightShapes(cfg.ModelDim, cfg.VocabSize, cfg.EffectiveMLMHead())
-	if len(smearMetas) == 0 && len(backoutMetas) == 0 && len(data2VecMetas) == 0 && len(mlmHeadMetas) == 0 {
+	layerAggregationMetas, err := layerAggregationWeightShapes(cfg.Blocks, cfg.EffectiveLayerAggregation())
+	if err != nil {
+		return nil, err
+	}
+	if len(smearMetas) == 0 && len(backoutMetas) == 0 && len(data2VecMetas) == 0 && len(mlmHeadMetas) == 0 && len(layerAggregationMetas) == 0 {
 		return metas, nil
 	}
 	fixed := fixedWeightCountWithHeadAndNorm(cfg.ReservesUntiedHeadWeight(), cfg.EffectiveNormSpec())
-	out := make([]WeightMeta, 0, len(metas)+len(smearMetas)+len(backoutMetas)+len(data2VecMetas)+len(mlmHeadMetas))
+	out := make([]WeightMeta, 0, len(metas)+len(smearMetas)+len(backoutMetas)+len(data2VecMetas)+len(mlmHeadMetas)+len(layerAggregationMetas))
 	out = append(out, metas[:fixed]...)
 	out = append(out, smearMetas...)
 	out = append(out, metas[fixed:]...)
 	out = append(out, backoutMetas...)
 	out = append(out, data2VecMetas...)
 	out = append(out, mlmHeadMetas...)
+	out = append(out, layerAggregationMetas...)
 	return out, nil
 }
 

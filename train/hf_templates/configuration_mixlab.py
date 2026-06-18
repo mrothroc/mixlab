@@ -19,6 +19,7 @@ class MixlabConfig(PretrainedConfig):
         masked_blocks=None,
         logit_softcap=0.0,
         mlm_head="linear",
+        layer_aggregation="none",
         hidden_dropout=0.0,
         char_vocab_size=0,
         char_dim=0,
@@ -49,6 +50,7 @@ class MixlabConfig(PretrainedConfig):
         self.masked_blocks = masked_blocks or []
         self.logit_softcap = logit_softcap
         self.mlm_head = mlm_head
+        self.layer_aggregation = layer_aggregation
         self.hidden_dropout = hidden_dropout
         self.char_vocab_size = char_vocab_size
         self.char_dim = char_dim
