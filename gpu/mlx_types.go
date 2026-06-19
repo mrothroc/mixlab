@@ -94,6 +94,12 @@ type TensorInput struct {
 	Data  interface{} // []int32 or []float32
 }
 
+type MemoryStats struct {
+	ActiveBytes uint64
+	CacheBytes  uint64
+	PeakBytes   uint64
+}
+
 type Program struct {
 	handle      int64
 	nWeights    int

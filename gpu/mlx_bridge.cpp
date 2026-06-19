@@ -4,6 +4,7 @@
 #include "ir_trainer.h"
 
 #include <mlx/compile.h>
+#include <mlx/memory.h>
 #include <mlx/mlx.h>
 
 #include <cstdlib>
@@ -279,6 +280,45 @@ int mlx_init(void) {
 
 const char* mlx_device_name(void) {
   return g_device_name.c_str();
+}
+
+uint64_t mlx_memory_active(void) {
+  try {
+    return static_cast<uint64_t>(mx::get_active_memory());
+  } catch (...) {
+    return 0;
+  }
+}
+
+uint64_t mlx_memory_cache(void) {
+  try {
+    return static_cast<uint64_t>(mx::get_cache_memory());
+  } catch (...) {
+    return 0;
+  }
+}
+
+uint64_t mlx_memory_peak(void) {
+  try {
+    return static_cast<uint64_t>(mx::get_peak_memory());
+  } catch (...) {
+    return 0;
+  }
+}
+
+void mlx_memory_clear_cache(void) {
+  try {
+    mx::clear_cache();
+  } catch (...) {
+  }
+}
+
+uint64_t mlx_memory_set_cache_limit(uint64_t limit) {
+  try {
+    return static_cast<uint64_t>(mx::set_cache_limit(static_cast<size_t>(limit)));
+  } catch (...) {
+    return 0;
+  }
 }
 
 int mlx_sgemm(const float* A, const float* B, float* C, int m, int k, int n) {

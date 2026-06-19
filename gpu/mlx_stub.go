@@ -30,6 +30,12 @@ func SetCUDAGraphLimits(maxOps, maxMB int) {
 func Available() bool    { return false }
 func DeviceName() string { return "" }
 
+func mlxMemoryStats() MemoryStats { return MemoryStats{} }
+
+func mlxClearMemoryCache() {}
+
+func mlxSetMemoryCacheLimit(bytes uint64) uint64 { return 0 }
+
 func FromData(data []float32, rows, cols int) (int64, error) {
 	return 0, errNotBuilt
 }

@@ -12,6 +12,7 @@ func TestGatedDeltaNetChunkedTrainStable(t *testing.T) {
 	if !mlxAvailable() {
 		t.Skip("MLX backend not available")
 	}
+	t.Setenv("MIXLAB_CAPTURE_TRAIN_OUTPUTS", "1")
 
 	cfg, err := ParseArchConfig([]byte(`{
 		"name": "gdn_chunked_stability",

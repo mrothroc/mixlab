@@ -1455,6 +1455,43 @@ void collect_state_for_eval(
   }
 }
 
+void detach_array_vector(std::vector<mx::array>& arrays) {
+  for (auto& arr : arrays) {
+    arr.detach();
+  }
+}
+
+void detach_output_map(std::unordered_map<std::string, mx::array>& outputs) {
+  for (auto& [_, arr] : outputs) {
+    arr.detach();
+  }
+}
+
+void detach_trainer_state(IRTrainer& trainer) {
+  detach_array_vector(trainer.weights);
+  for (size_t i = 0; i < trainer.adam_m.size(); ++i) {
+    if (trainer.has_adam_state[i] != 0) {
+      trainer.adam_m[i].detach();
+      trainer.adam_v[i].detach();
+    }
+  }
+  for (size_t i = 0; i < trainer.muon_momentum.size(); ++i) {
+    if (trainer.has_muon_state[i] != 0) {
+      trainer.muon_momentum[i].detach();
+    }
+  }
+  for (size_t i = 0; i < trainer.muon_second_moment.size(); ++i) {
+    if (trainer.has_muon_second_moment_state[i] != 0) {
+      trainer.muon_second_moment[i].detach();
+    }
+  }
+  for (size_t i = 0; i < trainer.sgd_momentum.size(); ++i) {
+    if (trainer.has_sgd_state[i] != 0) {
+      trainer.sgd_momentum[i].detach();
+    }
+  }
+}
+
 bool program_produces_output(const IRProgram& program, const std::string& output_name) {
   for (const auto& op : program.ops) {
     for (int i = 0; i < op.n_outputs; ++i) {
@@ -1528,10 +1565,20 @@ std::vector<std::string> collect_cached_output_names(const IRProgram& program, c
   return output_names;
 }
 
+bool capture_training_outputs() {
+  if (env_truthy("MIXLAB_CAPTURE_TRAIN_OUTPUTS") ||
+      env_truthy("MIXLAB_MAMBA3_CAPTURE_TRAIN_OUTPUTS")) {
+    return true;
+  }
+  if (env_truthy("MIXLAB_LOSS_ONLY_TRAIN_OUTPUTS") ||
+      env_truthy("MIXLAB_MAMBA3_LOSS_ONLY_TRAIN_OUTPUTS")) {
+    return false;
+  }
+  return false;
+}
+
 std::vector<std::string> collect_training_step_output_names(const IRProgram& program) {
-  if (program_has_fused_canonical_mamba3_block(program) &&
-      env_truthy("MIXLAB_MAMBA3_LOSS_ONLY_TRAIN_OUTPUTS") &&
-      !env_truthy("MIXLAB_MAMBA3_CAPTURE_TRAIN_OUTPUTS")) {
+  if (!capture_training_outputs()) {
     return {"loss"};
   }
   return collect_cached_output_names(program);
@@ -1751,6 +1798,8 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   eval_arrays.push_back(loss);
   collect_state_for_eval(*this, eval_arrays, false);
   mx::eval(eval_arrays);
+  loss.detach();
+  detach_trainer_state(*this);
   report_gated_delta_timing_summary("step", step_count);
   return loss.item<float>();
 }
@@ -2150,6 +2199,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     eval_arrays_with_context(
         output_eval_arrays,
         "canonical Mamba3 low-memory output eval");
+    loss.detach();
+    detach_output_map(outputs);
 
     float clip_scale_value = 1.0f;
     if (gradient_mode == Mamba3LowMemoryGradientMode::SingleBackward) {
@@ -2211,6 +2262,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
           "," + std::to_string(end) + ")");
     }
 
+    detach_trainer_state(*this);
     report_gated_delta_timing_summary("step", step_count);
     pending_loss_ = loss;
     pending_outputs_ = std::move(outputs);
@@ -2389,6 +2441,11 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       if (timing_enabled) {
         timing_eval_us = elapsed_us(eval_t0, HostClock::now());
       }
+      loss.detach();
+      detach_output_map(outputs);
+      detach_array_vector(next_weights);
+      detach_array_vector(next_adam_m);
+      detach_array_vector(next_adam_v);
       weights = std::move(next_weights);
       adam_m = std::move(next_adam_m);
       adam_v = std::move(next_adam_v);
@@ -2641,6 +2698,11 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       if (timing_enabled) {
         timing_eval_us = elapsed_us(eval_t0, HostClock::now());
       }
+      loss.detach();
+      detach_output_map(outputs);
+      detach_array_vector(next_weights);
+      detach_array_vector(next_adam_m);
+      detach_array_vector(next_adam_v);
       weights = std::move(next_weights);
       adam_m = std::move(next_adam_m);
       adam_v = std::move(next_adam_v);
@@ -2685,6 +2747,9 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   if (timing_enabled) {
     timing_eval_us = elapsed_us(eval_t0, HostClock::now());
   }
+  loss.detach();
+  detach_output_map(outputs);
+  detach_trainer_state(*this);
   report_gated_delta_timing_summary("step", step_count);
   pending_loss_ = loss;
   pending_outputs_ = std::move(outputs);

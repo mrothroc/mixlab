@@ -17,6 +17,13 @@ int mlx_init(void);
 // Get device name (e.g. "Apple M1 Max" or "NVIDIA RTX 4090")
 const char* mlx_device_name(void);
 
+// MLX memory counters and cache controls. Values are bytes.
+uint64_t mlx_memory_active(void);
+uint64_t mlx_memory_cache(void);
+uint64_t mlx_memory_peak(void);
+void mlx_memory_clear_cache(void);
+uint64_t mlx_memory_set_cache_limit(uint64_t limit);
+
 // Matrix multiply: C = A(m,k) * B(k,n), row-major float32
 // Returns 0 on success, -1 on failure
 int mlx_sgemm(const float* A, const float* B, float* C, int m, int k, int n);

@@ -14,6 +14,7 @@ func makePipelineTestProgram() *ir.Program {
 	prog.DeclareInput("tokens", ir.TensorInt32, []int{1, 4})
 	prog.DeclareInput("targets", ir.TensorInt32, []int{4})
 	prog.DeclareOutput("loss", ir.TensorFloat32, []int{1})
+	prog.DeclareOutput("logits", ir.TensorFloat32, []int{4, 4})
 	prog.Embed("w0", "tokens", "emb")
 	prog.Reshape("emb", []int{4, 2}, "emb_flat")
 	prog.MatMul("emb_flat", "w1", "logits")
@@ -176,6 +177,55 @@ func TestTrainerPipelineCollectsSubmittedLossesInOrder(t *testing.T) {
 				t.Fatalf("weight[%d][%d] mismatch: got=%g want=%g diff=%g", i, j, gotWeights[i][j], wantWeights[i][j], diff)
 			}
 		}
+	}
+}
+
+func TestTrainerStepCachesLossOnlyByDefault(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_CAPTURE_TRAIN_OUTPUTS", "0")
+
+	gpuProg, err := LowerIRProgram(makePipelineTestProgram())
+	if err != nil {
+		t.Fatalf("LowerIRProgram: %v", err)
+	}
+	defer gpuProg.Destroy()
+
+	trainer := createPipelineTestTrainer(t, gpuProg)
+	if _, err := TrainerStep(trainer, pipelineTestInputs(0)); err != nil {
+		t.Fatalf("TrainerStep: %v", err)
+	}
+	if _, err := TrainerReadOutput(trainer, "loss", []int{1}); err != nil {
+		t.Fatalf("TrainerReadOutput(loss): %v", err)
+	}
+	if _, err := TrainerReadOutput(trainer, "logits", []int{4, 4}); err == nil {
+		t.Fatal("TrainerReadOutput(logits) succeeded; training should cache loss only by default")
+	}
+}
+
+func TestTrainerStepCanCaptureTrainOutputsForDebug(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_CAPTURE_TRAIN_OUTPUTS", "1")
+
+	gpuProg, err := LowerIRProgram(makePipelineTestProgram())
+	if err != nil {
+		t.Fatalf("LowerIRProgram: %v", err)
+	}
+	defer gpuProg.Destroy()
+
+	trainer := createPipelineTestTrainer(t, gpuProg)
+	if _, err := TrainerStep(trainer, pipelineTestInputs(0)); err != nil {
+		t.Fatalf("TrainerStep: %v", err)
+	}
+	logits, err := TrainerReadOutput(trainer, "logits", []int{4, 4})
+	if err != nil {
+		t.Fatalf("TrainerReadOutput(logits): %v", err)
+	}
+	if len(logits) != 16 {
+		t.Fatalf("logits len=%d, want 16", len(logits))
 	}
 }
 

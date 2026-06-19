@@ -34,6 +34,22 @@ func mlxDeviceName() string {
 	return C.GoString(C.mlx_device_name())
 }
 
+func mlxMemoryStats() MemoryStats {
+	return MemoryStats{
+		ActiveBytes: uint64(C.mlx_memory_active()),
+		CacheBytes:  uint64(C.mlx_memory_cache()),
+		PeakBytes:   uint64(C.mlx_memory_peak()),
+	}
+}
+
+func mlxClearMemoryCache() {
+	C.mlx_memory_clear_cache()
+}
+
+func mlxSetMemoryCacheLimit(bytes uint64) uint64 {
+	return uint64(C.mlx_memory_set_cache_limit(C.uint64_t(bytes)))
+}
+
 func mlxFromData(data []float32, rows, cols int) int64 {
 	h := C.mlx_from_data(
 		(*C.float)(unsafe.Pointer(&data[0])),

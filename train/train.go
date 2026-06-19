@@ -402,6 +402,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	hasValLoss := false
 	logEvery := effectiveTrainEvery(opts.LogEvery, "MIXLAB_LOG_EVERY", 100)
 	valEvery := effectiveTrainEvery(opts.ValEvery, "MIXLAB_VAL_EVERY", 100)
+	mlxMemLogEvery := effectiveTrainEvery(0, "MIXLAB_MLX_MEM_LOG_EVERY", 0)
+	mlxClearCacheEvery := effectiveTrainEvery(0, "MIXLAB_MLX_CLEAR_CACHE_EVERY", 0)
+	mlxCacheLimitMB := effectiveTrainEvery(0, "MIXLAB_MLX_CACHE_LIMIT_MB", 0)
+	if mlxCacheLimitMB > 0 {
+		prev := gpu.SetMemoryCacheLimit(uint64(mlxCacheLimitMB) << 20)
+		fmt.Printf("  [%s] MLX cache limit set to %s (previous %s)\n",
+			name, formatMiB(uint64(mlxCacheLimitMB)<<20), formatMiB(prev))
+	}
 	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
 	// steadyStart is set after step 0 completes — excludes one-time
@@ -652,6 +660,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step, err)
 			}
+			handleMLXMemoryControls(name, step, mlxMemLogEvery, mlxClearCacheEvery)
 			v := float64(lossV)
 
 			if step == 0 {
@@ -858,6 +867,25 @@ func readTrainerOutput(trainer GPUTrainer, name string, shape []int) ([]float32,
 		return or.ReadOutput(name, shape)
 	}
 	return nil, fmt.Errorf("trainer does not support reading named outputs; ensure you are using the MLX backend")
+}
+
+func handleMLXMemoryControls(name string, step, logEvery, clearEvery int) {
+	if clearEvery > 0 && (step+1)%clearEvery == 0 {
+		gpu.ClearMemoryCache()
+	}
+	if logEvery <= 0 {
+		return
+	}
+	if step != 0 && (step+1)%logEvery != 0 {
+		return
+	}
+	stats := gpu.MemoryStatsSnapshot()
+	fmt.Printf("  [%s] [mlx-mem] step %d active=%s cache=%s peak=%s\n",
+		name, step, formatMiB(stats.ActiveBytes), formatMiB(stats.CacheBytes), formatMiB(stats.PeakBytes))
+}
+
+func formatMiB(bytes uint64) string {
+	return fmt.Sprintf("%.1fMiB", float64(bytes)/(1024.0*1024.0))
 }
 
 func formatProgressTiming(elapsed, steadyElapsed time.Duration, stepsForRate, step, totalSteps int) string {
