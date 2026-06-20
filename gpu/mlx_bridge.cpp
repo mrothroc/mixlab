@@ -313,6 +313,14 @@ void mlx_memory_clear_cache(void) {
   }
 }
 
+uint64_t mlx_memory_set_memory_limit(uint64_t limit) {
+  try {
+    return static_cast<uint64_t>(mx::set_memory_limit(static_cast<size_t>(limit)));
+  } catch (...) {
+    return 0;
+  }
+}
+
 uint64_t mlx_memory_set_cache_limit(uint64_t limit) {
   try {
     return static_cast<uint64_t>(mx::set_cache_limit(static_cast<size_t>(limit)));

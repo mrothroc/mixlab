@@ -337,6 +337,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		fmt.Printf("  [%s] loaded %d weights from %s\n", name, len(loadedWeights), opts.SafetensorsLoad)
 	}
 
+	if err := configureMLXMemoryLimits(name); err != nil {
+		return TrainResult{}, err
+	}
+
 	distiller, err := newDistillationEnsemble(cfg)
 	if err != nil {
 		return TrainResult{}, fmt.Errorf("init distillation teachers: %w", err)
@@ -402,14 +406,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	hasValLoss := false
 	logEvery := effectiveTrainEvery(opts.LogEvery, "MIXLAB_LOG_EVERY", 100)
 	valEvery := effectiveTrainEvery(opts.ValEvery, "MIXLAB_VAL_EVERY", 100)
-	mlxMemLogEvery := effectiveTrainEvery(0, "MIXLAB_MLX_MEM_LOG_EVERY", 0)
-	mlxClearCacheEvery := effectiveTrainEvery(0, "MIXLAB_MLX_CLEAR_CACHE_EVERY", 0)
-	mlxCacheLimitMB := effectiveTrainEvery(0, "MIXLAB_MLX_CACHE_LIMIT_MB", 0)
-	if mlxCacheLimitMB > 0 {
-		prev := gpu.SetMemoryCacheLimit(uint64(mlxCacheLimitMB) << 20)
-		fmt.Printf("  [%s] MLX cache limit set to %s (previous %s)\n",
-			name, formatMiB(uint64(mlxCacheLimitMB)<<20), formatMiB(prev))
-	}
+	mlxMemLogEvery := effectiveTrainEvery(0, mlxMemLogEveryEnv, 0)
+	mlxClearCacheEvery := effectiveTrainEvery(0, mlxClearCacheEveryEnv, 0)
 	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
 	// steadyStart is set after step 0 completes — excludes one-time

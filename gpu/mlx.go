@@ -46,6 +46,10 @@ func mlxClearMemoryCache() {
 	C.mlx_memory_clear_cache()
 }
 
+func mlxSetMemoryLimit(bytes uint64) uint64 {
+	return uint64(C.mlx_memory_set_memory_limit(C.uint64_t(bytes)))
+}
+
 func mlxSetMemoryCacheLimit(bytes uint64) uint64 {
 	return uint64(C.mlx_memory_set_cache_limit(C.uint64_t(bytes)))
 }

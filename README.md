@@ -564,6 +564,14 @@ Higher values batch more kernels into each graph, reducing dispatch overhead at
 the cost of more GPU memory. The auto-tuned default (3x IR ops, or at least
 16000 ops for `gated_deltanet`) captures most of the benefit.
 
+**MLX memory bounds:** mixlab sets conservative MLX memory limits at training
+startup so the MLX buffer cache cannot silently grow into OS swap on unified
+memory systems. The default uses total RAM, reserves at least 25% (with an 8GiB
+floor capped for small machines), and sets a smaller cache cap. Override with
+`MIXLAB_MLX_MEMORY_LIMIT_MB` and `MIXLAB_MLX_CACHE_LIMIT_MB`; set
+`MIXLAB_DISABLE_MLX_MEMORY_LIMITS=1` to opt out. For diagnostics, use
+`MIXLAB_MLX_MEM_LOG_EVERY=N` and optionally `MIXLAB_MLX_CLEAR_CACHE_EVERY=N`.
+
 ### Step timing breakdown
 
 Add `-timing` to see where each training step spends time:

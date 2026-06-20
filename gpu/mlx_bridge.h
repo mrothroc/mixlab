@@ -22,6 +22,7 @@ uint64_t mlx_memory_active(void);
 uint64_t mlx_memory_cache(void);
 uint64_t mlx_memory_peak(void);
 void mlx_memory_clear_cache(void);
+uint64_t mlx_memory_set_memory_limit(uint64_t limit);
 uint64_t mlx_memory_set_cache_limit(uint64_t limit);
 
 // Matrix multiply: C = A(m,k) * B(k,n), row-major float32
