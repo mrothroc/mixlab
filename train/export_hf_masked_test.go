@@ -2,7 +2,9 @@ package train
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -55,6 +57,12 @@ func TestExportHFMaskedLMMetadataAndBidirectionalBlocks(t *testing.T) {
 	if got := doc.MaskedBlocks[0]["attention_mask"]; got != "bidirectional" {
 		t.Fatalf("masked block attention_mask=%v, want bidirectional", got)
 	}
+	assertHFModelingTemplateContains(t, filepath.Join(outDir, "modeling_mixlab.py"),
+		"masked_blocks if masked_blocks else config.blocks",
+		"def forward_hidden(self, input_ids=None, attention_mask=None):",
+		"x = block(x, relative_embeddings, dwa, attention_mask)",
+		"super().__init__(config, blocks=config.blocks)",
+	)
 
 	cfg, err := LoadArchConfig(cfgPath)
 	if err != nil {
@@ -327,4 +335,18 @@ func containsString(values []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func assertHFModelingTemplateContains(t *testing.T, path string, snippets ...string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	text := string(data)
+	for _, snippet := range snippets {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("modeling_mixlab.py missing snippet %q", snippet)
+		}
+	}
 }

@@ -1,6 +1,6 @@
 # Hugging Face Export
 
-`export-hf` writes a Hugging Face custom-code directory from a Mixlab JSON config and a Mixlab safetensors checkpoint. Causal checkpoints export `AutoModel` and `AutoModelForCausalLM`; masked and hybrid checkpoints also export `AutoModelForMaskedLM`.
+`export-hf` writes a Hugging Face custom-code directory from a Mixlab JSON config and a Mixlab safetensors checkpoint. Causal checkpoints export `AutoModel` and `AutoModelForCausalLM`; masked and hybrid checkpoints also export `AutoModelForMaskedLM`. For masked-capable exports, `AutoModel` is the bidirectional encoder backbone while `AutoModelForCausalLM` stays causal.
 
 ```bash
 mixlab -mode export-hf \
@@ -86,7 +86,9 @@ HF export supports next-token and masked-LM checkpoints using sequential blocks:
 - tied embeddings; the exporter materializes `lm_head_weight = embed_tokens.weight.T` for Hugging Face consumers
 - data2vec-trained checkpoints; the training-only predictor weights and `training.data2vec` spec are stripped, exporting the student/base inference model
 - `training.objective: "mlm"` and `"mntp"` configs; these export both the standard causal head and a masked-LM head whose plain attention blocks are bidirectional
-- `training.objective: "hybrid"` configs for causal and masked evaluation; the causal head uses causal plain attention and the masked-LM head uses bidirectional plain attention
+- `training.objective: "hybrid"` configs for causal and masked evaluation; the causal head uses causal plain attention while `AutoModel` and the masked-LM head use bidirectional plain attention
+
+The generated `modeling_mixlab.py` consumes Hugging Face `attention_mask` in `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForMaskedLM`, so padded batches mask pad-token keys instead of letting padding leak into hidden states.
 
 Tokenizer artifacts must come from an explicit `-tokenizer-path`, or from `tokenizer.json` next to the config/checkpoint. If the tokenizer source is missing or unreachable, export fails before writing an incomplete Hugging Face directory. Mixlab writes `tokenizer_config.json` and `special_tokens_map.json` by merging any source sidecars with special-token metadata derived from `tokenizer.json`, and writes matching `pad/eos/bos/unk_token_id` fields to `config.json` when the tokens are present. For masked-capable checkpoints (`mlm`/`mntp`, or `hybrid` with `hybrid_clm_fraction < 1`), it also sets the tokenizer `mask_token`/`mask_token_id` — resolved from `training.mlm_mask_token_id` against the tokenizer vocab — so masked/MNTP eval works without manually patching the tokenizer.
 

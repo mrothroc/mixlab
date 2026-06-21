@@ -71,6 +71,10 @@ def main() -> int:
     with torch.no_grad():
         batched_lm = model(**encoded).logits
         hidden = backbone(**encoded).last_hidden_state
+        unmasked_hidden = backbone(
+            input_ids=encoded["input_ids"],
+            attention_mask=torch.ones_like(encoded["attention_mask"]),
+        ).last_hidden_state
     if batched_lm.shape[-1] != vocab:
         print(f"batched LM vocab dim {batched_lm.shape[-1]} != {vocab}", file=sys.stderr)
         return 2
@@ -81,10 +85,18 @@ def main() -> int:
     if not torch.isfinite(hidden).all() or not torch.isfinite(batched_lm).all():
         print("batched AutoModel/AutoModelForCausalLM outputs contain non-finite values", file=sys.stderr)
         return 2
+    if (encoded["attention_mask"] == 0).any():
+        mask_diff = (hidden - unmasked_hidden).abs().max().item()
+        if mask_diff <= 1e-8:
+            print("FAIL: AutoModel hidden states are unchanged when attention_mask hides padding", file=sys.stderr)
+            return 2
 
     with open(os.path.join(args.dir, "config.json")) as f:
         config_doc = json.load(f)
     if "AutoModelForMaskedLM" in config_doc.get("auto_map", {}):
+        if getattr(backbone.blocks[0], "attention_mask", "") == "causal":
+            print("FAIL: AutoModel uses causal blocks for a masked-capable export", file=sys.stderr)
+            return 2
         masked = AutoModelForMaskedLM.from_pretrained(args.dir, trust_remote_code=True)
         masked.eval()
         labels = input_ids.clone()

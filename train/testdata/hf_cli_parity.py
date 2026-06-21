@@ -113,6 +113,10 @@ def check_backbone_and_tokenizer(export_dir: str, model, vocab_size: int) -> int
     with torch.no_grad():
         lm_logits = model(**encoded).logits
         hidden = backbone(**encoded).last_hidden_state
+        unmasked_hidden = backbone(
+            input_ids=encoded["input_ids"],
+            attention_mask=torch.ones_like(encoded["attention_mask"]),
+        ).last_hidden_state
     if lm_logits.shape[-1] != vocab_size:
         raise ValueError(f"batched LM vocab dim {lm_logits.shape[-1]} != {vocab_size}")
     hidden_size = int(getattr(model.config, "hidden_size", getattr(model.config, "model_dim", 0)))
@@ -120,6 +124,15 @@ def check_backbone_and_tokenizer(export_dir: str, model, vocab_size: int) -> int
         raise ValueError(f"backbone hidden dim {hidden.shape[-1]} != {hidden_size}")
     if not torch.isfinite(lm_logits).all() or not torch.isfinite(hidden).all():
         raise ValueError("batched AutoModel/AutoModelForCausalLM outputs contain non-finite values")
+    if (encoded["attention_mask"] == 0).any():
+        mask_diff = (hidden - unmasked_hidden).abs().max().item()
+        if mask_diff <= 1e-8:
+            raise ValueError("AutoModel hidden states are unchanged when attention_mask hides padding")
+    with open(os.path.join(export_dir, "config.json")) as f:
+        config_doc = json.load(f)
+    if "AutoModelForMaskedLM" in config_doc.get("auto_map", {}):
+        if getattr(backbone.blocks[0], "attention_mask", "") == "causal":
+            raise ValueError("AutoModel uses causal blocks for a masked-capable export")
     return hidden_size
 
 

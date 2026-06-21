@@ -371,7 +371,24 @@ class MixlabPlainBlock(nn.Module):
         max_bucket = bucket_size - 1
         return torch.clamp(bucket_pos, -max_bucket, max_bucket).long()
 
-    def forward(self, x, shared_relative_embeddings=None, dwa=None):
+    @staticmethod
+    def _apply_attention_mask(scores, attention_mask):
+        if attention_mask is None:
+            return scores
+        mask = attention_mask.to(device=scores.device)
+        if mask.dim() == 2:
+            mask = mask[:, None, None, :]
+        elif mask.dim() == 3:
+            mask = mask[:, None, :, :]
+        elif mask.dim() != 4:
+            raise ValueError(
+                f"attention_mask must have rank 2, 3, or 4; got shape {tuple(attention_mask.shape)}"
+            )
+        if mask.dtype.is_floating_point and torch.any(mask < 0):
+            return scores + mask.to(dtype=scores.dtype)
+        return scores.masked_fill(~mask.bool(), -1e9)
+
+    def forward(self, x, shared_relative_embeddings=None, dwa=None, attention_mask=None):
         residual = x
         x_norm = self.norm(x) if self.norm is not None else x
         bsz, seq_len, dim = x_norm.shape
@@ -412,6 +429,7 @@ class MixlabPlainBlock(nn.Module):
             pass
         else:
             raise ValueError(f"unsupported exported attention_mask {self.attention_mask!r}")
+        scores = self._apply_attention_mask(scores, attention_mask)
         attn = torch.softmax(scores, dim=-1)
         ctx = torch.matmul(attn, v)
         if self.xsa:
@@ -681,7 +699,7 @@ class MixlabModel(PreTrainedModel):
                 self.trigram_proj = MixlabLinear(trigram_dim, config.model_dim)
             self.trigram_scale = nn.Parameter(torch.ones(1))
         modules = []
-        block_configs = blocks if blocks is not None else config.blocks
+        block_configs = blocks if blocks is not None else self._default_backbone_blocks(config)
         self.layer_aggregation = str(getattr(config, "layer_aggregation", "") or "none").lower()
         if self.layer_aggregation in ("", "none"):
             self.layer_aggregation = "none"
@@ -818,7 +836,12 @@ class MixlabModel(PreTrainedModel):
             x = x + state * self.trigram_scale
         return x
 
-    def forward_hidden(self, input_ids=None):
+    @staticmethod
+    def _default_backbone_blocks(config):
+        masked_blocks = getattr(config, "masked_blocks", None) or []
+        return masked_blocks if masked_blocks else config.blocks
+
+    def forward_hidden(self, input_ids=None, attention_mask=None):
         if input_ids is None:
             raise ValueError("input_ids is required")
         x = self._embed_features(input_ids)
@@ -828,15 +851,15 @@ class MixlabModel(PreTrainedModel):
             relative_embeddings = self.relative_layer_norm(relative_embeddings)
         for block in self.blocks:
             if isinstance(block, MixlabPlainBlock):
-                x = block(x, relative_embeddings, dwa)
+                x = block(x, relative_embeddings, dwa, attention_mask)
             else:
                 x = block(x, dwa)
         if dwa is not None:
             dwa.finish()
         return self.final_norm(x)
 
-    def forward(self, input_ids=None, **kwargs):
-        return BaseModelOutput(last_hidden_state=self.forward_hidden(input_ids))
+    def forward(self, input_ids=None, attention_mask=None, **kwargs):
+        return BaseModelOutput(last_hidden_state=self.forward_hidden(input_ids, attention_mask))
 
     def bert_mlm_logits(self, hidden):
         if self.mlm_head != "bert":
@@ -853,12 +876,12 @@ class MixlabForCausalLM(MixlabModel):
     _tied_weights_keys = []
 
     def __init__(self, config):
-        super().__init__(config)
+        super().__init__(config, blocks=config.blocks)
         self.lm_head_weight = nn.Parameter(torch.empty(config.model_dim, config.vocab_size))
         nn.init.xavier_uniform_(self.lm_head_weight)
 
-    def forward(self, input_ids=None, labels=None, **kwargs):
-        x = self.forward_hidden(input_ids)
+    def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
+        x = self.forward_hidden(input_ids, attention_mask)
         logits = torch.matmul(x, self.lm_head_weight)
         if getattr(self.config, "logit_softcap", 0.0):
             cap = float(self.config.logit_softcap)
@@ -884,8 +907,8 @@ class MixlabForMaskedLM(MixlabModel):
         self.lm_head_weight = nn.Parameter(torch.empty(config.model_dim, config.vocab_size))
         nn.init.xavier_uniform_(self.lm_head_weight)
 
-    def forward(self, input_ids=None, labels=None, **kwargs):
-        x = self.forward_hidden(input_ids)
+    def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
+        x = self.forward_hidden(input_ids, attention_mask)
         if getattr(self.config, "mlm_head", "linear") == "bert":
             logits = self.bert_mlm_logits(x)
         else:
