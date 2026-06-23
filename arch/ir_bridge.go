@@ -46,6 +46,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 			Data2VecInactive:     true,
 			ZLossInactive:        true,
 			DropoutInactive:      true,
+			SegmentMaskInactive:  true,
 		}, nil, cfg.RecurrencePhases[len(cfg.RecurrencePhases)-1].Order, false)
 	}
 	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
@@ -56,6 +57,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		Data2VecInactive:     true,
 		ZLossInactive:        true,
 		DropoutInactive:      true,
+		SegmentMaskInactive:  true,
 	}, nil, false)
 }
 
@@ -72,6 +74,7 @@ type TrainingProgramState struct {
 	Objective            string
 	HiddenCaptureTopK    int
 	HiddenCapturePrefix  string
+	SegmentMaskInactive  bool
 }
 
 // BuildTrainingIRProgramFromConfig constructs a training program with MTP
@@ -171,6 +174,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		hiddenDropout = 0
 		attnDropout = 0
 	}
+	segmentAttentionMask := cfg.Training.AttentionSegmentMaskEnabled() && !state.SegmentMaskInactive
 
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		cfg.ModelDim,
@@ -210,6 +214,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		distillation,
 		data2vec,
 		newData2VecHiddenCapture(state.HiddenCaptureTopK, len(cfg.Blocks), state.HiddenCapturePrefix),
+		segmentAttentionMask,
 		cfg.EffectiveNormSpec(),
 		cfg.EffectiveNormPlacement(),
 		cfg.FFNInternalNorm,

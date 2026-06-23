@@ -13,6 +13,7 @@ type objectiveBatch struct {
 	y               []int
 	lossMask        []float32
 	attentionCausal []int32
+	segmentIDs      []int32
 	maskedLossMask  []float32
 	teacherProbs    []float32
 	unmaskedX       []int
@@ -65,16 +66,27 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 	if len(batch.x) < need || len(batch.y) < need {
 		return objectiveBatch{}, fmt.Errorf("input size mismatch: tokens=%d targets=%d need=%d", len(batch.x), len(batch.y), need)
 	}
+	var prepared objectiveBatch
+	var err error
 	switch canonicalObjective(objective) {
 	case arch.ObjectiveMLM:
-		return prepareMLMBatch(cfg, batch, step, need)
+		prepared, err = prepareMLMBatch(cfg, batch, step, need)
 	case arch.ObjectiveMNTP:
-		return prepareMNTPBatch(cfg, batch, step, need, seqLen)
+		prepared, err = prepareMNTPBatch(cfg, batch, step, need, seqLen)
 	case arch.ObjectiveHybridExample:
-		return prepareHybridExampleBatch(cfg, batch, step, need, seqLen)
+		prepared, err = prepareHybridExampleBatch(cfg, batch, step, need, seqLen)
 	default:
-		return objectiveBatch{x: batch.x, y: batch.y, unmaskedX: batch.x[:need]}, nil
+		prepared = objectiveBatch{x: batch.x, y: batch.y, unmaskedX: batch.x[:need]}
 	}
+	if err != nil {
+		return objectiveBatch{}, err
+	}
+	if cfg.Training.AttentionSegmentMaskEnabled() {
+		if err := attachSegmentIDs(cfg, &prepared, need, seqLen); err != nil {
+			return objectiveBatch{}, err
+		}
+	}
+	return prepared, nil
 }
 
 func canonicalObjective(objective string) string {
@@ -267,6 +279,39 @@ func replaceSelectedMLMTokens(cfg *ArchConfig, rng *rand.Rand, x, originals []in
 			x[i] = originals[i]
 		}
 	}
+}
+
+func attachSegmentIDs(cfg *ArchConfig, batch *objectiveBatch, need, seqLen int) error {
+	if batch == nil {
+		return fmt.Errorf("nil objective batch")
+	}
+	if seqLen <= 0 || need%seqLen != 0 {
+		return fmt.Errorf("invalid segment id batch shape: tokens=%d seq_len=%d", need, seqLen)
+	}
+	source := batch.unmaskedX
+	if len(source) < need {
+		source = batch.x
+	}
+	if len(source) < need {
+		return fmt.Errorf("segment id source size=%d need=%d", len(source), need)
+	}
+	batch.segmentIDs = deriveSegmentIDs(source[:need], need, seqLen, cfg.Training.AttentionSegmentBoundaryTokenID)
+	return nil
+}
+
+func deriveSegmentIDs(tokens []int, need, seqLen, boundary int) []int32 {
+	ids := make([]int32, need)
+	for rowStart := 0; rowStart < need; rowStart += seqLen {
+		segment := int32(0)
+		for pos := 0; pos < seqLen; pos++ {
+			i := rowStart + pos
+			if tokens[i] == boundary {
+				segment++
+			}
+			ids[i] = segment
+		}
+	}
+	return ids
 }
 
 func deterministicObjectiveRNG(seed int64, step int, salt uint64) *rand.Rand {

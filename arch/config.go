@@ -233,6 +233,8 @@ type TrainingSpec struct {
 	HybridCLMFraction                 float64           `json:"hybrid_clm_fraction,omitempty"`
 	HybridSecondaryObjective          string            `json:"hybrid_secondary_objective,omitempty"`
 	HybridMixGranularity              string            `json:"hybrid_mix_granularity,omitempty"`
+	AttentionSegmentMask              string            `json:"attention_segment_mask,omitempty"`
+	AttentionSegmentBoundaryTokenID   int               `json:"attention_segment_boundary_token_id,omitempty"`
 	Distillation                      *DistillationSpec `json:"distillation,omitempty"`
 	Data2Vec                          *Data2VecSpec     `json:"data2vec,omitempty"`
 	ZLoss                             float64           `json:"z_loss,omitempty"`
@@ -296,18 +298,19 @@ type TrainingSpec struct {
 	SWADecay      float32 `json:"swa_decay,omitempty"`
 	SWAInterval   int     `json:"swa_interval,omitempty"`
 
-	mlmMaskProbSet        bool
-	mlmMaskTokenIDSet     bool
-	mlmReplacementProbSet bool
-	hybridCLMFractionSet  bool
-	warmupStepsSet        bool
-	warmupRatioSet        bool
-	holdStepsSet          bool
-	lambBeta1Set          bool
-	lambBeta2Set          bool
-	lambEpsSet            bool
-	swaDecaySet           bool
-	swaIntervalSet        bool
+	mlmMaskProbSet                     bool
+	mlmMaskTokenIDSet                  bool
+	mlmReplacementProbSet              bool
+	hybridCLMFractionSet               bool
+	attentionSegmentBoundaryTokenIDSet bool
+	warmupStepsSet                     bool
+	warmupRatioSet                     bool
+	holdStepsSet                       bool
+	lambBeta1Set                       bool
+	lambBeta2Set                       bool
+	lambEpsSet                         bool
+	swaDecaySet                        bool
+	swaIntervalSet                     bool
 }
 
 // EarlyStopSpec controls optional validation-loss early stopping beyond the
@@ -340,6 +343,7 @@ func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	_, keptProbSet := fields["mlm_kept_unchanged_prob"]
 	t.mlmReplacementProbSet = maskProbSet || randomProbSet || keptProbSet
 	_, t.hybridCLMFractionSet = fields["hybrid_clm_fraction"]
+	_, t.attentionSegmentBoundaryTokenIDSet = fields["attention_segment_boundary_token_id"]
 	_, t.warmupStepsSet = fields["warmup_steps"]
 	_, t.warmupRatioSet = fields["warmup_ratio"]
 	_, t.holdStepsSet = fields["hold_steps"]
@@ -455,6 +459,7 @@ func (t *TrainingSpec) ApplyDefaults() {
 		t.HybridSecondaryObjective = normalizeTrainingObjective(t.HybridSecondaryObjective)
 	}
 	t.HybridMixGranularity = t.EffectiveHybridMixGranularity()
+	t.AttentionSegmentMask = t.EffectiveAttentionSegmentMask()
 	if t.Data2Vec != nil {
 		t.Data2Vec.applyDefaults()
 	}
@@ -825,6 +830,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 	if err := validateTrainingObjective(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateTrainingAttentionSegmentMask(cfg, source); err != nil {
 		return nil, err
 	}
 	if err := validateMLMHead(cfg, source); err != nil {

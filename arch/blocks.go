@@ -55,6 +55,34 @@ func emitQKNormIR(prog *Program, qh, kh string, wi int, qkNorm, normalizeK bool)
 	return qNorm, kNorm, wi
 }
 
+func emitPlainAttentionMaskIR(prog *Program, scores, output, attentionMask string, T, windowSize int, segmentMask bool) (string, error) {
+	if segmentMask {
+		switch attentionMask {
+		case AttentionMaskCausal:
+			prog.SegmentAttentionMask(scores, "segment_ids", "", T, windowSize, SegmentMaskModeCausal, output)
+		case AttentionMaskHybridExample:
+			prog.SegmentAttentionMask(scores, "segment_ids", "attention_causal_mask", T, windowSize, SegmentMaskModeSelectiveCausal, output)
+		case AttentionMaskBidirectional, AttentionMaskNone:
+			prog.SegmentAttentionMask(scores, "segment_ids", "", T, windowSize, SegmentMaskModeNone, output)
+		default:
+			return "", fmt.Errorf("invalid attention_mask=%q", attentionMask)
+		}
+		return output, nil
+	}
+	switch attentionMask {
+	case AttentionMaskCausal:
+		prog.CausalMask(scores, T, windowSize, output)
+		return output, nil
+	case AttentionMaskHybridExample:
+		prog.SelectiveCausalMask(scores, "attention_causal_mask", T, windowSize, output)
+		return output, nil
+	case AttentionMaskBidirectional, AttentionMaskNone:
+		return scores, nil
+	default:
+		return "", fmt.Errorf("invalid attention_mask=%q", attentionMask)
+	}
+}
+
 func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
 	return emitPlainAttentionIRWithKVOptionsEx(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, false, ropeDims, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, "", kvSource, kvCache, blockIndex)
 }
@@ -64,7 +92,7 @@ func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D,
 }
 
 func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
-	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, false, false, "", xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, sharedRelativeAttentionPlan{WeightIndex: -1}, nil)
+	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, false, false, "", xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, sharedRelativeAttentionPlan{WeightIndex: -1}, nil, false)
 }
 
 func emitLinearProjectionIR(prog *Program, input string, wi int, useBias bool, output string) (weightNameUsed, biasNameUsed string, nextWI int) {
@@ -83,7 +111,7 @@ func emitLinearProjectionIR(prog *Program, input string, wi int, useBias bool, o
 	return weightNameUsed, biasNameUsed, wi
 }
 
-func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, attnPostNormMode string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, sharedRel sharedRelativeAttentionPlan, layerAgg *layerAggregationBuildState) (int, error) {
+func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, attnPostNormMode string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, sharedRel sharedRelativeAttentionPlan, layerAgg *layerAggregationBuildState, segmentMask bool) (int, error) {
 	_ = mlpMult
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
@@ -297,18 +325,11 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		}
 
 		// Attention mask + softmax
-		switch attentionMask {
-		case AttentionMaskCausal:
-			prog.CausalMask(scaled, T, windowSize, masked)
-			prog.Softmax(masked, -1, attn)
-		case AttentionMaskHybridExample:
-			prog.SelectiveCausalMask(scaled, "attention_causal_mask", T, windowSize, masked)
-			prog.Softmax(masked, -1, attn)
-		case AttentionMaskBidirectional, AttentionMaskNone:
-			prog.Softmax(scaled, -1, attn)
-		default:
-			return wi, fmt.Errorf("invalid attention_mask=%q", attentionMask)
+		maskedScores, err := emitPlainAttentionMaskIR(prog, scaled, masked, attentionMask, T, windowSize, segmentMask)
+		if err != nil {
+			return wi, err
 		}
+		prog.Softmax(maskedScores, -1, attn)
 		if attnDropout > 0 {
 			prog.Dropout(attn, attnDropout, attnDrop)
 			attn = attnDrop
@@ -730,7 +751,7 @@ func emitMLPIRNorm(prog *Program, x string, wi, idx int, activation string, leak
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, ffnActivation string, sharedRel sharedRelativeAttentionPlan) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, ffnActivation string, sharedRel sharedRelativeAttentionPlan, segmentMask bool) (string, int, error) {
 	_ = mlpMult
 	ffnActivation = normalizePlainFFNActivation(ffnActivation)
 	switch ffnActivation {
@@ -838,18 +859,11 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	if err != nil {
 		return "", wi, err
 	}
-	switch attentionMask {
-	case AttentionMaskCausal:
-		prog.CausalMask(scaled, T, windowSize, masked)
-		prog.Softmax(masked, -1, attn)
-	case AttentionMaskHybridExample:
-		prog.SelectiveCausalMask(scaled, "attention_causal_mask", T, windowSize, masked)
-		prog.Softmax(masked, -1, attn)
-	case AttentionMaskBidirectional, AttentionMaskNone:
-		prog.Softmax(scaled, -1, attn)
-	default:
-		return "", wi, fmt.Errorf("invalid attention_mask=%q", attentionMask)
+	maskedScores, err := emitPlainAttentionMaskIR(prog, scaled, masked, attentionMask, T, windowSize, segmentMask)
+	if err != nil {
+		return "", wi, err
 	}
+	prog.Softmax(maskedScores, -1, attn)
 	if attnDropout > 0 {
 		prog.Dropout(attn, attnDropout, attnDrop)
 		attn = attnDrop

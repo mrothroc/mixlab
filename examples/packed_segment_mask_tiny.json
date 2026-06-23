@@ -1,0 +1,20 @@
+{
+  "name": "packed-segment-mask-tiny",
+  "model_dim": 128,
+  "vocab_size": 32000,
+  "seq_len": 128,
+  "tie_embeddings": true,
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "steps": 200,
+    "lr": 0.0003,
+    "batch_tokens": 1024,
+    "attention_segment_mask": "boundary_token",
+    "attention_segment_boundary_token_id": 1
+  }
+}

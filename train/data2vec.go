@@ -23,9 +23,11 @@ type data2VecTeacher struct {
 	bigramVocabSize  int
 	trigramVocabSize int
 	lossMaskInput    bool
+	segmentIDsInput  bool
 	tokBuf           []int32
 	tgtBuf           []int32
 	lossMaskBuf      []float32
+	segmentIDBuf     []int32
 	charBuf          []int32
 	bigramBuf        []int32
 	trigramBuf       []int32
@@ -83,9 +85,11 @@ func newData2VecTeacher(cfg *ArchConfig, initialWeights [][]float32, concreteObj
 		bigramVocabSize:  cfg.BigramVocabSize,
 		trigramVocabSize: cfg.TrigramVocabSize,
 		lossMaskInput:    data2VecProgramDeclaresInput(teacherProg, "loss_mask"),
+		segmentIDsInput:  data2VecProgramDeclaresInput(teacherProg, "segment_ids"),
 		tokBuf:           make([]int32, cfg.Training.BatchTokens),
 		tgtBuf:           make([]int32, cfg.Training.BatchTokens),
 		lossMaskBuf:      make([]float32, cfg.Training.BatchTokens),
+		segmentIDBuf:     make([]int32, cfg.Training.BatchTokens),
 		charBuf:          make([]int32, cfg.Training.BatchTokens*cfg.CharMaxPerToken),
 		bigramBuf:        make([]int32, cfg.Training.BatchTokens),
 		trigramBuf:       make([]int32, cfg.Training.BatchTokens),
@@ -358,6 +362,9 @@ func (t *data2VecTeacher) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([
 		t.bigramBuf = make([]int32, need)
 		t.trigramBuf = make([]int32, need)
 	}
+	if t.segmentIDsInput && len(t.segmentIDBuf) < need {
+		t.segmentIDBuf = make([]int32, need)
+	}
 	for i := 0; i < need; i++ {
 		t.tokBuf[i] = int32(xTok[i])
 		t.tgtBuf[i] = int32(yTok[i])
@@ -375,6 +382,13 @@ func (t *data2VecTeacher) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([
 		}
 		inputs = append(inputs, gpu.TensorInput{
 			Name: "loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.lossMaskBuf[:need],
+		})
+	}
+	if t.segmentIDsInput {
+		ids := deriveSegmentIDs(xTok[:need], need, seqLen, t.cfg.Training.AttentionSegmentBoundaryTokenID)
+		copy(t.segmentIDBuf[:need], ids)
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "segment_ids", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.segmentIDBuf[:need],
 		})
 	}
 	if t.charMaxPerToken > 0 {

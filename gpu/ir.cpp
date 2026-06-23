@@ -2485,6 +2485,63 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, masked);
         break;
       }
+      case OP_SEGMENT_ATTENTION_MASK: {
+        if (op.n_inputs < 2) {
+          throw std::runtime_error("OP_SEGMENT_ATTENTION_MASK requires scores and segment ids");
+        }
+        if (op.n_int_params < 3) {
+          throw std::runtime_error("OP_SEGMENT_ATTENTION_MASK requires T, window_size, and mode");
+        }
+        int T = op.int_params[0];
+        int window_size = op.int_params[1];
+        int mode = op.int_params[2];
+        auto scores = get(op, 0);
+        auto segment_ids_raw = get(op, 1);
+        if (scores.ndim() != 4 || scores.shape(2) != T || scores.shape(3) != T) {
+          throw std::runtime_error("OP_SEGMENT_ATTENTION_MASK expects scores shape [B,H,T,T]");
+        }
+        if (segment_ids_raw.ndim() != 2 || segment_ids_raw.shape(0) != scores.shape(0) ||
+            segment_ids_raw.shape(1) != T) {
+          throw std::runtime_error("OP_SEGMENT_ATTENTION_MASK segment ids must have shape [B,T]");
+        }
+        auto segment_ids = mx::astype(segment_ids_raw, mx::int32);
+        auto q_seg = mx::expand_dims(segment_ids, 2);
+        auto k_seg = mx::expand_dims(segment_ids, 1);
+        auto mask3 = mx::logical_not(q_seg == k_seg);
+        if (mode == 1 || mode == 2) {
+          auto future_mask = mx::triu(mx::ones({T, T}, mx::bool_), 1);
+          if (window_size > 0 && window_size < T) {
+            auto pos = mx::astype(mx::arange(T), mx::int32);
+            auto query_pos = mx::expand_dims(pos, 1);
+            auto key_pos = mx::expand_dims(pos, 0);
+            auto too_old = key_pos < (query_pos - mx::array(window_size - 1, mx::int32));
+            future_mask = mx::logical_or(future_mask, too_old);
+          }
+          auto future3 = mx::expand_dims(future_mask, 0);
+          if (mode == 1) {
+            mask3 = mx::logical_or(mask3, future3);
+          } else {
+            if (op.n_inputs < 3) {
+              throw std::runtime_error("OP_SEGMENT_ATTENTION_MASK selective causal mode requires causal row mask");
+            }
+            auto causal_rows_raw = get(op, 2);
+            if (causal_rows_raw.ndim() != 1 || causal_rows_raw.shape(0) != scores.shape(0)) {
+              throw std::runtime_error("OP_SEGMENT_ATTENTION_MASK causal row mask must have shape [B]");
+            }
+            auto row_mask = mx::greater(
+                mx::astype(causal_rows_raw, mx::int32),
+                mx::array(0, mx::int32));
+            auto row_mask3 = mx::expand_dims(mx::expand_dims(row_mask, 1), 2);
+            mask3 = mx::logical_or(mask3, mx::logical_and(row_mask3, future3));
+          }
+        } else if (mode != 0) {
+          throw std::runtime_error("OP_SEGMENT_ATTENTION_MASK has invalid mode");
+        }
+        auto mask4 = mx::expand_dims(mask3, 1);
+        auto masked = mx::where(mask4, mx::full_like(scores, -1e9f), scores);
+        set_out(op, 0, masked);
+        break;
+      }
       case OP_PREFIX_CAUSAL_MASK: {
         if (op.n_int_params < 2) {
           throw std::runtime_error("OP_PREFIX_CAUSAL_MASK requires int params: selfT, prefixT");

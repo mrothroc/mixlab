@@ -174,6 +174,11 @@ var exampleConfigs = []exampleConfigCase{
 		wantWeights: 25, // 3 base + 2*(7 plain + 4 swiglu)
 		minOps:      10,
 	},
+	{
+		filename:    "packed_segment_mask_tiny.json",
+		wantWeights: 24, // 2 tied-embed base + 2*(7 plain + 4 swiglu)
+		minOps:      10,
+	},
 	// --- New block types (needs block impl) ---
 	{
 		filename:    "mamba_2L.json",
@@ -264,6 +269,9 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 			if cfg.Training.Distillation != nil {
 				wantInputs++
 			}
+			if cfg.Training.AttentionSegmentMaskEnabled() {
+				wantInputs++
+			}
 			if cfg.CharVocabSize > 0 {
 				wantInputs++
 			}
@@ -283,6 +291,12 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 				t.Errorf("input[1].Name = %q, want \"targets\"", prog.Inputs[1].Name)
 			}
 			inputIdx := 2
+			if cfg.Training.AttentionSegmentMaskEnabled() {
+				if prog.Inputs[inputIdx].Name != "segment_ids" {
+					t.Errorf("input[%d].Name = %q, want \"segment_ids\"", inputIdx, prog.Inputs[inputIdx].Name)
+				}
+				inputIdx++
+			}
 			if cfg.Training.Distillation != nil {
 				if prog.Inputs[inputIdx].Name != "teacher_probs" {
 					t.Errorf("input[%d].Name = %q, want \"teacher_probs\"", inputIdx, prog.Inputs[inputIdx].Name)

@@ -187,6 +187,78 @@ func TestPrepareObjectiveBatchHybridExampleMaskedRows(t *testing.T) {
 	}
 }
 
+func TestPrepareObjectiveBatchSegmentIDsFromBoundaryToken(t *testing.T) {
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 4
+	cfg.Training.BatchTokens = 8
+	cfg.Training.AttentionSegmentMask = arch.AttentionSegmentMaskBoundaryToken
+	cfg.Training.AttentionSegmentBoundaryTokenID = 1
+	batch := trainBatch{
+		x: []int{10, 1, 11, 12, 1, 20, 1, 21},
+		y: []int{1, 11, 12, 1, 20, 1, 21, 22},
+	}
+	got, err := prepareObjectiveBatch(cfg, batch, 0, arch.ObjectiveCausal)
+	if err != nil {
+		t.Fatalf("prepare causal segment batch: %v", err)
+	}
+	want := []int32{0, 1, 1, 1, 1, 1, 2, 2}
+	if !reflect.DeepEqual(got.segmentIDs, want) {
+		t.Fatalf("segmentIDs = %v, want %v", got.segmentIDs, want)
+	}
+}
+
+func TestPrepareObjectiveBatchSegmentIDsUseUnmaskedMLMTokens(t *testing.T) {
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 4
+	cfg.Training.BatchTokens = 4
+	cfg.Training.AttentionSegmentMask = arch.AttentionSegmentMaskBoundaryToken
+	cfg.Training.AttentionSegmentBoundaryTokenID = 1
+	cfg.Training.MLMMaskProb = 1
+	cfg.Training.MLMMaskTokenProb = 1
+	cfg.Training.MLMRandomTokenProb = 0
+	cfg.Training.MLMKeptUnchangedProb = 0
+	batch := trainBatch{
+		x: []int{1, 10, 1, 11},
+		y: []int{10, 1, 11, 12},
+	}
+	got, err := prepareObjectiveBatch(cfg, batch, 0, arch.ObjectiveMLM)
+	if err != nil {
+		t.Fatalf("prepare MLM segment batch: %v", err)
+	}
+	if wantX := []int{9, 9, 9, 9}; !reflect.DeepEqual(got.x, wantX) {
+		t.Fatalf("MLM x = %v, want %v", got.x, wantX)
+	}
+	if want := []int32{1, 1, 2, 2}; !reflect.DeepEqual(got.segmentIDs, want) {
+		t.Fatalf("segmentIDs = %v, want %v", got.segmentIDs, want)
+	}
+}
+
+func TestPrepareObjectiveBatchHybridExampleSegmentIDsAndCausalRows(t *testing.T) {
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 4
+	cfg.Training.BatchTokens = 8
+	cfg.Training.Objective = arch.ObjectiveHybrid
+	cfg.Training.HybridMixGranularity = arch.HybridMixGranularityExample
+	cfg.Training.HybridCLMFraction = 1
+	cfg.Training.HybridSecondaryObjective = arch.ObjectiveMLM
+	cfg.Training.AttentionSegmentMask = arch.AttentionSegmentMaskBoundaryToken
+	cfg.Training.AttentionSegmentBoundaryTokenID = 1
+	batch := trainBatch{
+		x: []int{1, 10, 11, 12, 20, 1, 21, 22},
+		y: []int{10, 11, 12, 20, 1, 21, 22, 23},
+	}
+	got, err := prepareObjectiveBatch(cfg, batch, 0, arch.ObjectiveHybridExample)
+	if err != nil {
+		t.Fatalf("prepare hybrid segment batch: %v", err)
+	}
+	if want := []int32{1, 1, 1, 1, 0, 1, 1, 1}; !reflect.DeepEqual(got.segmentIDs, want) {
+		t.Fatalf("segmentIDs = %v, want %v", got.segmentIDs, want)
+	}
+	if want := []int32{1, 1}; !reflect.DeepEqual(got.attentionCausal, want) {
+		t.Fatalf("attentionCausal = %v, want %v", got.attentionCausal, want)
+	}
+}
+
 func TestHybridExampleObjectiveSelectionDeterministicAndApproximateFraction(t *testing.T) {
 	cfg := objectiveTestConfig()
 	cfg.SeqLen = 4

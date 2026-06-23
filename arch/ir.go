@@ -79,6 +79,11 @@ const (
 	OpEqual                = 86 // OP_EQUAL
 	OpLayerNorm            = 87 // OP_LAYERNORM
 	OpSelectiveCausalMask  = 88 // OP_SELECTIVE_CAUSAL_MASK
+	OpSegmentAttentionMask = 89 // OP_SEGMENT_ATTENTION_MASK
+
+	SegmentMaskModeNone            = 0
+	SegmentMaskModeCausal          = 1
+	SegmentMaskModeSelectiveCausal = 2
 
 	TensorInt32   = 0
 	TensorFloat32 = 1
@@ -214,6 +219,17 @@ func (p *Program) CausalMask(scores string, T, windowSize int, output string) {
 // causalRows[b] > 0. Other rows keep dense bidirectional scores.
 func (p *Program) SelectiveCausalMask(scores, causalRows string, T, windowSize int, output string) {
 	p.AddOp(OpSelectiveCausalMask, []string{scores, causalRows}, []string{output}, nil, []int{T, windowSize})
+}
+
+// SegmentAttentionMask applies a block-diagonal segment mask from segmentIDs.
+// mode selects whether to also apply no causal mask, all-row causal masking, or
+// per-batch-row selective causal masking using causalRows.
+func (p *Program) SegmentAttentionMask(scores, segmentIDs, causalRows string, T, windowSize, mode int, output string) {
+	inputs := []string{scores, segmentIDs}
+	if causalRows != "" {
+		inputs = append(inputs, causalRows)
+	}
+	p.AddOp(OpSegmentAttentionMask, inputs, []string{output}, nil, []int{T, windowSize, mode})
 }
 
 // CrossEntropy emits a cross-entropy loss computation.

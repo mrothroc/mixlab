@@ -79,6 +79,7 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"Equal", ir.OpEqual, OpEqual},
 		{"LayerNorm", ir.OpLayerNorm, OpLayerNorm},
 		{"SelectiveCausalMask", ir.OpSelectiveCausalMask, OpSelectiveCausalMask},
+		{"SegmentAttentionMask", ir.OpSegmentAttentionMask, OpSegmentAttentionMask},
 		{"StopGradient", ir.OpStopGradient, OpStopGradient},
 		{"FirstByteMaskedCrossEntropy", ir.OpFirstByteMaskedCE, OpFirstByteMaskedCE},
 	}

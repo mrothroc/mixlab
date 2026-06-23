@@ -80,6 +80,7 @@ const (
 	OpEqual                = 86
 	OpLayerNorm            = 87
 	OpSelectiveCausalMask  = 88
+	OpSegmentAttentionMask = 89
 )
 
 const (

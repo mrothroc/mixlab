@@ -53,6 +53,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [token_blend_plain.json](token_blend_plain.json) | Token blending | Learned adjacent-token gate |
 | [bigram_plain.json](bigram_plain.json) | Bigram embedding | Hashed bigram context features |
 | [char_features_plain.json](char_features_plain.json) | Char feature embedding | Tokenizer-level ByteLevel char feature channel |
+| [packed_segment_mask_tiny.json](packed_segment_mask_tiny.json) | Packed segment masking | Block-diagonal plain attention from a boundary token |
 | [softcap_plain.json](softcap_plain.json) | Logit softcap | Bounded logits before loss |
 | [qk_norm_tiny.json](qk_norm_tiny.json) | QK-norm attention | Learned per-head-dimension Q/K RMSNorm |
 | [layernorm_sandwich_tiny.json](layernorm_sandwich_tiny.json) | LayerNorm sandwich stack | HF-exportable GPT-BERT-style norms and GEGLU |
@@ -84,6 +85,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **Averaged checkpoints**: Use `swa_ema_tiny.json` to keep both live final and SWA/EMA averaged weights.
 - **Relative attention**: Use `deberta_relative_tiny.json` for DeBERTa-style P2C/C2P position bias. Add `relative_attention_parameterization: "shared_qk_reuse"` when you want GPT-BERT-style shared relative embeddings instead of per-block position projection weights.
 - **Character/byte features**: Use `char_features_plain.json` with data prepared using `-char-vocab-size 257`.
+- **Packed document boundaries**: Use `packed_segment_mask_tiny.json` when your packed shards already contain a boundary token and you want block-diagonal attention inside each packed sequence.
 - **Large-batch optimizer**: Use `lamb_plain_tiny.json` as a minimal whole-model LAMB starting point.
 - **Sparse feed-forward experts**: Use `moe_tiny.json` for top-k routed MoE blocks with load balancing.
 - **Exploring block types**: Try `mamba_2L.json`, `retnet_2L.json`, `rwkv_2L.json`, `hgrn2_2L.json`, or `mlstm_2L.json`.

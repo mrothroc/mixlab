@@ -97,6 +97,100 @@ func TestTrainingObjectiveValidation_HybridWindowSizeAllowedWhenCausalOnly(t *te
 		}`)
 }
 
+func TestTrainingAttentionSegmentMaskValidation(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"training": {"steps": 1, "lr": 0.001, "batch_tokens": 8}`)
+	if cfg.Training.AttentionSegmentMaskEnabled() {
+		t.Fatal("segment mask should be disabled by default")
+	}
+	_ = parseObjectiveConfig(t, `"training": {
+		"steps": 1, "lr": 0.001, "batch_tokens": 8,
+		"attention_segment_mask": "boundary_token",
+		"attention_segment_boundary_token_id": 1
+	}`)
+	_ = parseObjectiveConfig(t, `"training": {
+		"steps": 1, "lr": 0.001, "batch_tokens": 8,
+		"attention_segment_mask": "boundary_token",
+		"attention_segment_boundary_token_id": 0
+	}`)
+
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name: "missing boundary token",
+			body: `"training": {
+				"steps": 1, "lr": 0.001, "batch_tokens": 8,
+				"attention_segment_mask": "boundary_token"
+			}`,
+			wantErr: "attention_segment_boundary_token_id is required",
+		},
+		{
+			name: "bad mode",
+			body: `"training": {
+				"steps": 1, "lr": 0.001, "batch_tokens": 8,
+				"attention_segment_mask": "manifest",
+				"attention_segment_boundary_token_id": 1
+			}`,
+			wantErr: "attention_segment_mask",
+		},
+		{
+			name: "out of range boundary token",
+			body: `"training": {
+				"steps": 1, "lr": 0.001, "batch_tokens": 8,
+				"attention_segment_mask": "boundary_token",
+				"attention_segment_boundary_token_id": 32
+			}`,
+			wantErr: "attention_segment_boundary_token_id",
+		},
+		{
+			name: "no plain blocks",
+			body: `"blocks": [{"type": "swiglu"}],
+				"training": {
+					"steps": 1, "lr": 0.001, "batch_tokens": 8,
+					"attention_segment_mask": "boundary_token",
+					"attention_segment_boundary_token_id": 1
+				}`,
+			wantErr: "requires at least one type=plain",
+		},
+		{
+			name: "unsupported token mixer",
+			body: `"blocks": [{"type": "plain", "heads": 2}, {"type": "retnet", "heads": 2}],
+				"training": {
+					"steps": 1, "lr": 0.001, "batch_tokens": 8,
+					"attention_segment_mask": "boundary_token",
+					"attention_segment_boundary_token_id": 1
+				}`,
+			wantErr: "cannot be combined",
+		},
+		{
+			name: "distillation unsupported",
+			body: `"training": {
+				"steps": 1, "lr": 0.001, "batch_tokens": 8,
+				"attention_segment_mask": "boundary_token",
+				"attention_segment_boundary_token_id": 1,
+				"distillation": {
+					"teacher_checkpoints": ["teacher.safetensors"],
+					"teacher_configs": ["teacher.json"],
+					"loss_weight_ce": 1,
+					"loss_weight_kl": 0,
+					"ensemble_strategy": "mean_logits"
+				}
+			}`,
+			wantErr: "training.distillation",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseArchConfig([]byte(objectiveConfigJSON(tt.body)), tt.name)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("ParseArchConfig error=%v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestTrainingRecipeKnobValidationAndDefaults(t *testing.T) {
 	cfg := parseObjectiveConfig(t, `"training": {
 		"steps": 10,
@@ -231,6 +325,93 @@ func TestBuildIRProgram_MLMUsesMaskedLossAndBidirectionalPlainAttention(t *testi
 	}
 	if n := countOps(prog, OpCausalMask); n != 0 {
 		t.Fatalf("MLM default plain attention emitted %d causal masks, want 0", n)
+	}
+}
+
+func TestBuildIRProgram_SegmentAttentionMaskCausalTrainingOnly(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"training": {
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"attention_segment_mask": "boundary_token",
+		"attention_segment_boundary_token_id": 1
+	}`)
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	if !programDeclaresInputArch(prog, "segment_ids") {
+		t.Fatal("segment-mask training program should declare segment_ids")
+	}
+	if n := countOps(prog, OpSegmentAttentionMask); n != 1 {
+		t.Fatalf("OpSegmentAttentionMask count=%d want 1", n)
+	}
+	if n := countOps(prog, OpCausalMask); n != 0 {
+		t.Fatalf("OpCausalMask count=%d want 0 when segment mask owns causal masking", n)
+	}
+
+	evalProg, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildEvalIRProgramFromConfig: %v", err)
+	}
+	if programDeclaresInputArch(evalProg, "segment_ids") {
+		t.Fatal("eval program should not declare segment_ids")
+	}
+	if n := countOps(evalProg, OpSegmentAttentionMask); n != 0 {
+		t.Fatalf("eval OpSegmentAttentionMask count=%d want 0", n)
+	}
+	if n := countOps(evalProg, OpCausalMask); n != 1 {
+		t.Fatalf("eval OpCausalMask count=%d want 1", n)
+	}
+}
+
+func TestBuildIRProgram_SegmentAttentionMaskMaskedAndHybridExample(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"training": {
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"objective": "mlm",
+		"mlm_mask_token_id": 7,
+		"attention_segment_mask": "boundary_token",
+		"attention_segment_boundary_token_id": 1
+	}`)
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig(mlm): %v", err)
+	}
+	if !programDeclaresInputArch(prog, "segment_ids") {
+		t.Fatal("MLM segment-mask program should declare segment_ids")
+	}
+	if n := countOps(prog, OpSegmentAttentionMask); n != 1 {
+		t.Fatalf("MLM OpSegmentAttentionMask count=%d want 1", n)
+	}
+	if n := countOps(prog, OpCausalMask) + countOps(prog, OpSelectiveCausalMask); n != 0 {
+		t.Fatalf("MLM causal mask op count=%d want 0", n)
+	}
+
+	hybrid := parseObjectiveConfig(t, `"training": {
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"objective": "hybrid",
+		"hybrid_mix_granularity": "example",
+		"hybrid_secondary_objective": "mlm",
+		"mlm_mask_token_id": 7,
+		"attention_segment_mask": "boundary_token",
+		"attention_segment_boundary_token_id": 1
+	}`)
+	hybridProg, err := BuildTrainingIRProgramFromConfig(hybrid, TrainingProgramState{Objective: ObjectiveHybridExample})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(hybrid_example): %v", err)
+	}
+	if !programDeclaresInputArch(hybridProg, "attention_causal_mask") || !programDeclaresInputArch(hybridProg, "segment_ids") {
+		t.Fatal("hybrid example segment-mask program should declare both attention_causal_mask and segment_ids")
+	}
+	if n := countOps(hybridProg, OpSegmentAttentionMask); n != 1 {
+		t.Fatalf("hybrid OpSegmentAttentionMask count=%d want 1", n)
+	}
+	if n := countOps(hybridProg, OpSelectiveCausalMask); n != 0 {
+		t.Fatalf("hybrid OpSelectiveCausalMask count=%d want 0", n)
 	}
 }
 

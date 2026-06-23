@@ -22,6 +22,9 @@ const (
 
 	HybridMixGranularityBatch   = "batch"
 	HybridMixGranularityExample = "example"
+
+	AttentionSegmentMaskNone          = "none"
+	AttentionSegmentMaskBoundaryToken = "boundary_token"
 )
 
 func normalizeTrainingObjective(raw string) string {
@@ -67,6 +70,18 @@ func (t TrainingSpec) EffectiveHybridSecondaryObjective() string {
 		return ObjectiveMNTP
 	}
 	return obj
+}
+
+func (t TrainingSpec) EffectiveAttentionSegmentMask() string {
+	mode := strings.ToLower(strings.TrimSpace(t.AttentionSegmentMask))
+	if mode == "" {
+		return ""
+	}
+	return mode
+}
+
+func (t TrainingSpec) AttentionSegmentMaskEnabled() bool {
+	return t.EffectiveAttentionSegmentMask() == AttentionSegmentMaskBoundaryToken
 }
 
 func (t TrainingSpec) DefaultConcreteObjective() string {
@@ -158,6 +173,41 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	}
 	if t.Objective == ObjectiveHybrid && t.HybridSecondaryObjective == ObjectiveMNTP && cfg.SeqLen <= 1 {
 		return fmt.Errorf("config %q training.hybrid_secondary_objective=\"mntp\" requires seq_len > 1", source)
+	}
+	return nil
+}
+
+func validateTrainingAttentionSegmentMask(cfg *ArchConfig, source string) error {
+	t := &cfg.Training
+	t.AttentionSegmentMask = t.EffectiveAttentionSegmentMask()
+	switch t.AttentionSegmentMask {
+	case "", AttentionSegmentMaskNone:
+		return nil
+	case AttentionSegmentMaskBoundaryToken:
+	default:
+		return fmt.Errorf("config %q has invalid training.attention_segment_mask=%q (must be \"none\" or \"boundary_token\")", source, t.AttentionSegmentMask)
+	}
+	if !t.attentionSegmentBoundaryTokenIDSet && t.AttentionSegmentBoundaryTokenID == 0 {
+		return fmt.Errorf("config %q training.attention_segment_boundary_token_id is required when training.attention_segment_mask=\"boundary_token\"", source)
+	}
+	if t.AttentionSegmentBoundaryTokenID < 0 || t.AttentionSegmentBoundaryTokenID >= cfg.VocabSize {
+		return fmt.Errorf("config %q has invalid training.attention_segment_boundary_token_id=%d (must be in [0,%d))", source, t.AttentionSegmentBoundaryTokenID, cfg.VocabSize)
+	}
+	if cfg.Training.Distillation != nil {
+		return fmt.Errorf("config %q training.attention_segment_mask cannot be combined with training.distillation in v1; teacher programs do not consume segment_ids", source)
+	}
+	hasPlain := false
+	for i, block := range cfg.Blocks {
+		switch blockTypeKey(block) {
+		case "plain":
+			hasPlain = true
+		case "swiglu", "geglu", "mlp", "moe":
+		default:
+			return fmt.Errorf("config %q blocks[%d].type=%q cannot be combined with training.attention_segment_mask in v1; segment masking only applies to plain self-attention plus position-wise FFN/MoE blocks", source, i, block.Type)
+		}
+	}
+	if !hasPlain {
+		return fmt.Errorf("config %q training.attention_segment_mask requires at least one type=plain block", source)
 	}
 	return nil
 }
