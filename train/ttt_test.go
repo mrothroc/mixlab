@@ -64,6 +64,10 @@ func (t *fakeTTTTrainer) EvaluateGPU(_ []int, _ []int, _, _ int) (float32, error
 	return t.loss, nil
 }
 
+func (t *fakeTTTTrainer) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error) {
+	return t.EvaluateGPU(batch.x, batch.y, batchSize, seqLen)
+}
+
 func (t *fakeTTTTrainer) EvaluatePerTokenGPU(_ []int, _ []int, _, _ int) ([]float32, error) {
 	t.evalCalls++
 	t.events = append(t.events, "eval_per_token")

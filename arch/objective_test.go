@@ -328,6 +328,100 @@ func TestBuildIRProgram_MLMUsesMaskedLossAndBidirectionalPlainAttention(t *testi
 	}
 }
 
+func TestBlockDiffusionIRInputsMaskedLossAndCausalEval(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"training": {
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"objective": "block_diffusion",
+		"mlm_mask_token_id": 7,
+		"diffusion": {"block_size": 2}
+	}`)
+	trainProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive: true,
+		Objective:        ObjectiveBlockDiffusion,
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(block_diffusion): %v", err)
+	}
+	for _, name := range []string{"loss_mask", "diffusion_block_start", "diffusion_block_end"} {
+		if !programDeclaresInputArch(trainProg, name) {
+			t.Fatalf("block_diffusion training program missing input %q", name)
+		}
+	}
+	if n := countOps(trainProg, OpMaskedCrossEntropy); n != 1 {
+		t.Fatalf("OpMaskedCrossEntropy count=%d, want 1", n)
+	}
+	if n := countOps(trainProg, OpMaskedCEPerToken); n != 1 {
+		t.Fatalf("OpMaskedCEPerToken count=%d, want 1", n)
+	}
+	if n := countOps(trainProg, OpBlockDiffusionMask); n != 1 {
+		t.Fatalf("OpBlockDiffusionMask count=%d, want 1", n)
+	}
+	if n := countOps(trainProg, OpCausalMask); n != 0 {
+		t.Fatalf("block_diffusion training program emitted %d causal masks, want 0", n)
+	}
+
+	evalProg, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildEvalIRProgramFromConfig(block_diffusion): %v", err)
+	}
+	for _, name := range []string{"loss_mask", "diffusion_block_start", "diffusion_block_end"} {
+		if programDeclaresInputArch(evalProg, name) {
+			t.Fatalf("block_diffusion eval program declares training-only input %q", name)
+		}
+	}
+	if n := countOps(evalProg, OpBlockDiffusionMask); n != 0 {
+		t.Fatalf("eval OpBlockDiffusionMask count=%d, want 0", n)
+	}
+	if n := countOps(evalProg, OpCausalMask); n != 1 {
+		t.Fatalf("eval OpCausalMask count=%d, want 1", n)
+	}
+	if n := countOps(evalProg, OpCrossEntropy); n != 1 {
+		t.Fatalf("eval OpCrossEntropy count=%d, want 1", n)
+	}
+	if n := countOps(evalProg, OpMaskedCrossEntropy); n != 0 {
+		t.Fatalf("eval OpMaskedCrossEntropy count=%d, want 0", n)
+	}
+}
+
+func TestBlockDiffusionTrainingEvalWeightCountParity(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"blocks": [
+			{"type": "plain", "heads": 2},
+			{"type": "swiglu"}
+		],
+		"tie_embeddings": false,
+		"training": {
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"objective": "block_diffusion",
+			"mlm_mask_token_id": 7,
+			"diffusion": {"block_size": 2}
+		}`)
+	trainProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive: true,
+		Objective:        ObjectiveBlockDiffusion,
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(block_diffusion): %v", err)
+	}
+	evalProg, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildEvalIRProgramFromConfig(block_diffusion): %v", err)
+	}
+	counted, err := CountIRWeightsFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CountIRWeightsFromConfig: %v", err)
+	}
+	if trainProg.NumWeights != evalProg.NumWeights {
+		t.Fatalf("weight count mismatch train=%d eval=%d", trainProg.NumWeights, evalProg.NumWeights)
+	}
+	if trainProg.NumWeights != counted {
+		t.Fatalf("training NumWeights=%d, counted=%d", trainProg.NumWeights, counted)
+	}
+}
+
 func TestBuildIRProgram_SegmentAttentionMaskCausalTrainingOnly(t *testing.T) {
 	cfg := parseObjectiveConfig(t, `"training": {
 		"steps": 1,

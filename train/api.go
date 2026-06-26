@@ -88,6 +88,10 @@ func RunGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 	return runGenerate(configPath, safetensorsLoad, maxTokens, temperature, topK, prompt)
 }
 
+func RunGenerateDiffusion(configPath, safetensorsLoad string, maxTokens int, prompt string) error {
+	return runGenerateDiffusion(configPath, safetensorsLoad, maxTokens, prompt)
+}
+
 func RunHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath string) error {
 	return runHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath)
 }

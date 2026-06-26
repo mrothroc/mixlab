@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/mrothroc/mixlab/arch"
-	"github.com/mrothroc/mixlab/gpu"
 )
 
 func TestMLMObjectiveLearnsMaskedTokenAboveChance(t *testing.T) {
@@ -94,13 +93,73 @@ func TestMLMObjectiveLearnsMaskedTokenAboveChance(t *testing.T) {
 	}
 }
 
-func evaluatePreparedObjectiveBatch(trainer *mlxGPUTrainer, batch objectiveBatch, batchSize, seqLen int) (float32, error) {
-	if err := trainer.FlushGPU(); err != nil {
-		return 0, err
+func TestBlockDiffusionMLXSmoke(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
 	}
-	inputs, err := trainer.makeObjectiveInputs(batch, batchSize, seqLen)
+
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "block_diffusion_mlx_smoke",
+		"model_dim": 16,
+		"vocab_size": 16,
+		"seq_len": 4,
+		"blocks": [
+			{"type": "plain", "heads": 2},
+			{"type": "swiglu"}
+		],
+		"training": {
+			"steps": 2,
+			"lr": 0.01,
+			"seed": 31,
+			"batch_tokens": 8,
+			"grad_clip": 1.0,
+			"weight_decay": 0.0,
+			"objective": "block_diffusion",
+			"mlm_mask_token_id": 15,
+			"diffusion": {
+				"block_size": 2,
+				"min_mask_fraction": 1.0,
+				"max_mask_fraction": 1.0
+			}
+		}
+	}`), "block_diffusion_mlx_smoke")
 	if err != nil {
-		return 0, err
+		t.Fatalf("ParseArchConfig: %v", err)
 	}
-	return gpu.TrainerEvaluate(trainer.handle, inputs)
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	trainerIface, err := initGPUTrainer(prog, cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("initGPUTrainer: %v", err)
+	}
+	trainer, ok := trainerIface.(*mlxGPUTrainer)
+	if !ok {
+		t.Fatalf("trainer type=%T, want *mlxGPUTrainer", trainerIface)
+	}
+	defer trainer.CloseTrainer()
+
+	batchSize := cfg.Training.BatchTokens / cfg.SeqLen
+	raw := trainBatch{
+		x: []int{3, 4, 5, 6, 3, 4, 5, 6},
+		y: []int{4, 5, 6, 7, 4, 5, 6, 7},
+	}
+	for step := 0; step < cfg.Training.Steps; step++ {
+		prepared, err := prepareObjectiveBatch(cfg, raw, step, arch.ObjectiveBlockDiffusion)
+		if err != nil {
+			t.Fatalf("prepare block diffusion step %d: %v", step, err)
+		}
+		loss, err := trainer.TrainObjectiveStepGPU(prepared, batchSize, cfg.SeqLen, float32(cfg.Training.LR))
+		if err != nil {
+			t.Fatalf("TrainObjectiveStepGPU step %d: %v", step, err)
+		}
+		if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) || loss <= 0 {
+			t.Fatalf("loss step %d=%g, want finite positive", step, loss)
+		}
+	}
+}
+
+func evaluatePreparedObjectiveBatch(trainer *mlxGPUTrainer, batch objectiveBatch, batchSize, seqLen int) (float32, error) {
+	return trainer.EvaluateObjectiveGPU(batch, batchSize, seqLen)
 }

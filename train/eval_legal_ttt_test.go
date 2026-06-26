@@ -38,6 +38,9 @@ func (t *fakeLegalTTTTrainer) EvaluateGPU(_ []int, _ []int, _, _ int) (float32, 
 	t.scoreCalls++
 	return 1, nil
 }
+func (t *fakeLegalTTTTrainer) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error) {
+	return t.EvaluateGPU(batch.x, batch.y, batchSize, seqLen)
+}
 func (t *fakeLegalTTTTrainer) EvaluatePerTokenGPU(_ []int, _ []int, _, _ int) ([]float32, error) {
 	return nil, nil
 }

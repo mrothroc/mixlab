@@ -34,6 +34,12 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 	if t.segmentIDsInput && len(t.segmentIDBuf) < need {
 		t.segmentIDBuf = make([]int32, need)
 	}
+	if t.diffusionBlockStartInput && len(t.diffusionBlockStartBuf) < batchSize {
+		t.diffusionBlockStartBuf = make([]int32, batchSize)
+	}
+	if t.diffusionBlockEndInput && len(t.diffusionBlockEndBuf) < batchSize {
+		t.diffusionBlockEndBuf = make([]int32, batchSize)
+	}
 	if t.charInput && len(t.charBuf) < need*t.charMaxPerToken {
 		t.charBuf = make([]int32, need*t.charMaxPerToken)
 	}
@@ -92,6 +98,24 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		}
 		inputs = append(inputs, gpu.TensorInput{
 			Name: "segment_ids", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.segmentIDBuf[:need],
+		})
+	}
+	if t.diffusionBlockStartInput {
+		if len(batch.diffusionBlockStart) < batchSize {
+			return nil, fmt.Errorf("objective batch missing diffusion_block_start: got=%d need=%d", len(batch.diffusionBlockStart), batchSize)
+		}
+		copy(t.diffusionBlockStartBuf[:batchSize], batch.diffusionBlockStart[:batchSize])
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "diffusion_block_start", DType: gpu.TensorInt32, Shape: []int{batchSize}, Data: t.diffusionBlockStartBuf[:batchSize],
+		})
+	}
+	if t.diffusionBlockEndInput {
+		if len(batch.diffusionBlockEnd) < batchSize {
+			return nil, fmt.Errorf("objective batch missing diffusion_block_end: got=%d need=%d", len(batch.diffusionBlockEnd), batchSize)
+		}
+		copy(t.diffusionBlockEndBuf[:batchSize], batch.diffusionBlockEnd[:batchSize])
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "diffusion_block_end", DType: gpu.TensorInt32, Shape: []int{batchSize}, Data: t.diffusionBlockEndBuf[:batchSize],
 		})
 	}
 	if t.teacherProbsInput {

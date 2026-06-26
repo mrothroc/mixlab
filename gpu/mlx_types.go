@@ -81,6 +81,7 @@ const (
 	OpLayerNorm            = 87
 	OpSelectiveCausalMask  = 88
 	OpSegmentAttentionMask = 89
+	OpBlockDiffusionMask   = 90
 )
 
 const (

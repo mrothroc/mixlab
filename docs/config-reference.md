@@ -243,7 +243,7 @@ Per-phase order:
 
 ### `plain`
 
-Self-attention block with configurable model norm, RoPE, grouped-query support via `kv_heads`, configurable FFN tail, and residual connections. It defaults to causal attention for causal training objectives and bidirectional attention for masked objectives.
+Self-attention block with configurable model norm, RoPE, grouped-query support via `kv_heads`, configurable FFN tail, and residual connections. It defaults to causal attention for causal training objectives and bidirectional attention for current masked objective graphs.
 
 Required fields:
 
@@ -268,7 +268,7 @@ Optional fields:
 
 The `plain` block's relative-attention operator matches the DeBERTa/GPT-BERT C2P/P2C bucket and index semantics. The default `per_block_projections` layout remains Mixlab's original bias-free architecture with per-block projected position tensors. `shared_qk_reuse` switches only the relative-attention parameterization to the GPT-BERT-style shared embedding table and Q/K projection reuse; use `attn_bias` and `attn_value_gate` independently when matching recipes that need biased projections or value gating.
 - `xsa` — eXplicit Subspace Attention: after computing `y = softmax(QK^T)V`, projects `y` orthogonal to `V` at each position. Forces attention to contribute information that V doesn't already provide. Zero additional parameters. Compatible with GQA.
-- `attention_mask` — `"causal"`, `"bidirectional"`, or `"none"`. Omit to resolve from `training.objective`: causal objectives use `"causal"` and masked objectives use `"bidirectional"`. For `training.objective: "hybrid"`, Mixlab ignores block-level `attention_mask` during training and chooses the mask from the concrete per-batch objective: causal batches use `"causal"` and MLM/MNTP batches use `"bidirectional"`. `"bidirectional"` and `"none"` both use dense softmax with no triangular mask.
+- `attention_mask` — `"causal"`, `"bidirectional"`, or `"none"`. Omit to resolve from `training.objective`: causal objectives use `"causal"` and current masked objective graphs use `"bidirectional"`. For `training.objective: "hybrid"`, Mixlab ignores block-level `attention_mask` during training and chooses the mask from the concrete per-batch objective: causal batches use `"causal"` and MLM/MNTP batches use `"bidirectional"`. For `training.objective: "block_diffusion"`, `plain` attention uses a prefix-plus-block mask (committed prefix attends causally, the active block attends bidirectionally within itself and over the prefix) and `window_size` is rejected rather than approximating that rule. `"bidirectional"` and `"none"` both use dense softmax with no triangular mask.
 - `window_size` — sliding causal attention width. `0` means full causal attention. Valid only when the resolved `attention_mask` is `"causal"`.
 - `kv_source` — reuse K/V projections from an earlier block (1-indexed). Saves 2 weight matrices per shared block. Source must be an earlier `plain` block with matching `heads` and `kv_heads`. Not supported with `parallel_residual`.
 - `parallel_residual` — when `true`, fuses this block with the immediately following `swiglu` block into a parallel residual pair. See [`parallel_residual`](#parallel_residual) for the full description.
@@ -869,12 +869,13 @@ The `training` object controls optimization, batching, and stochastic settings.
 |------|------|----------|---------|-------|
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
 | `lr` | number | No | `3e-4` | Base learning rate. Must be `> 0`. |
-| `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, or `"hybrid"`. Existing configs default to causal next-token training. |
+| `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, `"hybrid"`, or `"block_diffusion"`. Existing configs default to causal next-token training. |
+| `diffusion` | object | No | Defaults | Block-diffusion corruption and sampler knobs. Only valid with `objective: "block_diffusion"`. Omit it to use conservative defaults. |
 | `z_loss` | number | No | `0` | Training-only logit z-regularization weight. When positive, Mixlab adds `z_loss * mean(logsumexp(logits)^2)` to optimizer loss while keeping `eval_loss` and `per_token_nll` as the primary task loss. Must be finite and `>= 0`. |
 | `mlm_mask_prob` | number | No | `0.15` | Probability of selecting each eligible token for masked-objective loss. Must be in `[0,1]`. |
 | `mlm_mask_prob_schedule` | array | No | Disabled | Stepwise mask-probability schedule as `[[step, probability], ...]`. Entries must start at step `0`, use strictly increasing integer steps, and probabilities in `[0,1]`. Overrides `mlm_mask_prob` on MLM/MNTP/hybrid masked steps. |
 | `mlm_mask_prob_schedule_mode` | string | No | `"step"` | Schedule interpolation mode: `"step"` holds each entry until the next step, while `"linear"` linearly interpolates between adjacent entries and holds the final probability afterward. |
-| `mlm_mask_token_id` | integer | Required for `mlm`, `mntp`, `hybrid` | None | Token id used as the mask replacement. Must be in `[0, vocab_size)`. |
+| `mlm_mask_token_id` | integer | Required for `mlm`, `mntp`, `hybrid`, `block_diffusion` | None | Token id used as the mask replacement. For `block_diffusion`, v1 temporarily reuses this field as the mask token source until an objective-neutral `mask_token_id` alias exists. Must be in `[0, vocab_size)`. |
 | `mlm_mask_token_prob` | number | No | `0.8` | Probability that a selected MLM token is replaced with `mlm_mask_token_id`. |
 | `mlm_random_token_prob` | number | No | `0.1` | Probability that a selected MLM token is replaced with a random token id. |
 | `mlm_kept_unchanged_prob` | number | No | `0.1` | Probability that a selected MLM token is kept unchanged. The three replacement probabilities must sum to `1.0`. |
@@ -949,11 +950,28 @@ The Hugging Face exporter uses whichever checkpoint is passed through `-safetens
 
 ### Training objectives
 
-`objective: "causal"` preserves the existing shifted next-token objective. `objective: "mlm"` masks selected input positions and trains only those positions to predict the original token. `objective: "mntp"` predicts next tokens from bidirectional context while masking the corresponding next-token input position so the answer is not visible. `objective: "hybrid"` deterministically mixes causal and the configured secondary objective from `training.seed` and the step index. The default `hybrid_mix_granularity: "batch"` chooses one objective per batch. `hybrid_mix_granularity: "example"` chooses independently per sequence inside the batch, so `hybrid_clm_fraction: 0.0625` gives approximately 6.25% causal sequences and 93.75% masked sequences over time.
+`objective: "causal"` preserves the existing shifted next-token objective. `objective: "mlm"` masks selected input positions and trains only those positions to predict the original token. `objective: "mntp"` predicts next tokens from bidirectional context while masking the corresponding next-token input position so the answer is not visible. `objective: "hybrid"` deterministically mixes causal and the configured secondary objective from `training.seed` and the step index. `objective: "block_diffusion"` trains block-wise masked diffusion: each example masks a randomly selected active block under a prefix-plus-block attention mask, and the masked cross-entropy loss is taken over the masked positions. Sample from a trained checkpoint with `-mode generate-diffusion` (see [cli.md](cli.md#generate-diffusion)). The default `hybrid_mix_granularity: "batch"` chooses one objective per batch. `hybrid_mix_granularity: "example"` chooses independently per sequence inside the batch, so `hybrid_clm_fraction: 0.0625` gives approximately 6.25% causal sequences and 93.75% masked sequences over time.
 
 Hybrid training uses objective-specific attention masks regardless of any block-level `attention_mask`: causal batches or sequences are always causal, and MLM/MNTP batches or sequences are always bidirectional. In per-example mode, `plain` attention receives a row-level mask so causal and bidirectional sequences can share one training step safely. Validation, full eval, generation, and other next-token scoring paths use causal attention. `plain.window_size` is rejected for hybrid configs unless `hybrid_clm_fraction` is `1.0`, because masked secondary batches or sequences require bidirectional attention.
 
 Masked objectives emit a training loss averaged only over rows where `loss_mask > 0`; the dense `eval_loss` and `per_token_nll` outputs remain available for evaluation/export paths. Top-level `mtp` and `training.first_byte_mask` are not supported with non-causal objectives in this version.
+
+`block_diffusion` requires `training.mlm_mask_token_id` in v1. This is compatibility debt: the field supplies the mask token for diffusion today, but a future objective-neutral `mask_token_id` alias should replace the MLM-specific spelling without changing token semantics. V1 only supports sequential `plain` self-attention plus `swiglu`, `geglu`, `mlp`, and `moe` blocks. It rejects `plain.window_size`, `training.attention_segment_mask`, fixed-teacher distillation, data2vec, recurrent/SSM blocks, cross-attention, and custom blocks. Diffusion-aware HF export is not yet implemented and is deferred with the rest of the larger diffusion roadmap (two-tower context/denoiser, bidirectional Mamba).
+
+`training.diffusion` holds both corruption-time (training) and sampler-time (generation) knobs so `-mode generate-diffusion` shares the trained block size. Corruption fields shape masking during training; sampler fields drive the `generate-diffusion` denoising loop.
+
+`training.diffusion` fields:
+
+| Field | Applies to | Type | Required | Default | Notes |
+|------|------------|------|----------|---------|-------|
+| `block_size` | Training and generation | integer | No | `16` when it divides `seq_len`, otherwise `seq_len` | Active diffusion block length. Must be `> 0`, `<= seq_len`, and divide `seq_len` in v1. |
+| `min_mask_fraction` | Training | number | No | `0.05` | Minimum sampled training mask fraction. Must be in `[0,1]` and `<= max_mask_fraction`. |
+| `max_mask_fraction` | Training | number | No | `1.0` | Maximum sampled training mask fraction. Must be in `(0,1]`. |
+| `steps_per_block` | Generation | integer | No | `block_size` | Sampler denoising passes per block. Must be `> 0`. |
+| `confidence_threshold` | Generation | number | No | `0.8` | Sampler confidence threshold for committing positions. Must be in `[0,1]`. |
+| `commit_floor` | Generation | integer | No | `1` | Minimum positions to commit on a sampler pass when none reaches the threshold. Must be in `[1, block_size]`. |
+
+For diffusion experiments, compare against causal and MLM baselines that keep the same supported Transformer backbone, vocabulary, context length, optimizer settings, data, and training-token budget. Use causal validation BPB/per-token NLL for apples-to-apples model comparison, and report diffusion masked training loss separately because it is not the same metric as next-token validation loss.
 
 `attention_segment_mask: "boundary_token"` is for packed training streams that already contain a reliable document/segment marker. Mixlab derives `segment_ids` from the unmasked input tokens, then masks `plain` self-attention so tokens attend only within their segment. Causal, bidirectional, and per-example hybrid masks still apply inside each segment. V1 supports `plain` self-attention stacks with position-wise FFN/MoE blocks; fixed-teacher distillation, recurrent blocks, cross-attention, custom token mixers, and inference/generation segmentation are out of scope.
 

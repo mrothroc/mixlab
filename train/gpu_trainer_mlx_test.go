@@ -4,6 +4,7 @@ package train
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mrothroc/mixlab/gpu"
@@ -77,6 +78,64 @@ func TestMLXGPUTrainerMakeInputs_StandardTargetsUnchanged(t *testing.T) {
 	}
 }
 
+func TestBlockDiffusionMLXInputsMaterializeBoundaries(t *testing.T) {
+	trainer := &mlxGPUTrainer{
+		lossMaskInput:            true,
+		diffusionBlockStartInput: true,
+		diffusionBlockEndInput:   true,
+		tokBuf:                   make([]int32, 8),
+		tgtBuf:                   make([]int32, 8),
+		lossMaskBuf:              make([]float32, 8),
+		diffusionBlockStartBuf:   make([]int32, 2),
+		diffusionBlockEndBuf:     make([]int32, 2),
+	}
+	batch := objectiveBatch{
+		x:                   []int{10, 11, 12, 13, 20, 21, 22, 23},
+		y:                   []int{10, 11, 12, 13, 20, 21, 22, 23},
+		lossMask:            []float32{0, 1, 0, 0, 0, 0, 1, 0},
+		diffusionBlockStart: []int32{1, 4},
+		diffusionBlockEnd:   []int32{3, 8},
+	}
+	inputs, err := trainer.makeObjectiveInputs(batch, 2, 4)
+	if err != nil {
+		t.Fatalf("makeObjectiveInputs(block_diffusion): %v", err)
+	}
+	start := tensorInputByName(t, inputs, "diffusion_block_start")
+	if start.DType != gpu.TensorInt32 || !reflect.DeepEqual(start.Shape, []int{2}) {
+		t.Fatalf("diffusion_block_start dtype/shape=%d/%v, want int32/[2]", start.DType, start.Shape)
+	}
+	if !reflect.DeepEqual(start.Data, []int32{1, 4}) {
+		t.Fatalf("diffusion_block_start data=%v, want [1 4]", start.Data)
+	}
+	end := tensorInputByName(t, inputs, "diffusion_block_end")
+	if end.DType != gpu.TensorInt32 || !reflect.DeepEqual(end.Shape, []int{2}) {
+		t.Fatalf("diffusion_block_end dtype/shape=%d/%v, want int32/[2]", end.DType, end.Shape)
+	}
+	if !reflect.DeepEqual(end.Data, []int32{3, 8}) {
+		t.Fatalf("diffusion_block_end data=%v, want [3 8]", end.Data)
+	}
+	lossMask := tensorInputByName(t, inputs, "loss_mask")
+	if !reflect.DeepEqual(lossMask.Data, batch.lossMask) {
+		t.Fatalf("loss_mask data=%v, want %v", lossMask.Data, batch.lossMask)
+	}
+
+	batch.diffusionBlockEnd = nil
+	if _, err := trainer.makeObjectiveInputs(batch, 2, 4); err == nil {
+		t.Fatal("makeObjectiveInputs without diffusion_block_end succeeded, want error")
+	}
+}
+
+func tensorInputByName(t *testing.T, inputs []gpu.TensorInput, name string) gpu.TensorInput {
+	t.Helper()
+	for _, input := range inputs {
+		if input.Name == name {
+			return input
+		}
+	}
+	t.Fatalf("missing tensor input %q in %v", name, inputs)
+	return gpu.TensorInput{}
+}
+
 func TestMLXGPUTrainerPrepareTargets_InvalidExtendedShape(t *testing.T) {
 	trainer := &mlxGPUTrainer{
 		declaredTargetSize: 19,
@@ -86,6 +145,79 @@ func TestMLXGPUTrainerPrepareTargets_InvalidExtendedShape(t *testing.T) {
 	if _, _, err := trainer.prepareTargets(2, 8, 16); err == nil {
 		t.Fatal("prepareTargets succeeded, want error")
 	}
+}
+
+func TestMLXGPUTrainerMakeObjectiveInputs_DiffusionBlocks(t *testing.T) {
+	trainer := &mlxGPUTrainer{
+		tokBuf:                   make([]int32, 6),
+		tgtBuf:                   make([]int32, 6),
+		diffusionBlockStartInput: true,
+		diffusionBlockEndInput:   true,
+		diffusionBlockStartBuf:   make([]int32, 2),
+		diffusionBlockEndBuf:     make([]int32, 2),
+	}
+	batch := objectiveBatch{
+		x:                   []int{10, 11, 12, 20, 21, 22},
+		y:                   []int{11, 12, 13, 21, 22, 23},
+		diffusionBlockStart: []int32{0, 3},
+		diffusionBlockEnd:   []int32{2, 6},
+	}
+
+	inputs, err := trainer.makeObjectiveInputs(batch, 2, 3)
+	if err != nil {
+		t.Fatalf("makeObjectiveInputs: %v", err)
+	}
+	start := findTensorInput(t, inputs, "diffusion_block_start")
+	if !reflect.DeepEqual(start.Shape, []int{2}) {
+		t.Fatalf("diffusion_block_start shape=%v, want [2]", start.Shape)
+	}
+	if start.DType != gpu.TensorInt32 {
+		t.Fatalf("diffusion_block_start dtype=%d, want TensorInt32", start.DType)
+	}
+	if got := start.Data.([]int32); !reflect.DeepEqual(got, []int32{0, 3}) {
+		t.Fatalf("diffusion_block_start data=%v, want [0 3]", got)
+	}
+	end := findTensorInput(t, inputs, "diffusion_block_end")
+	if !reflect.DeepEqual(end.Shape, []int{2}) {
+		t.Fatalf("diffusion_block_end shape=%v, want [2]", end.Shape)
+	}
+	if end.DType != gpu.TensorInt32 {
+		t.Fatalf("diffusion_block_end dtype=%d, want TensorInt32", end.DType)
+	}
+	if got := end.Data.([]int32); !reflect.DeepEqual(got, []int32{2, 6}) {
+		t.Fatalf("diffusion_block_end data=%v, want [2 6]", got)
+	}
+}
+
+func TestMLXGPUTrainerMakeObjectiveInputs_RequiresDiffusionBlocks(t *testing.T) {
+	trainer := &mlxGPUTrainer{
+		tokBuf:                   make([]int32, 4),
+		tgtBuf:                   make([]int32, 4),
+		diffusionBlockStartInput: true,
+		diffusionBlockEndInput:   true,
+		diffusionBlockStartBuf:   make([]int32, 2),
+		diffusionBlockEndBuf:     make([]int32, 2),
+	}
+	batch := objectiveBatch{
+		x: []int{10, 11, 20, 21},
+		y: []int{11, 12, 21, 22},
+	}
+
+	_, err := trainer.makeObjectiveInputs(batch, 2, 2)
+	if err == nil || !strings.Contains(err.Error(), "diffusion_block_start") {
+		t.Fatalf("makeObjectiveInputs error=%v, want missing diffusion_block_start", err)
+	}
+}
+
+func findTensorInput(t *testing.T, inputs []gpu.TensorInput, name string) gpu.TensorInput {
+	t.Helper()
+	for _, input := range inputs {
+		if input.Name == name {
+			return input
+		}
+	}
+	t.Fatalf("input %q not found in %+v", name, inputs)
+	return gpu.TensorInput{}
 }
 
 func TestCopyWeightDataTransposesEmbedToHead(t *testing.T) {

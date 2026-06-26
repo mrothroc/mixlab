@@ -217,12 +217,15 @@ type Data2VecSpec struct {
 	targetNormEpsSet bool
 }
 
+// DiffusionSpec and its block-diffusion validation live in diffusion.go.
+
 // TrainingSpec holds training hyperparameters.
 type TrainingSpec struct {
 	Steps                             int               `json:"steps"`
 	LR                                float64           `json:"lr"`
 	Phases                            []TrainingPhase   `json:"phases,omitempty"`
 	Objective                         string            `json:"objective,omitempty"`
+	Diffusion                         *DiffusionSpec    `json:"diffusion,omitempty"`
 	MLMMaskProb                       float64           `json:"mlm_mask_prob,omitempty"`
 	MLMMaskTokenID                    int               `json:"mlm_mask_token_id,omitempty"`
 	MLMMaskTokenProb                  float64           `json:"mlm_mask_token_prob,omitempty"`

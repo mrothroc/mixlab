@@ -68,6 +68,22 @@ func generateSyntheticBatch(rng *rand.Rand, batchTokens, vocabSize int) (x, y []
 	return x, y
 }
 
+// syntheticBatchUnsupportedReason reports why a config's forward graph cannot
+// be driven by the synthetic next-token harness used here. The harness feeds
+// plain (x, y) token batches through the simple TrainStepGPU/EvaluateGPU path,
+// which can default loss_mask to all-ones but cannot invent the per-example
+// runtime inputs some objectives require. Block diffusion declares
+// diffusion_block_start/diffusion_block_end (the active denoising block per
+// example) with no sensible synthetic default; it is exercised end to end by
+// dedicated tests instead (TestBlockDiffusionMLXSmoke, TestGenerateDiffusionMLXSmoke,
+// TestBlockDiffusionMaskMatchesOracle, and the arch/train objective tests).
+func syntheticBatchUnsupportedReason(cfg *arch.ArchConfig) string {
+	if cfg.Training.EffectiveObjective() == arch.ObjectiveBlockDiffusion {
+		return "block_diffusion needs per-example diffusion block-boundary inputs the synthetic next-token harness cannot supply; covered by dedicated block-diffusion tests"
+	}
+	return ""
+}
+
 // TestIntegrationExampleConfigs_TrainStable runs 10 training steps on
 // synthetic data for each example config and verifies the training loop
 // produces finite, non-NaN losses (no crashes, no gradient explosions).
@@ -83,6 +99,9 @@ func TestIntegrationExampleConfigs_TrainStable(t *testing.T) {
 			cfg, err := LoadArchConfig(filepath.Join("examples", filename))
 			if err != nil {
 				t.Fatalf("LoadArchConfig: %v", err)
+			}
+			if reason := syntheticBatchUnsupportedReason(cfg); reason != "" {
+				t.Skip(reason)
 			}
 
 			shrinkConfigForTest(cfg)
@@ -144,6 +163,9 @@ func TestIntegrationExampleConfigs_EvalForwardPass(t *testing.T) {
 			cfg, err := LoadArchConfig(filepath.Join("examples", filename))
 			if err != nil {
 				t.Fatalf("LoadArchConfig: %v", err)
+			}
+			if reason := syntheticBatchUnsupportedReason(cfg); reason != "" {
+				t.Skip(reason)
 			}
 
 			shrinkConfigForTest(cfg)

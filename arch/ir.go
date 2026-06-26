@@ -80,6 +80,7 @@ const (
 	OpLayerNorm            = 87 // OP_LAYERNORM
 	OpSelectiveCausalMask  = 88 // OP_SELECTIVE_CAUSAL_MASK
 	OpSegmentAttentionMask = 89 // OP_SEGMENT_ATTENTION_MASK
+	OpBlockDiffusionMask   = 90 // OP_BLOCK_DIFFUSION_MASK
 
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -230,6 +231,12 @@ func (p *Program) SegmentAttentionMask(scores, segmentIDs, causalRows string, T,
 		inputs = append(inputs, causalRows)
 	}
 	p.AddOp(OpSegmentAttentionMask, inputs, []string{output}, nil, []int{T, windowSize, mode})
+}
+
+// BlockDiffusionMask applies prefix-plus-block attention masking from
+// per-example active block boundaries.
+func (p *Program) BlockDiffusionMask(scores, blockStart, blockEnd string, T int, output string) {
+	p.AddOp(OpBlockDiffusionMask, []string{scores, blockStart, blockEnd}, []string{output}, nil, []int{T})
 }
 
 // CrossEntropy emits a cross-entropy loss computation.

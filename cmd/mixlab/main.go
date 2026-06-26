@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
+	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
@@ -209,6 +209,8 @@ func main() {
 		must(train.RunHiddenstats(*configPath, *trainPattern, *safetensorsLoad, *prepOutput))
 	case "generate":
 		must(train.RunGenerate(*configPath, *safetensorsLoad, *maxTokens, float32(*temperature), *topK, *prompt))
+	case "generate-diffusion":
+		must(train.RunGenerateDiffusion(*configPath, *safetensorsLoad, *maxTokens, *prompt))
 	case "parity":
 		must(train.RunParity(train.ParityOptions{
 			ConfigPath:      *configPath,
@@ -221,7 +223,7 @@ func main() {
 			LogitTokens:     *parityLogitTokens,
 		}))
 	default:
-		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, export-hf, parity)", *mode))
+		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, export-hf, parity)", *mode))
 	}
 }
 

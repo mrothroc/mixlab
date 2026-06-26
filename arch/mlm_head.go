@@ -58,7 +58,7 @@ func validateMLMHead(cfg *ArchConfig, source string) error {
 		return nil
 	}
 	obj := cfg.Training.EffectiveObjective()
-	maskedCapable := obj == ObjectiveMLM || obj == ObjectiveMNTP || (obj == ObjectiveHybrid && cfg.Training.HybridCLMFraction < 1)
+	maskedCapable := obj == ObjectiveMLM || obj == ObjectiveMNTP || obj == ObjectiveBlockDiffusion || (obj == ObjectiveHybrid && cfg.Training.HybridCLMFraction < 1)
 	if !maskedCapable {
 		return fmt.Errorf("config %q sets mlm_head=\"bert\" but training.objective=%q has no masked objective path", source, obj)
 	}

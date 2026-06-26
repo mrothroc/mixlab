@@ -124,6 +124,248 @@ func TestPrepareObjectiveBatchMNTPMasksNextInputWithoutLeakage(t *testing.T) {
 	}
 }
 
+func TestPrepareBlockDiffusionBatch(t *testing.T) {
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 6
+	cfg.VocabSize = 64
+	cfg.Training.BatchTokens = 12
+	cfg.Training.Objective = arch.ObjectiveBlockDiffusion
+	cfg.Training.Diffusion = &arch.DiffusionSpec{
+		BlockSize:       3,
+		MinMaskFraction: 1,
+		MaxMaskFraction: 1,
+	}
+	batch := trainBatch{
+		x: []int{10, 11, 12, 13, 14, 15, 20, 21, 22, 23, 24, 25},
+		y: []int{11, 12, 13, 14, 15, 16, 21, 22, 23, 24, 25, 26},
+	}
+	got, err := prepareObjectiveBatch(cfg, batch, 7, arch.ObjectiveBlockDiffusion)
+	if err != nil {
+		t.Fatalf("prepare block diffusion batch: %v", err)
+	}
+	if !reflect.DeepEqual(got.y, batch.x) {
+		t.Fatalf("block diffusion targets = %v, want clean inputs %v", got.y, batch.x)
+	}
+	if !reflect.DeepEqual(got.unmaskedX, batch.x) {
+		t.Fatalf("block diffusion unmaskedX = %v, want clean inputs %v", got.unmaskedX, batch.x)
+	}
+	if len(got.diffusionBlockStart) != 2 || len(got.diffusionBlockEnd) != 2 {
+		t.Fatalf("diffusion block vectors have lengths start=%d end=%d, want 2", len(got.diffusionBlockStart), len(got.diffusionBlockEnd))
+	}
+	for b := 0; b < 2; b++ {
+		blockStart := int(got.diffusionBlockStart[b])
+		blockEnd := int(got.diffusionBlockEnd[b])
+		if blockEnd-blockStart != cfg.Training.Diffusion.BlockSize || blockStart%cfg.Training.Diffusion.BlockSize != 0 || blockStart < 0 || blockEnd > cfg.SeqLen {
+			t.Fatalf("row %d diffusion block=[%d,%d), want aligned size-%d block inside seq_len=%d", b, blockStart, blockEnd, cfg.Training.Diffusion.BlockSize, cfg.SeqLen)
+		}
+		rowStart := b * cfg.SeqLen
+		for pos := 0; pos < cfg.SeqLen; pos++ {
+			i := rowStart + pos
+			inActiveBlock := pos >= blockStart && pos < blockEnd
+			wantMask := float32(0)
+			wantX := batch.x[i]
+			if inActiveBlock {
+				wantMask = 1
+				wantX = cfg.Training.MLMMaskTokenID
+			}
+			if got.lossMask[i] != wantMask {
+				t.Fatalf("row %d pos %d lossMask=%g, want %g for active block [%d,%d)", b, pos, got.lossMask[i], wantMask, blockStart, blockEnd)
+			}
+			if got.x[i] != wantX {
+				t.Fatalf("row %d pos %d x=%d, want %d for active block [%d,%d)", b, pos, got.x[i], wantX, blockStart, blockEnd)
+			}
+		}
+	}
+}
+
+func TestBlockDiffusionObjectiveForStep(t *testing.T) {
+	spec := TrainingSpec{
+		Objective: arch.ObjectiveBlockDiffusion,
+		Seed:      123,
+	}
+	for step := 0; step < 8; step++ {
+		if got := objectiveForStep(spec, step); got != arch.ObjectiveBlockDiffusion {
+			t.Fatalf("objectiveForStep step %d = %q, want %q", step, got, arch.ObjectiveBlockDiffusion)
+		}
+	}
+	if got := canonicalObjective(" " + arch.ObjectiveBlockDiffusion + " "); got != arch.ObjectiveBlockDiffusion {
+		t.Fatalf("canonicalObjective(block_diffusion) = %q, want %q", got, arch.ObjectiveBlockDiffusion)
+	}
+}
+
+func TestBlockDiffusionBatchDeterministic(t *testing.T) {
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 8
+	cfg.VocabSize = 128
+	cfg.Training.BatchTokens = 16
+	cfg.Training.Seed = 777
+	cfg.Training.MLMMaskTokenID = 99
+	cfg.Training.Objective = arch.ObjectiveBlockDiffusion
+	cfg.Training.Diffusion = &arch.DiffusionSpec{
+		BlockSize:       4,
+		MinMaskFraction: 0,
+		MaxMaskFraction: 1e-9,
+	}
+	batch := trainBatch{
+		x: []int{10, 11, 12, 13, 14, 15, 16, 17, 30, 31, 32, 33, 34, 35, 36, 37},
+		y: []int{11, 12, 13, 14, 15, 16, 17, 18, 31, 32, 33, 34, 35, 36, 37, 38},
+	}
+	first, err := prepareObjectiveBatch(cfg, batch, 12, arch.ObjectiveBlockDiffusion)
+	if err != nil {
+		t.Fatalf("prepare first block diffusion batch: %v", err)
+	}
+	second, err := prepareObjectiveBatch(cfg, batch, 12, arch.ObjectiveBlockDiffusion)
+	if err != nil {
+		t.Fatalf("prepare second block diffusion batch: %v", err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("block diffusion batch is not deterministic for fixed seed+step:\nfirst=%+v\nsecond=%+v", first, second)
+	}
+	for b := 0; b < 2; b++ {
+		blockStart := int(first.diffusionBlockStart[b])
+		blockEnd := int(first.diffusionBlockEnd[b])
+		rowStart := b * cfg.SeqLen
+		masked := 0
+		for pos := 0; pos < cfg.SeqLen; pos++ {
+			i := rowStart + pos
+			inActiveBlock := pos >= blockStart && pos < blockEnd
+			if first.lossMask[i] > 0 {
+				masked++
+				if !inActiveBlock {
+					t.Fatalf("row %d pos %d is masked outside active block [%d,%d)", b, pos, blockStart, blockEnd)
+				}
+				if first.x[i] != cfg.Training.MLMMaskTokenID {
+					t.Fatalf("row %d pos %d masked x=%d, want mask token %d", b, pos, first.x[i], cfg.Training.MLMMaskTokenID)
+				}
+				continue
+			}
+			if first.x[i] != batch.x[i] {
+				t.Fatalf("row %d pos %d unmasked x=%d, want clean token %d", b, pos, first.x[i], batch.x[i])
+			}
+		}
+		if masked == 0 {
+			t.Fatalf("row %d has no masked token despite max_mask_fraction=%g", b, cfg.Training.Diffusion.MaxMaskFraction)
+		}
+	}
+}
+
+func TestBlockDiffusionObjectiveBatchInputs(t *testing.T) {
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 8
+	cfg.VocabSize = 64
+	cfg.Training.BatchTokens = 16
+	cfg.Training.Seed = 42
+	cfg.Training.Objective = arch.ObjectiveBlockDiffusion
+	cfg.Training.Diffusion = &arch.DiffusionSpec{
+		BlockSize:       4,
+		MinMaskFraction: 1,
+		MaxMaskFraction: 1,
+	}
+	batch := trainBatch{
+		x: []int{10, 11, 12, 13, 14, 15, 16, 17, 20, 21, 22, 23, 24, 25, 26, 27},
+		y: []int{11, 12, 13, 14, 15, 16, 17, 18, 21, 22, 23, 24, 25, 26, 27, 28},
+	}
+	got, err := prepareObjectiveBatch(cfg, batch, 3, arch.ObjectiveBlockDiffusion)
+	if err != nil {
+		t.Fatalf("prepareObjectiveBatch(block_diffusion): %v", err)
+	}
+	if len(got.diffusionBlockStart) != 2 || len(got.diffusionBlockEnd) != 2 {
+		t.Fatalf("diffusion block inputs lengths start=%d end=%d, want 2/2", len(got.diffusionBlockStart), len(got.diffusionBlockEnd))
+	}
+	if !reflect.DeepEqual(got.y, batch.x) {
+		t.Fatalf("block_diffusion targets=%v, want clean inputs %v", got.y, batch.x)
+	}
+	for b := 0; b < 2; b++ {
+		start := int(got.diffusionBlockStart[b])
+		end := int(got.diffusionBlockEnd[b])
+		if start < 0 || end > cfg.SeqLen || end-start != cfg.Training.Diffusion.BlockSize || start%cfg.Training.Diffusion.BlockSize != 0 {
+			t.Fatalf("row %d block=[%d,%d), want aligned size-%d block in seq_len=%d", b, start, end, cfg.Training.Diffusion.BlockSize, cfg.SeqLen)
+		}
+		for pos := 0; pos < cfg.SeqLen; pos++ {
+			i := b*cfg.SeqLen + pos
+			wantMask := float32(0)
+			if pos >= start && pos < end {
+				wantMask = 1
+			}
+			if got.lossMask[i] != wantMask {
+				t.Fatalf("row %d pos %d lossMask=%g, want %g for block [%d,%d)", b, pos, got.lossMask[i], wantMask, start, end)
+			}
+		}
+	}
+}
+
+type recordingBlockDiffusionSubmitTrainer struct {
+	objectiveCalls int
+	plainCalls     int
+	batch          objectiveBatch
+	batchSize      int
+	seqLen         int
+	lr             float32
+}
+
+func (t *recordingBlockDiffusionSubmitTrainer) TrainStepGPU([]int, []int, int, int, float32) (float32, error) {
+	return 0, nil
+}
+
+func (t *recordingBlockDiffusionSubmitTrainer) SubmitStepGPU([]int, []int, int, int, float32) error {
+	t.plainCalls++
+	return nil
+}
+
+func (t *recordingBlockDiffusionSubmitTrainer) SubmitObjectiveStepGPU(batch objectiveBatch, batchSize, seqLen int, lr float32) error {
+	t.objectiveCalls++
+	t.batch = batch
+	t.batchSize = batchSize
+	t.seqLen = seqLen
+	t.lr = lr
+	return nil
+}
+
+func (t *recordingBlockDiffusionSubmitTrainer) CollectLossGPU() (float32, error) { return 0, nil }
+func (t *recordingBlockDiffusionSubmitTrainer) FlushGPU() error                  { return nil }
+func (t *recordingBlockDiffusionSubmitTrainer) SetQATGPU(string) error           { return nil }
+func (t *recordingBlockDiffusionSubmitTrainer) SetWeightGPU(string, []float32) error {
+	return nil
+}
+func (t *recordingBlockDiffusionSubmitTrainer) EvaluateObjectiveGPU(objectiveBatch, int, int) (float32, error) {
+	return 0, nil
+}
+func (t *recordingBlockDiffusionSubmitTrainer) EvaluateGPU([]int, []int, int, int) (float32, error) {
+	return 0, nil
+}
+func (t *recordingBlockDiffusionSubmitTrainer) EvaluatePerTokenGPU([]int, []int, int, int) ([]float32, error) {
+	return nil, nil
+}
+func (t *recordingBlockDiffusionSubmitTrainer) EvaluateLoRATTTGPU([]int, []int, int, int, int, float32, int) (float32, error) {
+	return 0, nil
+}
+func (t *recordingBlockDiffusionSubmitTrainer) CloseTrainer() {}
+
+func TestBlockDiffusionInputsUseObjectiveSubmitPath(t *testing.T) {
+	trainer := &recordingBlockDiffusionSubmitTrainer{}
+	batch := objectiveBatch{
+		x:                   []int{1, 2, 3, 4},
+		y:                   []int{1, 2, 3, 4},
+		lossMask:            []float32{0, 1, 0, 0},
+		diffusionBlockStart: []int32{1},
+		diffusionBlockEnd:   []int32{2},
+	}
+	if err := submitPreparedStepGPU(trainer, batch, 1, 4, 0.125); err != nil {
+		t.Fatalf("submitPreparedStepGPU: %v", err)
+	}
+	if trainer.objectiveCalls != 1 || trainer.plainCalls != 0 {
+		t.Fatalf("calls objective=%d plain=%d, want 1/0", trainer.objectiveCalls, trainer.plainCalls)
+	}
+	if trainer.batchSize != 1 || trainer.seqLen != 4 || trainer.lr != 0.125 {
+		t.Fatalf("submitted shape/lr=(%d,%d,%g), want (1,4,0.125)", trainer.batchSize, trainer.seqLen, trainer.lr)
+	}
+	if !reflect.DeepEqual(trainer.batch.diffusionBlockStart, batch.diffusionBlockStart) ||
+		!reflect.DeepEqual(trainer.batch.diffusionBlockEnd, batch.diffusionBlockEnd) {
+		t.Fatalf("submitted diffusion block inputs start=%v end=%v, want start=%v end=%v",
+			trainer.batch.diffusionBlockStart, trainer.batch.diffusionBlockEnd, batch.diffusionBlockStart, batch.diffusionBlockEnd)
+	}
+}
+
 func TestPrepareObjectiveBatchHybridExampleCausalRows(t *testing.T) {
 	cfg := objectiveTestConfig()
 	cfg.SeqLen = 4

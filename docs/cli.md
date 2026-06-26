@@ -11,7 +11,8 @@ mixlab uses `-mode` to select the command to run.
 | `count` | Print parameter, size, block, FLOP, and IR op counts for a config. |
 | `eval` | Load safetensors and evaluate validation loss. |
 | `hiddenstats` | Export one batch of hidden states as float32 binary. |
-| `generate` | Generate token IDs from a safetensors checkpoint. |
+| `generate` | Generate token IDs from a safetensors checkpoint (causal next-token). |
+| `generate-diffusion` | Generate token IDs from a `block_diffusion` checkpoint using block-wise masked diffusion sampling. |
 
 ## arch
 
@@ -161,6 +162,37 @@ values in `logprobs.bin` to float32/float16 tolerance.
 | `-temperature` | Sampling temperature. Default: `0.8`. |
 | `-top-k` | Top-k sampling cutoff. `0` disables the cutoff. |
 | `-prompt` | Prompt token IDs in `token_ids:0,1,2` form. |
+
+`generate` is causal next-token generation. It does not consume
+`training.diffusion.steps_per_block`, `confidence_threshold`, or `commit_floor`;
+those drive `generate-diffusion` instead.
+
+## generate-diffusion
+
+Generate from a `training.objective: "block_diffusion"` checkpoint using
+block-wise masked diffusion. Starting from the prompt, mixlab appends a block of
+mask tokens, then runs up to `steps_per_block` denoising passes per block,
+committing positions whose predicted probability clears `confidence_threshold`
+(and at least `commit_floor` positions per pass so every block completes) until
+the requested number of tokens is produced or `seq_len` is reached.
+
+```bash
+./mixlab -mode generate-diffusion -config examples/block_diffusion_tiny.json \
+  -safetensors-load weights.st -prompt token_ids:0,1,2 -max-tokens 16
+```
+
+| Flag | Description |
+|------|-------------|
+| `-config` | Required. Must set `training.objective: "block_diffusion"`. |
+| `-safetensors-load` | Required. Trained block-diffusion weights. |
+| `-max-tokens` | Maximum generated tokens (capped at `seq_len - prompt`). Default: `256`. |
+| `-prompt` | Prompt token IDs in `token_ids:0,1,2` form. |
+
+Block size and sampler behavior come from `training.diffusion`
+(`block_size`, `steps_per_block`, `confidence_threshold`, `commit_floor`).
+Sampling is deterministic argmax over unresolved positions; `-temperature` and
+`-top-k` do not apply. Output uses the same `generated token_ids:...` format as
+`generate`.
 
 ## prepare
 

@@ -55,33 +55,8 @@ func emitQKNormIR(prog *Program, qh, kh string, wi int, qkNorm, normalizeK bool)
 	return qNorm, kNorm, wi
 }
 
-func emitPlainAttentionMaskIR(prog *Program, scores, output, attentionMask string, T, windowSize int, segmentMask bool) (string, error) {
-	if segmentMask {
-		switch attentionMask {
-		case AttentionMaskCausal:
-			prog.SegmentAttentionMask(scores, "segment_ids", "", T, windowSize, SegmentMaskModeCausal, output)
-		case AttentionMaskHybridExample:
-			prog.SegmentAttentionMask(scores, "segment_ids", "attention_causal_mask", T, windowSize, SegmentMaskModeSelectiveCausal, output)
-		case AttentionMaskBidirectional, AttentionMaskNone:
-			prog.SegmentAttentionMask(scores, "segment_ids", "", T, windowSize, SegmentMaskModeNone, output)
-		default:
-			return "", fmt.Errorf("invalid attention_mask=%q", attentionMask)
-		}
-		return output, nil
-	}
-	switch attentionMask {
-	case AttentionMaskCausal:
-		prog.CausalMask(scores, T, windowSize, output)
-		return output, nil
-	case AttentionMaskHybridExample:
-		prog.SelectiveCausalMask(scores, "attention_causal_mask", T, windowSize, output)
-		return output, nil
-	case AttentionMaskBidirectional, AttentionMaskNone:
-		return scores, nil
-	default:
-		return "", fmt.Errorf("invalid attention_mask=%q", attentionMask)
-	}
-}
+// Attention-mask emission (sameIntShape, ensureProgramInput,
+// emitPlainAttentionMaskIR) lives in attention_mask.go.
 
 func emitPlainAttentionIRWithKVOptions(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, ropeDims int, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
 	return emitPlainAttentionIRWithKVOptionsEx(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, false, ropeDims, xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, "", kvSource, kvCache, blockIndex)
@@ -325,7 +300,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		}
 
 		// Attention mask + softmax
-		maskedScores, err := emitPlainAttentionMaskIR(prog, scaled, masked, attentionMask, T, windowSize, segmentMask)
+		maskedScores, err := emitPlainAttentionMaskIR(prog, scaled, masked, attentionMask, B, T, windowSize, segmentMask)
 		if err != nil {
 			return wi, err
 		}
@@ -859,7 +834,7 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	if err != nil {
 		return "", wi, err
 	}
-	maskedScores, err := emitPlainAttentionMaskIR(prog, scaled, masked, attentionMask, T, windowSize, segmentMask)
+	maskedScores, err := emitPlainAttentionMaskIR(prog, scaled, masked, attentionMask, B, T, windowSize, segmentMask)
 	if err != nil {
 		return "", wi, err
 	}

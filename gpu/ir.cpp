@@ -2542,6 +2542,49 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, masked);
         break;
       }
+      case OP_BLOCK_DIFFUSION_MASK: {
+        if (op.n_inputs < 3) {
+          throw std::runtime_error("OP_BLOCK_DIFFUSION_MASK requires scores, block_start, and block_end");
+        }
+        if (op.n_int_params < 1) {
+          throw std::runtime_error("OP_BLOCK_DIFFUSION_MASK missing T");
+        }
+        int T = op.int_params[0];
+        auto scores = get(op, 0);
+        auto block_start_raw = get(op, 1);
+        auto block_end_raw = get(op, 2);
+        if (scores.ndim() != 4 || scores.shape(2) != T || scores.shape(3) != T) {
+          throw std::runtime_error("OP_BLOCK_DIFFUSION_MASK expects scores shape [B,H,T,T]");
+        }
+        if (block_start_raw.ndim() != 1 || block_start_raw.shape(0) != scores.shape(0)) {
+          throw std::runtime_error("OP_BLOCK_DIFFUSION_MASK block_start must have shape [B]");
+        }
+        if (block_end_raw.ndim() != 1 || block_end_raw.shape(0) != scores.shape(0)) {
+          throw std::runtime_error("OP_BLOCK_DIFFUSION_MASK block_end must have shape [B]");
+        }
+
+        auto pos = mx::astype(mx::arange(T), mx::int32);
+        auto query_pos = mx::expand_dims(mx::expand_dims(pos, 0), 2);
+        auto key_pos = mx::expand_dims(mx::expand_dims(pos, 0), 1);
+        auto block_start = mx::expand_dims(
+            mx::expand_dims(mx::astype(block_start_raw, mx::int32), 1),
+            2);
+        auto block_end = mx::expand_dims(
+            mx::expand_dims(mx::astype(block_end_raw, mx::int32), 1),
+            2);
+
+        auto prefix_query = query_pos < block_start;
+        auto active_query = mx::logical_and(query_pos >= block_start, query_pos < block_end);
+        auto suffix_query = query_pos >= block_end;
+        auto causal_query = mx::logical_or(prefix_query, suffix_query);
+        auto causal_mask = mx::logical_and(causal_query, key_pos > query_pos);
+        auto active_future_mask = mx::logical_and(active_query, key_pos >= block_end);
+        auto mask3 = mx::logical_or(causal_mask, active_future_mask);
+        auto mask4 = mx::expand_dims(mask3, 1);
+        auto masked = mx::where(mask4, mx::full_like(scores, -1e9f), scores);
+        set_out(op, 0, masked);
+        break;
+      }
       case OP_PREFIX_CAUSAL_MASK: {
         if (op.n_int_params < 2) {
           throw std::runtime_error("OP_PREFIX_CAUSAL_MASK requires int params: selfT, prefixT");

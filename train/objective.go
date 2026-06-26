@@ -2,6 +2,7 @@ package train
 
 import (
 	"fmt"
+	"math"
 	"math/rand"
 	"strings"
 
@@ -9,16 +10,18 @@ import (
 )
 
 type objectiveBatch struct {
-	x               []int
-	y               []int
-	lossMask        []float32
-	attentionCausal []int32
-	segmentIDs      []int32
-	maskedLossMask  []float32
-	teacherProbs    []float32
-	unmaskedX       []int
-	data2vecTargets []float32
-	data2vecMask    []float32
+	x                   []int
+	y                   []int
+	lossMask            []float32
+	attentionCausal     []int32
+	segmentIDs          []int32
+	maskedLossMask      []float32
+	teacherProbs        []float32
+	unmaskedX           []int
+	data2vecTargets     []float32
+	data2vecMask        []float32
+	diffusionBlockStart []int32
+	diffusionBlockEnd   []int32
 }
 
 func objectiveForStep(spec TrainingSpec, step int) string {
@@ -28,6 +31,8 @@ func objectiveForStep(spec TrainingSpec, step int) string {
 		return arch.ObjectiveMLM
 	case arch.ObjectiveMNTP:
 		return arch.ObjectiveMNTP
+	case arch.ObjectiveBlockDiffusion:
+		return arch.ObjectiveBlockDiffusion
 	case arch.ObjectiveHybrid:
 		if spec.EffectiveHybridMixGranularity() == arch.HybridMixGranularityExample {
 			if spec.HybridCLMFraction >= 1 {
@@ -73,6 +78,8 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 		prepared, err = prepareMLMBatch(cfg, batch, step, need)
 	case arch.ObjectiveMNTP:
 		prepared, err = prepareMNTPBatch(cfg, batch, step, need, seqLen)
+	case arch.ObjectiveBlockDiffusion:
+		prepared, err = prepareBlockDiffusionBatch(cfg, batch, step, need, seqLen)
 	case arch.ObjectiveHybridExample:
 		prepared, err = prepareHybridExampleBatch(cfg, batch, step, need, seqLen)
 	default:
@@ -95,6 +102,8 @@ func canonicalObjective(objective string) string {
 		return arch.ObjectiveMLM
 	case arch.ObjectiveMNTP:
 		return arch.ObjectiveMNTP
+	case arch.ObjectiveBlockDiffusion:
+		return arch.ObjectiveBlockDiffusion
 	case arch.ObjectiveHybridExample:
 		return arch.ObjectiveHybridExample
 	case arch.ObjectiveHybrid:
@@ -168,6 +177,109 @@ func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int)
 		}
 	}
 	return objectiveBatch{x: x, y: y, lossMask: lossMask, unmaskedX: unmasked}, nil
+}
+
+func prepareBlockDiffusionBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int) (objectiveBatch, error) {
+	if cfg.VocabSize <= 0 {
+		return objectiveBatch{}, fmt.Errorf("invalid vocab_size=%d", cfg.VocabSize)
+	}
+	if cfg.Training.MLMMaskTokenID < 0 || cfg.Training.MLMMaskTokenID >= cfg.VocabSize {
+		return objectiveBatch{}, fmt.Errorf("invalid mlm_mask_token_id=%d for vocab_size=%d", cfg.Training.MLMMaskTokenID, cfg.VocabSize)
+	}
+	diffusion, err := diffusionSpecForObjectiveBatch(cfg, seqLen)
+	if err != nil {
+		return objectiveBatch{}, err
+	}
+	if need%seqLen != 0 {
+		return objectiveBatch{}, fmt.Errorf("batch_tokens (%d) must be divisible by seq_len (%d)", need, seqLen)
+	}
+	batchSize := need / seqLen
+	blockSize := diffusion.BlockSize
+	numBlocks := seqLen / blockSize
+	x := append([]int(nil), batch.x[:need]...)
+	y := append([]int(nil), batch.x[:need]...)
+	unmasked := append([]int(nil), batch.x[:need]...)
+	lossMask := make([]float32, need)
+	diffusionBlockStart := make([]int32, batchSize)
+	diffusionBlockEnd := make([]int32, batchSize)
+	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0xa4093822299f31d0)
+	for b := 0; b < batchSize; b++ {
+		rowStart := b * seqLen
+		blockStart := rng.Intn(numBlocks) * blockSize
+		blockEnd := blockStart + blockSize
+		diffusionBlockStart[b] = int32(blockStart)
+		diffusionBlockEnd[b] = int32(blockEnd)
+
+		maskFraction := diffusion.MinMaskFraction
+		if diffusion.MaxMaskFraction > diffusion.MinMaskFraction {
+			maskFraction += rng.Float64() * (diffusion.MaxMaskFraction - diffusion.MinMaskFraction)
+		}
+		globalStart := rowStart + blockStart
+		globalEnd := rowStart + blockEnd
+		selected := selectMaskPositions(rng, lossMask[globalStart:globalEnd], maskFraction, blockSize)
+		if selected == 0 && diffusion.MaxMaskFraction > 0 && blockSize > 0 {
+			pos := globalStart + rng.Intn(blockSize)
+			lossMask[pos] = 1
+		}
+		for i := globalStart; i < globalEnd; i++ {
+			if lossMask[i] > 0 {
+				x[i] = cfg.Training.MLMMaskTokenID
+			}
+		}
+	}
+	return objectiveBatch{
+		x:                   x,
+		y:                   y,
+		lossMask:            lossMask,
+		unmaskedX:           unmasked,
+		diffusionBlockStart: diffusionBlockStart,
+		diffusionBlockEnd:   diffusionBlockEnd,
+	}, nil
+}
+
+func diffusionSpecForObjectiveBatch(cfg *ArchConfig, seqLen int) (arch.DiffusionSpec, error) {
+	if seqLen <= 0 {
+		return arch.DiffusionSpec{}, fmt.Errorf("invalid seq_len=%d", seqLen)
+	}
+	var diffusion arch.DiffusionSpec
+	if cfg.Training.Diffusion != nil {
+		diffusion = *cfg.Training.Diffusion
+	}
+	if diffusion.BlockSize == 0 {
+		diffusion.BlockSize = defaultDiffusionBlockSizeForBatch(seqLen)
+	}
+	if diffusion.MaxMaskFraction == 0 {
+		diffusion.MaxMaskFraction = 1
+	}
+	if diffusion.BlockSize <= 0 {
+		return arch.DiffusionSpec{}, fmt.Errorf("invalid diffusion block_size=%d", diffusion.BlockSize)
+	}
+	if diffusion.BlockSize > seqLen {
+		return arch.DiffusionSpec{}, fmt.Errorf("diffusion block_size=%d must be <= seq_len=%d", diffusion.BlockSize, seqLen)
+	}
+	if seqLen%diffusion.BlockSize != 0 {
+		return arch.DiffusionSpec{}, fmt.Errorf("diffusion block_size=%d must divide seq_len=%d", diffusion.BlockSize, seqLen)
+	}
+	if math.IsNaN(diffusion.MinMaskFraction) || diffusion.MinMaskFraction < 0 || diffusion.MinMaskFraction > 1 {
+		return arch.DiffusionSpec{}, fmt.Errorf("invalid diffusion min_mask_fraction=%g", diffusion.MinMaskFraction)
+	}
+	if math.IsNaN(diffusion.MaxMaskFraction) || diffusion.MaxMaskFraction <= 0 || diffusion.MaxMaskFraction > 1 {
+		return arch.DiffusionSpec{}, fmt.Errorf("invalid diffusion max_mask_fraction=%g", diffusion.MaxMaskFraction)
+	}
+	if diffusion.MinMaskFraction > diffusion.MaxMaskFraction {
+		return arch.DiffusionSpec{}, fmt.Errorf("invalid diffusion mask fraction range [%g,%g]", diffusion.MinMaskFraction, diffusion.MaxMaskFraction)
+	}
+	return diffusion, nil
+}
+
+func defaultDiffusionBlockSizeForBatch(seqLen int) int {
+	if seqLen <= 0 {
+		return 0
+	}
+	if seqLen >= 16 && seqLen%16 == 0 {
+		return 16
+	}
+	return seqLen
 }
 
 func prepareHybridExampleBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int) (objectiveBatch, error) {

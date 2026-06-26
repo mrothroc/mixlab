@@ -49,8 +49,20 @@ sources, causal/bidirectional masks, and packed-segment masks.
 
 The training stack supports causal next-token modeling, masked language
 modeling, MNTP, hybrid causal/masked objectives, fixed-teacher distillation,
-and online EMA self-distillation through data2vec-style targets. Some
-combinations are intentionally rejected until their semantics are explicit.
+online EMA self-distillation through data2vec-style targets, and block-wise
+masked diffusion. Some combinations are intentionally rejected until their
+semantics are explicit.
+
+Block diffusion is modeled as an objective and sampler over an existing
+backbone, not as a block type. v1 trains with a prefix-plus-block attention
+mask and a masked cross-entropy loss, and generates with `-mode
+generate-diffusion` (block-wise confidence-based denoising). The config surface
+is limited to sequential `plain` self-attention plus `swiglu`, `geglu`, `mlp`,
+and `moe` blocks. Mamba and other recurrent/SSM mixers, cross-attention, custom
+blocks, segment masks, windowed attention, data2vec, distillation, and
+diffusion-aware HF export are deferred until their denoising semantics have
+dedicated implementation and tests. Use matching causal and MLM configs as
+baselines when evaluating diffusion experiments.
 
 See [config-reference.md](config-reference.md#training) for the current
 compatibility rules.
