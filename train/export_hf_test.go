@@ -155,6 +155,32 @@ func TestExportHFUnsupportedValidation(t *testing.T) {
 			}`,
 			wantErr: "blocks[0].type",
 		},
+		{
+			name: "block_diffusion objective is native-only",
+			config: `{
+				"model_dim": 4, "vocab_size": 7, "seq_len": 4,
+				"blocks": [{"type": "plain", "heads": 2}, {"type": "swiglu"}],
+				"training": {
+					"steps": 1, "batch_tokens": 4,
+					"objective": "block_diffusion", "mlm_mask_token_id": 5,
+					"diffusion": {"block_size": 2}
+				}
+			}`,
+			wantErr: "training.objective",
+		},
+		{
+			name: "hybrid block_diffusion secondary is native-only",
+			config: `{
+				"model_dim": 4, "vocab_size": 7, "seq_len": 4,
+				"blocks": [{"type": "plain", "heads": 2}, {"type": "swiglu"}],
+				"training": {
+					"steps": 1, "batch_tokens": 4,
+					"objective": "hybrid", "hybrid_secondary_objective": "block_diffusion",
+					"mlm_mask_token_id": 5, "diffusion": {"block_size": 2}
+				}
+			}`,
+			wantErr: "training.objective",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

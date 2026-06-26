@@ -219,6 +219,41 @@ func TestGenerateDiffusionRejectsNonDiffusionConfig(t *testing.T) {
 	}
 }
 
+func TestApplyDiffusionGenerationOverridesBounds(t *testing.T) {
+	base := func() *arch.DiffusionSpec {
+		return &arch.DiffusionSpec{BlockSize: 4, StepsPerBlock: 4, ConfidenceThreshold: 0.8, CommitFloor: 1}
+	}
+	bad := 1.5
+	cases := []struct {
+		name string
+		opts diffusionGenerationRuntimeOptions
+	}{
+		{name: "confidence above 1", opts: diffusionGenerationRuntimeOptions{confidenceThreshold: &bad}},
+		{name: "commit_floor above block_size", opts: diffusionGenerationRuntimeOptions{commitFloor: 5}},
+		{name: "negative steps_per_block", opts: diffusionGenerationRuntimeOptions{stepsPerBlock: -1}},
+		{name: "negative temperature", opts: diffusionGenerationRuntimeOptions{temperature: -0.1}},
+		{name: "negative top_k", opts: diffusionGenerationRuntimeOptions{topK: -1}},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := applyDiffusionGenerationOverrides(base(), tt.opts); err == nil {
+				t.Fatalf("applyDiffusionGenerationOverrides(%s) succeeded, want error", tt.name)
+			}
+		})
+	}
+
+	spec := base()
+	good := 0.5
+	if err := applyDiffusionGenerationOverrides(spec, diffusionGenerationRuntimeOptions{
+		stepsPerBlock: 7, confidenceThreshold: &good, commitFloor: 3,
+	}); err != nil {
+		t.Fatalf("applyDiffusionGenerationOverrides(valid): %v", err)
+	}
+	if spec.StepsPerBlock != 7 || spec.ConfidenceThreshold != 0.5 || spec.CommitFloor != 3 {
+		t.Fatalf("overrides not applied: %+v", spec)
+	}
+}
+
 func testGenerateDiffusionConfig() *ArchConfig {
 	return &ArchConfig{
 		Name:      "generate_diffusion_test",

@@ -7,6 +7,38 @@ import (
 	"testing"
 )
 
+func TestDiffusionPredictionsFromLogitsSampledGuards(t *testing.T) {
+	logits := []float32{0, 1, 2, 3}
+	rng := rand.New(rand.NewSource(1))
+
+	if _, err := diffusionPredictionsFromLogitsSampled(logits, []int{0}, 4, -0.5, 0, rng); err == nil {
+		t.Fatal("negative temperature accepted, want error")
+	}
+	if _, err := diffusionPredictionsFromLogitsSampled(logits, []int{0}, 4, 1.0, -1, rng); err == nil {
+		t.Fatal("negative top_k accepted, want error")
+	}
+	if _, err := diffusionPredictionsFromLogitsSampled(logits, []int{0}, 4, 1.0, 0, nil); err == nil {
+		t.Fatal("nil rng with temperature>0 accepted, want error")
+	}
+	nan := []float32{0, float32(math.NaN()), 2, 3}
+	if _, err := diffusionPredictionsFromLogitsSampled(nan, []int{0}, 4, 1.0, 0, rng); err == nil {
+		t.Fatal("NaN logit accepted, want error")
+	}
+
+	// temperature == 0 must fall back to deterministic argmax.
+	sampled, err := diffusionPredictionsFromLogitsSampled(logits, []int{0}, 4, 0, 0, nil)
+	if err != nil {
+		t.Fatalf("temperature=0 fallback: %v", err)
+	}
+	argmax, err := diffusionPredictionsFromLogits(logits, []int{0}, 4)
+	if err != nil {
+		t.Fatalf("diffusionPredictionsFromLogits: %v", err)
+	}
+	if !reflect.DeepEqual(sampled, argmax) {
+		t.Fatalf("temperature=0 sampled=%#v, want argmax=%#v", sampled, argmax)
+	}
+}
+
 func TestCommitThresholdDiffusionSampler(t *testing.T) {
 	state, err := newDiffusionSamplerState([]int{10, 99, 99, 13}, 1, 3, 99, nil)
 	if err != nil {
