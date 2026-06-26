@@ -593,6 +593,44 @@ func TestObjectiveForStepHybridDeterministicAndHonorsFractions(t *testing.T) {
 	}
 }
 
+func TestObjectiveForStepHybridBlockDiffusionSchedule(t *testing.T) {
+	cfg := parseHybridBlockDiffusionObjectiveConfig(t)
+	if got := cfg.Training.EffectiveHybridCLMFractionForStep(0); got != 1 {
+		t.Fatalf("hybrid causal fraction step0=%g, want 1", got)
+	}
+	if got := cfg.Training.EffectiveHybridCLMFractionForStep(1); got != 0 {
+		t.Fatalf("hybrid causal fraction step1=%g, want 0", got)
+	}
+	if got := objectiveForStep(cfg.Training, 0); got != arch.ObjectiveCausal {
+		t.Fatalf("objectiveForStep step0=%q, want causal", got)
+	}
+	if got := objectiveForStep(cfg.Training, 1); got != arch.ObjectiveBlockDiffusion {
+		t.Fatalf("objectiveForStep step1=%q, want block_diffusion", got)
+	}
+
+	batch := trainBatch{
+		x: []int{10, 11, 12, 13, 20, 21, 22, 23},
+		y: []int{11, 12, 13, 14, 21, 22, 23, 24},
+	}
+	causal, err := prepareObjectiveBatch(cfg, batch, 0, objectiveForStep(cfg.Training, 0))
+	if err != nil {
+		t.Fatalf("prepare causal hybrid step: %v", err)
+	}
+	if causal.diffusionBlockStart != nil || causal.diffusionBlockEnd != nil || causal.lossMask != nil {
+		t.Fatalf("causal hybrid step carried diffusion/masked inputs: %+v", causal)
+	}
+	diffusion, err := prepareObjectiveBatch(cfg, batch, 1, objectiveForStep(cfg.Training, 1))
+	if err != nil {
+		t.Fatalf("prepare diffusion hybrid step: %v", err)
+	}
+	if len(diffusion.diffusionBlockStart) != 2 || len(diffusion.diffusionBlockEnd) != 2 {
+		t.Fatalf("diffusion block vectors lengths start=%d end=%d, want 2", len(diffusion.diffusionBlockStart), len(diffusion.diffusionBlockEnd))
+	}
+	if diffusion.lossMask == nil {
+		t.Fatal("diffusion hybrid step missing lossMask")
+	}
+}
+
 func objectiveTestConfig() *ArchConfig {
 	return &ArchConfig{
 		Name:      "objective_test",
@@ -638,6 +676,33 @@ func parsedHybridObjectiveSpec(t *testing.T, causalFraction float64, secondary s
 		t.Fatalf("ParseArchConfig: %v", err)
 	}
 	return cfg.Training
+}
+
+func parseHybridBlockDiffusionObjectiveConfig(t *testing.T) *ArchConfig {
+	t.Helper()
+	raw := []byte(`{
+		"name": "hybrid_block_diffusion_objective_test",
+		"model_dim": 8,
+		"vocab_size": 32,
+		"seq_len": 4,
+		"blocks": [{"type": "plain", "heads": 2}],
+		"training": {
+			"steps": 4,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"seed": 123,
+			"objective": "hybrid",
+			"mlm_mask_token_id": 9,
+			"hybrid_secondary_objective": "block_diffusion",
+			"hybrid_clm_fraction_schedule": [[0,1],[1,0]],
+			"diffusion": {"block_size": 2, "min_mask_fraction": 1, "max_mask_fraction": 1}
+		}
+	}`)
+	cfg, err := ParseArchConfig(raw, "hybrid_block_diffusion_objective_test")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	return cfg
 }
 
 func formatFloatForJSON(v float64) string {

@@ -196,9 +196,12 @@ func TestTrainingRecipeKnobValidationAndDefaults(t *testing.T) {
 		"steps": 10,
 		"lr": 0.001,
 		"batch_tokens": 8,
+		"objective": "hybrid",
+		"mlm_mask_token_id": 7,
 		"z_loss": 0.0001,
 		"seq_len_schedule": [[0,2],[5,4]],
 		"mlm_mask_prob_schedule": [[0,0.3],[5,0.15]],
+		"hybrid_clm_fraction_schedule": [[0,0.75],[5,0.25]],
 		"early_stop": {"metric": "val", "patience": 3, "min_delta": 0.01, "min_steps": 10}
 	}`)
 	if cfg.Training.ZLoss != 0.0001 {
@@ -218,6 +221,15 @@ func TestTrainingRecipeKnobValidationAndDefaults(t *testing.T) {
 	}
 	if cfg.Training.MLMMaskProbScheduleMode != "step" {
 		t.Fatalf("mlm_mask_prob_schedule_mode=%q, want step", cfg.Training.MLMMaskProbScheduleMode)
+	}
+	if got := cfg.Training.EffectiveHybridCLMFractionForStep(0); got != 0.75 {
+		t.Fatalf("hybrid clm fraction step0=%g, want 0.75", got)
+	}
+	if got := cfg.Training.EffectiveHybridCLMFractionForStep(5); got != 0.25 {
+		t.Fatalf("hybrid clm fraction step5=%g, want 0.25", got)
+	}
+	if cfg.Training.HybridCLMFractionScheduleMode != "step" {
+		t.Fatalf("hybrid_clm_fraction_schedule_mode=%q, want step", cfg.Training.HybridCLMFractionScheduleMode)
 	}
 	if cfg.Training.EarlyStop == nil || cfg.Training.EarlyStop.Patience != 3 {
 		t.Fatalf("early_stop=%+v, want patience 3", cfg.Training.EarlyStop)
@@ -250,6 +262,34 @@ func TestEffectiveMLMMaskProbScheduleLinear(t *testing.T) {
 	}
 }
 
+func TestEffectiveHybridCLMFractionScheduleLinear(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"training": {
+		"batch_tokens": 8,
+		"objective": "hybrid",
+		"mlm_mask_token_id": 7,
+		"hybrid_clm_fraction": 0.9,
+		"hybrid_clm_fraction_schedule": [[0,1.0],[10,0.25]],
+		"hybrid_clm_fraction_schedule_mode": "linear"
+	}`)
+	if got := cfg.Training.HybridCLMFractionScheduleMode; got != "linear" {
+		t.Fatalf("hybrid_clm_fraction_schedule_mode=%q, want linear", got)
+	}
+	tests := []struct {
+		step int
+		want float64
+	}{
+		{step: 0, want: 1.0},
+		{step: 5, want: 0.625},
+		{step: 10, want: 0.25},
+		{step: 20, want: 0.25},
+	}
+	for _, tt := range tests {
+		if got := cfg.Training.EffectiveHybridCLMFractionForStep(tt.step); math.Abs(got-tt.want) > 1e-12 {
+			t.Fatalf("EffectiveHybridCLMFractionForStep(%d)=%g, want %g", tt.step, got, tt.want)
+		}
+	}
+}
+
 func TestTrainingRecipeKnobValidationErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -263,6 +303,10 @@ func TestTrainingRecipeKnobValidationErrors(t *testing.T) {
 		{name: "mask schedule integer step", body: `"training": {"batch_tokens": 8, "mlm_mask_prob_schedule": [[0.5,0.2]]}`, wantErr: "step must be an integer"},
 		{name: "mask schedule probability", body: `"training": {"batch_tokens": 8, "mlm_mask_prob_schedule": [[0,1.5]]}`, wantErr: "must be in [0,1]"},
 		{name: "mask schedule mode", body: `"training": {"batch_tokens": 8, "mlm_mask_prob_schedule": [[0,0.2]], "mlm_mask_prob_schedule_mode": "spline"}`, wantErr: "mlm_mask_prob_schedule_mode"},
+		{name: "hybrid fraction schedule requires hybrid", body: `"training": {"batch_tokens": 8, "hybrid_clm_fraction_schedule": [[0,0.5]]}`, wantErr: "hybrid_clm_fraction_schedule"},
+		{name: "hybrid fraction schedule integer step", body: `"training": {"batch_tokens": 8, "objective":"hybrid", "mlm_mask_token_id":7, "hybrid_clm_fraction_schedule": [[0.5,0.2]]}`, wantErr: "step must be an integer"},
+		{name: "hybrid fraction schedule probability", body: `"training": {"batch_tokens": 8, "objective":"hybrid", "mlm_mask_token_id":7, "hybrid_clm_fraction_schedule": [[0,1.5]]}`, wantErr: "must be in [0,1]"},
+		{name: "hybrid fraction schedule mode", body: `"training": {"batch_tokens": 8, "objective":"hybrid", "mlm_mask_token_id":7, "hybrid_clm_fraction_schedule": [[0,0.2]], "hybrid_clm_fraction_schedule_mode": "spline"}`, wantErr: "hybrid_clm_fraction_schedule_mode"},
 		{name: "early stop metric", body: `"training": {"batch_tokens": 8, "early_stop": {"metric": "train", "patience": 2}}`, wantErr: "early_stop.metric"},
 		{name: "early stop patience", body: `"training": {"batch_tokens": 8, "early_stop": {"patience": -1}}`, wantErr: "early_stop.patience"},
 		{name: "early stop val gt", body: `"training": {"batch_tokens": 8, "early_stop": {"val_gt": -1}}`, wantErr: "early_stop.val_gt"},
@@ -419,6 +463,59 @@ func TestBlockDiffusionTrainingEvalWeightCountParity(t *testing.T) {
 	}
 	if trainProg.NumWeights != counted {
 		t.Fatalf("training NumWeights=%d, counted=%d", trainProg.NumWeights, counted)
+	}
+}
+
+func TestHybridBlockDiffusionConcreteGraphParity(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"blocks": [
+			{"type": "plain", "heads": 2},
+			{"type": "swiglu"}
+		],
+		"tie_embeddings": false,
+		"training": {
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"objective": "hybrid",
+			"hybrid_secondary_objective": "block_diffusion",
+			"hybrid_clm_fraction": 0.5,
+			"mlm_mask_token_id": 7,
+			"diffusion": {"block_size": 2}
+		}`)
+	causalProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive: true,
+		Objective:        ObjectiveCausal,
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(causal): %v", err)
+	}
+	diffusionProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive: true,
+		Objective:        ObjectiveBlockDiffusion,
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(block_diffusion): %v", err)
+	}
+	evalProg, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildEvalIRProgramFromConfig(hybrid block diffusion): %v", err)
+	}
+	if causalProg.NumWeights != diffusionProg.NumWeights || causalProg.NumWeights != evalProg.NumWeights {
+		t.Fatalf("weight count mismatch causal=%d diffusion=%d eval=%d", causalProg.NumWeights, diffusionProg.NumWeights, evalProg.NumWeights)
+	}
+	for _, name := range []string{"loss_mask", "diffusion_block_start", "diffusion_block_end"} {
+		if !programDeclaresInputArch(diffusionProg, name) {
+			t.Fatalf("hybrid diffusion concrete program missing input %q", name)
+		}
+		if programDeclaresInputArch(causalProg, name) {
+			t.Fatalf("hybrid causal concrete program unexpectedly declares input %q", name)
+		}
+	}
+	if n := countOps(diffusionProg, OpBlockDiffusionMask); n != 1 {
+		t.Fatalf("hybrid diffusion OpBlockDiffusionMask count=%d, want 1", n)
+	}
+	if n := countOps(causalProg, OpBlockDiffusionMask); n != 0 {
+		t.Fatalf("hybrid causal OpBlockDiffusionMask count=%d, want 0", n)
 	}
 }
 

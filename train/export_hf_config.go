@@ -187,7 +187,7 @@ func hfExportSupportsMaskedLM(cfg *ArchConfig) bool {
 	case "mlm", "mntp":
 		return true
 	case "hybrid":
-		return cfg.Training.HybridCLMFraction < 1
+		return !cfg.Training.UsesBlockDiffusionObjective() && cfg.Training.HybridHasMaskedSteps()
 	default:
 		return false
 	}

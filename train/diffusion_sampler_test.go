@@ -2,6 +2,7 @@ package train
 
 import (
 	"math"
+	"math/rand"
 	"reflect"
 	"testing"
 )
@@ -126,8 +127,37 @@ func TestDiffusionSamplerLogitPredictions(t *testing.T) {
 	}
 }
 
+func TestDiffusionSamplerSampledLogitPredictionsDeterministic(t *testing.T) {
+	logits := make([]float32, 3*4)
+	logits[1*4+0] = 0
+	logits[1*4+1] = 2
+	logits[1*4+2] = 4
+	logits[1*4+3] = 6
+	first, err := diffusionPredictionsFromLogitsSampled(logits, []int{1}, 4, 1.0, 2, rand.New(rand.NewSource(123)))
+	if err != nil {
+		t.Fatalf("diffusionPredictionsFromLogitsSampled first: %v", err)
+	}
+	second, err := diffusionPredictionsFromLogitsSampled(logits, []int{1}, 4, 1.0, 2, rand.New(rand.NewSource(123)))
+	if err != nil {
+		t.Fatalf("diffusionPredictionsFromLogitsSampled second: %v", err)
+	}
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("sampled predictions are not deterministic: %#v vs %#v", first, second)
+	}
+	if len(first) != 1 {
+		t.Fatalf("predictions=%#v, want one", first)
+	}
+	if first[0].token != 3 && first[0].token != 2 {
+		t.Fatalf("top-k sampled token=%d, want one of top-2 tokens 2 or 3", first[0].token)
+	}
+	if first[0].confidence <= 0 || first[0].confidence > 1 {
+		t.Fatalf("sampled confidence=%g, want in (0,1]", first[0].confidence)
+	}
+}
+
 func TestDiffusionSamplerResolvesBlockWithinSteps(t *testing.T) {
 	cfg := diffusionSamplerConfig{
+		blockIndex:          2,
 		blockStart:          2,
 		blockEnd:            6,
 		stepsPerBlock:       4,
@@ -165,6 +195,20 @@ func TestDiffusionSamplerResolvesBlockWithinSteps(t *testing.T) {
 	}
 	if len(result.commits) != 4 {
 		t.Fatalf("commits = %#v, want 4 commits", result.commits)
+	}
+	if len(result.trace) != 4 {
+		t.Fatalf("trace len=%d, want 4", len(result.trace))
+	}
+	firstTrace := result.trace[0]
+	if firstTrace.Block != 2 || firstTrace.BlockStart != 2 || firstTrace.BlockEnd != 6 || firstTrace.Step != 0 {
+		t.Fatalf("first trace location = %+v", firstTrace)
+	}
+	if firstTrace.UnresolvedBefore != 4 || firstTrace.Committed != 1 || firstTrace.UnresolvedAfter != 3 || firstTrace.Forced != 0 {
+		t.Fatalf("first trace counts = %+v", firstTrace)
+	}
+	lastTrace := result.trace[len(result.trace)-1]
+	if !lastTrace.Complete || lastTrace.UnresolvedAfter != 0 {
+		t.Fatalf("last trace = %+v, want complete with no unresolved positions", lastTrace)
 	}
 	if !reflect.DeepEqual(start, []int{10, 11, 99, 99, 99, 99}) {
 		t.Fatalf("input tokens mutated: %v", start)

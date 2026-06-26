@@ -234,6 +234,8 @@ type TrainingSpec struct {
 	MLMMaskProbSchedule               [][]float64       `json:"mlm_mask_prob_schedule,omitempty"`
 	MLMMaskProbScheduleMode           string            `json:"mlm_mask_prob_schedule_mode,omitempty"`
 	HybridCLMFraction                 float64           `json:"hybrid_clm_fraction,omitempty"`
+	HybridCLMFractionSchedule         [][]float64       `json:"hybrid_clm_fraction_schedule,omitempty"`
+	HybridCLMFractionScheduleMode     string            `json:"hybrid_clm_fraction_schedule_mode,omitempty"`
 	HybridSecondaryObjective          string            `json:"hybrid_secondary_objective,omitempty"`
 	HybridMixGranularity              string            `json:"hybrid_mix_granularity,omitempty"`
 	AttentionSegmentMask              string            `json:"attention_segment_mask,omitempty"`

@@ -137,7 +137,7 @@ func validateTrainingData2Vec(cfg *ArchConfig, source string) error {
 	switch cfg.Training.EffectiveObjective() {
 	case ObjectiveMLM, ObjectiveMNTP:
 	case ObjectiveHybrid:
-		if cfg.Training.HybridCLMFraction >= 1 {
+		if !cfg.Training.HybridHasMaskedSteps() {
 			return fmt.Errorf("config %q has training.data2vec enabled but hybrid_clm_fraction=%g leaves no masked objective steps", source, cfg.Training.HybridCLMFraction)
 		}
 	default:

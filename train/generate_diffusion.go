@@ -1,9 +1,11 @@
 package train
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"runtime"
 
 	"github.com/mrothroc/mixlab/arch"
@@ -17,35 +19,85 @@ type diffusionGenerationEvaluator interface {
 type diffusionGenerationResult struct {
 	tokens          []int
 	commits         []diffusionCommit
+	trace           []diffusionSamplerTraceEntry
 	blocks          int
 	steps           int
 	stoppedAtSeqLen bool
 }
 
+type GenerateDiffusionOptions struct {
+	ConfigPath                   string
+	SafetensorsLoad              string
+	MaxTokens                    int
+	Prompt                       string
+	DiffusionStepsPerBlock       int
+	DiffusionConfidenceThreshold *float64
+	DiffusionCommitFloor         int
+	DiffusionTemperature         float32
+	DiffusionTopK                int
+	DiffusionTraceOut            string
+}
+
+type diffusionGenerationRuntimeOptions struct {
+	stepsPerBlock       int
+	confidenceThreshold *float64
+	commitFloor         int
+	temperature         float32
+	topK                int
+	rng                 *rand.Rand
+}
+
 func runGenerateDiffusion(configPath, safetensorsLoad string, maxTokens int, prompt string) error {
+	return runGenerateDiffusionWithOptions(GenerateDiffusionOptions{
+		ConfigPath:      configPath,
+		SafetensorsLoad: safetensorsLoad,
+		MaxTokens:       maxTokens,
+		Prompt:          prompt,
+	})
+}
+
+func runGenerateDiffusionWithOptions(opts GenerateDiffusionOptions) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	if configPath == "" {
+	if opts.ConfigPath == "" {
 		return fmt.Errorf("-config is required for generate-diffusion mode")
 	}
-	if safetensorsLoad == "" {
+	if opts.SafetensorsLoad == "" {
 		return fmt.Errorf("-safetensors-load is required for generate-diffusion mode")
 	}
-	if maxTokens < 0 {
+	if opts.MaxTokens < 0 {
 		return fmt.Errorf("-max-tokens must be >= 0")
 	}
+	if opts.DiffusionStepsPerBlock < 0 {
+		return fmt.Errorf("-diffusion-steps-per-block must be >= 0")
+	}
+	if opts.DiffusionCommitFloor < 0 {
+		return fmt.Errorf("-diffusion-commit-floor must be >= 0")
+	}
+	if opts.DiffusionConfidenceThreshold != nil {
+		v := *opts.DiffusionConfidenceThreshold
+		if math.IsNaN(v) || v < 0 || v > 1 {
+			return fmt.Errorf("-diffusion-confidence-threshold must be in [0,1]")
+		}
+	}
+	if opts.DiffusionTemperature < 0 {
+		return fmt.Errorf("-diffusion-temperature must be >= 0")
+	}
+	if opts.DiffusionTopK < 0 {
+		return fmt.Errorf("-diffusion-top-k must be >= 0")
+	}
 
-	cfg, err := LoadArchConfig(configPath)
+	cfg, err := LoadArchConfig(opts.ConfigPath)
 	if err != nil {
 		return err
 	}
-	if cfg.Training.EffectiveObjective() != arch.ObjectiveBlockDiffusion {
-		return fmt.Errorf("generate-diffusion requires training.objective=%q, got %q", arch.ObjectiveBlockDiffusion, cfg.Training.EffectiveObjective())
+	if !cfg.Training.UsesBlockDiffusionObjective() {
+		return fmt.Errorf("generate-diffusion requires training.objective=%q or hybrid_secondary_objective=%q, got objective=%q secondary=%q", arch.ObjectiveBlockDiffusion, arch.ObjectiveBlockDiffusion, cfg.Training.EffectiveObjective(), cfg.Training.EffectiveHybridSecondaryObjective())
 	}
 	genCfg := *cfg
 	genCfg.Training.BatchTokens = genCfg.SeqLen
-	if err := configureCharFeaturesForConfigPath(&genCfg, configPath, safetensorsLoad); err != nil {
+	if err := configureCharFeaturesForConfigPath(&genCfg, opts.ConfigPath, opts.SafetensorsLoad); err != nil {
 		return err
 	}
 
@@ -57,9 +109,9 @@ func runGenerateDiffusion(configPath, safetensorsLoad string, maxTokens int, pro
 	if err != nil {
 		return fmt.Errorf("compute weight shapes: %w", err)
 	}
-	loadedWeights, err := loadSafetensorsWeights(safetensorsLoad, shapes)
+	loadedWeights, err := loadSafetensorsWeights(opts.SafetensorsLoad, shapes)
 	if err != nil {
-		return fmt.Errorf("load safetensors %q: %w", safetensorsLoad, err)
+		return fmt.Errorf("load safetensors %q: %w", opts.SafetensorsLoad, err)
 	}
 	trainer, err := initGPUTrainer(prog, &genCfg, loadedWeights, nil)
 	if err != nil {
@@ -72,7 +124,7 @@ func runGenerateDiffusion(configPath, safetensorsLoad string, maxTokens int, pro
 	}
 
 	rng := rand.New(rand.NewSource(cfg.Training.Seed))
-	context, err := generationPromptTokens(prompt, cfg.VocabSize, rng)
+	context, err := generationPromptTokens(opts.Prompt, cfg.VocabSize, rng)
 	if err != nil {
 		return err
 	}
@@ -80,8 +132,18 @@ func runGenerateDiffusion(configPath, safetensorsLoad string, maxTokens int, pro
 		return fmt.Errorf("prompt length %d exceeds seq_len %d", len(context), cfg.SeqLen)
 	}
 
-	result, err := generateDiffusionTokens(&genCfg, evaluator, context, maxTokens)
+	result, err := generateDiffusionTokensWithOptions(&genCfg, evaluator, context, opts.MaxTokens, diffusionGenerationRuntimeOptions{
+		stepsPerBlock:       opts.DiffusionStepsPerBlock,
+		confidenceThreshold: opts.DiffusionConfidenceThreshold,
+		commitFloor:         opts.DiffusionCommitFloor,
+		temperature:         opts.DiffusionTemperature,
+		topK:                opts.DiffusionTopK,
+		rng:                 rng,
+	})
 	if err != nil {
+		return err
+	}
+	if err := writeDiffusionTrace(opts.DiffusionTraceOut, result.trace); err != nil {
 		return err
 	}
 	if result.stoppedAtSeqLen {
@@ -109,6 +171,10 @@ func buildGenerateDiffusionIRProgram(cfg *ArchConfig) (*arch.Program, error) {
 }
 
 func generateDiffusionTokens(cfg *ArchConfig, evaluator diffusionGenerationEvaluator, prompt []int, maxTokens int) (diffusionGenerationResult, error) {
+	return generateDiffusionTokensWithOptions(cfg, evaluator, prompt, maxTokens, diffusionGenerationRuntimeOptions{})
+}
+
+func generateDiffusionTokensWithOptions(cfg *ArchConfig, evaluator diffusionGenerationEvaluator, prompt []int, maxTokens int, opts diffusionGenerationRuntimeOptions) (diffusionGenerationResult, error) {
 	if cfg == nil {
 		return diffusionGenerationResult{}, fmt.Errorf("nil config")
 	}
@@ -124,8 +190,8 @@ func generateDiffusionTokens(cfg *ArchConfig, evaluator diffusionGenerationEvalu
 	if cfg.VocabSize <= 0 {
 		return diffusionGenerationResult{}, fmt.Errorf("invalid vocab_size=%d", cfg.VocabSize)
 	}
-	if cfg.Training.EffectiveObjective() != arch.ObjectiveBlockDiffusion {
-		return diffusionGenerationResult{}, fmt.Errorf("generate-diffusion requires training.objective=%q, got %q", arch.ObjectiveBlockDiffusion, cfg.Training.EffectiveObjective())
+	if !cfg.Training.UsesBlockDiffusionObjective() {
+		return diffusionGenerationResult{}, fmt.Errorf("generate-diffusion requires training.objective=%q or hybrid_secondary_objective=%q, got objective=%q secondary=%q", arch.ObjectiveBlockDiffusion, arch.ObjectiveBlockDiffusion, cfg.Training.EffectiveObjective(), cfg.Training.EffectiveHybridSecondaryObjective())
 	}
 	if len(prompt) == 0 {
 		return diffusionGenerationResult{}, fmt.Errorf("prompt must contain at least one token")
@@ -142,6 +208,13 @@ func generateDiffusionTokens(cfg *ArchConfig, evaluator diffusionGenerationEvalu
 	spec, err := diffusionGenerationSpec(cfg)
 	if err != nil {
 		return diffusionGenerationResult{}, err
+	}
+	if err := applyDiffusionGenerationOverrides(&spec, opts); err != nil {
+		return diffusionGenerationResult{}, err
+	}
+	rng := opts.rng
+	if rng == nil {
+		rng = rand.New(rand.NewSource(cfg.Training.Seed))
 	}
 
 	tokens := append([]int(nil), prompt...)
@@ -172,6 +245,7 @@ func generateDiffusionTokens(cfg *ArchConfig, evaluator diffusionGenerationEvalu
 		}
 
 		samplerCfg := diffusionSamplerConfig{
+			blockIndex:          result.blocks,
 			blockStart:          blockStart,
 			blockEnd:            blockEnd,
 			stepsPerBlock:       spec.StepsPerBlock,
@@ -194,6 +268,9 @@ func generateDiffusionTokens(cfg *ArchConfig, evaluator diffusionGenerationEvalu
 			if len(logits) != cfg.SeqLen*cfg.VocabSize {
 				return nil, fmt.Errorf("logits length mismatch: got=%d want=%d", len(logits), cfg.SeqLen*cfg.VocabSize)
 			}
+			if opts.temperature > 0 {
+				return diffusionPredictionsFromLogitsSampled(logits, input.unresolved, cfg.VocabSize, opts.temperature, opts.topK, rng)
+			}
 			return diffusionPredictionsFromLogits(logits, input.unresolved, cfg.VocabSize)
 		})
 		if err != nil {
@@ -202,12 +279,72 @@ func generateDiffusionTokens(cfg *ArchConfig, evaluator diffusionGenerationEvalu
 
 		tokens = blockResult.tokens
 		result.commits = append(result.commits, blockResult.commits...)
+		result.trace = append(result.trace, blockResult.trace...)
 		result.steps += blockResult.steps
 		result.blocks++
 		result.tokens = append([]int(nil), tokens...)
 		generated += blockLen
 	}
 	return result, nil
+}
+
+func applyDiffusionGenerationOverrides(spec *arch.DiffusionSpec, opts diffusionGenerationRuntimeOptions) error {
+	if spec == nil {
+		return fmt.Errorf("nil diffusion generation spec")
+	}
+	if opts.stepsPerBlock < 0 {
+		return fmt.Errorf("diffusion steps_per_block override must be >= 0, got %d", opts.stepsPerBlock)
+	}
+	if opts.stepsPerBlock > 0 {
+		spec.StepsPerBlock = opts.stepsPerBlock
+	}
+	if opts.confidenceThreshold != nil {
+		v := *opts.confidenceThreshold
+		if math.IsNaN(v) || v < 0 || v > 1 {
+			return fmt.Errorf("diffusion confidence_threshold override must be in [0,1], got %g", v)
+		}
+		spec.ConfidenceThreshold = v
+	}
+	if opts.commitFloor < 0 {
+		return fmt.Errorf("diffusion commit_floor override must be >= 0, got %d", opts.commitFloor)
+	}
+	if opts.commitFloor > 0 {
+		spec.CommitFloor = opts.commitFloor
+	}
+	if spec.StepsPerBlock <= 0 {
+		return fmt.Errorf("diffusion steps_per_block=%d must be > 0", spec.StepsPerBlock)
+	}
+	if spec.CommitFloor <= 0 || spec.CommitFloor > spec.BlockSize {
+		return fmt.Errorf("diffusion commit_floor=%d must be in [1,block_size=%d]", spec.CommitFloor, spec.BlockSize)
+	}
+	if opts.temperature < 0 {
+		return fmt.Errorf("diffusion temperature must be >= 0, got %g", opts.temperature)
+	}
+	if opts.topK < 0 {
+		return fmt.Errorf("diffusion top_k must be >= 0, got %d", opts.topK)
+	}
+	return nil
+}
+
+func writeDiffusionTrace(path string, trace []diffusionSamplerTraceEntry) error {
+	if path == "" {
+		return nil
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("create diffusion trace %q: %w", path, err)
+	}
+	enc := json.NewEncoder(f)
+	for _, entry := range trace {
+		if err := enc.Encode(entry); err != nil {
+			_ = f.Close()
+			return fmt.Errorf("write diffusion trace %q: %w", path, err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close diffusion trace %q: %w", path, err)
+	}
+	return nil
 }
 
 func diffusionGenerationBatch(tokens []int, unresolved []int, blockStart, blockEnd, seqLen int) (objectiveBatch, error) {

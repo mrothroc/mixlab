@@ -160,6 +160,102 @@ func TestBlockDiffusionMLXSmoke(t *testing.T) {
 	}
 }
 
+func TestHybridBlockDiffusionMLXProgramSwitchSmoke(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "hybrid_block_diffusion_mlx_smoke",
+		"model_dim": 16,
+		"vocab_size": 16,
+		"seq_len": 4,
+		"blocks": [
+			{"type": "plain", "heads": 2},
+			{"type": "swiglu"}
+		],
+		"training": {
+			"steps": 2,
+			"lr": 0.01,
+			"seed": 37,
+			"batch_tokens": 8,
+			"grad_clip": 1.0,
+			"weight_decay": 0.0,
+			"objective": "hybrid",
+			"hybrid_secondary_objective": "block_diffusion",
+			"hybrid_clm_fraction_schedule": [[0,1],[1,0]],
+			"mlm_mask_token_id": 15,
+			"diffusion": {
+				"block_size": 2,
+				"min_mask_fraction": 1.0,
+				"max_mask_fraction": 1.0
+			}
+		}
+	}`), "hybrid_block_diffusion_mlx_smoke")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	causalProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive: true,
+		Objective:        arch.ObjectiveCausal,
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(causal): %v", err)
+	}
+	diffusionProg, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive: true,
+		Objective:        arch.ObjectiveBlockDiffusion,
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(block_diffusion): %v", err)
+	}
+	trainerIface, err := initGPUTrainer(causalProg, cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("initGPUTrainer: %v", err)
+	}
+	trainer, ok := trainerIface.(*mlxGPUTrainer)
+	if !ok {
+		t.Fatalf("trainer type=%T, want *mlxGPUTrainer", trainerIface)
+	}
+	defer trainer.CloseTrainer()
+
+	batchSize := cfg.Training.BatchTokens / cfg.SeqLen
+	raw := trainBatch{
+		x: []int{3, 4, 5, 6, 6, 5, 4, 3},
+		y: []int{4, 5, 6, 7, 5, 4, 3, 2},
+	}
+	causal, err := prepareObjectiveBatch(cfg, raw, 0, objectiveForStep(cfg.Training, 0))
+	if err != nil {
+		t.Fatalf("prepare causal step: %v", err)
+	}
+	loss, err := trainer.TrainObjectiveStepGPU(causal, batchSize, cfg.SeqLen, float32(cfg.Training.LR))
+	if err != nil {
+		t.Fatalf("TrainObjectiveStepGPU causal: %v", err)
+	}
+	if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) || loss <= 0 {
+		t.Fatalf("causal loss=%g, want finite positive", loss)
+	}
+
+	switcher, ok := trainerIface.(gpuProgramSwitcher)
+	if !ok {
+		t.Fatalf("trainer type=%T does not implement gpuProgramSwitcher", trainerIface)
+	}
+	if err := switcher.SetProgramGPU(diffusionProg); err != nil {
+		t.Fatalf("SetProgramGPU(diffusion): %v", err)
+	}
+	diffusion, err := prepareObjectiveBatch(cfg, raw, 1, objectiveForStep(cfg.Training, 1))
+	if err != nil {
+		t.Fatalf("prepare diffusion step: %v", err)
+	}
+	loss, err = trainer.TrainObjectiveStepGPU(diffusion, batchSize, cfg.SeqLen, float32(cfg.Training.LR))
+	if err != nil {
+		t.Fatalf("TrainObjectiveStepGPU diffusion: %v", err)
+	}
+	if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) || loss <= 0 {
+		t.Fatalf("diffusion loss=%g, want finite positive", loss)
+	}
+}
+
 func evaluatePreparedObjectiveBatch(trainer *mlxGPUTrainer, batch objectiveBatch, batchSize, seqLen int) (float32, error) {
 	return trainer.EvaluateObjectiveGPU(batch, batchSize, seqLen)
 }

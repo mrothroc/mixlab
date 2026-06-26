@@ -74,6 +74,12 @@ func (t TrainingSpec) EffectiveHybridSecondaryObjective() string {
 	return obj
 }
 
+func (t TrainingSpec) UsesBlockDiffusionObjective() bool {
+	obj := t.EffectiveObjective()
+	return obj == ObjectiveBlockDiffusion ||
+		(obj == ObjectiveHybrid && t.EffectiveHybridSecondaryObjective() == ObjectiveBlockDiffusion)
+}
+
 func (t TrainingSpec) EffectiveAttentionSegmentMask() string {
 	mode := strings.ToLower(strings.TrimSpace(t.AttentionSegmentMask))
 	if mode == "" {
@@ -106,9 +112,6 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	default:
 		return fmt.Errorf("config %q has invalid training.objective=%q (must be \"causal\", \"mlm\", \"hybrid\", \"mntp\", or \"block_diffusion\")", source, t.Objective)
 	}
-	if t.Objective != ObjectiveBlockDiffusion && t.Diffusion != nil {
-		return fmt.Errorf("config %q sets training.diffusion but training.objective=%q (must be \"block_diffusion\")", source, t.Objective)
-	}
 	t.HybridMixGranularity = t.EffectiveHybridMixGranularity()
 	switch t.HybridMixGranularity {
 	case HybridMixGranularityBatch, HybridMixGranularityExample:
@@ -134,6 +137,9 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	} else {
 		t.HybridSecondaryObjective = normalizeTrainingObjective(t.HybridSecondaryObjective)
 	}
+	if t.Diffusion != nil && !t.UsesBlockDiffusionObjective() {
+		return fmt.Errorf("config %q sets training.diffusion but training.objective=%q does not use \"block_diffusion\" (set objective=\"block_diffusion\" or hybrid_secondary_objective=\"block_diffusion\")", source, t.Objective)
+	}
 
 	if t.MLMMaskProb < 0 || t.MLMMaskProb > 1 || math.IsNaN(t.MLMMaskProb) {
 		return fmt.Errorf("config %q has invalid training.mlm_mask_prob=%g (must be in [0,1])", source, t.MLMMaskProb)
@@ -155,12 +161,15 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 		return fmt.Errorf("config %q has invalid training.hybrid_clm_fraction=%g (must be in [0,1])", source, t.HybridCLMFraction)
 	}
 	switch t.HybridSecondaryObjective {
-	case ObjectiveMLM, ObjectiveMNTP:
+	case ObjectiveMLM, ObjectiveMNTP, ObjectiveBlockDiffusion:
 	default:
-		return fmt.Errorf("config %q has invalid training.hybrid_secondary_objective=%q (must be \"mlm\" or \"mntp\")", source, t.HybridSecondaryObjective)
+		return fmt.Errorf("config %q has invalid training.hybrid_secondary_objective=%q (must be \"mlm\", \"mntp\", or \"block_diffusion\")", source, t.HybridSecondaryObjective)
 	}
-	if t.Objective == ObjectiveBlockDiffusion && !t.mlmMaskTokenIDSet {
-		return fmt.Errorf("config %q training.mlm_mask_token_id is required when training.objective is \"block_diffusion\"; block_diffusion v1 reuses it as the mask token", source)
+	if t.Objective == ObjectiveHybrid && t.HybridSecondaryObjective == ObjectiveBlockDiffusion && t.HybridMixGranularity == HybridMixGranularityExample {
+		return fmt.Errorf("config %q training.hybrid_mix_granularity=\"example\" cannot be combined with hybrid_secondary_objective=\"block_diffusion\" in v1", source)
+	}
+	if t.UsesBlockDiffusionObjective() && !t.mlmMaskTokenIDSet {
+		return fmt.Errorf("config %q training.mlm_mask_token_id is required for block_diffusion objective paths; block_diffusion v1 reuses it as the mask token", source)
 	}
 	if (t.Objective == ObjectiveMLM || t.Objective == ObjectiveMNTP || t.Objective == ObjectiveHybrid) && !t.mlmMaskTokenIDSet {
 		return fmt.Errorf("config %q training.mlm_mask_token_id is required when training.objective is %q", source, t.Objective)
@@ -182,7 +191,7 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	if t.Objective == ObjectiveHybrid && t.HybridSecondaryObjective == ObjectiveMNTP && cfg.SeqLen <= 1 {
 		return fmt.Errorf("config %q training.hybrid_secondary_objective=\"mntp\" requires seq_len > 1", source)
 	}
-	if t.Objective == ObjectiveBlockDiffusion {
+	if t.UsesBlockDiffusionObjective() {
 		if err := validateBlockDiffusionObjective(cfg, source); err != nil {
 			return err
 		}
@@ -206,8 +215,8 @@ func validateTrainingAttentionSegmentMask(cfg *ArchConfig, source string) error 
 	if t.AttentionSegmentBoundaryTokenID < 0 || t.AttentionSegmentBoundaryTokenID >= cfg.VocabSize {
 		return fmt.Errorf("config %q has invalid training.attention_segment_boundary_token_id=%d (must be in [0,%d))", source, t.AttentionSegmentBoundaryTokenID, cfg.VocabSize)
 	}
-	if cfg.Training.EffectiveObjective() == ObjectiveBlockDiffusion {
-		return fmt.Errorf("config %q training.attention_segment_mask cannot be combined with training.objective=\"block_diffusion\" in v1", source)
+	if cfg.Training.UsesBlockDiffusionObjective() {
+		return fmt.Errorf("config %q training.attention_segment_mask cannot be combined with block_diffusion objective paths in v1", source)
 	}
 	if cfg.Training.Distillation != nil {
 		return fmt.Errorf("config %q training.attention_segment_mask cannot be combined with training.distillation in v1; teacher programs do not consume segment_ids", source)
@@ -247,6 +256,9 @@ func resolvedPlainAttentionMaskForObjective(spec BlockSpec, objective, rootObjec
 	objective = normalizeTrainingObjective(objective)
 	rootObjective = normalizeTrainingObjective(rootObjective)
 	if rootObjective == ObjectiveHybrid {
+		if objective == ObjectiveBlockDiffusion {
+			return AttentionMaskBlockDiffusion
+		}
 		if objective == ObjectiveHybridExample {
 			return AttentionMaskHybridExample
 		}
@@ -296,10 +308,10 @@ func validatePlainAttentionMask(cfg *ArchConfig, source string, b BlockSpec, gro
 	default:
 		return fmt.Errorf("config %q %s[%d] type=plain has invalid attention_mask=%q (must be \"causal\", \"bidirectional\", or \"none\")", source, groupName, idx, b.AttentionMask)
 	}
-	if b.WindowSize > 0 && cfg.Training.EffectiveObjective() == ObjectiveBlockDiffusion {
-		return fmt.Errorf("config %q %s[%d] type=plain sets window_size but training.objective=\"block_diffusion\" requires full prefix-plus-block attention in v1", source, groupName, idx)
+	if b.WindowSize > 0 && cfg.Training.UsesBlockDiffusionObjective() {
+		return fmt.Errorf("config %q %s[%d] type=plain sets window_size but block_diffusion objective paths require full prefix-plus-block attention in v1", source, groupName, idx)
 	}
-	if b.WindowSize > 0 && cfg.Training.EffectiveObjective() == ObjectiveHybrid && cfg.Training.HybridCLMFraction < 1 {
+	if b.WindowSize > 0 && cfg.Training.EffectiveObjective() == ObjectiveHybrid && cfg.Training.HybridHasMaskedSteps() {
 		return fmt.Errorf("config %q %s[%d] type=plain sets window_size but training.objective=\"hybrid\" can run masked secondary steps that require bidirectional attention", source, groupName, idx)
 	}
 	if b.WindowSize > 0 && cfg.Training.EffectiveObjective() == ObjectiveHybrid {

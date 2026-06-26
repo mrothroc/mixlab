@@ -1,0 +1,29 @@
+{
+  "name": "hybrid-block-diffusion-tiny",
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 32,
+  "tie_embeddings": true,
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "steps": 50,
+    "lr": 0.0003,
+    "batch_tokens": 64,
+    "objective": "hybrid",
+    "hybrid_secondary_objective": "block_diffusion",
+    "hybrid_clm_fraction_schedule": [[0, 0.75], [25, 0.25]],
+    "hybrid_clm_fraction_schedule_mode": "linear",
+    "mlm_mask_token_id": 103,
+    "diffusion": {
+      "block_size": 8,
+      "steps_per_block": 8,
+      "min_mask_fraction": 0.25,
+      "max_mask_fraction": 1.0,
+      "confidence_threshold": 0.8,
+      "commit_floor": 1
+    }
+  }
+}

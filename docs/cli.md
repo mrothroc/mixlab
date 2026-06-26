@@ -169,12 +169,13 @@ those drive `generate-diffusion` instead.
 
 ## generate-diffusion
 
-Generate from a `training.objective: "block_diffusion"` checkpoint using
-block-wise masked diffusion. Starting from the prompt, mixlab appends a block of
-mask tokens, then runs up to `steps_per_block` denoising passes per block,
-committing positions whose predicted probability clears `confidence_threshold`
-(and at least `commit_floor` positions per pass so every block completes) until
-the requested number of tokens is produced or `seq_len` is reached.
+Generate from a `training.objective: "block_diffusion"` checkpoint or a hybrid
+checkpoint with `training.hybrid_secondary_objective: "block_diffusion"`.
+Starting from the prompt, mixlab appends a block of mask tokens, then runs up to
+`steps_per_block` denoising passes per block, committing positions whose
+predicted probability clears `confidence_threshold` (and at least
+`commit_floor` positions per pass so every block completes) until the requested
+number of tokens is produced or `seq_len` is reached.
 
 ```bash
 ./mixlab -mode generate-diffusion -config examples/block_diffusion_tiny.json \
@@ -183,16 +184,23 @@ the requested number of tokens is produced or `seq_len` is reached.
 
 | Flag | Description |
 |------|-------------|
-| `-config` | Required. Must set `training.objective: "block_diffusion"`. |
+| `-config` | Required. Must set `training.objective: "block_diffusion"` or hybrid with `hybrid_secondary_objective: "block_diffusion"`. |
 | `-safetensors-load` | Required. Trained block-diffusion weights. |
 | `-max-tokens` | Maximum generated tokens (capped at `seq_len - prompt`). Default: `256`. |
 | `-prompt` | Prompt token IDs in `token_ids:0,1,2` form. |
+| `-diffusion-steps-per-block` | Override `training.diffusion.steps_per_block`. `0` uses the config. |
+| `-diffusion-confidence-threshold` | Override `training.diffusion.confidence_threshold` when explicitly set. |
+| `-diffusion-commit-floor` | Override `training.diffusion.commit_floor`. `0` uses the config. |
+| `-diffusion-temperature` | Diffusion sampling temperature. `0` keeps deterministic argmax. |
+| `-diffusion-top-k` | Diffusion top-k cutoff when `-diffusion-temperature > 0`. `0` disables the cutoff. |
+| `-diffusion-trace-out` | Write sampler telemetry JSONL, one denoising pass per line. |
 
 Block size and sampler behavior come from `training.diffusion`
 (`block_size`, `steps_per_block`, `confidence_threshold`, `commit_floor`).
-Sampling is deterministic argmax over unresolved positions; `-temperature` and
-`-top-k` do not apply. Output uses the same `generated token_ids:...` format as
-`generate`.
+By default, sampling is deterministic argmax over unresolved positions;
+`-temperature` and `-top-k` still apply only to causal `generate`. Use the
+diffusion-specific temperature/top-k flags for stochastic diffusion sampling.
+Output uses the same `generated token_ids:...` format as `generate`.
 
 ## prepare
 

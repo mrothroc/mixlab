@@ -76,6 +76,68 @@ func (t TrainingSpec) effectiveLinearMLMMaskProbForStep(step int) float64 {
 	return sched[len(sched)-1][1]
 }
 
+// EffectiveHybridCLMFractionForStep returns the causal-batch probability active
+// for a hybrid training step. Without a schedule it is hybrid_clm_fraction.
+func (t TrainingSpec) EffectiveHybridCLMFractionForStep(step int) float64 {
+	if len(t.HybridCLMFractionSchedule) == 0 {
+		return t.HybridCLMFraction
+	}
+	if strings.EqualFold(strings.TrimSpace(t.HybridCLMFractionScheduleMode), "linear") {
+		return t.effectiveLinearHybridCLMFractionForStep(step)
+	}
+	out := t.HybridCLMFraction
+	for _, pair := range t.HybridCLMFractionSchedule {
+		if len(pair) != 2 {
+			continue
+		}
+		if int(pair[0]) > step {
+			break
+		}
+		out = pair[1]
+	}
+	return out
+}
+
+func (t TrainingSpec) effectiveLinearHybridCLMFractionForStep(step int) float64 {
+	sched := t.HybridCLMFractionSchedule
+	if len(sched) == 0 {
+		return t.HybridCLMFraction
+	}
+	if step <= int(sched[0][0]) {
+		return sched[0][1]
+	}
+	for i := 1; i < len(sched); i++ {
+		prevStep := int(sched[i-1][0])
+		nextStep := int(sched[i][0])
+		prevFraction := sched[i-1][1]
+		nextFraction := sched[i][1]
+		if step < nextStep {
+			den := nextStep - prevStep
+			if den <= 0 {
+				return nextFraction
+			}
+			progress := float64(step-prevStep) / float64(den)
+			return prevFraction + (nextFraction-prevFraction)*progress
+		}
+	}
+	return sched[len(sched)-1][1]
+}
+
+func (t TrainingSpec) HybridHasMaskedSteps() bool {
+	if t.EffectiveObjective() != ObjectiveHybrid {
+		return false
+	}
+	if len(t.HybridCLMFractionSchedule) == 0 {
+		return t.HybridCLMFraction < 1
+	}
+	for _, pair := range t.HybridCLMFractionSchedule {
+		if len(pair) == 2 && pair[1] < 1 {
+			return true
+		}
+	}
+	return false
+}
+
 func validateTrainingRecipeKnobs(cfg *ArchConfig, source string) error {
 	if cfg.Training.ZLoss < 0 || math.IsNaN(cfg.Training.ZLoss) || math.IsInf(cfg.Training.ZLoss, 0) {
 		return fmt.Errorf("config %q has invalid training.z_loss=%g (must be finite and >= 0)", source, cfg.Training.ZLoss)
@@ -84,6 +146,9 @@ func validateTrainingRecipeKnobs(cfg *ArchConfig, source string) error {
 		return err
 	}
 	if err := validateMLMMaskProbSchedule(cfg, source); err != nil {
+		return err
+	}
+	if err := validateHybridCLMFractionSchedule(cfg, source); err != nil {
 		return err
 	}
 	if err := validateEarlyStopSpec(cfg, source); err != nil {
@@ -194,6 +259,47 @@ func validateMLMMaskProbSchedule(cfg *ArchConfig, source string) error {
 		}
 		if prob < 0 || prob > 1 || math.IsNaN(prob) || math.IsInf(prob, 0) {
 			return fmt.Errorf("config %q has invalid training.mlm_mask_prob_schedule[%d][1]=%g (must be in [0,1])", source, i, prob)
+		}
+		prevStep = step
+	}
+	return nil
+}
+
+func validateHybridCLMFractionSchedule(cfg *ArchConfig, source string) error {
+	mode := strings.ToLower(strings.TrimSpace(cfg.Training.HybridCLMFractionScheduleMode))
+	switch mode {
+	case "", "step":
+		cfg.Training.HybridCLMFractionScheduleMode = "step"
+	case "linear":
+		cfg.Training.HybridCLMFractionScheduleMode = "linear"
+	default:
+		return fmt.Errorf("config %q has invalid training.hybrid_clm_fraction_schedule_mode=%q (must be \"step\" or \"linear\")", source, cfg.Training.HybridCLMFractionScheduleMode)
+	}
+	sched := cfg.Training.HybridCLMFractionSchedule
+	if len(sched) == 0 {
+		return nil
+	}
+	if cfg.Training.EffectiveObjective() != ObjectiveHybrid {
+		return fmt.Errorf("config %q sets training.hybrid_clm_fraction_schedule but training.objective=%q (must be \"hybrid\")", source, cfg.Training.EffectiveObjective())
+	}
+	prevStep := -1
+	for i, pair := range sched {
+		if len(pair) != 2 {
+			return fmt.Errorf("config %q has invalid training.hybrid_clm_fraction_schedule[%d] length=%d (must be [step, fraction])", source, i, len(pair))
+		}
+		stepFloat, fraction := pair[0], pair[1]
+		step := int(stepFloat)
+		if float64(step) != stepFloat {
+			return fmt.Errorf("config %q has invalid training.hybrid_clm_fraction_schedule[%d][0]=%g (step must be an integer)", source, i, stepFloat)
+		}
+		if i == 0 && step != 0 {
+			return fmt.Errorf("config %q has invalid training.hybrid_clm_fraction_schedule[0][0]=%d (first step must be 0)", source, step)
+		}
+		if step <= prevStep {
+			return fmt.Errorf("config %q has invalid training.hybrid_clm_fraction_schedule[%d][0]=%d (steps must be strictly increasing)", source, i, step)
+		}
+		if fraction < 0 || fraction > 1 || math.IsNaN(fraction) || math.IsInf(fraction, 0) {
+			return fmt.Errorf("config %q has invalid training.hybrid_clm_fraction_schedule[%d][1]=%g (must be in [0,1])", source, i, fraction)
 		}
 		prevStep = step
 	}

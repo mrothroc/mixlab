@@ -76,9 +76,12 @@ func generateSyntheticBatch(rng *rand.Rand, batchTokens, vocabSize int) (x, y []
 // diffusion_block_start/diffusion_block_end (the active denoising block per
 // example) with no sensible synthetic default; it is exercised end to end by
 // dedicated tests instead (TestBlockDiffusionMLXSmoke, TestGenerateDiffusionMLXSmoke,
-// TestBlockDiffusionMaskMatchesOracle, and the arch/train objective tests).
+// TestBlockDiffusionMaskMatchesOracle, and the arch/train objective tests). This
+// covers both pure block-diffusion configs and hybrid configs whose secondary
+// objective is block diffusion, since both resolve a forward graph that declares
+// the diffusion block-boundary inputs.
 func syntheticBatchUnsupportedReason(cfg *arch.ArchConfig) string {
-	if cfg.Training.EffectiveObjective() == arch.ObjectiveBlockDiffusion {
+	if cfg.Training.UsesBlockDiffusionObjective() {
 		return "block_diffusion needs per-example diffusion block-boundary inputs the synthetic next-token harness cannot supply; covered by dedicated block-diffusion tests"
 	}
 	return ""

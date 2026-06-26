@@ -33,6 +33,9 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 	if len(cfg.Recurrence) > 0 || len(cfg.RecurrencePhases) > 0 {
 		return unsupportedHFExport("recurrence", "weight sharing and recurrence phases are planned for later HF coverage")
 	}
+	if cfg.Training.UsesBlockDiffusionObjective() {
+		return unsupportedHFExport("training.objective", "block_diffusion generation/export semantics are native-only in this release")
+	}
 	switch cfg.Training.EffectiveObjective() {
 	case "causal", "hybrid", "mlm", "mntp":
 	default:

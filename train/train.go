@@ -312,8 +312,16 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	case arch.ObjectiveMLM, arch.ObjectiveMNTP:
 		fmt.Printf("  [%s] training objective: %s\n", name, cfg.Training.EffectiveObjective())
 	case arch.ObjectiveHybrid:
-		fmt.Printf("  [%s] training objective: hybrid granularity=%s causal=%.2f secondary=%s\n",
-			name, cfg.Training.EffectiveHybridMixGranularity(), cfg.Training.HybridCLMFraction, cfg.Training.EffectiveHybridSecondaryObjective())
+		causalLabel := fmt.Sprintf("%.2f", cfg.Training.EffectiveHybridCLMFractionForStep(0))
+		if len(cfg.Training.HybridCLMFractionSchedule) > 0 {
+			causalLabel = fmt.Sprintf("%.2f scheduled(%s)", cfg.Training.EffectiveHybridCLMFractionForStep(0), cfg.Training.HybridCLMFractionScheduleMode)
+		}
+		fmt.Printf("  [%s] training objective: hybrid granularity=%s causal=%s secondary=%s\n",
+			name, cfg.Training.EffectiveHybridMixGranularity(), causalLabel, cfg.Training.EffectiveHybridSecondaryObjective())
+		if cfg.Training.EffectiveHybridSecondaryObjective() == arch.ObjectiveBlockDiffusion && cfg.Training.Diffusion != nil {
+			fmt.Printf("  [%s] hybrid diffusion: block_size=%d steps_per_block=%d confidence_threshold=%.3f commit_floor=%d\n",
+				name, cfg.Training.Diffusion.BlockSize, cfg.Training.Diffusion.StepsPerBlock, cfg.Training.Diffusion.ConfidenceThreshold, cfg.Training.Diffusion.CommitFloor)
+		}
 	}
 	if len(cfg.Training.SeqLenSchedule) > 0 {
 		fmt.Printf("  [%s] seq_len schedule: max=%d active_step0=%d\n", name, seqLen, currentSeqLen)

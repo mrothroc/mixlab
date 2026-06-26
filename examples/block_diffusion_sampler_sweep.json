@@ -1,0 +1,26 @@
+{
+  "name": "block-diffusion-sampler-sweep",
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 32,
+  "tie_embeddings": true,
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "steps": 50,
+    "lr": 0.0003,
+    "batch_tokens": 64,
+    "objective": "block_diffusion",
+    "mlm_mask_token_id": 103,
+    "diffusion": {
+      "block_size": 8,
+      "steps_per_block": 4,
+      "min_mask_fraction": 0.25,
+      "max_mask_fraction": 1.0,
+      "confidence_threshold": 0.65,
+      "commit_floor": 2
+    }
+  }
+}

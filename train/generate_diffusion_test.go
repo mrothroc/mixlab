@@ -1,8 +1,12 @@
 package train
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mrothroc/mixlab/arch"
@@ -125,12 +129,93 @@ func TestGenerateDiffusionMultipleBlocksAndSeqLenStop(t *testing.T) {
 	}
 }
 
-func TestGenerateDiffusionRejectsNonDiffusionConfig(t *testing.T) {
+func TestGenerateDiffusionHybridBlockDiffusionConfig(t *testing.T) {
 	cfg := testGenerateDiffusionConfig()
-	cfg.Training.Objective = arch.ObjectiveCausal
-	_, err := generateDiffusionTokens(cfg, &fakeDiffusionGenerationEvaluator{}, []int{1}, 1)
-	if err == nil {
-		t.Fatal("generateDiffusionTokens with causal objective succeeded, want error")
+	cfg.Training.Objective = arch.ObjectiveHybrid
+	cfg.Training.HybridSecondaryObjective = arch.ObjectiveBlockDiffusion
+	cfg.Training.HybridCLMFraction = 0.5
+	evaluator := &fakeDiffusionGenerationEvaluator{
+		logitsForBatch: func(batch objectiveBatch, call int) []float32 {
+			return diffusionTestLogitsFromLossMask(batch, cfg.VocabSize, 40, 12)
+		},
+	}
+
+	result, err := generateDiffusionTokens(cfg, evaluator, []int{2}, 2)
+	if err != nil {
+		t.Fatalf("generateDiffusionTokens hybrid block diffusion: %v", err)
+	}
+	if want := []int{2, 41, 42}; !reflect.DeepEqual(result.tokens, want) {
+		t.Fatalf("tokens = %v, want %v", result.tokens, want)
+	}
+}
+
+func TestGenerateDiffusionOptionsOverrideAndTraceJSONL(t *testing.T) {
+	cfg := testGenerateDiffusionConfig()
+	confidence := 0.99
+	evaluator := &fakeDiffusionGenerationEvaluator{
+		logitsForBatch: func(batch objectiveBatch, call int) []float32 {
+			return diffusionTestLogitsFromLossMask(batch, cfg.VocabSize, 20, 1)
+		},
+	}
+
+	result, err := generateDiffusionTokensWithOptions(cfg, evaluator, []int{5}, 2, diffusionGenerationRuntimeOptions{
+		stepsPerBlock:       2,
+		confidenceThreshold: &confidence,
+		commitFloor:         1,
+	})
+	if err != nil {
+		t.Fatalf("generateDiffusionTokensWithOptions: %v", err)
+	}
+	if result.steps != 2 {
+		t.Fatalf("steps=%d, want 2", result.steps)
+	}
+	if len(result.trace) != 2 {
+		t.Fatalf("trace len=%d, want 2", len(result.trace))
+	}
+	if result.trace[0].Forced != 1 || result.trace[0].Committed != 1 || result.trace[0].UnresolvedBefore != 2 {
+		t.Fatalf("first trace = %+v, want one forced commit from two unresolved", result.trace[0])
+	}
+
+	tracePath := filepath.Join(t.TempDir(), "trace.jsonl")
+	if err := writeDiffusionTrace(tracePath, result.trace); err != nil {
+		t.Fatalf("writeDiffusionTrace: %v", err)
+	}
+	data, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatalf("ReadFile(trace): %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("trace lines=%d, want 2: %q", len(lines), string(data))
+	}
+	var entry diffusionSamplerTraceEntry
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("json.Unmarshal trace: %v", err)
+	}
+	if entry.Block != 0 || entry.Step != 0 || entry.Forced != 1 {
+		t.Fatalf("first trace JSON = %+v", entry)
+	}
+}
+
+func TestGenerateDiffusionRejectsNonDiffusionConfig(t *testing.T) {
+	tests := []struct {
+		name      string
+		objective string
+		secondary string
+	}{
+		{name: "causal", objective: arch.ObjectiveCausal},
+		{name: "ordinary hybrid", objective: arch.ObjectiveHybrid, secondary: arch.ObjectiveMNTP},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := testGenerateDiffusionConfig()
+			cfg.Training.Objective = tt.objective
+			cfg.Training.HybridSecondaryObjective = tt.secondary
+			_, err := generateDiffusionTokens(cfg, &fakeDiffusionGenerationEvaluator{}, []int{1}, 1)
+			if err == nil {
+				t.Fatal("generateDiffusionTokens with non-diffusion objective succeeded, want error")
+			}
+		})
 	}
 }
 

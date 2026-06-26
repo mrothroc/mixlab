@@ -3,10 +3,12 @@ package train
 import (
 	"fmt"
 	"math"
+	"math/rand"
 	"slices"
 )
 
 type diffusionSamplerConfig struct {
+	blockIndex          int
 	blockStart          int
 	blockEnd            int
 	stepsPerBlock       int
@@ -45,11 +47,27 @@ type diffusionSamplerStepInput struct {
 type diffusionSamplerResult struct {
 	tokens   []int
 	commits  []diffusionCommit
+	trace    []diffusionSamplerTraceEntry
 	steps    int
 	complete bool
 }
 
 type diffusionSamplerPredictFunc func(diffusionSamplerStepInput) ([]diffusionTokenPrediction, error)
+
+type diffusionSamplerTraceEntry struct {
+	Block            int     `json:"block"`
+	BlockStart       int     `json:"block_start"`
+	BlockEnd         int     `json:"block_end"`
+	Step             int     `json:"step"`
+	UnresolvedBefore int     `json:"unresolved_before"`
+	Committed        int     `json:"committed"`
+	Forced           int     `json:"forced"`
+	UnresolvedAfter  int     `json:"unresolved_after"`
+	Complete         bool    `json:"complete"`
+	ConfidenceMin    float32 `json:"confidence_min"`
+	ConfidenceMean   float32 `json:"confidence_mean"`
+	ConfidenceMax    float32 `json:"confidence_max"`
+}
 
 func newDiffusionSamplerState(tokens []int, blockStart, blockEnd, maskTokenID int, committed []bool) (diffusionSamplerState, error) {
 	if len(tokens) == 0 {
@@ -300,6 +318,100 @@ func diffusionPredictionsFromLogits(logits []float32, positions []int, vocab int
 	return predictions, nil
 }
 
+func diffusionPredictionsFromLogitsSampled(logits []float32, positions []int, vocab int, temperature float32, topK int, rng *rand.Rand) ([]diffusionTokenPrediction, error) {
+	if temperature < 0 {
+		return nil, fmt.Errorf("diffusion temperature must be >= 0, got %g", temperature)
+	}
+	if topK < 0 {
+		return nil, fmt.Errorf("diffusion top_k must be >= 0, got %d", topK)
+	}
+	if temperature == 0 {
+		return diffusionPredictionsFromLogits(logits, positions, vocab)
+	}
+	if rng == nil {
+		return nil, fmt.Errorf("nil diffusion sampling rng")
+	}
+	if vocab <= 0 {
+		return nil, fmt.Errorf("invalid vocab=%d", vocab)
+	}
+	predictions := make([]diffusionTokenPrediction, 0, len(positions))
+	for _, pos := range positions {
+		row, err := diffusionRow(logits, pos, vocab, "logits")
+		if err != nil {
+			return nil, err
+		}
+		token, confidence, err := sampleDiffusionLogitRow(row, pos, temperature, topK, rng)
+		if err != nil {
+			return nil, err
+		}
+		predictions = append(predictions, diffusionTokenPrediction{
+			position:   pos,
+			token:      token,
+			confidence: confidence,
+		})
+	}
+	return predictions, nil
+}
+
+func sampleDiffusionLogitRow(row []float32, position int, temperature float32, topK int, rng *rand.Rand) (int, float32, error) {
+	if len(row) == 0 {
+		return 0, 0, fmt.Errorf("empty logits row at position %d", position)
+	}
+	if temperature <= 0 {
+		return 0, 0, fmt.Errorf("diffusion temperature must be > 0 for stochastic sampling, got %g", temperature)
+	}
+	type candidate struct {
+		token int
+		logit float64
+	}
+	candidates := make([]candidate, len(row))
+	for token, logit := range row {
+		if math.IsNaN(float64(logit)) || math.IsInf(float64(logit), 0) {
+			return 0, 0, fmt.Errorf("logit %g at position %d token %d is invalid", logit, position, token)
+		}
+		candidates[token] = candidate{token: token, logit: float64(logit) / float64(temperature)}
+	}
+	slices.SortFunc(candidates, func(a, b candidate) int {
+		switch {
+		case a.logit > b.logit:
+			return -1
+		case a.logit < b.logit:
+			return 1
+		case a.token < b.token:
+			return -1
+		case a.token > b.token:
+			return 1
+		default:
+			return 0
+		}
+	})
+	if topK > 0 && topK < len(candidates) {
+		candidates = candidates[:topK]
+	}
+
+	maxLogit := candidates[0].logit
+	weights := make([]float64, len(candidates))
+	total := 0.0
+	for i, cand := range candidates {
+		weight := math.Exp(cand.logit - maxLogit)
+		weights[i] = weight
+		total += weight
+	}
+	if total <= 0 || math.IsNaN(total) || math.IsInf(total, 0) {
+		return 0, 0, fmt.Errorf("non-finite diffusion sampling denominator at position %d", position)
+	}
+	draw := rng.Float64() * total
+	accum := 0.0
+	for i, weight := range weights {
+		accum += weight
+		if draw <= accum {
+			return candidates[i].token, float32(weight / total), nil
+		}
+	}
+	last := len(candidates) - 1
+	return candidates[last].token, float32(weights[last] / total), nil
+}
+
 func runDiffusionSamplerSteps(cfg diffusionSamplerConfig, tokens []int, committed []bool, predict diffusionSamplerPredictFunc) (diffusionSamplerResult, error) {
 	if predict == nil {
 		return diffusionSamplerResult{}, fmt.Errorf("nil diffusion sampler predictor")
@@ -327,6 +439,7 @@ func runDiffusionSamplerStateSteps(state diffusionSamplerState, cfg diffusionSam
 	state = state.clone()
 
 	var allCommits []diffusionCommit
+	var trace []diffusionSamplerTraceEntry
 	steps := 0
 	for step := 0; step < cfg.stepsPerBlock && !state.complete(); step++ {
 		unresolved := state.unresolvedPositions()
@@ -343,12 +456,14 @@ func runDiffusionSamplerStateSteps(state diffusionSamplerState, cfg diffusionSam
 			return diffusionSamplerResult{}, err
 		}
 		allCommits = append(allCommits, commits...)
+		trace = append(trace, diffusionSamplerTrace(cfg, step, len(unresolved), len(state.unresolvedPositions()), state.complete(), commits))
 		steps++
 	}
 
 	result := diffusionSamplerResult{
 		tokens:   state.tokenSnapshot(),
 		commits:  allCommits,
+		trace:    trace,
 		steps:    steps,
 		complete: state.complete(),
 	}
@@ -356,6 +471,41 @@ func runDiffusionSamplerStateSteps(state diffusionSamplerState, cfg diffusionSam
 		return result, fmt.Errorf("diffusion sampler left %d unresolved positions after %d steps", len(state.unresolvedPositions()), cfg.stepsPerBlock)
 	}
 	return result, nil
+}
+
+func diffusionSamplerTrace(cfg diffusionSamplerConfig, step, unresolvedBefore, unresolvedAfter int, complete bool, commits []diffusionCommit) diffusionSamplerTraceEntry {
+	entry := diffusionSamplerTraceEntry{
+		Block:            cfg.blockIndex,
+		BlockStart:       cfg.blockStart,
+		BlockEnd:         cfg.blockEnd,
+		Step:             step,
+		UnresolvedBefore: unresolvedBefore,
+		Committed:        len(commits),
+		UnresolvedAfter:  unresolvedAfter,
+		Complete:         complete,
+	}
+	if len(commits) == 0 {
+		return entry
+	}
+	minConf := commits[0].confidence
+	maxConf := commits[0].confidence
+	sumConf := float32(0)
+	for _, commit := range commits {
+		if commit.forced {
+			entry.Forced++
+		}
+		if commit.confidence < minConf {
+			minConf = commit.confidence
+		}
+		if commit.confidence > maxConf {
+			maxConf = commit.confidence
+		}
+		sumConf += commit.confidence
+	}
+	entry.ConfidenceMin = minConf
+	entry.ConfidenceMean = sumConf / float32(len(commits))
+	entry.ConfidenceMax = maxConf
+	return entry
 }
 
 func diffusionRow(values []float32, position, vocab int, label string) ([]float32, error) {

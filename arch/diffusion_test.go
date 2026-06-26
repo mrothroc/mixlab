@@ -62,6 +62,33 @@ func TestBlockDiffusionConfigExplicitValid(t *testing.T) {
 		}`)
 }
 
+func TestHybridBlockDiffusionConfigDefaults(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"training": {
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"objective": "hybrid",
+		"hybrid_secondary_objective": "block_diffusion",
+		"hybrid_clm_fraction": 0.75,
+		"mlm_mask_token_id": 7
+	}`)
+	if cfg.Training.EffectiveObjective() != ObjectiveHybrid {
+		t.Fatalf("objective=%q, want %q", cfg.Training.EffectiveObjective(), ObjectiveHybrid)
+	}
+	if cfg.Training.EffectiveHybridSecondaryObjective() != ObjectiveBlockDiffusion {
+		t.Fatalf("secondary=%q, want %q", cfg.Training.EffectiveHybridSecondaryObjective(), ObjectiveBlockDiffusion)
+	}
+	if !cfg.Training.UsesBlockDiffusionObjective() {
+		t.Fatal("hybrid block_diffusion config should use block diffusion")
+	}
+	if cfg.Training.Diffusion == nil {
+		t.Fatal("training.diffusion default is nil")
+	}
+	if cfg.Training.Diffusion.BlockSize != cfg.SeqLen {
+		t.Fatalf("diffusion.block_size=%d, want seq_len=%d", cfg.Training.Diffusion.BlockSize, cfg.SeqLen)
+	}
+}
+
 func TestBlockDiffusionObjectiveHelpers(t *testing.T) {
 	spec := TrainingSpec{Objective: ObjectiveBlockDiffusion}
 	if got := spec.EffectiveObjective(); got != ObjectiveBlockDiffusion {
@@ -137,6 +164,27 @@ func TestBlockDiffusionConfigValidation(t *testing.T) {
 				"diffusion": {"block_size": 2}
 			}`,
 			want: "training.diffusion",
+		},
+		{
+			name: "hybrid diffusion requires block secondary",
+			body: `"training": {
+				"steps": 1, "lr": 0.001, "batch_tokens": 8,
+				"objective": "hybrid", "mlm_mask_token_id": 7,
+				"hybrid_secondary_objective": "mntp",
+				"diffusion": {"block_size": 2}
+			}`,
+			want: "training.diffusion",
+		},
+		{
+			name: "hybrid block diffusion rejects example granularity",
+			body: `"training": {
+				"steps": 1, "lr": 0.001, "batch_tokens": 8,
+				"objective": "hybrid", "mlm_mask_token_id": 7,
+				"hybrid_secondary_objective": "block_diffusion",
+				"hybrid_mix_granularity": "example",
+				"diffusion": {"block_size": 2}
+			}`,
+			want: "hybrid_mix_granularity",
 		},
 		{
 			name: "top level mtp",

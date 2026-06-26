@@ -35,6 +35,12 @@ func main() {
 	maxTokens := flag.Int("max-tokens", 256, "maximum number of tokens to generate (generate mode)")
 	temperature := flag.Float64("temperature", 0.8, "sampling temperature (generate mode)")
 	topK := flag.Int("top-k", 40, "top-k sampling cutoff (generate mode)")
+	diffusionStepsPerBlock := flag.Int("diffusion-steps-per-block", 0, "override training.diffusion.steps_per_block for generate-diffusion (0 uses config)")
+	diffusionConfidenceThreshold := flag.Float64("diffusion-confidence-threshold", 0, "override training.diffusion.confidence_threshold for generate-diffusion when explicitly set")
+	diffusionCommitFloor := flag.Int("diffusion-commit-floor", 0, "override training.diffusion.commit_floor for generate-diffusion (0 uses config)")
+	diffusionTemperature := flag.Float64("diffusion-temperature", 0, "diffusion sampling temperature; 0 keeps deterministic argmax")
+	diffusionTopK := flag.Int("diffusion-top-k", 0, "diffusion top-k sampling cutoff when -diffusion-temperature > 0; 0 disables cutoff")
+	diffusionTraceOut := flag.String("diffusion-trace-out", "", "write generate-diffusion sampler telemetry as JSONL")
 	prompt := flag.String("prompt", "", "prompt for generate mode, e.g. token_ids:0,1,2")
 	logprobsOut := flag.String("logprobs-out", "", "write per-token eval NLLs to a binary file (eval mode)")
 	ranksOut := flag.String("ranks-out", "", "write per-token target ranks to a binary file (eval mode); can be combined with -logprobs-out for a single eval pass")
@@ -210,7 +216,23 @@ func main() {
 	case "generate":
 		must(train.RunGenerate(*configPath, *safetensorsLoad, *maxTokens, float32(*temperature), *topK, *prompt))
 	case "generate-diffusion":
-		must(train.RunGenerateDiffusion(*configPath, *safetensorsLoad, *maxTokens, *prompt))
+		var confidenceOverride *float64
+		if providedFlags["diffusion-confidence-threshold"] {
+			v := *diffusionConfidenceThreshold
+			confidenceOverride = &v
+		}
+		must(train.RunGenerateDiffusionWithOptions(train.GenerateDiffusionOptions{
+			ConfigPath:                   *configPath,
+			SafetensorsLoad:              *safetensorsLoad,
+			MaxTokens:                    *maxTokens,
+			Prompt:                       *prompt,
+			DiffusionStepsPerBlock:       *diffusionStepsPerBlock,
+			DiffusionConfidenceThreshold: confidenceOverride,
+			DiffusionCommitFloor:         *diffusionCommitFloor,
+			DiffusionTemperature:         float32(*diffusionTemperature),
+			DiffusionTopK:                *diffusionTopK,
+			DiffusionTraceOut:            *diffusionTraceOut,
+		}))
 	case "parity":
 		must(train.RunParity(train.ParityOptions{
 			ConfigPath:      *configPath,

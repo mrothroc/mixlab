@@ -34,17 +34,18 @@ func objectiveForStep(spec TrainingSpec, step int) string {
 	case arch.ObjectiveBlockDiffusion:
 		return arch.ObjectiveBlockDiffusion
 	case arch.ObjectiveHybrid:
+		causalFraction := spec.EffectiveHybridCLMFractionForStep(step)
 		if spec.EffectiveHybridMixGranularity() == arch.HybridMixGranularityExample {
-			if spec.HybridCLMFraction >= 1 {
+			if causalFraction >= 1 {
 				return arch.ObjectiveCausal
 			}
-			if spec.HybridCLMFraction <= 0 {
+			if causalFraction <= 0 {
 				return spec.EffectiveHybridSecondaryObjective()
 			}
 			return arch.ObjectiveHybridExample
 		}
 		rng := deterministicObjectiveRNG(spec.Seed, step, 0x9e3779b97f4a7c15)
-		if rng.Float64() < spec.HybridCLMFraction {
+		if rng.Float64() < causalFraction {
 			return arch.ObjectiveCausal
 		}
 		return spec.EffectiveHybridSecondaryObjective()
@@ -304,11 +305,12 @@ func prepareHybridExampleBatch(cfg *ArchConfig, batch trainBatch, step, need, se
 	attentionCausal := make([]int32, batchSize)
 	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0xd1b54a32d192ed03)
 	maskProb := cfg.Training.EffectiveMLMMaskProbForStep(step)
+	causalFraction := cfg.Training.EffectiveHybridCLMFractionForStep(step)
 	secondary := cfg.Training.EffectiveHybridSecondaryObjective()
 	for b := 0; b < batchSize; b++ {
 		start := b * seqLen
 		end := start + seqLen
-		if rng.Float64() < cfg.Training.HybridCLMFraction {
+		if rng.Float64() < causalFraction {
 			attentionCausal[b] = 1
 			for i := start; i < end; i++ {
 				lossMask[i] = 1

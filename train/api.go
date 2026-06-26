@@ -92,6 +92,10 @@ func RunGenerateDiffusion(configPath, safetensorsLoad string, maxTokens int, pro
 	return runGenerateDiffusion(configPath, safetensorsLoad, maxTokens, prompt)
 }
 
+func RunGenerateDiffusionWithOptions(opts GenerateDiffusionOptions) error {
+	return runGenerateDiffusionWithOptions(opts)
+}
+
 func RunHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath string) error {
 	return runHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath)
 }

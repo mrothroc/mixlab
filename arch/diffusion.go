@@ -113,10 +113,10 @@ func validateBlockDiffusionObjective(cfg *ArchConfig, source string) error {
 		return fmt.Errorf("config %q has invalid training.diffusion.commit_floor=%d (must be in [1,block_size=%d])", source, d.CommitFloor, d.BlockSize)
 	}
 	if t.Distillation != nil {
-		return fmt.Errorf("config %q training.objective=\"block_diffusion\" cannot be combined with training.distillation in v1", source)
+		return fmt.Errorf("config %q block_diffusion objective paths cannot be combined with training.distillation in v1", source)
 	}
 	if t.Data2VecActive() {
-		return fmt.Errorf("config %q training.objective=\"block_diffusion\" cannot be combined with training.data2vec in v1", source)
+		return fmt.Errorf("config %q block_diffusion objective paths cannot be combined with training.data2vec in v1", source)
 	}
 
 	hasPlain := false
@@ -126,11 +126,11 @@ func validateBlockDiffusionObjective(cfg *ArchConfig, source string) error {
 			hasPlain = true
 		case "swiglu", "geglu", "mlp", "moe":
 		default:
-			return fmt.Errorf("config %q blocks[%d].type=%q cannot be combined with training.objective=\"block_diffusion\" in v1; supported blocks are plain self-attention plus position-wise FFN/MoE blocks", source, i, block.Type)
+			return fmt.Errorf("config %q blocks[%d].type=%q cannot be combined with block_diffusion objective paths in v1; supported blocks are plain self-attention plus position-wise FFN/MoE blocks", source, i, block.Type)
 		}
 	}
 	if !hasPlain {
-		return fmt.Errorf("config %q training.objective=\"block_diffusion\" requires at least one type=plain block", source)
+		return fmt.Errorf("config %q a block_diffusion objective path requires at least one type=plain block", source)
 	}
 	return nil
 }
