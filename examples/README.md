@@ -57,6 +57,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [softcap_plain.json](softcap_plain.json) | Logit softcap | Bounded logits before loss |
 | [qk_norm_tiny.json](qk_norm_tiny.json) | QK-norm attention | Learned per-head-dimension Q/K RMSNorm |
 | [layernorm_sandwich_tiny.json](layernorm_sandwich_tiny.json) | LayerNorm sandwich stack | HF-exportable GPT-BERT-style norms and GEGLU |
+| [gpt2_strict_small_2026.json](gpt2_strict_small_2026.json) | GPT-2 strict-small baseline | Learned absolute positions, GPT-2 FFN/norm/bias layout, native GPT-2 HF export |
 | [mlm_tiny.json](mlm_tiny.json) | Bidirectional transformer | Masked language modeling objective |
 | [hybrid_tiny.json](hybrid_tiny.json) | Hybrid transformer | Causal plus masked-objective training, with per-batch default mixing and optional per-example mixing |
 | [block_diffusion_tiny.json](block_diffusion_tiny.json) | Block diffusion | Block-wise masked-diffusion objective (`training.objective: "block_diffusion"`); train, then sample with `-mode generate-diffusion` |
@@ -88,6 +89,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **EMA representation distillation**: Use `data2vec_hybrid_tiny.json` for experimental online data2vec-style hidden-state targets on masked objective steps. The current implementation prioritizes correctness and uses CPU EMA weight refreshes.
 - **Averaged checkpoints**: Use `swa_ema_tiny.json` to keep both live final and SWA/EMA averaged weights.
 - **Relative attention**: Use `deberta_relative_tiny.json` for DeBERTa-style P2C/C2P position bias. Add `relative_attention_parameterization: "shared_qk_reuse"` when you want GPT-BERT-style shared relative embeddings instead of per-block position projection weights.
+- **GPT-2-compatible baseline**: Use `gpt2_strict_small_2026.json` when you need a strict GPT-2-style architecture and native `GPT2LMHeadModel` export instead of Mixlab custom-code export.
 - **Character/byte features**: Use `char_features_plain.json` with data prepared using `-char-vocab-size 257`.
 - **Packed document boundaries**: Use `packed_segment_mask_tiny.json` when your packed shards already contain a boundary token and you want block-diagonal attention inside each packed sequence.
 - **Large-batch optimizer**: Use `lamb_plain_tiny.json` as a minimal whole-model LAMB starting point.

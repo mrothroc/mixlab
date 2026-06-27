@@ -26,8 +26,15 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "plain.qk_norm", Status: hfExportSupported, Reason: "Learned Q/K RMSNorm scales are mirrored in the generated PyTorch template."},
 		{Feature: "plain.xsa", Status: hfExportSupported, Reason: "XSA output projection is mirrored in the generated PyTorch template."},
 		{Feature: "plain.sparse_attn_gate", Status: hfExportSupported, Reason: "Sparse per-head attention gates are mirrored in the generated PyTorch template."},
+		{Feature: "plain.ffn_activation=gelu", Status: hfExportSupported, Reason: "Plain-block exact GELU FFN tails are mirrored in the generated PyTorch template."},
+		{Feature: "plain.ffn_activation=gelu_new", Status: hfExportSupported, Reason: "Plain-block GPT-2 tanh-approx GELU FFN tails are mirrored in the generated PyTorch template."},
 		{Feature: "plain.ffn_activation=geglu", Status: hfExportSupported, Reason: "Plain-block GeGLU FFN tails are mirrored with an explicit gate projection in the generated PyTorch template."},
 		{Feature: "plain.ffn_activation=swiglu", Status: hfExportSupported, Reason: "Plain-block SwiGLU FFN tails are mirrored with an explicit gate projection in the generated PyTorch template."},
+		{Feature: "plain.ffn_pre_norm", Status: hfExportSupported, Reason: "The GPT-2-style second pre-FFN norm is mirrored in the generated PyTorch template."},
+		{Feature: "plain.ffn_bias", Status: hfExportSupported, Reason: "Plain-block FFN projection biases are mirrored in the generated PyTorch template."},
+		{Feature: "positional_embedding=learned_absolute", Status: hfExportSupported, Reason: "Learned absolute position embeddings export as a model-level WPE table and disable RoPE."},
+		{Feature: "positional_embedding=none", Status: hfExportSupported, Reason: "No-position configs export raw QK attention without RoPE or WPE."},
+		{Feature: "hf_export_format=gpt2", Status: hfExportSupported, Reason: "Strict GPT-2-compatible configs can export as native GPT2LMHeadModel directories with packed QKV tensors."},
 		{Feature: "plain.relative_attention=deberta_p2c_c2p", Status: hfExportSupported, Reason: "DeBERTa/GPT-BERT C2P/P2C relative bias uses log-bucketed q-k positions in the generated PyTorch template."},
 		{Feature: "plain.relative_attention_parameterization=shared_qk_reuse", Status: hfExportSupported, Reason: "GPT-BERT-style shared relative embedding export reuses each block's Q/K projections in the generated PyTorch template."},
 		{Feature: "plain.relative_attention_embedding_norm=layernorm", Status: hfExportSupported, Reason: "A model-level affine LayerNorm can be applied to the shared relative embedding before Q/K reuse."},
@@ -62,7 +69,13 @@ func hfExportBlockCapability(block BlockSpec) hfExportCapability {
 		if block.AttnBias {
 			return capabilityByFeature("plain.attn_bias")
 		}
-		if activation := hfPlainFFNActivation(block); activation == "geglu" || activation == "swiglu" {
+		if block.FFNPreNorm {
+			return capabilityByFeature("plain.ffn_pre_norm")
+		}
+		if block.FFNBias {
+			return capabilityByFeature("plain.ffn_bias")
+		}
+		if activation := hfPlainFFNActivation(block); activation == "gelu" || activation == "gelu_new" || activation == "geglu" || activation == "swiglu" {
 			return capabilityByFeature("plain.ffn_activation=" + activation)
 		}
 		if hfRelativeAttentionUsesSharedQKReuse(block) {

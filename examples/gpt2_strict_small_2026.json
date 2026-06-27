@@ -1,0 +1,46 @@
+{
+  "name": "gpt2_strict_small_2026",
+
+  "model_dim": 768,
+  "vocab_size": 16384,
+  "seq_len": 1024,
+  "max_positions": 1024,
+  "mlp_mult": 4.0,
+
+  "tie_embeddings": true,
+  "norm_type": "layernorm",
+  "norm_affine": true,
+  "norm_eps": 1e-5,
+  "positional_embedding": "learned_absolute",
+  "embedding_dropout": 0.1,
+  "hidden_dropout": 0.1,
+  "attn_dropout": 0.1,
+  "hf_export_format": "gpt2",
+
+  "blocks": [
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true}
+  ],
+
+  "training": {
+    "objective": "causal",
+    "optimizer": "adamw",
+    "lr": 0.0003,
+    "weight_decay": 0.0,
+    "grad_clip": 1.0,
+    "warmup_steps": 2000,
+    "batch_tokens": 8192,
+    "compute_dtype": "bf16",
+    "seed": 42
+  }
+}

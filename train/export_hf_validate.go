@@ -100,7 +100,7 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 				return unsupportedHFExport(field+".window_size", "windowed attention export requires causal attention")
 			}
 			switch hfPlainFFNActivation(block) {
-			case "silu", "geglu", "swiglu":
+			case "silu", "gelu", "gelu_new", "geglu", "swiglu":
 			default:
 				return unsupportedHFExport(field+".ffn_activation", fmt.Sprintf("unsupported plain ffn_activation %q", block.FFNActivation))
 			}

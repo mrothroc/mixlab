@@ -7,18 +7,19 @@ import (
 
 // EmitOptions carries optional context for block emitters.
 type EmitOptions struct {
-	StreamSeqLens   map[string]int
-	MLPMult         float64
-	BlockScales     bool
-	ResidMix        bool
-	Dropout         float32
-	AttnDropout     float32
-	Norm            NormSpec
-	NormPlacement   string
-	FFNInternalNorm bool
-	BlockIndex      int
-	KVCache         map[int]BlockKVOutputs
-	SegmentMask     bool
+	StreamSeqLens       map[string]int
+	MLPMult             float64
+	BlockScales         bool
+	ResidMix            bool
+	Dropout             float32
+	AttnDropout         float32
+	Norm                NormSpec
+	NormPlacement       string
+	FFNInternalNorm     bool
+	PositionalEmbedding string
+	BlockIndex          int
+	KVCache             map[int]BlockKVOutputs
+	SegmentMask         bool
 
 	sharedRelative sharedRelativeAttentionPlan
 	layerAgg       *layerAggregationBuildState
@@ -109,7 +110,7 @@ func init() {
 			if heads <= 0 {
 				heads = 4
 			}
-			return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, opts.AttnDropout, spec.SkipAttention, spec.QKGain, spec.QKNorm, spec.RopeDims, spec.RopeConvention, spec.AttnBias, spec.AttnValueGate, spec.AttnPostNorm, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.RelativeAttentionParameterization, spec.KVSource, opts.KVCache, opts.BlockIndex, opts.Norm, opts.NormPlacement, opts.FFNInternalNorm, spec.FFNActivation, opts.sharedRelative, opts.layerAgg, opts.SegmentMask)
+			return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, stream, wi, heads, spec.KVHeads, D, T, B, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, opts.AttnDropout, spec.SkipAttention, spec.QKGain, spec.QKNorm, spec.RopeDims, spec.RopeConvention, spec.AttnBias, spec.AttnValueGate, spec.AttnPostNorm, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.RelativeAttentionParameterization, spec.KVSource, opts.KVCache, opts.BlockIndex, opts.Norm, opts.NormPlacement, opts.FFNInternalNorm, spec.FFNActivation, spec.FFNPreNorm, spec.FFNBias, opts.PositionalEmbedding, opts.sharedRelative, opts.layerAgg, opts.SegmentMask)
 		},
 		WeightCount: plainWeightCount,
 		WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
@@ -233,6 +234,12 @@ func plainWeightCount(spec BlockSpec, blockScales, residMix bool) (int, error) {
 	}
 	if plainFFNActivationUsesGate(spec.FFNActivation) {
 		total++
+	}
+	if spec.FFNPreNorm {
+		total++ // legacy/default RMSNorm counter
+	}
+	if spec.FFNBias {
+		total += 2
 	}
 	if blockScales {
 		total += 2

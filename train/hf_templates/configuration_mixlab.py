@@ -9,6 +9,7 @@ class MixlabConfig(PretrainedConfig):
         model_dim=0,
         vocab_size=0,
         seq_len=0,
+        max_position_embeddings=0,
         mlp_mult=2.67,
         norm_type="rmsnorm",
         norm_eps=1e-5,
@@ -21,6 +22,8 @@ class MixlabConfig(PretrainedConfig):
         mlm_head="linear",
         layer_aggregation="none",
         hidden_dropout=0.0,
+        embedding_dropout=0.0,
+        positional_embedding="rope",
         char_vocab_size=0,
         char_dim=0,
         char_max_per_token=0,
@@ -39,7 +42,7 @@ class MixlabConfig(PretrainedConfig):
         self.hidden_size = model_dim
         self.vocab_size = vocab_size
         self.seq_len = seq_len
-        self.max_position_embeddings = seq_len
+        self.max_position_embeddings = max_position_embeddings or seq_len
         self.mlp_mult = mlp_mult
         self.norm_type = norm_type
         self.norm_eps = norm_eps
@@ -52,6 +55,8 @@ class MixlabConfig(PretrainedConfig):
         self.mlm_head = mlm_head
         self.layer_aggregation = layer_aggregation
         self.hidden_dropout = hidden_dropout
+        self.embedding_dropout = embedding_dropout
+        self.positional_embedding = positional_embedding
         self.char_vocab_size = char_vocab_size
         self.char_dim = char_dim
         self.char_max_per_token = char_max_per_token

@@ -44,6 +44,25 @@ masked = AutoModelForMaskedLM.from_pretrained("runs/masked_model/hf", trust_remo
 
 `trust_remote_code=True` executes the Python modeling files from the export directory. Only use it for directories you created or reviewed.
 
+## Native GPT-2 Export
+
+Set top-level `hf_export_format: "gpt2"` when a config is intentionally strict GPT-2-compatible and should export as a native Hugging Face `GPT2LMHeadModel` directory instead of a custom Mixlab directory. Native GPT-2 export writes `model_type: "gpt2"`, `architectures: ["GPT2LMHeadModel"]`, packed `attn.c_attn` QKV tensors, GPT-2 `transformer.wte/wpe/h.*` names, and tied `lm_head.weight`.
+
+The exporter rejects configs that are not exactly representable as GPT-2. The accepted v1 shape is a causal, sequential `plain` stack with `positional_embedding: "learned_absolute"`, affine `norm_type: "layernorm"`, `tie_embeddings: true`, `attn_bias: true`, `ffn_pre_norm: true`, `ffn_bias: true`, `ffn_activation: "gelu_new"` or `"gelu"`, no RoPE/relative attention fields, and no Mixlab training-only or architecture extras.
+
+```json
+{
+  "hf_export_format": "gpt2",
+  "positional_embedding": "learned_absolute",
+  "max_positions": 1024,
+  "norm_type": "layernorm",
+  "tie_embeddings": true,
+  "blocks": [
+    {"type": "plain", "heads": 12, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true}
+  ]
+}
+```
+
 ## Native-vs-HF Parity Mode
 
 After exporting, use `parity` mode to compare the native MLX forward against the exported Hugging Face directory on real eval shards:
@@ -65,8 +84,9 @@ The Python checker requires the HF parity dependencies from `requirements-hf.txt
 HF export supports next-token and masked-LM checkpoints using sequential blocks:
 
 - `plain` attention with Mixlab's default adjacent-pair RoPE convention or explicit `rope_convention: "half_rotation"`, including partial `rope_dims`
+- `positional_embedding: "learned_absolute"` and `"none"` in the custom Mixlab template; learned absolute exports a `position_embeddings.weight` table
 - configurable core norms through `norm_type`, `norm_eps`, `norm_affine`, `norm_placement`, and `ffn_internal_norm` for sequential `plain`, `swiglu`, `geglu`, and `mlp` blocks
-- `plain` FFN tails with the default `silu` activation or gated `ffn_activation: "geglu"` / `"swiglu"`
+- `plain` FFN tails with the default `silu` activation, non-gated `ffn_activation: "gelu"` / `"gelu_new"`, optional `ffn_pre_norm` / `ffn_bias`, or gated `ffn_activation: "geglu"` / `"swiglu"`
 - grouped-query attention through `kv_heads`
 - `plain` attention projection biases through `attn_bias`
 - `plain` attention value gates through `attn_value_gate`
@@ -87,6 +107,7 @@ HF export supports next-token and masked-LM checkpoints using sequential blocks:
 - data2vec-trained checkpoints; the training-only predictor weights and `training.data2vec` spec are stripped, exporting the student/base inference model
 - `training.objective: "mlm"` and `"mntp"` configs; these export both the standard causal head and a masked-LM head whose plain attention blocks are bidirectional
 - `training.objective: "hybrid"` configs with MLM/MNTP secondary objectives for causal and masked evaluation; the causal head uses causal plain attention while `AutoModel` and the masked-LM head use bidirectional plain attention
+- `hf_export_format: "gpt2"` for strict GPT-2-compatible configs, exported without custom Mixlab Python code
 
 The generated `modeling_mixlab.py` consumes Hugging Face `attention_mask` in `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForMaskedLM`, so padded batches mask pad-token keys instead of letting padding leak into hidden states.
 

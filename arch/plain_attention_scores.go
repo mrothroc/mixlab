@@ -70,7 +70,7 @@ func emitDebertaRelativeProjectionIR(prog *Program, prefix, tableName, keyProjec
 	return nil
 }
 
-func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, wi, B, H, kvH, D, T, headDim int, baseScale float32, qkGain float64, ropeDims int, ropeConvention, relativeAttention string, relativeWindow int, relativeParameterization string, qWeightName, qBiasName, kWeightName, kBiasName string, sharedRel sharedRelativeAttentionPlan) (string, string, int, error) {
+func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, wi, B, H, kvH, D, T, headDim int, baseScale float32, qkGain float64, ropeDims int, ropeConvention, positionalEmbedding, relativeAttention string, relativeWindow int, relativeParameterization string, qWeightName, qBiasName, kWeightName, kBiasName string, sharedRel sharedRelativeAttentionPlan) (string, string, int, error) {
 	relMode := normalizeRelativeAttention(relativeAttention)
 	qForScores := qh
 	kForScores := kh
@@ -78,12 +78,14 @@ func emitPlainProjectedAttentionScoresIR(prog *Program, prefix, qh, kh string, w
 	keyForCache := kh
 	switch relMode {
 	case "", RelativeAttentionNone:
-		qRot := prefix + "_q_rot"
-		kRot := prefix + "_k_rot"
-		emitRoPEForConvention(prog, qh, kh, qRot, kRot, T, headDim, ropeDims, ropeConvention)
-		qForScores = qRot
-		kForScores = kRot
-		keyForCache = kRot
+		if normalizePositionalEmbedding(positionalEmbedding) == PositionalEmbeddingRope {
+			qRot := prefix + "_q_rot"
+			kRot := prefix + "_k_rot"
+			emitRoPEForConvention(prog, qh, kh, qRot, kRot, T, headDim, ropeDims, ropeConvention)
+			qForScores = qRot
+			kForScores = kRot
+			keyForCache = kRot
+		}
 	case RelativeAttentionDebertaP2CC2P:
 		if relativeWindow <= 0 {
 			relativeWindow = defaultRelativeAttentionWindow

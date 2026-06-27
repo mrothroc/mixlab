@@ -43,6 +43,8 @@ type hfConfigJSON struct {
 	MLMHead               string            `json:"mlm_head,omitempty"`
 	LayerAggregation      string            `json:"layer_aggregation,omitempty"`
 	HiddenDropout         float32           `json:"hidden_dropout,omitempty"`
+	EmbeddingDropout      float32           `json:"embedding_dropout,omitempty"`
+	PositionalEmbedding   string            `json:"positional_embedding,omitempty"`
 	CharVocabSize         int               `json:"char_vocab_size,omitempty"`
 	CharDim               int               `json:"char_dim,omitempty"`
 	CharMaxPerToken       int               `json:"char_max_per_token,omitempty"`
@@ -96,6 +98,9 @@ func runExportHF(opts ExportHFOptions) error {
 	cfg, err := LoadArchConfig(opts.ConfigPath)
 	if err != nil {
 		return err
+	}
+	if exportCfg := hfExportInferenceConfig(cfg); exportCfg != nil && exportCfg.EffectiveHFExportFormat() == "gpt2" {
+		return runExportHFGPT2(opts, exportCfg)
 	}
 	if err := configureCharFeaturesForHFExport(cfg, opts.ConfigPath, opts.SafetensorsLoad, opts.TokenizerSource); err != nil {
 		return err
@@ -316,6 +321,11 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 	if err := addNormByName("final_norm", "final_norm"); err != nil {
 		return nil, err
 	}
+	if cfg.EffectivePositionalEmbedding() == "learned_absolute" {
+		if err := addByName("position_embeddings", "position_embeddings.weight"); err != nil {
+			return nil, err
+		}
+	}
 
 	wi := firstUnmappedWeight(used, 0)
 	featureNames := []struct {
@@ -425,17 +435,23 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 			if attnPostNorm == "after_outproj" {
 				names = appendNormNames(names, "post_attn_norm", "post_attn_norm")
 			}
-			if normPlacement == "sandwich" {
+			if normPlacement == "sandwich" || block.FFNPreNorm {
 				names = appendNormNames(names, "ffn_norm", "ffn_norm")
 			}
 			if hfPlainFFNActivationUsesGate(block) {
 				names = append(names, hfBlockWeightName{mixlab: "ff_gate", hf: "ff_gate.weight"})
 			}
 			names = append(names, hfBlockWeightName{mixlab: "ff1", hf: "ff1.weight"})
+			if block.FFNBias {
+				names = append(names, hfBlockWeightName{mixlab: "ff1_bias", hf: "ff1.bias"})
+			}
 			if cfg.FFNInternalNorm {
 				names = appendNormNames(names, "ffn_internal_norm", "ffn_internal_norm")
 			}
 			names = append(names, hfBlockWeightName{mixlab: "ff2", hf: "ff2.weight"})
+			if block.FFNBias {
+				names = append(names, hfBlockWeightName{mixlab: "ff2_bias", hf: "ff2.bias"})
+			}
 			if normPlacement == "post" || normPlacement == "sandwich" {
 				names = appendNormNames(names, "post_ffn_norm", "post_ffn_norm")
 			}

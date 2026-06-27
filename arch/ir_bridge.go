@@ -170,9 +170,11 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	}
 	hiddenDropout := cfg.EffectiveHiddenDropout()
 	attnDropout := cfg.EffectiveAttnDropout()
+	embeddingDropout := cfg.EffectiveEmbeddingDropout()
 	if state.DropoutInactive {
 		hiddenDropout = 0
 		attnDropout = 0
+		embeddingDropout = 0
 	}
 	segmentAttentionMask := cfg.Training.AttentionSegmentMaskEnabled() && !state.SegmentMaskInactive
 
@@ -209,6 +211,9 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		cfg.EffectiveLayerAggregation(),
 		firstByteMask,
 		zLoss,
+		cfg.EffectivePositionalEmbedding(),
+		cfg.EffectiveMaxPositions(),
+		embeddingDropout,
 		cfg.smearEmbeddingOptions(),
 		cfg.Backout,
 		distillation,

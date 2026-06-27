@@ -82,6 +82,7 @@ const (
 	OpSelectiveCausalMask  = 88
 	OpSegmentAttentionMask = 89
 	OpBlockDiffusionMask   = 90
+	OpGELUExact            = 91
 )
 
 const (

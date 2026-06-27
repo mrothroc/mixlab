@@ -202,9 +202,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 			return fmt.Errorf("config %q %s[%d] type=plain has invalid attn_post_norm=%q (must be \"inherit\", \"none\", \"after_outproj\", or \"before_outproj\")", source, groupName, idx, b.AttnPostNorm)
 		}
 		switch normalizePlainFFNActivation(b.FFNActivation) {
-		case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
+		case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU, PlainFFNActivationGELU, PlainFFNActivationGELUNew:
 		default:
-			return fmt.Errorf("config %q %s[%d] type=plain has invalid ffn_activation=%q (must be \"silu\", \"geglu\", or \"swiglu\")", source, groupName, idx, b.FFNActivation)
+			return fmt.Errorf("config %q %s[%d] type=plain has invalid ffn_activation=%q (must be \"silu\", \"gelu\", \"gelu_new\", \"geglu\", or \"swiglu\")", source, groupName, idx, b.FFNActivation)
 		}
 		if normalizeRelativeAttentionParameterization(b.RelativeAttentionParameterization) == RelativeAttentionParamSharedQKReuse && !relativeAttentionEnabled(b) {
 			return fmt.Errorf("config %q %s[%d] type=plain relative_attention_parameterization=\"shared_qk_reuse\" requires relative_attention=\"deberta_p2c_c2p\"", source, groupName, idx)

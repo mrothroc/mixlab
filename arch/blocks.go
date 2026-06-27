@@ -67,7 +67,7 @@ func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D,
 }
 
 func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
-	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, false, false, "", xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, sharedRelativeAttentionPlan{WeightIndex: -1}, nil, false)
+	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, ropeDims, ropeConvention, false, false, "", xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, false, false, PositionalEmbeddingRope, sharedRelativeAttentionPlan{WeightIndex: -1}, nil, false)
 }
 
 func emitLinearProjectionIR(prog *Program, input string, wi int, useBias bool, output string) (weightNameUsed, biasNameUsed string, nextWI int) {
@@ -86,17 +86,18 @@ func emitLinearProjectionIR(prog *Program, input string, wi int, useBias bool, o
 	return weightNameUsed, biasNameUsed, wi
 }
 
-func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, attnPostNormMode string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, sharedRel sharedRelativeAttentionPlan, layerAgg *layerAggregationBuildState, segmentMask bool) (int, error) {
+func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, attnPostNormMode string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, ffnPreNorm, ffnBias bool, positionalEmbedding string, sharedRel sharedRelativeAttentionPlan, layerAgg *layerAggregationBuildState, segmentMask bool) (int, error) {
 	_ = mlpMult
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
 	attnPostNorm := effectivePlainAttnPostNorm(BlockSpec{AttnPostNorm: attnPostNormMode}, normPlacement)
 	ffnActivation = normalizePlainFFNActivation(ffnActivation)
 	switch ffnActivation {
-	case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
+	case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU, PlainFFNActivationGELU, PlainFFNActivationGELUNew:
 	default:
 		return wi, fmt.Errorf("invalid plain ffn_activation=%q", ffnActivation)
 	}
+	ffnPreNorm = ffnPreNorm || normPlacement == NormPlacementSandwich
 	if H <= 0 || D <= 0 || D%H != 0 {
 		return wi, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, H)
 	}
@@ -263,7 +264,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 
 			qh, kh, wi = emitQKNormIR(prog, qh, kh, wi, qkNorm, true)
 			var keyForCache string
-			scaled, keyForCache, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, kvH, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow, relativeParameterization, qWeightName, qBiasName, kWeightName, kBiasName, sharedRel)
+			scaled, keyForCache, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, kvH, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, positionalEmbedding, relativeAttention, relativeWindow, relativeParameterization, qWeightName, qBiasName, kWeightName, kBiasName, sharedRel)
 			if err != nil {
 				return wi, err
 			}
@@ -275,10 +276,12 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 			qh, kh, wi = emitQKNormIR(prog, qh, kh, wi, qkNorm, false)
 			switch normalizeRelativeAttention(relativeAttention) {
 			case "", RelativeAttentionNone:
-				qRot := prefix + "_q_rot"
-				kRotUnused := prefix + "_k_rot_unused"
-				emitRoPEForConvention(prog, qh, kh, qRot, kRotUnused, T, headDim, ropeDims, ropeConvention)
-				qh = qRot
+				if normalizePositionalEmbedding(positionalEmbedding) == PositionalEmbeddingRope {
+					qRot := prefix + "_q_rot"
+					kRotUnused := prefix + "_k_rot_unused"
+					emitRoPEForConvention(prog, qh, kh, qRot, kRotUnused, T, headDim, ropeDims, ropeConvention)
+					qh = qRot
+				}
 			case RelativeAttentionDebertaP2CC2P:
 				return wi, fmt.Errorf("kv_source is not supported with relative_attention")
 			default:
@@ -380,7 +383,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 	ff2Scaled := prefix + "_ff2_scaled"
 	ff2Drop := prefix + "_ff2_dropout"
 	ffIn := x
-	if normPlacement == NormPlacementSandwich {
+	if ffnPreNorm {
 		var err error
 		wi, err = emitNamedNormIR(prog, x, wi, ffInNorm, norm)
 		if err != nil {
@@ -389,10 +392,16 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		ffIn = ffInNorm
 	}
 	switch ffnActivation {
-	case PlainFFNActivationSiLU:
-		prog.MatMul(ffIn, weightName(wi), ff1)
-		wi++
-		prog.SiLU(ff1, ffAct)
+	case PlainFFNActivationSiLU, PlainFFNActivationGELU, PlainFFNActivationGELUNew:
+		_, _, wi = emitLinearProjectionIR(prog, ffIn, wi, ffnBias, ff1)
+		switch ffnActivation {
+		case PlainFFNActivationSiLU:
+			prog.SiLU(ff1, ffAct)
+		case PlainFFNActivationGELU:
+			prog.GELUExact(ff1, ffAct)
+		case PlainFFNActivationGELUNew:
+			prog.GELU(ff1, ffAct)
+		}
 	case PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
 		prog.MatMul(ffIn, weightName(wi), ffGate)
 		wi++
@@ -401,8 +410,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		} else {
 			prog.SiLU(ffGate, ffGateAct)
 		}
-		prog.MatMul(ffIn, weightName(wi), ff1)
-		wi++
+		_, _, wi = emitLinearProjectionIR(prog, ffIn, wi, ffnBias, ff1)
 		prog.Mul(ffGateAct, ff1, ffAct)
 	default:
 		return wi, fmt.Errorf("invalid plain ffn_activation=%q", ffnActivation)
@@ -416,8 +424,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		}
 		ffHidden = ffActNorm
 	}
-	prog.MatMul(ffHidden, weightName(wi), ff2)
-	wi++
+	_, _, wi = emitLinearProjectionIR(prog, ffHidden, wi, ffnBias, ff2)
 	if normPlacement == NormPlacementPost || normPlacement == NormPlacementSandwich {
 		var err error
 		wi, err = emitNamedNormIR(prog, ff2, wi, ff2PostNorm, norm)
@@ -726,11 +733,12 @@ func emitMLPIRNorm(prog *Program, x string, wi, idx int, activation string, leak
 	return wi, nil
 }
 
-func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, ffnActivation string, sharedRel sharedRelativeAttentionPlan, segmentMask bool) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, ffnActivation string, norm NormSpec, ffnPreNorm, ffnBias bool, positionalEmbedding string, sharedRel sharedRelativeAttentionPlan, segmentMask bool) (string, int, error) {
 	_ = mlpMult
+	norm = normSpecOrDefault(norm)
 	ffnActivation = normalizePlainFFNActivation(ffnActivation)
 	switch ffnActivation {
-	case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
+	case PlainFFNActivationSiLU, PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU, PlainFFNActivationGELU, PlainFFNActivationGELUNew:
 	default:
 		return "", wi, fmt.Errorf("invalid plain ffn_activation=%q", ffnActivation)
 	}
@@ -830,7 +838,7 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	}
 
 	qh, kh, wi = emitQKNormIR(prog, qh, kh, wi, qkNorm, true)
-	scaled, _, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, kvH, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, relativeAttention, relativeWindow, relativeParameterization, qWeightName, qBiasName, kWeightName, kBiasName, sharedRel)
+	scaled, _, wi, err = emitPlainProjectedAttentionScoresIR(prog, prefix, qh, kh, wi, B, H, kvH, D, T, headDim, scale, qkGain, ropeDims, ropeConvention, positionalEmbedding, relativeAttention, relativeWindow, relativeParameterization, qWeightName, qBiasName, kWeightName, kBiasName, sharedRel)
 	if err != nil {
 		return "", wi, err
 	}
@@ -882,17 +890,32 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	ffGate := prefix + "_ff_gate"
 	ffGateAct := ffGate + "_act"
 	ff1 := prefix + "_ff1"
+	ffInNorm := prefix + "_ffn_x_norm"
 	ffAct := prefix + "_ff_act"
 	ff2 := prefix + "_ff2"
 	ff2Scaled := prefix + "_ff2_scaled"
 	ff2Drop := prefix + "_ff2_dropout"
 	state := prefix + "_state"
 	prog.Add(x, proj, ffIn)
+	if ffnPreNorm {
+		var err error
+		wi, err = emitNamedNormIR(prog, ffIn, wi, ffInNorm, norm)
+		if err != nil {
+			return "", wi, err
+		}
+		ffIn = ffInNorm
+	}
 	switch ffnActivation {
-	case PlainFFNActivationSiLU:
-		prog.MatMul(ffIn, weightName(wi), ff1)
-		wi++
-		prog.SiLU(ff1, ffAct)
+	case PlainFFNActivationSiLU, PlainFFNActivationGELU, PlainFFNActivationGELUNew:
+		_, _, wi = emitLinearProjectionIR(prog, ffIn, wi, ffnBias, ff1)
+		switch ffnActivation {
+		case PlainFFNActivationSiLU:
+			prog.SiLU(ff1, ffAct)
+		case PlainFFNActivationGELU:
+			prog.GELUExact(ff1, ffAct)
+		case PlainFFNActivationGELUNew:
+			prog.GELU(ff1, ffAct)
+		}
 	case PlainFFNActivationGEGLU, PlainFFNActivationSwiGLU:
 		prog.MatMul(ffIn, weightName(wi), ffGate)
 		wi++
@@ -901,14 +924,12 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 		} else {
 			prog.SiLU(ffGate, ffGateAct)
 		}
-		prog.MatMul(ffIn, weightName(wi), ff1)
-		wi++
+		_, _, wi = emitLinearProjectionIR(prog, ffIn, wi, ffnBias, ff1)
 		prog.Mul(ffGateAct, ff1, ffAct)
 	default:
 		return "", wi, fmt.Errorf("invalid plain ffn_activation=%q", ffnActivation)
 	}
-	prog.MatMul(ffAct, weightName(wi), ff2)
-	wi++
+	_, _, wi = emitLinearProjectionIR(prog, ffAct, wi, ffnBias, ff2)
 	if blockScales {
 		prog.Mul(ff2, weightName(wi), ff2Scaled)
 		wi++

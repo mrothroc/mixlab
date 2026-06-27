@@ -25,7 +25,7 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 		HiddenSize:            cfg.ModelDim,
 		VocabSize:             cfg.VocabSize,
 		SeqLen:                cfg.SeqLen,
-		MaxPositionEmbeddings: cfg.SeqLen,
+		MaxPositionEmbeddings: cfg.EffectiveMaxPositions(),
 		MLPMult:               cfg.EffectiveMLPMult(),
 		NormType:              cfg.EffectiveNormSpec().Type,
 		NormEps:               cfg.EffectiveNormSpec().Eps,
@@ -36,6 +36,8 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 		MLMHead:               hfExportMLMHead(cfg),
 		LayerAggregation:      hfExportLayerAggregation(cfg),
 		HiddenDropout:         cfg.EffectiveHiddenDropout(),
+		EmbeddingDropout:      cfg.EffectiveEmbeddingDropout(),
+		PositionalEmbedding:   cfg.EffectivePositionalEmbedding(),
 		CharVocabSize:         cfg.CharVocabSize,
 		CharDim:               cfg.EffectiveCharDim(),
 		CharMaxPerToken:       cfg.EffectiveCharMaxPerToken(),
@@ -55,7 +57,7 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 			"source":            "mixlab",
 			"weight_map":        "weight_map.json",
 			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe"},
+			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.ffn_activation=gelu", "plain.ffn_activation=gelu_new", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.ffn_pre_norm", "plain.ffn_bias", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "positional_embedding=learned_absolute", "positional_embedding=none", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe"},
 			"unsupported_fails": true,
 		},
 	}
@@ -130,6 +132,12 @@ func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 			}
 			if activation := hfPlainFFNActivation(block); activation != "silu" {
 				entry["ffn_activation"] = activation
+			}
+			if block.FFNPreNorm {
+				entry["ffn_pre_norm"] = true
+			}
+			if block.FFNBias {
+				entry["ffn_bias"] = true
 			}
 			mask := hfExportAttentionMask(cfg, block, masked)
 			if mask != "" {

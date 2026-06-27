@@ -3,9 +3,11 @@ package arch
 import "strings"
 
 const (
-	PlainFFNActivationSiLU   = "silu"
-	PlainFFNActivationGEGLU  = "geglu"
-	PlainFFNActivationSwiGLU = "swiglu"
+	PlainFFNActivationSiLU    = "silu"
+	PlainFFNActivationGEGLU   = "geglu"
+	PlainFFNActivationSwiGLU  = "swiglu"
+	PlainFFNActivationGELU    = "gelu"
+	PlainFFNActivationGELUNew = "gelu_new"
 )
 
 func normalizePlainFFNActivation(activation string) string {
@@ -16,6 +18,10 @@ func normalizePlainFFNActivation(activation string) string {
 		return PlainFFNActivationGEGLU
 	case PlainFFNActivationSwiGLU:
 		return PlainFFNActivationSwiGLU
+	case PlainFFNActivationGELU:
+		return PlainFFNActivationGELU
+	case "gelu-new", "gelu_new":
+		return PlainFFNActivationGELUNew
 	default:
 		return strings.ToLower(strings.TrimSpace(activation))
 	}

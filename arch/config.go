@@ -33,6 +33,10 @@ type ArchConfig struct {
 	CharVocabSize            int          `json:"char_vocab_size,omitempty"`
 	CharDim                  int          `json:"char_dim,omitempty"`
 	CharMaxPerToken          int          `json:"char_max_per_token,omitempty"`
+	PositionalEmbedding      string       `json:"positional_embedding,omitempty"`
+	MaxPositions             int          `json:"max_positions,omitempty"`
+	EmbeddingDropout         float32      `json:"embedding_dropout,omitempty"`
+	HFExportFormat           string       `json:"hf_export_format,omitempty"`
 	BigramVocabSize          int          `json:"bigram_vocab_size,omitempty"`
 	BigramDim                int          `json:"bigram_dim,omitempty"`
 	TrigramVocabSize         int          `json:"trigram_vocab_size,omitempty"`
@@ -83,27 +87,6 @@ type DataSpec struct {
 // Types and validation helpers for recurrence_phases live in
 // arch/config_recurrence_phases.go.
 
-// WeightSpec declares a named weight for a custom block with symbolic shape.
-type WeightSpec struct {
-	Name  string   `json:"name"`
-	Shape []string `json:"shape"`
-}
-
-// CustomWeightSpec is kept as a source-compatible alias for older tests and callers.
-type CustomWeightSpec = WeightSpec
-
-// OpSpec declares one operation in a custom block.
-type OpSpec struct {
-	Op      string                 `json:"op"`
-	Inputs  []string               `json:"inputs"`
-	Output  string                 `json:"output"`
-	Outputs []string               `json:"outputs"`
-	Params  map[string]interface{} `json:"params"`
-}
-
-// CustomOpSpec is kept as a source-compatible alias for older tests and callers.
-type CustomOpSpec = OpSpec
-
 // BlockSpec describes a single model block.
 type BlockSpec struct {
 	Type                              string       `json:"type"`
@@ -135,6 +118,8 @@ type BlockSpec struct {
 	SkipAttention                     bool         `json:"skip_attention,omitempty"`                      // plain: bypass attention while preserving weight layout.
 	SparseAttnGate                    bool         `json:"sparse_attn_gate,omitempty"`                    // plain: narrow per-head output gate over the first gate_window head channels.
 	FFNActivation                     string       `json:"ffn_activation,omitempty"`                      // plain: "silu" (default), "geglu", or "swiglu" feed-forward tail.
+	FFNPreNorm                        bool         `json:"ffn_pre_norm,omitempty"`                        // plain: add a second pre-FFN norm after attention residual.
+	FFNBias                           bool         `json:"ffn_bias,omitempty"`                            // plain: add learned biases to FFN up/down projections.
 	InnerDim                          int          `json:"inner_dim,omitempty"`                           // Mamba inner dimension; defaults to model_dim.
 	DK                                int          `json:"d_k,omitempty"`                                 // gated_deltanet: key/query dim per head.
 	DV                                int          `json:"d_v,omitempty"`                                 // gated_deltanet: value dim per head; defaults to 2*d_k.
@@ -651,6 +636,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.SeqLen <= 0 {
 		cfg.SeqLen = 128
 	}
+	if err := validatePositionalAndExportConfig(cfg, source); err != nil {
+		return nil, err
+	}
 	if cfg.CharVocabSize < 0 {
 		return nil, fmt.Errorf("config %q has invalid char_vocab_size=%d (must be >= 0)", source, cfg.CharVocabSize)
 	}
@@ -795,6 +783,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 			return nil, err
 		}
 		if err := validateBlockRopeDims(b, cfg.ModelDim, source, "blocks", i); err != nil {
+			return nil, err
+		}
+		if err := validateBlockPositionalEmbedding(cfg, b, source, "blocks", i); err != nil {
 			return nil, err
 		}
 		if err := validateRecurrentMixerDims(b, cfg.ModelDim, source, "blocks", i); err != nil {

@@ -130,6 +130,23 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// GPT-2-style feature set in the custom-code export: learned absolute
+			// position embeddings (no RoPE), affine LayerNorm, per-block attn/FFN
+			// biases, a pre-FFN norm, and both exact (gelu) and tanh-approx
+			// (gelu_new) GELU FFN tails.
+			name: "gpt2_features_learned_absolute_gelu",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "max_positions": 6, "mlp_mult": 2.0,
+				"norm_type": "layernorm", "norm_affine": true,
+				"positional_embedding": "learned_absolute", "embedding_dropout": 0.1,
+				"blocks": [
+					{"type": "plain", "heads": 2, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+					{"type": "plain", "heads": 2, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 2727}
+			}`,
+		},
+		{
 			// Affine LayerNorm in post placement: exercises LayerNorm scale+bias
 			// weights plus post_attn/post_ffn norm slots against the Python template.
 			name: "layernorm_affine_post",

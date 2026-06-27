@@ -214,6 +214,7 @@ class MixlabPlainBlock(nn.Module):
         self.rope_convention = str(block_config.get("rope_convention", "") or "adjacent_pair").lower()
         if self.rope_convention not in ("adjacent_pair", "half_rotation"):
             raise ValueError(f"unsupported exported rope_convention {self.rope_convention!r}")
+        self.positional_embedding = str(getattr(config, "positional_embedding", "rope") or "rope").lower()
         self.effective_rope_dims = self.rope_dims
         if self.effective_rope_dims <= 0 or self.effective_rope_dims >= self.head_dim:
             self.effective_rope_dims = self.head_dim
@@ -233,8 +234,10 @@ class MixlabPlainBlock(nn.Module):
         self.attn_post_norm = effective_attn_post_norm(block_config, self.norm_placement)
         self.ffn_internal_norm_enabled = bool(getattr(config, "ffn_internal_norm", False))
         self.ffn_activation = str(block_config.get("ffn_activation", "") or "silu").lower()
-        if self.ffn_activation not in ("silu", "geglu", "swiglu"):
+        if self.ffn_activation not in ("silu", "gelu", "gelu_new", "geglu", "swiglu"):
             raise ValueError(f"unsupported exported plain ffn_activation {self.ffn_activation!r}")
+        self.ffn_pre_norm = bool(block_config.get("ffn_pre_norm", False))
+        self.ffn_bias = bool(block_config.get("ffn_bias", False))
         self.norm = make_mixlab_norm(config, dim) if self.norm_placement in ("pre", "sandwich") else None
         self.wq = MixlabLinear(dim, dim, bias=self.attn_bias)
         self.wk = MixlabLinear(dim, self.kv_heads * self.head_dim, bias=self.attn_bias)
@@ -274,12 +277,12 @@ class MixlabPlainBlock(nn.Module):
             nn.init.zeros_(self.attn_gate_w)
         self.post_attn_norm = make_mixlab_norm(config, dim) if self.attn_post_norm != "none" else None
         self.wo = MixlabLinear(dim, dim, bias=self.attn_bias)
-        self.ffn_norm = make_mixlab_norm(config, dim) if self.norm_placement == "sandwich" else None
+        self.ffn_norm = make_mixlab_norm(config, dim) if self.norm_placement == "sandwich" or self.ffn_pre_norm else None
         ffn_dim = max(dim, int(round(dim * float(config.mlp_mult))))
         self.ff_gate = MixlabLinear(dim, ffn_dim) if self.ffn_activation in ("geglu", "swiglu") else None
-        self.ff1 = MixlabLinear(dim, ffn_dim)
+        self.ff1 = MixlabLinear(dim, ffn_dim, bias=self.ffn_bias)
         self.ffn_internal_norm = make_mixlab_norm(config, ffn_dim) if self.ffn_internal_norm_enabled else None
-        self.ff2 = MixlabLinear(ffn_dim, dim)
+        self.ff2 = MixlabLinear(ffn_dim, dim, bias=self.ffn_bias)
         self.post_ffn_norm = make_mixlab_norm(config, dim) if self.norm_placement in ("post", "sandwich") else None
         # NB: the causal mask and RoPE tables are computed dynamically in
         # forward() rather than cached as buffers. `from_pretrained` initializes
@@ -411,13 +414,18 @@ class MixlabPlainBlock(nn.Module):
             scores = scores + self._deberta_relative_bias(q, k, seq_len, shared_relative_embeddings)
             scores = scores / math.sqrt(float(self.head_dim * 3))
         else:
-            cos_t, sin_t = self._rope_tables(seq_len, q.device, q.dtype)
-            if self.rope_convention == "half_rotation":
-                q = rotate_half_rope(q, self.effective_rope_dims, cos_t, sin_t)
-                k = rotate_half_rope(k, self.effective_rope_dims, cos_t, sin_t)
+            if self.positional_embedding == "rope":
+                cos_t, sin_t = self._rope_tables(seq_len, q.device, q.dtype)
+                if self.rope_convention == "half_rotation":
+                    q = rotate_half_rope(q, self.effective_rope_dims, cos_t, sin_t)
+                    k = rotate_half_rope(k, self.effective_rope_dims, cos_t, sin_t)
+                else:
+                    q = rotate_adjacent_rope(q, self.effective_rope_dims, cos_t, sin_t)
+                    k = rotate_adjacent_rope(k, self.effective_rope_dims, cos_t, sin_t)
+            elif self.positional_embedding in ("learned_absolute", "none"):
+                pass
             else:
-                q = rotate_adjacent_rope(q, self.effective_rope_dims, cos_t, sin_t)
-                k = rotate_adjacent_rope(k, self.effective_rope_dims, cos_t, sin_t)
+                raise ValueError(f"unsupported positional_embedding {self.positional_embedding!r}")
             scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(float(self.head_dim))
         if self.qk_gain is not None:
             scores = scores * self.qk_gain.view(1, self.heads, 1, 1)
@@ -455,6 +463,10 @@ class MixlabPlainBlock(nn.Module):
         ff_in = self.ffn_norm(x) if self.ffn_norm is not None else x
         if self.ffn_activation == "silu":
             ff_hidden = torch.nn.functional.silu(self.ff1(ff_in))
+        elif self.ffn_activation == "gelu":
+            ff_hidden = torch.nn.functional.gelu(self.ff1(ff_in), approximate="none")
+        elif self.ffn_activation == "gelu_new":
+            ff_hidden = torch.nn.functional.gelu(self.ff1(ff_in), approximate="tanh")
         else:
             gate = self.ff_gate(ff_in)
             if self.ffn_activation == "geglu":
@@ -667,6 +679,13 @@ class MixlabModel(PreTrainedModel):
     def __init__(self, config, blocks=None):
         super().__init__(config)
         self.embed_tokens = nn.Embedding(config.vocab_size, config.model_dim)
+        self.position_embeddings = None
+        self.positional_embedding = str(getattr(config, "positional_embedding", "rope") or "rope").lower()
+        if self.positional_embedding == "learned_absolute":
+            self.position_embeddings = nn.Embedding(int(config.max_position_embeddings), config.model_dim)
+        elif self.positional_embedding not in ("rope", "none"):
+            raise ValueError(f"unsupported positional_embedding {self.positional_embedding!r}")
+        self.embed_dropout = nn.Dropout(float(getattr(config, "embedding_dropout", 0.0) or 0.0))
         self.char_table = None
         self.char_proj = None
         self.char_scale = None
@@ -812,6 +831,14 @@ class MixlabModel(PreTrainedModel):
 
     def _embed_features(self, input_ids):
         x = self.embed_tokens(input_ids)
+        if self.position_embeddings is not None:
+            seq_len = input_ids.shape[1]
+            if seq_len > int(self.config.max_position_embeddings):
+                raise ValueError(
+                    f"sequence length {seq_len} exceeds max_position_embeddings={self.config.max_position_embeddings}"
+                )
+            position_ids = torch.arange(seq_len, device=input_ids.device, dtype=torch.long)
+            x = x + self.position_embeddings(position_ids).unsqueeze(0)
         if self.char_table is not None:
             if self.char_lookup is None:
                 self.char_lookup = load_char_lookup(self.config).to(input_ids.device)
@@ -834,6 +861,7 @@ class MixlabModel(PreTrainedModel):
             if self.trigram_proj is not None:
                 state = self.trigram_proj(state)
             x = x + state * self.trigram_scale
+        x = self.embed_dropout(x)
         return x
 
     @staticmethod

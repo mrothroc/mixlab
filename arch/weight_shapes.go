@@ -174,17 +174,23 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		if blockScales {
 			metas = append(metas, WeightMeta{Name: "attn_scale", Shape: []int{D}, InitOne: true})
 		}
-		if placement == NormPlacementSandwich {
+		if placement == NormPlacementSandwich || spec.FFNPreNorm {
 			metas = append(metas, normWeights("ffn_norm", D, norm)...)
 		}
 		if plainFFNActivationUsesGate(spec.FFNActivation) {
 			metas = append(metas, WeightMeta{Name: "ff_gate", Shape: []int{D, ffn}})
 		}
 		metas = append(metas, WeightMeta{Name: "ff1", Shape: []int{D, ffn}})
+		if spec.FFNBias {
+			metas = append(metas, WeightMeta{Name: "ff1_bias", Shape: []int{ffn}, InitZero: true})
+		}
 		if ffnInternalNorm {
 			metas = append(metas, normWeights("ffn_internal_norm", ffn, norm)...)
 		}
 		metas = append(metas, WeightMeta{Name: "ff2", Shape: []int{ffn, D}})
+		if spec.FFNBias {
+			metas = append(metas, WeightMeta{Name: "ff2_bias", Shape: []int{D}, InitZero: true})
+		}
 		if placement == NormPlacementPost || placement == NormPlacementSandwich {
 			metas = append(metas, normWeights("post_ffn_norm", D, norm)...)
 		}
@@ -687,6 +693,8 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 		cfg.ResidMix,
 		cfg.UNet,
 		cfg.ParallelResidual,
+		cfg.EffectivePositionalEmbedding(),
+		cfg.EffectiveMaxPositions(),
 		cfg.CharVocabSize,
 		cfg.EffectiveCharDim(),
 		cfg.BigramVocabSize,
@@ -716,7 +724,7 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if len(smearMetas) == 0 && len(backoutMetas) == 0 && len(data2VecMetas) == 0 && len(mlmHeadMetas) == 0 && len(layerAggregationMetas) == 0 {
 		return metas, nil
 	}
-	fixed := fixedWeightCountWithHeadAndNorm(cfg.ReservesUntiedHeadWeight(), cfg.EffectiveNormSpec())
+	fixed := fixedWeightCountWithHeadAndNorm(cfg.ReservesUntiedHeadWeight(), cfg.EffectiveNormSpec()) + len(positionalEmbeddingWeightShapes(cfg.ModelDim, cfg.EffectiveMaxPositions(), cfg.EffectivePositionalEmbedding()))
 	out := make([]WeightMeta, 0, len(metas)+len(smearMetas)+len(backoutMetas)+len(data2VecMetas)+len(mlmHeadMetas)+len(layerAggregationMetas))
 	out = append(out, metas[:fixed]...)
 	out = append(out, smearMetas...)
@@ -771,7 +779,7 @@ func collectWeightShapesWithRefsHeadLayoutFeatures(
 	blocks []BlockSpec,
 	refs []int,
 ) ([]WeightMeta, error) {
-	return collectWeightShapesWithRefsHeadLayoutFeaturesNorm(modelDim, vocabSize, seqLen, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, refs, defaultNormSpec(), NormPlacementPre, false)
+	return collectWeightShapesWithRefsHeadLayoutFeaturesNorm(modelDim, vocabSize, seqLen, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, PositionalEmbeddingRope, seqLen, charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, refs, defaultNormSpec(), NormPlacementPre, false)
 }
 
 func collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
@@ -781,6 +789,8 @@ func collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 	blockScales, residMix bool,
 	unet bool,
 	parallelResidual bool,
+	positionalEmbedding string,
+	maxPositions int,
 	charVocabSize, charDim int,
 	bigramVocabSize, bigramDim int,
 	trigramVocabSize, trigramDim int,
@@ -831,6 +841,13 @@ func collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 	}
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
+	positionalEmbedding = normalizePositionalEmbedding(positionalEmbedding)
+	if maxPositions <= 0 {
+		maxPositions = T
+	}
+	if maxPositions < T {
+		return nil, fmt.Errorf("max_positions=%d must be >= seq_len=%d", maxPositions, T)
+	}
 
 	var shapes []WeightMeta
 
@@ -840,6 +857,7 @@ func collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 		shapes = append(shapes, WeightMeta{Name: "head", Shape: []int{D, V}})
 	}
 	shapes = append(shapes, normWeights("final_norm", D, norm)...)
+	shapes = append(shapes, positionalEmbeddingWeightShapes(D, maxPositions, positionalEmbedding)...)
 	shapes = append(shapes, charWeightShapes(D, charVocabSize, charDim)...)
 	shapes = append(shapes, bigramWeightShapes(D, bigramVocabSize, bigramDim)...)
 	shapes = append(shapes, trigramWeightShapes(D, trigramVocabSize, trigramDim)...)

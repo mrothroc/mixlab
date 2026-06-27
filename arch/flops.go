@@ -119,7 +119,7 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	uniqueShapes, err := collectWeightShapesWithRefsHeadLayoutFeatures(
+	uniqueShapes, err := collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 		cfg.ModelDim,
 		cfg.VocabSize,
 		cfg.SeqLen,
@@ -129,6 +129,8 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 		cfg.ResidMix,
 		cfg.UNet,
 		cfg.ParallelResidual,
+		cfg.EffectivePositionalEmbedding(),
+		cfg.EffectiveMaxPositions(),
 		cfg.CharVocabSize,
 		cfg.EffectiveCharDim(),
 		cfg.BigramVocabSize,
@@ -137,12 +139,15 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 		cfg.EffectiveTrigramDim(),
 		cfg.Blocks,
 		uniqueRefs,
+		cfg.EffectiveNormSpec(),
+		cfg.EffectiveNormPlacement(),
+		cfg.FFNInternalNorm,
 	)
 	if err != nil {
 		return 0, 0, err
 	}
 
-	expandedShapes, err := collectWeightShapesWithRefsHeadLayoutFeatures(
+	expandedShapes, err := collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 		cfg.ModelDim,
 		cfg.VocabSize,
 		cfg.SeqLen,
@@ -152,6 +157,8 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 		cfg.ResidMix,
 		cfg.UNet,
 		cfg.ParallelResidual,
+		cfg.EffectivePositionalEmbedding(),
+		cfg.EffectiveMaxPositions(),
 		cfg.CharVocabSize,
 		cfg.EffectiveCharDim(),
 		cfg.BigramVocabSize,
@@ -160,6 +167,9 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 		cfg.EffectiveTrigramDim(),
 		cfg.Blocks,
 		identityWeightRefs(cfg.Blocks),
+		cfg.EffectiveNormSpec(),
+		cfg.EffectiveNormPlacement(),
+		cfg.FFNInternalNorm,
 	)
 	if err != nil {
 		return 0, 0, err

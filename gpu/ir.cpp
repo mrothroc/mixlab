@@ -2343,6 +2343,11 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, 0.5f * x * (1.0f + mx::tanh(0.7978845608f * (x + 0.044715f * x * mx::square(x)))));
         break;
       }
+      case OP_GELU_EXACT: {
+        auto x = get(op, 0);
+        set_out(op, 0, 0.5f * x * (1.0f + mx::erf(0.70710678118f * x)));
+        break;
+      }
       case OP_RELU: {
         set_out(op, 0, mx::maximum(get(op, 0), mx::array(0.0f)));
         break;

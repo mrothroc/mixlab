@@ -81,6 +81,7 @@ const (
 	OpSelectiveCausalMask  = 88 // OP_SELECTIVE_CAUSAL_MASK
 	OpSegmentAttentionMask = 89 // OP_SEGMENT_ATTENTION_MASK
 	OpBlockDiffusionMask   = 90 // OP_BLOCK_DIFFUSION_MASK
+	OpGELUExact            = 91 // OP_GELU_EXACT
 
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -163,6 +164,11 @@ func (p *Program) Sub(a, b, output string) {
 // GELU emits a GELU activation.
 func (p *Program) GELU(a, output string) {
 	p.AddOp(OpGELU, []string{a}, []string{output}, nil, nil)
+}
+
+// GELUExact emits the exact erf-based GELU activation.
+func (p *Program) GELUExact(a, output string) {
+	p.AddOp(OpGELUExact, []string{a}, []string{output}, nil, nil)
 }
 
 // Tanh emits a tanh activation.
