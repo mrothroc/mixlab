@@ -8,6 +8,13 @@ This reference covers the current JSON schema used by `mixlab`, based on:
 
 All examples below are valid JSON fragments unless otherwise noted.
 
+For a shorter path through the schema, start with:
+
+- [Config: Model Basics](config-model.md)
+- [Config: Blocks](config-blocks.md)
+- [Config: Training](config-training.md)
+- [Config: Advanced Features](config-advanced.md)
+
 ## Top-level model fields
 
 These fields live at the root of the config object.
@@ -120,7 +127,7 @@ The engine is tokenizer-agnostic: it consumes a `[vocab_size, char_max_per_token
 The bundled `scripts/prepare.py` writes this format for HuggingFace ByteLevel BPE tokenizers — each token's constituent bytes become its char ids (offset by `+1` so id `0` stays reserved for padding):
 
 ```bash
-mixlab -mode prepare -input data.txt -output data/example \
+mixlab -mode prepare -input data.txt -prepare-output-dir data/example \
   -vocab-size 1024 -char-vocab-size 257 -char-max-per-token 16
 ```
 

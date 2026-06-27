@@ -6,7 +6,7 @@
 mixlab -mode export-hf \
   -config examples/plain_3L.json \
   -safetensors-load runs/plain_3L/weights.safetensors \
-  -output runs/plain_3L/hf \
+  -export-dir runs/plain_3L/hf \
   -tokenizer-path data/example/tokenizer.json
 ```
 
@@ -16,7 +16,7 @@ For training runs with SWA/EMA averaging enabled, pass the averaged checkpoint w
 mixlab -mode export-hf \
   -config examples/swa_ema_tiny.json \
   -safetensors-load runs/swa_ema_tiny/model.swa.safetensors \
-  -output runs/swa_ema_tiny/hf \
+  -export-dir runs/swa_ema_tiny/hf \
   -tokenizer-path data/example/tokenizer.json
 ```
 
@@ -75,7 +75,7 @@ mixlab -mode parity \
   -train 'data/example/val_*.bin'
 ```
 
-`parity` mode loads the native checkpoint, scores the shard glob passed to `-train` directly, and runs the exported directory through `AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True)` on the same token stream. It reports native loss, Hugging Face loss, the loss delta, and max absolute logit difference for a bounded sample. The logit sample defaults to one native eval batch; increase it with `-parity-logit-tokens`, set the loss gate with `-threshold`, set the logit gate with `-max-logit-diff`, or disable the logit gate with `-max-logit-diff 0`.
+`parity` mode loads the native checkpoint, scores the shard glob passed to `-train` directly, and runs the exported directory through Hugging Face on the same token stream. It reports native loss, Hugging Face loss, the loss delta, and max absolute logit difference for a bounded sample. The logit sample defaults to one native eval batch; increase it with `-parity-logit-tokens`, set the loss gate with `-parity-loss-threshold` (legacy alias: `-threshold`), set the logit gate with `-max-logit-diff`, or disable the logit gate with `-max-logit-diff 0`.
 
 The Python checker requires the HF parity dependencies from `requirements-hf.txt` (`torch`, `transformers`, and `safetensors`). Use `-parity-python` or `HF_PARITY_PYTHON` when those packages live in a non-default Python environment.
 

@@ -134,6 +134,8 @@ func validateHFGPT2ExportConfig(cfg *ArchConfig) error {
 	if len(cfg.Blocks) == 0 {
 		return unsupportedHFExport("blocks", "native GPT-2 export requires at least one plain block")
 	}
+	firstHeads := cfg.Blocks[0].Heads
+	firstActivation := hfPlainFFNActivation(cfg.Blocks[0])
 	for i, block := range cfg.Blocks {
 		field := fmt.Sprintf("blocks[%d]", i)
 		if strings.ToLower(strings.TrimSpace(block.Type)) != "plain" {
@@ -141,6 +143,9 @@ func validateHFGPT2ExportConfig(cfg *ArchConfig) error {
 		}
 		if block.Heads <= 0 {
 			return unsupportedHFExport(field+".heads", "heads must be > 0")
+		}
+		if block.Heads != firstHeads {
+			return unsupportedHFExport(field+".heads", "native GPT-2 export requires all blocks to use the same head count")
 		}
 		if block.KVHeads > 0 && block.KVHeads != block.Heads {
 			return unsupportedHFExport(field+".kv_heads", "native GPT-2 export requires full multi-head attention")
@@ -158,10 +163,14 @@ func validateHFGPT2ExportConfig(cfg *ArchConfig) error {
 		if !block.FFNPreNorm {
 			return unsupportedHFExport(field+".ffn_pre_norm", "native GPT-2 export requires the GPT-2 second pre-FFN norm")
 		}
-		switch hfPlainFFNActivation(block) {
+		activation := hfPlainFFNActivation(block)
+		switch activation {
 		case "gelu_new", "gelu":
 		default:
 			return unsupportedHFExport(field+".ffn_activation", "native GPT-2 export requires gelu_new or gelu")
+		}
+		if activation != firstActivation {
+			return unsupportedHFExport(field+".ffn_activation", "native GPT-2 export requires all blocks to use the same FFN activation")
 		}
 		if block.RopeDims != 0 || strings.TrimSpace(block.RopeConvention) != "" {
 			return unsupportedHFExport(field+".rope", "native GPT-2 export requires no RoPE fields")

@@ -131,6 +131,7 @@ framework. It trades generality for speed of iteration.
 - [CLI usage](docs/cli.md)
 - [Data preparation](docs/data.md)
 - [Architecture guide](docs/architecture.md)
+- [Config guides](docs/config-model.md)
 - [Configuration reference](docs/config-reference.md)
 - [Examples](examples/README.md)
 - [Hugging Face export](docs/hf-export.md)
@@ -156,7 +157,7 @@ framework. It trades generality for speed of iteration.
 
 # Export a supported checkpoint to Hugging Face
 ./mixlab -mode export-hf -config examples/plain_3L.json \
-    -safetensors-load weights.safetensors -output runs/plain_3L/hf \
+    -safetensors-load weights.safetensors -export-dir runs/plain_3L/hf \
     -tokenizer-path data/example/tokenizer.json
 
 # Verify the Hugging Face export against native Mixlab inference

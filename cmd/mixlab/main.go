@@ -3,9 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"strings"
 
 	"github.com/mrothroc/mixlab/logits"
 	"github.com/mrothroc/mixlab/train"
@@ -28,6 +30,7 @@ func main() {
 	checkpointEvery := flag.Int("checkpoint-every", 0, "save a safetensors checkpoint every N training steps (0 disables)")
 	logEvery := flag.Int("log-every", 0, "print progress every N training steps (0 uses default; MIXLAB_LOG_EVERY overrides)")
 	valEvery := flag.Int("val-every", 0, "run validation every N training steps (0 uses default; MIXLAB_VAL_EVERY overrides)")
+	evalAfterTrain := flag.Bool("eval-after-train", false, "run full validation BPB evaluation after training; clearer alias for -eval")
 	swaStart := flag.Int("swa-start", 0, "override training.swa_start: step at which SWA/EMA accumulation starts; 0 disables")
 	swaDecay := flag.Float64("swa-decay", 0.999, "override training.swa_decay: EMA decay for averaged weights")
 	swaInterval := flag.Int("swa-interval", 10, "override training.swa_interval: update cadence for SWA/EMA accumulation")
@@ -50,6 +53,7 @@ func main() {
 	logitsForm := flag.String("logits-form", "raw", "encoding for -logits-out rows: raw (default) or logprobs (log_softmax)")
 	hfDir := flag.String("hf", "", "Hugging Face export directory to compare against native inference (parity mode)")
 	parityThreshold := flag.Float64("threshold", 0.05, "maximum allowed native-vs-HF mean NLL difference (parity mode)")
+	parityLossThreshold := flag.Float64("parity-loss-threshold", 0.05, "maximum allowed native-vs-HF mean NLL difference; clearer alias for -threshold")
 	maxLogitDiff := flag.Float64("max-logit-diff", 1e-3, "maximum allowed native-vs-HF absolute logit difference on the sampled rows; <=0 disables (parity mode)")
 	parityLogitTokens := flag.Int("parity-logit-tokens", 0, "number of token pairs to sample for logit comparison; rounded up to full eval batches, 0 uses one batch (parity mode)")
 	parityPython := flag.String("parity-python", "", "Python interpreter for the HF parity checker; defaults to HF_PARITY_PYTHON or python3 (parity mode)")
@@ -60,16 +64,26 @@ func main() {
 
 	// prepare mode flags
 	prepInput := flag.String("input", "", "input text file, JSONL, or directory (prepare mode)")
-	prepOutput := flag.String("output", "", "output directory for shards (prepare mode), Hugging Face directory (export-hf mode), or output file (hiddenstats mode)")
+	prepOutput := flag.String("output", "", "legacy output path for prepare, export-hf, or hiddenstats; prefer mode-specific output aliases in new scripts")
+	prepareOutputDir := flag.String("prepare-output-dir", "", "output directory for shards; clearer alias for -output in prepare mode")
+	exportDir := flag.String("export-dir", "", "Hugging Face output directory; clearer alias for -output in export-hf mode")
+	hiddenstatsOut := flag.String("hiddenstats-out", "", "output file for hiddenstats mode; clearer alias for -output")
 	prepVocabSize := flag.Int("vocab-size", 1024, "BPE vocabulary size (prepare mode)")
 	prepValSplit := flag.Float64("val-split", 0.1, "fraction of tokens for validation (prepare mode)")
-	prepTokenizerPath := flag.String("tokenizer-path", "", "path to pre-trained tokenizer.json (prepare mode)")
+	prepTokenizerPath := flag.String("tokenizer-path", "", "path to tokenizer.json for prepare reuse or export-hf bundling")
 	prepTextField := flag.String("text-field", "text", "JSON field for text in JSONL (prepare mode)")
 	prepCharVocabSize := flag.Int("char-vocab-size", 0, "write tokenizer-level char_features.bin with this char vocab size; 0 disables (prepare mode)")
 	prepCharMaxPerToken := flag.Int("char-max-per-token", 16, "fixed char feature slots per token when -char-vocab-size is enabled (prepare mode)")
 
+	flag.Usage = func() {
+		printUsage(os.Stderr, requestedHelpMode(os.Args[1:]))
+	}
 	flag.Parse()
 	providedFlags := providedFlagSet()
+	effectiveParityThreshold := *parityThreshold
+	if providedFlags["parity-loss-threshold"] {
+		effectiveParityThreshold = *parityLossThreshold
+	}
 
 	if *cpuProfile != "" {
 		f, err := os.Create(*cpuProfile)
@@ -125,9 +139,11 @@ func main() {
 		return
 	}
 	if *mode == "prepare" {
+		prepareOutput, err := aliasedStringFlagValue(*prepOutput, "prepare-output-dir", *prepareOutputDir, providedFlags)
+		must(err)
 		must(train.RunPrepare(train.PrepareOptions{
 			Input:           *prepInput,
-			Output:          *prepOutput,
+			Output:          prepareOutput,
 			VocabSize:       *prepVocabSize,
 			ValSplit:        *prepValSplit,
 			TokenizerPath:   *prepTokenizerPath,
@@ -142,10 +158,12 @@ func main() {
 		return
 	}
 	if *mode == "export-hf" {
+		exportOutput, err := aliasedStringFlagValue(*prepOutput, "export-dir", *exportDir, providedFlags)
+		must(err)
 		must(train.RunExportHF(train.ExportHFOptions{
 			ConfigPath:      *configPath,
 			SafetensorsLoad: *safetensorsLoad,
-			OutputDir:       *prepOutput,
+			OutputDir:       exportOutput,
 			TokenizerSource: *prepTokenizerPath,
 		}))
 		return
@@ -163,7 +181,7 @@ func main() {
 		QuantMethod:     *quantMethod,
 		QuantK:          float32(*quantK),
 		QuantKEmbed:     float32(*quantKEmbed),
-		DoFullEval:      *flagFullEval,
+		DoFullEval:      *flagFullEval || *evalAfterTrain,
 		LUTDir:          *lutDir,
 		CheckpointDir:   *checkpointDir,
 		CheckpointEvery: *checkpointEvery,
@@ -212,7 +230,9 @@ func main() {
 			must(train.RunEvalModeWithLUT(*configPath, *trainPattern, *safetensorsLoad, *lutDir))
 		}
 	case "hiddenstats":
-		must(train.RunHiddenstats(*configPath, *trainPattern, *safetensorsLoad, *prepOutput))
+		hiddenstatsOutput, err := aliasedStringFlagValue(*prepOutput, "hiddenstats-out", *hiddenstatsOut, providedFlags)
+		must(err)
+		must(train.RunHiddenstats(*configPath, *trainPattern, *safetensorsLoad, hiddenstatsOutput))
 	case "generate":
 		must(train.RunGenerate(*configPath, *safetensorsLoad, *maxTokens, float32(*temperature), *topK, *prompt))
 	case "generate-diffusion":
@@ -240,13 +260,162 @@ func main() {
 			HFDir:           *hfDir,
 			TokenPattern:    *trainPattern,
 			Python:          *parityPython,
-			LossThreshold:   *parityThreshold,
+			LossThreshold:   effectiveParityThreshold,
 			MaxLogitDiff:    *maxLogitDiff,
 			LogitTokens:     *parityLogitTokens,
 		}))
 	default:
 		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, export-hf, parity)", *mode))
 	}
+}
+
+type flagGroup struct {
+	Title string
+	Names []string
+}
+
+var supportedModes = []string{"smoke", "arch", "arch_race", "prepare", "count", "eval", "hiddenstats", "generate", "generate-diffusion", "export-hf", "parity"}
+
+var modeFlagGroups = map[string][]flagGroup{
+	"arch": {
+		{"Required", []string{"config", "train"}},
+		{"Checkpointing", []string{"safetensors", "safetensors-load", "checkpoint-dir", "checkpoint-every"}},
+		{"Training run controls", []string{"eval", "eval-after-train", "lut-dir", "log-every", "val-every", "timing", "swa-start", "swa-decay", "swa-interval"}},
+		{"Quantization", []string{"quantize", "quant-method", "quant-k", "quant-k-embed"}},
+		{"Profiling", []string{"cpuprofile", "memprofile"}},
+	},
+	"arch_race": {
+		{"Required", []string{"configs", "train"}},
+		{"Checkpointing and eval", []string{"safetensors", "safetensors-load", "eval", "eval-after-train", "lut-dir"}},
+		{"Run controls", []string{"log-every", "val-every", "timing"}},
+		{"Quantization", []string{"quantize", "quant-method", "quant-k", "quant-k-embed"}},
+	},
+	"prepare": {
+		{"Required", []string{"input"}},
+		{"Output", []string{"prepare-output-dir", "output"}},
+		{"Tokenizer/data", []string{"vocab-size", "val-split", "tokenizer-path", "text-field"}},
+		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},
+	},
+	"count": {
+		{"Required", []string{"config"}},
+	},
+	"eval": {
+		{"Required", []string{"config", "train", "safetensors-load"}},
+		{"Lookup tables", []string{"lut-dir"}},
+		{"Per-token exports", []string{"logprobs-out", "ranks-out", "uncertainty-out", "logits-out", "logits-dtype", "logits-form"}},
+	},
+	"hiddenstats": {
+		{"Required", []string{"config", "train", "safetensors-load"}},
+		{"Output", []string{"hiddenstats-out", "output"}},
+	},
+	"generate": {
+		{"Required", []string{"config", "safetensors-load", "prompt"}},
+		{"Sampling", []string{"max-tokens", "temperature", "top-k"}},
+	},
+	"generate-diffusion": {
+		{"Required", []string{"config", "safetensors-load", "prompt"}},
+		{"Sampling", []string{"max-tokens", "diffusion-steps-per-block", "diffusion-confidence-threshold", "diffusion-commit-floor", "diffusion-temperature", "diffusion-top-k", "diffusion-trace-out"}},
+	},
+	"export-hf": {
+		{"Required", []string{"config", "safetensors-load"}},
+		{"Output", []string{"export-dir", "output"}},
+		{"Tokenizer", []string{"tokenizer-path"}},
+	},
+	"parity": {
+		{"Required", []string{"config", "safetensors-load", "hf", "train"}},
+		{"Thresholds", []string{"threshold", "parity-loss-threshold", "max-logit-diff", "parity-logit-tokens"}},
+		{"Python", []string{"parity-python"}},
+	},
+	"smoke": {
+		{"Options", []string{}},
+	},
+}
+
+func requestedHelpMode(args []string) string {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-mode" || arg == "--mode":
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+		case strings.HasPrefix(arg, "-mode="):
+			return strings.TrimPrefix(arg, "-mode=")
+		case strings.HasPrefix(arg, "--mode="):
+			return strings.TrimPrefix(arg, "--mode=")
+		}
+	}
+	return ""
+}
+
+// fprintf/fprintln write usage text to an arbitrary io.Writer (os.Stderr in
+// production, a buffer in tests). Usage output has nowhere useful to report a
+// write error, so the result is intentionally discarded.
+func fprintf(w io.Writer, format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
+func fprintln(w io.Writer, a ...any)               { _, _ = fmt.Fprintln(w, a...) }
+
+func printUsage(w io.Writer, mode string) {
+	if mode == "" {
+		fprintf(w, "Usage: mixlab -mode MODE [flags]\n\n")
+		fprintf(w, "Modes: %s\n\n", strings.Join(supportedModes, ", "))
+		fprintln(w, "Use `mixlab -mode MODE -h` for mode-specific flags.")
+		fprintln(w, "Common flags:")
+		printFlagGroup(w, flagGroup{"", []string{"mode", "config", "train", "safetensors", "safetensors-load"}})
+		return
+	}
+	groups, ok := modeFlagGroups[mode]
+	if !ok {
+		fprintf(w, "Unknown mode %q.\n\n", mode)
+		printUsage(w, "")
+		return
+	}
+	fprintf(w, "Usage: mixlab -mode %s [flags]\n\n", mode)
+	for _, group := range groups {
+		printFlagGroup(w, group)
+	}
+	if mode == "prepare" || mode == "export-hf" || mode == "hiddenstats" {
+		fprintln(w, "\n`-output` remains supported. Prefer the mode-specific alias in new scripts when available.")
+	}
+}
+
+func printFlagGroup(w io.Writer, group flagGroup) {
+	if group.Title != "" {
+		fprintf(w, "%s:\n", group.Title)
+	}
+	if len(group.Names) == 0 {
+		fprintln(w, "  (no flags)")
+		return
+	}
+	for _, name := range group.Names {
+		f := flag.Lookup(name)
+		if f == nil {
+			continue
+		}
+		valueName, usage := flag.UnquoteUsage(f)
+		if valueName != "" {
+			fprintf(w, "  -%s %s\n", f.Name, valueName)
+		} else {
+			fprintf(w, "  -%s\n", f.Name)
+		}
+		fprintf(w, "      %s", usage)
+		if f.DefValue != "" && f.DefValue != "false" {
+			fprintf(w, " (default %s)", f.DefValue)
+		}
+		fprintln(w)
+	}
+}
+
+// aliasedStringFlagValue resolves the legacy -output flag against a
+// mode-specific alias (e.g. -export-dir). The alias wins when set; providing
+// both with conflicting non-empty values is an error.
+func aliasedStringFlagValue(outputValue, aliasName, aliasValue string, provided map[string]bool) (string, error) {
+	if !provided[aliasName] {
+		return outputValue, nil
+	}
+	if provided["output"] && outputValue != "" && aliasValue != "" && outputValue != aliasValue {
+		return "", fmt.Errorf("-output and -%s both provided with different values", aliasName)
+	}
+	return aliasValue, nil
 }
 
 func providedFlagSet() map[string]bool {

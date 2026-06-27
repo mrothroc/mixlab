@@ -23,10 +23,10 @@ type PrepareOptions struct {
 // runPrepare shells out to scripts/prepare.py to tokenize raw text into binary shards.
 func runPrepare(opts PrepareOptions) error {
 	if opts.Input == "" {
-		return fmt.Errorf("-input is required for prepare mode; pass a text file, JSONL, or directory, e.g.: mixlab -mode prepare -input corpus.jsonl -output data/")
+		return fmt.Errorf("-input is required for prepare mode; pass a text file, JSONL, or directory, e.g.: mixlab -mode prepare -input corpus.jsonl -prepare-output-dir data/")
 	}
 	if opts.Output == "" {
-		return fmt.Errorf("-output is required for prepare mode; pass an output directory, e.g.: mixlab -mode prepare -input corpus.jsonl -output data/")
+		return fmt.Errorf("-prepare-output-dir (or legacy -output) is required for prepare mode; pass an output directory, e.g.: mixlab -mode prepare -input corpus.jsonl -prepare-output-dir data/")
 	}
 
 	scriptPath, err := findPrepareScript()

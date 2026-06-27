@@ -57,20 +57,20 @@ mixlab can tokenize UTF-8 text files, directories of text files, or JSONL:
 
 ```bash
 # Single text file
-mixlab -mode prepare -input corpus.txt -output data/my_data -vocab-size 1024
+mixlab -mode prepare -input corpus.txt -prepare-output-dir data/my_data -vocab-size 1024
 
 # Directory of text files
-mixlab -mode prepare -input texts/ -output data/my_data -vocab-size 4096
+mixlab -mode prepare -input texts/ -prepare-output-dir data/my_data -vocab-size 4096
 
 # JSONL
-mixlab -mode prepare -input data.jsonl -output data/my_data \
+mixlab -mode prepare -input data.jsonl -prepare-output-dir data/my_data \
     -vocab-size 8192 -text-field content
 ```
 
 Or use a pre-trained tokenizer:
 
 ```bash
-mixlab -mode prepare -input corpus.txt -output data/my_data \
+mixlab -mode prepare -input corpus.txt -prepare-output-dir data/my_data \
     -tokenizer-path path/to/tokenizer.json
 ```
 
@@ -87,7 +87,7 @@ Common flags:
 | Flag | Description |
 |------|-------------|
 | `-input` | Input text file, JSONL file, or directory. |
-| `-output` | Output directory for binary shards. |
+| `-prepare-output-dir` | Output directory for binary shards. Preferred alias for legacy `-output`. |
 | `-vocab-size` | BPE vocabulary size. Default: `1024`. |
 | `-val-split` | Fraction of tokens reserved for validation. Default: `0.1`. |
 | `-tokenizer-path` | Path to a pre-trained `tokenizer.json`. |

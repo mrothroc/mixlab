@@ -147,6 +147,41 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// Native GPT-2 export path: load the exported directory through stock
+			// GPT2LMHeadModel, with no Mixlab custom Python code, and compare to
+			// the native MLX forward. Uses GPT-2's default tanh-approx GELU.
+			name: "gpt2_native_gelu_new",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "max_positions": 6, "mlp_mult": 2.0,
+				"tie_embeddings": true,
+				"norm_type": "layernorm", "norm_affine": true,
+				"positional_embedding": "learned_absolute", "embedding_dropout": 0.1,
+				"hf_export_format": "gpt2",
+				"blocks": [
+					{"type": "plain", "heads": 2, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true},
+					{"type": "plain", "heads": 2, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu_new", "ffn_pre_norm": true, "ffn_bias": true}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 4242}
+			}`,
+		},
+		{
+			// Native GPT-2 export with exact GELU, represented by GPT2Config's
+			// activation_function="gelu".
+			name: "gpt2_native_gelu_exact",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "max_positions": 6, "mlp_mult": 2.0,
+				"tie_embeddings": true,
+				"norm_type": "layernorm", "norm_affine": true,
+				"positional_embedding": "learned_absolute",
+				"hf_export_format": "gpt2",
+				"blocks": [
+					{"type": "plain", "heads": 2, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true},
+					{"type": "plain", "heads": 2, "attention_mask": "causal", "attn_bias": true, "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 4343}
+			}`,
+		},
+		{
 			// Affine LayerNorm in post placement: exercises LayerNorm scale+bias
 			// weights plus post_attn/post_ffn norm slots against the Python template.
 			name: "layernorm_affine_post",

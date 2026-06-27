@@ -92,7 +92,7 @@ func runExportHF(opts ExportHFOptions) error {
 		return fmt.Errorf("-safetensors-load is required for export-hf mode")
 	}
 	if strings.TrimSpace(opts.OutputDir) == "" {
-		return fmt.Errorf("-output is required for export-hf mode")
+		return fmt.Errorf("-export-dir (or legacy -output) is required for export-hf mode")
 	}
 
 	cfg, err := LoadArchConfig(opts.ConfigPath)

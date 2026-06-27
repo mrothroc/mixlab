@@ -104,7 +104,7 @@ func TestRunExportHFRequiresInputs(t *testing.T) {
 	}{
 		{name: "config", opts: ExportHFOptions{}, want: "-config"},
 		{name: "weights", opts: ExportHFOptions{ConfigPath: "config.json"}, want: "-safetensors-load"},
-		{name: "output", opts: ExportHFOptions{ConfigPath: "config.json", SafetensorsLoad: "weights.safetensors"}, want: "-output"},
+		{name: "output", opts: ExportHFOptions{ConfigPath: "config.json", SafetensorsLoad: "weights.safetensors"}, want: "-export-dir"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -25,7 +25,7 @@ func runHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath string
 		return fmt.Errorf("-train is required for hiddenstats mode")
 	}
 	if outputPath == "" {
-		return fmt.Errorf("-output is required for hiddenstats mode")
+		return fmt.Errorf("-hiddenstats-out (or legacy -output) is required for hiddenstats mode")
 	}
 
 	cfg, err := LoadArchConfig(configPath)

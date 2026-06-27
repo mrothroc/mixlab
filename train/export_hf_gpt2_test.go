@@ -150,6 +150,59 @@ func TestExportHFGPT2RejectsNonStrictPlainBlock(t *testing.T) {
 	}
 }
 
+func TestExportHFGPT2RejectsPerBlockSettingsNotRepresentableInGPT2Config(t *testing.T) {
+	tests := []struct {
+		name       string
+		blocksJSON string
+		want       string
+	}{
+		{
+			name: "mixed_heads",
+			blocksJSON: `[
+				{"type":"plain","heads":2,"attention_mask":"causal","attn_bias":true,"ffn_activation":"gelu_new","ffn_pre_norm":true,"ffn_bias":true},
+				{"type":"plain","heads":3,"attention_mask":"causal","attn_bias":true,"ffn_activation":"gelu_new","ffn_pre_norm":true,"ffn_bias":true}
+			]`,
+			want: "head count",
+		},
+		{
+			name: "mixed_activations",
+			blocksJSON: `[
+				{"type":"plain","heads":2,"attention_mask":"causal","attn_bias":true,"ffn_activation":"gelu_new","ffn_pre_norm":true,"ffn_bias":true},
+				{"type":"plain","heads":2,"attention_mask":"causal","attn_bias":true,"ffn_activation":"gelu","ffn_pre_norm":true,"ffn_bias":true}
+			]`,
+			want: "FFN activation",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+				"name":"bad_gpt2_per_block",
+				"model_dim":6,
+				"vocab_size":7,
+				"seq_len":3,
+				"mlp_mult":2.0,
+				"tie_embeddings":true,
+				"norm_type":"layernorm",
+				"norm_affine":true,
+				"positional_embedding":"learned_absolute",
+				"hf_export_format":"gpt2",
+				"blocks":`+tt.blocksJSON+`,
+				"training":{"batch_tokens":3,"objective":"causal","seed":7}
+			}`)
+			err := RunExportHF(ExportHFOptions{
+				ConfigPath:      cfgPath,
+				SafetensorsLoad: weightsPath,
+				OutputDir:       filepath.Join(dir, "out"),
+				TokenizerSource: tokenizerDir,
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("RunExportHF error=%v want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func nthWeightShapeIndex(t *testing.T, shapes []WeightShape, name string) int {
 	t.Helper()
 	for i, shape := range shapes {

@@ -22,7 +22,7 @@ After training a supported causal core model, export a Hugging Face custom-code 
 ./mixlab -mode export-hf \
   -config examples/plain_3L.json \
   -safetensors-load runs/plain_3L/weights.safetensors \
-  -output runs/plain_3L/hf \
+  -export-dir runs/plain_3L/hf \
   -tokenizer-path data/example/tokenizer.json
 ```
 
