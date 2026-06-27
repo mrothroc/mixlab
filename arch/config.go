@@ -275,10 +275,10 @@ type TrainingSpec struct {
 	QATStart            int     `json:"qat_start,omitempty"`
 	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default), "normal", or "gptbert"
 	WeightInitStd       float32 `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
-	EmbedWeightDecay    float32 `json:"embed_weight_decay,omitempty"`
-	MatrixWeightDecay   float32 `json:"matrix_weight_decay,omitempty"`
-	ScalarWeightDecay   float32 `json:"scalar_weight_decay,omitempty"`
-	HeadWeightDecay     float32 `json:"head_weight_decay,omitempty"`
+	EmbedWeightDecay    float32 `json:"embed_weight_decay"`
+	MatrixWeightDecay   float32 `json:"matrix_weight_decay"`
+	ScalarWeightDecay   float32 `json:"scalar_weight_decay"`
+	HeadWeightDecay     float32 `json:"head_weight_decay"`
 	// MinLRFraction sets the minimum LR as a fraction of peak LR.
 	// 0 (default) = current behavior (warmdown ends near 0).
 	// 0.10 = recommended (LR never drops below 10% of peak).
@@ -296,6 +296,11 @@ type TrainingSpec struct {
 	warmupStepsSet                     bool
 	warmupRatioSet                     bool
 	holdStepsSet                       bool
+	weightDecaySet                     bool
+	embedWeightDecaySet                bool
+	matrixWeightDecaySet               bool
+	scalarWeightDecaySet               bool
+	headWeightDecaySet                 bool
 	lambBeta1Set                       bool
 	lambBeta2Set                       bool
 	lambEpsSet                         bool
@@ -312,37 +317,6 @@ type EarlyStopSpec struct {
 	MinSteps int     `json:"min_steps,omitempty"`
 	ValGT    float64 `json:"val_gt,omitempty"`
 	AtStep   int     `json:"at_step,omitempty"`
-}
-
-func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
-	type alias TrainingSpec
-	var raw alias
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*t = TrainingSpec(raw)
-
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return err
-	}
-	_, t.mlmMaskProbSet = fields["mlm_mask_prob"]
-	_, t.mlmMaskTokenIDSet = fields["mlm_mask_token_id"]
-	_, maskProbSet := fields["mlm_mask_token_prob"]
-	_, randomProbSet := fields["mlm_random_token_prob"]
-	_, keptProbSet := fields["mlm_kept_unchanged_prob"]
-	t.mlmReplacementProbSet = maskProbSet || randomProbSet || keptProbSet
-	_, t.hybridCLMFractionSet = fields["hybrid_clm_fraction"]
-	_, t.attentionSegmentBoundaryTokenIDSet = fields["attention_segment_boundary_token_id"]
-	_, t.warmupStepsSet = fields["warmup_steps"]
-	_, t.warmupRatioSet = fields["warmup_ratio"]
-	_, t.holdStepsSet = fields["hold_steps"]
-	_, t.lambBeta1Set = fields["lamb_beta1"]
-	_, t.lambBeta2Set = fields["lamb_beta2"]
-	_, t.lambEpsSet = fields["lamb_eps"]
-	_, t.swaDecaySet = fields["swa_decay"]
-	_, t.swaIntervalSet = fields["swa_interval"]
-	return nil
 }
 
 // WarmupStepsConfigured reports whether training.warmup_steps was provided.
@@ -453,7 +427,7 @@ func (t *TrainingSpec) ApplyDefaults() {
 	if t.Data2Vec != nil {
 		t.Data2Vec.applyDefaults()
 	}
-	if t.WeightDecay == 0 {
+	if !t.weightDecaySet && t.WeightDecay == 0 {
 		t.WeightDecay = d.WeightDecay
 	}
 	if t.Beta1 == 0 {
@@ -508,16 +482,16 @@ func (t *TrainingSpec) ApplyDefaults() {
 	t.Optimizer = strings.ToLower(strings.TrimSpace(t.Optimizer))
 	t.ComputeDType = strings.ToLower(strings.TrimSpace(t.ComputeDType))
 	t.WeightInit = strings.ToLower(strings.TrimSpace(t.WeightInit))
-	if t.EmbedWeightDecay == 0 {
+	if !t.embedWeightDecaySet && t.EmbedWeightDecay == 0 {
 		t.EmbedWeightDecay = t.WeightDecay
 	}
-	if t.MatrixWeightDecay == 0 {
+	if !t.matrixWeightDecaySet && t.MatrixWeightDecay == 0 {
 		t.MatrixWeightDecay = t.WeightDecay
 	}
-	if t.ScalarWeightDecay == 0 {
+	if !t.scalarWeightDecaySet && t.ScalarWeightDecay == 0 {
 		t.ScalarWeightDecay = t.WeightDecay
 	}
-	if t.HeadWeightDecay == 0 {
+	if !t.headWeightDecaySet && t.HeadWeightDecay == 0 {
 		t.HeadWeightDecay = t.WeightDecay
 	}
 	if !t.swaDecaySet && t.SWADecay == 0 {

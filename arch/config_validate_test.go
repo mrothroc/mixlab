@@ -23,6 +23,35 @@ func TestNegativeWeightDecay(t *testing.T) {
 	}
 }
 
+func TestNegativePerGroupWeightDecay(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+	}{
+		{name: "embed", field: "embed_weight_decay"},
+		{name: "matrix", field: "matrix_weight_decay"},
+		{name: "scalar", field: "scalar_weight_decay"},
+		{name: "head", field: "head_weight_decay"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := []byte(`{
+				"model_dim": 128,
+				"vocab_size": 1024,
+				"blocks": [{"type": "plain", "heads": 4}],
+				"training": {"` + tt.field + `": -0.01}
+			}`)
+			_, err := ParseArchConfig(raw, "test")
+			if err == nil {
+				t.Fatal("expected error for negative per-group weight decay")
+			}
+			if !strings.Contains(err.Error(), "per-group weight decay") {
+				t.Errorf("error should mention per-group weight decay: %v", err)
+			}
+		})
+	}
+}
+
 func TestNegativeGradClip(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  128,

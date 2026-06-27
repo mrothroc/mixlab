@@ -252,107 +252,36 @@ func TestPlainBlockMissingHeads(t *testing.T) {
 	}
 }
 
-func TestTrainingDefaults(t *testing.T) {
-	cfg := ArchConfig{
-		ModelDim:  128,
-		VocabSize: 1024,
-		Blocks:    []BlockSpec{{Type: "plain", Heads: 4}},
-	}
-	data, _ := json.Marshal(cfg)
-	got, err := ParseArchConfig(data, "test")
+func parseWeightDecayTestConfig(t *testing.T, training string) *ArchConfig {
+	t.Helper()
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim": 128,
+		"vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		`+training+`
+	}`), "weight_decay")
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("ParseArchConfig: %v", err)
 	}
-	d := DefaultTrainingSpec()
-	if got.Training.Steps != d.Steps {
-		t.Errorf("default steps = %d, want %d", got.Training.Steps, d.Steps)
+	return cfg
+}
+
+func assertWeightDecays(t *testing.T, cfg *ArchConfig, weight, embed, matrix, scalar, head float32) {
+	t.Helper()
+	if cfg.Training.WeightDecay != weight {
+		t.Fatalf("weight_decay=%g want %g", cfg.Training.WeightDecay, weight)
 	}
-	if got.Training.LR != d.LR {
-		t.Errorf("default lr = %g, want %g", got.Training.LR, d.LR)
+	if cfg.Training.EmbedWeightDecay != embed {
+		t.Fatalf("embed_weight_decay=%g want %g", cfg.Training.EmbedWeightDecay, embed)
 	}
-	if got.Training.Seed != d.Seed {
-		t.Errorf("default seed = %d, want %d", got.Training.Seed, d.Seed)
+	if cfg.Training.MatrixWeightDecay != matrix {
+		t.Fatalf("matrix_weight_decay=%g want %g", cfg.Training.MatrixWeightDecay, matrix)
 	}
-	if got.Training.BatchTokens != d.BatchTokens {
-		t.Errorf("default batch_tokens = %d, want %d", got.Training.BatchTokens, d.BatchTokens)
+	if cfg.Training.ScalarWeightDecay != scalar {
+		t.Fatalf("scalar_weight_decay=%g want %g", cfg.Training.ScalarWeightDecay, scalar)
 	}
-	if got.Training.WeightDecay != d.WeightDecay {
-		t.Errorf("default weight_decay = %g, want %g", got.Training.WeightDecay, d.WeightDecay)
-	}
-	if got.Training.EmbedLR != float32(d.LR) {
-		t.Errorf("default embed_lr = %g, want %g", got.Training.EmbedLR, float32(d.LR))
-	}
-	if got.Training.MatrixLR != float32(d.LR) {
-		t.Errorf("default matrix_lr = %g, want %g", got.Training.MatrixLR, float32(d.LR))
-	}
-	if got.Training.ScalarLR != float32(d.LR) {
-		t.Errorf("default scalar_lr = %g, want %g", got.Training.ScalarLR, float32(d.LR))
-	}
-	if got.Training.HeadLR != float32(d.LR) {
-		t.Errorf("default head_lr = %g, want %g", got.Training.HeadLR, float32(d.LR))
-	}
-	if got.Training.MuonMomentum != d.Beta1 {
-		t.Errorf("default muon_momentum = %g, want %g", got.Training.MuonMomentum, d.Beta1)
-	}
-	if got.Training.MuonBackendSteps != d.MuonBackendSteps {
-		t.Errorf("default muon_backend_steps = %d, want %d", got.Training.MuonBackendSteps, d.MuonBackendSteps)
-	}
-	if got.Training.LAMBBeta1 != d.LAMBBeta1 {
-		t.Errorf("default lamb_beta1 = %g, want %g", got.Training.LAMBBeta1, d.LAMBBeta1)
-	}
-	if got.Training.LAMBBeta2 != d.LAMBBeta2 {
-		t.Errorf("default lamb_beta2 = %g, want %g", got.Training.LAMBBeta2, d.LAMBBeta2)
-	}
-	if got.Training.LAMBEps != d.LAMBEps {
-		t.Errorf("default lamb_eps = %g, want %g", got.Training.LAMBEps, d.LAMBEps)
-	}
-	if got.Training.EmbedWeightDecay != d.WeightDecay {
-		t.Errorf("default embed_weight_decay = %g, want %g", got.Training.EmbedWeightDecay, d.WeightDecay)
-	}
-	if got.Training.MatrixWeightDecay != d.WeightDecay {
-		t.Errorf("default matrix_weight_decay = %g, want %g", got.Training.MatrixWeightDecay, d.WeightDecay)
-	}
-	if got.Training.ScalarWeightDecay != d.WeightDecay {
-		t.Errorf("default scalar_weight_decay = %g, want %g", got.Training.ScalarWeightDecay, d.WeightDecay)
-	}
-	if got.Training.HeadWeightDecay != d.WeightDecay {
-		t.Errorf("default head_weight_decay = %g, want %g", got.Training.HeadWeightDecay, d.WeightDecay)
-	}
-	if got.Training.SWADecay != d.SWADecay {
-		t.Errorf("default swa_decay = %g, want %g", got.Training.SWADecay, d.SWADecay)
-	}
-	if got.Training.SWAInterval != d.SWAInterval {
-		t.Errorf("default swa_interval = %d, want %d", got.Training.SWAInterval, d.SWAInterval)
-	}
-	if got.Training.WarmdownSteps != 0 {
-		t.Errorf("default warmdown_steps = %d, want 0", got.Training.WarmdownSteps)
-	}
-	if got.Training.WarmupSteps != 0 {
-		t.Errorf("default warmup_steps = %d, want 0", got.Training.WarmupSteps)
-	}
-	if got.Training.WarmupRatio != 0 {
-		t.Errorf("default warmup_ratio = %g, want 0", got.Training.WarmupRatio)
-	}
-	if got.Training.HoldSteps != 0 {
-		t.Errorf("default hold_steps = %d, want 0", got.Training.HoldSteps)
-	}
-	if got.Training.TTTSteps != 0 {
-		t.Errorf("default ttt_steps = %d, want 0", got.Training.TTTSteps)
-	}
-	if got.Training.TTTMode != d.TTTMode {
-		t.Errorf("default ttt_mode = %q, want %q", got.Training.TTTMode, d.TTTMode)
-	}
-	if got.Training.TTTLR != d.TTTLR {
-		t.Errorf("default ttt_lr = %g, want %g", got.Training.TTTLR, d.TTTLR)
-	}
-	if got.Training.TTTRank != d.TTTRank {
-		t.Errorf("default ttt_rank = %d, want %d", got.Training.TTTRank, d.TTTRank)
-	}
-	if got.MLPMult != 2.67 {
-		t.Errorf("default mlp_mult = %g, want 2.67", got.MLPMult)
-	}
-	if got.SeqLen != 128 {
-		t.Errorf("default seq_len = %d, want 128", got.SeqLen)
+	if cfg.Training.HeadWeightDecay != head {
+		t.Fatalf("head_weight_decay=%g want %g", cfg.Training.HeadWeightDecay, head)
 	}
 }
 

@@ -374,6 +374,89 @@ func TestBuildTrainerOptimizerSpec_LAMBWholeModel(t *testing.T) {
 	}
 }
 
+func TestBuildTrainerOptimizerSpec_ParsedAdamWZeroWeightDecay(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "adamw_zero_decay",
+		"model_dim": 16,
+		"vocab_size": 32,
+		"seq_len": 4,
+		"blocks": [{"type": "plain", "heads": 2}],
+		"training": {
+			"steps": 1,
+			"batch_tokens": 16,
+			"optimizer": "adamw",
+			"weight_decay": 0.0
+		}
+	}`), "adamw_zero_decay")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	spec, err := buildTrainerOptimizerSpec(cfg, shapes)
+	if err != nil {
+		t.Fatalf("buildTrainerOptimizerSpec: %v", err)
+	}
+
+	for _, name := range []string{"embed", "head", "final_norm", "wq"} {
+		group := optimizerGroupForWeightName(t, spec, shapes, name)
+		if group.Kind != gpu.OptimizerAdamW {
+			t.Fatalf("%s group kind=%d want AdamW", name, group.Kind)
+		}
+		if group.WeightDecay != 0 {
+			t.Fatalf("%s group weight_decay=%g want 0", name, group.WeightDecay)
+		}
+	}
+}
+
+func TestBuildTrainerOptimizerSpec_ParsedLAMBMixedWeightDecay(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "lamb_mixed_decay",
+		"model_dim": 16,
+		"vocab_size": 32,
+		"seq_len": 4,
+		"blocks": [{"type": "plain", "heads": 2}],
+		"training": {
+			"steps": 1,
+			"batch_tokens": 16,
+			"optimizer": "lamb",
+			"weight_decay": 0.3,
+			"embed_weight_decay": 0.0,
+			"matrix_weight_decay": 0.0,
+			"scalar_weight_decay": 0.02,
+			"head_weight_decay": 0.04
+		}
+	}`), "lamb_mixed_decay")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	spec, err := buildTrainerOptimizerSpec(cfg, shapes)
+	if err != nil {
+		t.Fatalf("buildTrainerOptimizerSpec: %v", err)
+	}
+
+	for name, wantDecay := range map[string]float32{
+		"embed":      0,
+		"head":       0.04,
+		"final_norm": 0.02,
+		"wq":         0,
+	} {
+		group := optimizerGroupForWeightName(t, spec, shapes, name)
+		if group.Kind != gpu.OptimizerLAMB {
+			t.Fatalf("%s group kind=%d want LAMB", name, group.Kind)
+		}
+		if group.WeightDecay != wantDecay {
+			t.Fatalf("%s group weight_decay=%g want %g", name, group.WeightDecay, wantDecay)
+		}
+	}
+}
+
 func TestBuildTrainerOptimizerSpec_CautiousWeightDecay(t *testing.T) {
 	cfg := &ArchConfig{
 		Name:      "cautious_weight_decay_optimizer",
@@ -406,4 +489,22 @@ func TestBuildTrainerOptimizerSpec_CautiousWeightDecay(t *testing.T) {
 			t.Fatalf("group %d activation step=%d want 5", i, group.CautiousWeightDecayActivationStep)
 		}
 	}
+}
+
+func optimizerGroupForWeightName(t *testing.T, spec gpu.TrainerOptimizerSpec, shapes []WeightShape, name string) gpu.OptimizerGroup {
+	t.Helper()
+	for i, shape := range shapes {
+		if shape.Name == name {
+			if i >= len(spec.Weights) {
+				t.Fatalf("weight optimizer index %d out of range for %q", i, name)
+			}
+			groupIdx := spec.Weights[i].GroupIndex
+			if groupIdx < 0 || groupIdx >= len(spec.Groups) {
+				t.Fatalf("group index %d out of range for %q", groupIdx, name)
+			}
+			return spec.Groups[groupIdx]
+		}
+	}
+	t.Fatalf("missing weight %q in shapes", name)
+	return gpu.OptimizerGroup{}
 }
