@@ -12,6 +12,7 @@ This directory holds focused guides for using and extending mixlab.
 | [cli-export.md](cli-export.md) | Hugging Face `export-hf` and `parity` flags. |
 | [data.md](data.md) | Preparing example data, FineWeb-Edu, custom corpora, and tokenizer compatibility. |
 | [architecture.md](architecture.md) | Model/block concepts, config customization, custom blocks, and extension points. |
+| [recipes.md](recipes.md) | Registry of reproducible end-to-end recipes (config → trained → published HF model). |
 | [config-model.md](config-model.md) | Short guide to top-level model fields and embedding channels. |
 | [config-blocks.md](config-blocks.md) | Short guide to block families and common block patterns. |
 | [config-training.md](config-training.md) | Short guide to training objectives, optimizers, and auxiliary losses. |

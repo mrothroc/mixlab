@@ -131,6 +131,7 @@ framework. It trades generality for speed of iteration.
 - [CLI usage](docs/cli.md)
 - [Data preparation](docs/data.md)
 - [Architecture guide](docs/architecture.md)
+- [Recipes](docs/recipes.md) — reproducible end-to-end models (config → trained → Hugging Face)
 - [Config guides](docs/config-model.md)
 - [Configuration reference](docs/config-reference.md)
 - [Examples](examples/README.md)
