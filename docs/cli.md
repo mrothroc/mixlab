@@ -10,6 +10,8 @@ mixlab uses `-mode` to select the command to run.
 | `prepare` | Tokenize raw text or JSONL into binary training shards. |
 | `count` | Print parameter, size, block, FLOP, and IR op counts for a config. |
 | `eval` | Load safetensors and evaluate validation loss. |
+| `export-hf` | Export supported safetensors checkpoints to Hugging Face model directories. |
+| `parity` | Compare native Mixlab inference against a Hugging Face export. |
 | `hiddenstats` | Export one batch of hidden states as float32 binary. |
 | `generate` | Generate token IDs from a safetensors checkpoint (causal next-token). |
 | `generate-diffusion` | Generate token IDs from a `block_diffusion` checkpoint using block-wise masked diffusion sampling. |
@@ -140,6 +142,57 @@ if FORM[form_id] == "raw":
 
 When `-logits-out` is combined with `-logprobs-out`, recovered NLLs match the
 values in `logprobs.bin` to float32/float16 tolerance.
+
+## export-hf
+
+Export a supported Mixlab checkpoint as a Hugging Face model directory:
+
+```bash
+./mixlab -mode export-hf \
+  -config examples/plain_3L.json \
+  -safetensors-load runs/plain_3L/weights.safetensors \
+  -output runs/plain_3L/hf \
+  -tokenizer-path data/example/tokenizer.json
+```
+
+| Flag | Description |
+|------|-------------|
+| `-config` | JSON config used to train the checkpoint. |
+| `-safetensors-load` | Safetensors checkpoint to export. |
+| `-output` | Destination Hugging Face model directory. |
+| `-tokenizer-path` | Tokenizer JSON to bundle with the export. |
+
+The default export format is Mixlab custom-code Hugging Face export. Configs
+with `hf_export_format: "gpt2"` export as native `GPT2LMHeadModel` when they
+meet the strict GPT-2 compatibility rules. See [hf-export.md](hf-export.md)
+for supported features and load examples.
+
+## parity
+
+Compare a Hugging Face export against native Mixlab inference:
+
+```bash
+./mixlab -mode parity \
+  -config examples/plain_3L.json \
+  -safetensors-load runs/plain_3L/weights.safetensors \
+  -hf runs/plain_3L/hf \
+  -train 'data/example/val_*.bin'
+```
+
+| Flag | Description |
+|------|-------------|
+| `-config` | JSON config used for native inference. |
+| `-safetensors-load` | Native safetensors checkpoint to compare. |
+| `-hf` | Hugging Face export directory to load. |
+| `-train` | Shard glob used as the comparison token stream. |
+| `-threshold` | Maximum allowed native-vs-HF mean NLL difference. Default: `0.05`. |
+| `-max-logit-diff` | Maximum allowed absolute logit difference on sampled rows. `<=0` disables the logit gate. Default: `0.001`. |
+| `-parity-logit-tokens` | Number of token pairs to sample for logit comparison, rounded up to full eval batches. `0` uses one batch. |
+| `-parity-python` | Python interpreter for the HF checker. Defaults to `HF_PARITY_PYTHON` or `python3`. |
+
+The Python checker needs the packages in `requirements-hf.txt`. Use `parity`
+after `export-hf` when changing export templates, weight mapping, tokenizer
+metadata, or supported block features.
 
 ## hiddenstats
 

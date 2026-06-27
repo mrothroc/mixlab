@@ -154,12 +154,24 @@ framework. It trades generality for speed of iteration.
 ./mixlab -mode eval -config examples/plain_3L.json \
     -safetensors-load weights.st -train 'data/example/train_*.bin'
 
+# Export a supported checkpoint to Hugging Face
+./mixlab -mode export-hf -config examples/plain_3L.json \
+    -safetensors-load weights.safetensors -output runs/plain_3L/hf \
+    -tokenizer-path data/example/tokenizer.json
+
+# Verify the Hugging Face export against native Mixlab inference
+./mixlab -mode parity -config examples/plain_3L.json \
+    -safetensors-load weights.safetensors -hf runs/plain_3L/hf \
+    -train 'data/example/val_*.bin'
+
 # Generate token IDs from a checkpoint
 ./mixlab -mode generate -config examples/plain_3L.json \
     -safetensors-load weights.st -prompt token_ids:0,1,2
 ```
 
 See [docs/cli.md](docs/cli.md) for the full mode and flag reference.
+For long MLX runs, see [performance and profiling](docs/performance.md#mlx-memory-bounds)
+for cache and memory-limit environment variables.
 
 ## Contributing
 
