@@ -205,6 +205,46 @@ func TestComputeWeightShapesMarksGPTBERTOutputProjections(t *testing.T) {
 	}
 }
 
+func TestComputeWeightShapesMarksGPT2ResidualProjectionScale(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "gpt2_init_shapes",
+		"model_dim": 32,
+		"vocab_size": 128,
+		"seq_len": 8,
+		"blocks": [
+			{"type": "plain", "heads": 4},
+			{"type": "plain", "heads": 4},
+			{"type": "plain", "heads": 4}
+		],
+		"training": {"steps": 10, "lr": 0.001, "batch_tokens": 16, "weight_init": "gpt2"}
+	}`), "gpt2_init_shapes")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	want := float32(1.0 / math.Sqrt(2.0*3.0))
+	residuals := 0
+	for _, ws := range shapes {
+		switch ws.Name {
+		case "wo", "ff2":
+			residuals++
+			if math.Abs(float64(ws.GPT2Scale-want)) > 1e-6 {
+				t.Fatalf("%s GPT2Scale=%g, want %g", ws.Name, ws.GPT2Scale, want)
+			}
+		case "wq", "wk", "wv", "ff1":
+			if ws.GPT2Scale != 0 {
+				t.Fatalf("%s unexpectedly had GPT2Scale=%g", ws.Name, ws.GPT2Scale)
+			}
+		}
+	}
+	if residuals != 6 {
+		t.Fatalf("marked GPT-2 residual projections=%d, want 6", residuals)
+	}
+}
+
 func TestInitWeightData_GPTBERTTruncatedDepthScaled(t *testing.T) {
 	shapes := []WeightShape{
 		{Name: "wq", Shape: []int{512, 512}, ModelDim: 512},
@@ -225,6 +265,37 @@ func TestInitWeightData_GPTBERTTruncatedDepthScaled(t *testing.T) {
 	ratio := rms(weights[1]) / rms(weights[0])
 	if math.Abs(ratio-0.5) > 0.04 {
 		t.Fatalf("scaled/unscaled RMS ratio=%g, want about 0.5", ratio)
+	}
+}
+
+func TestInitWeightData_GPT2NormalAndResidualScaled(t *testing.T) {
+	scale := float32(1.0 / math.Sqrt(2.0*12.0))
+	shapes := []WeightShape{
+		{Name: "norm", Shape: []int{64}, IsNormScale: true},
+		{Name: "bias", Shape: []int{64}},
+		{Name: "embed", Shape: []int{512, 512}},
+		{Name: "wq", Shape: []int{512, 512}},
+		{Name: "wo", Shape: []int{512, 512}, GPT2Scale: scale},
+	}
+	weights := initWeightData(shapes, 42, "gpt2", 0)
+	for _, v := range weights[0] {
+		if v != 1.0 {
+			t.Fatalf("norm scale should be 1.0 with gpt2 init, got %v", v)
+		}
+	}
+	for _, v := range weights[1] {
+		if v != 0 {
+			t.Fatalf("bias should be zero with gpt2 init, got %v", v)
+		}
+	}
+	for _, idx := range []int{2, 3} {
+		if got := rms(weights[idx]); math.Abs(got-0.02) > 0.0015 {
+			t.Fatalf("%s RMS=%g, want about 0.02", shapes[idx].Name, got)
+		}
+	}
+	ratio := rms(weights[4]) / rms(weights[3])
+	if math.Abs(ratio-float64(scale)) > 0.006 {
+		t.Fatalf("residual/base RMS ratio=%g, want about %g", ratio, scale)
 	}
 }
 

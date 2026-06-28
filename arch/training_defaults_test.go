@@ -175,5 +175,8 @@ func TestGPT2StrictSmallWeightDecayZero(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadArchConfig: %v", err)
 	}
+	if cfg.Training.WeightInit != "gpt2" {
+		t.Fatalf("weight_init=%q, want gpt2", cfg.Training.WeightInit)
+	}
 	assertWeightDecays(t, cfg, 0, 0, 0, 0, 0)
 }

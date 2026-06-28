@@ -263,6 +263,24 @@ func TestInvalidWeightInit(t *testing.T) {
 	}
 }
 
+func TestGPT2WeightInitAccepted(t *testing.T) {
+	raw := []byte(`{
+		"name": "gpt2_weight_init",
+		"model_dim": 128,
+		"vocab_size": 1024,
+		"seq_len": 128,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 100, "lr": 0.0003, "batch_tokens": 1024, "weight_init": "gpt2"}
+	}`)
+	cfg, err := ParseArchConfig(raw, "gpt2_weight_init")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if cfg.Training.WeightInit != "gpt2" {
+		t.Fatalf("weight_init=%q, want gpt2", cfg.Training.WeightInit)
+	}
+}
+
 func TestNegativeHardwareTFLOPs(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  128,

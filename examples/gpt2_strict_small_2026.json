@@ -41,6 +41,7 @@
     "warmup_steps": 2000,
     "batch_tokens": 8192,
     "compute_dtype": "bf16",
+    "weight_init": "gpt2",
     "seed": 42
   }
 }

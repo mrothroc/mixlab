@@ -22,6 +22,7 @@ type WeightShape struct {
 	DtMin         float64
 	DtMax         float64
 	GPTBERTScale  float32
+	GPT2Scale     float32
 	ModelDim      int
 }
 
@@ -50,6 +51,7 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 			DtMin:         m.DtMin,
 			DtMax:         m.DtMax,
 			GPTBERTScale:  m.GPTBERTScale,
+			GPT2Scale:     m.GPT2Scale,
 			ModelDim:      cfg.ModelDim,
 		}
 	}
@@ -101,6 +103,18 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 				}
 				for j := range data {
 					data[j] = float32(truncatedNormal(rng, std) * scale)
+				}
+			case "gpt2":
+				std := float64(weightInitStd)
+				if std <= 0 {
+					std = 0.02
+				}
+				scale := float64(1.0)
+				if ws.GPT2Scale > 0 {
+					scale = float64(ws.GPT2Scale)
+				}
+				for j := range data {
+					data[j] = float32(rng.NormFloat64() * std * scale)
 				}
 			default:
 				fanIn := ws.Shape[0]

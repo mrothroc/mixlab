@@ -24,6 +24,7 @@ type WeightMeta struct {
 	DtMin         float64
 	DtMax         float64
 	GPTBERTScale  float32
+	GPT2Scale     float32
 }
 
 // ffnDim computes the FFN hidden dimension, clamped to at least D.
@@ -466,7 +467,7 @@ func streamWeightShapesWithRefsAndParallelOptions(specs []BlockSpec, refs []int,
 			if err != nil {
 				return nil, err
 			}
-			annotateGPTBERTOutputScale(metas, spec, i)
+			annotateResidualOutputScales(metas, spec, i, len(specs))
 			all = append(all, metas...)
 		}
 		return all, nil
@@ -483,7 +484,7 @@ func streamWeightShapesWithRefsAndParallelOptions(specs []BlockSpec, refs []int,
 		if err != nil {
 			return nil, err
 		}
-		annotateGPTBERTOutputScale(metas, spec, i)
+		annotateResidualOutputScales(metas, spec, i, len(specs))
 		all = append(all, metas...)
 	}
 	return all, nil
@@ -499,20 +500,25 @@ func blockRangeWeightShapesWithRefs(specs []BlockSpec, refs []int, start, end, D
 		if err != nil {
 			return nil, err
 		}
-		annotateGPTBERTOutputScale(metas, specs[i], i)
+		annotateResidualOutputScales(metas, specs[i], i, len(specs))
 		all = append(all, metas...)
 	}
 	return all, nil
 }
 
-func annotateGPTBERTOutputScale(metas []WeightMeta, spec BlockSpec, blockIndex int) {
+func annotateResidualOutputScales(metas []WeightMeta, spec BlockSpec, blockIndex, numBlocks int) {
 	if blockIndex < 0 {
 		blockIndex = 0
 	}
-	scale := float32(math.Sqrt(1.0 / (2.0 * float64(blockIndex+1))))
+	if numBlocks <= 0 {
+		numBlocks = 1
+	}
+	gptBERTScale := float32(math.Sqrt(1.0 / (2.0 * float64(blockIndex+1))))
+	gpt2Scale := float32(1.0 / math.Sqrt(2.0*float64(numBlocks)))
 	for i := range metas {
 		if isGPTBERTOutputProjectionName(spec, metas[i].Name) {
-			metas[i].GPTBERTScale = scale
+			metas[i].GPTBERTScale = gptBERTScale
+			metas[i].GPT2Scale = gpt2Scale
 		}
 	}
 }

@@ -307,7 +307,7 @@ type TrainingSpec struct {
 	ComputeDType        string  `json:"compute_dtype,omitempty"`
 	QAT                 string  `json:"qat,omitempty"` // "none" (default), "int8", or "int6"
 	QATStart            int     `json:"qat_start,omitempty"`
-	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default), "normal", or "gptbert"
+	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default), "normal", "gptbert", or "gpt2"
 	WeightInitStd       float32 `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
 	EmbedWeightDecay    float32 `json:"embed_weight_decay"`
 	MatrixWeightDecay   float32 `json:"matrix_weight_decay"`
@@ -871,9 +871,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, fmt.Errorf("config %q has invalid training.optimizer=%q (must be \"adamw\", \"muon\", \"muon_eq_r\", \"normuon\", or \"lamb\")", source, cfg.Training.Optimizer)
 	}
 	switch cfg.Training.WeightInit {
-	case "", "xavier_uniform", "normal", "gptbert":
+	case "", "xavier_uniform", "normal", "gptbert", "gpt2":
 	default:
-		return nil, fmt.Errorf("config %q has invalid training.weight_init=%q (must be \"xavier_uniform\", \"normal\", or \"gptbert\")", source, cfg.Training.WeightInit)
+		return nil, fmt.Errorf("config %q has invalid training.weight_init=%q (must be \"xavier_uniform\", \"normal\", \"gptbert\", or \"gpt2\")", source, cfg.Training.WeightInit)
 	}
 	switch cfg.Training.EffectiveComputeDType() {
 	case "float32", "bf16":
