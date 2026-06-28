@@ -6,6 +6,17 @@ import (
 	"github.com/mrothroc/mixlab/data"
 )
 
+type gpuObjectiveTrainingLossEvaluator interface {
+	EvaluateObjectiveTrainingLossGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error)
+}
+
+func evaluateObjectiveTrainingLossGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int) (float32, error) {
+	if evaluator, ok := trainer.(gpuObjectiveTrainingLossEvaluator); ok {
+		return evaluator.EvaluateObjectiveTrainingLossGPU(batch, batchSize, seqLen)
+	}
+	return trainer.EvaluateObjectiveGPU(batch, batchSize, seqLen)
+}
+
 // meanValidationLoss computes the mean loss across validation batches.
 func meanValidationLoss(valSet *data.ValSet, trainer GPUTrainer, batchSize, seqLen int) (float64, error) {
 	return meanValidationLossWithTTT(valSet, trainer, batchSize, seqLen, "full", 0, 0, 0)
@@ -45,9 +56,18 @@ func meanValidationLossWithTTT(
 			loss float32
 			err  error
 		)
-		if tttMode == "lora" && tttSteps > 0 {
+		switch {
+		case tttMode == "lora" && tttSteps > 0:
+			if len(vb.LossMask) > 0 {
+				return 0, fmt.Errorf("masked validation batches do not support LoRA-TTT")
+			}
 			loss, err = trainer.EvaluateLoRATTTGPU(vb.X, vb.Y, batchSize, seqLen, tttSteps, tttLR, tttRank)
-		} else {
+		case len(vb.LossMask) > 0:
+			if tttSteps > 0 {
+				return 0, fmt.Errorf("masked validation batches do not support score-first TTT")
+			}
+			loss, err = evaluateObjectiveTrainingLossGPU(trainer, objectiveBatch{x: vb.X, y: vb.Y, lossMask: vb.LossMask}, batchSize, seqLen)
+		default:
 			loss, err = trainer.EvaluateGPU(vb.X, vb.Y, batchSize, seqLen)
 		}
 		if err != nil {

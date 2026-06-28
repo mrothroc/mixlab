@@ -120,6 +120,9 @@ func (s *InferenceSession) EvalTokens(tokens []uint16) ([]float32, error) {
 	if s.cfg == nil {
 		return nil, fmt.Errorf("inference session has no config")
 	}
+	if s.cfg.Training.ExampleFramingEnabled() {
+		return nil, fmt.Errorf("training.example_framing is not supported by flat-token EvalTokens in v1")
+	}
 
 	batchTokens := s.cfg.Training.BatchTokens
 	seqLen := s.cfg.SeqLen
@@ -204,6 +207,9 @@ func (s *InferenceSession) checkEvalPreconditions(tokens []uint16) error {
 	}
 	if s.cfg == nil {
 		return fmt.Errorf("inference session has no config")
+	}
+	if s.cfg.Training.ExampleFramingEnabled() {
+		return fmt.Errorf("training.example_framing is not supported by flat-token EvalTokens/EvalLogits in v1")
 	}
 	batchTokens := s.cfg.Training.BatchTokens
 	seqLen := s.cfg.SeqLen

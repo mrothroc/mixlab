@@ -529,6 +529,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		nil,
 		nil,
 		false,
+		false,
 		defaultNormSpec(),
 		NormPlacementPre,
 		false,
@@ -568,6 +569,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	data2vec *Data2VecSpec,
 	hiddenCapture *data2VecHiddenCapture,
 	segmentAttentionMask bool,
+	framedCausalLoss bool,
 	norm NormSpec,
 	normPlacement string,
 	ffnInternalNorm bool,
@@ -692,10 +694,11 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 
 	prog := NewProgram(nWeights)
 	maskedObjective := isMaskedTrainingObjective(objective)
+	maskedLoss := maskedObjective || (framedCausalLoss && objective == ObjectiveCausal)
 	distillationEnabled := distillation != nil
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
-	if maskedObjective {
+	if maskedLoss {
 		prog.DeclareInput("loss_mask", TensorFloat32, []int{B * T})
 	}
 	if objective == ObjectiveHybridExample {
@@ -896,7 +899,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 
 	switch {
-	case maskedObjective:
+	case maskedLoss:
 		emitMaskedLanguageModelLossIR(prog, logitsState, "targets", "loss_mask")
 	case distillationEnabled:
 		if err := emitDistillationLanguageModelLossIR(prog, logitsState, "targets", "teacher_probs", distillation.LossWeightCE, distillation.LossWeightKL); err != nil {
@@ -910,7 +913,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	if data2VecEnabled {
 		emitData2VecLossIR(prog, data2vec)
 	}
-	taskLossHasEvalLoss := maskedObjective || distillationEnabled || firstByteMask || (mtp != nil && mtp.EffectiveN() > 1)
+	taskLossHasEvalLoss := maskedLoss || distillationEnabled || firstByteMask || (mtp != nil && mtp.EffectiveN() > 1)
 	taskLossHasEvalLoss = emitZLossIR(prog, logitsState, zLoss, taskLossHasEvalLoss)
 	moeEnabled := emitMoEAuxiliaryAggregatesIR(prog, taskLossHasEvalLoss)
 	prog.DeclareOutput("loss", TensorFloat32, []int{1})

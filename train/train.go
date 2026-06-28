@@ -230,6 +230,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		}
 		fmt.Printf("  [%s] char features enabled (%s)\n", name, source)
 	}
+	if cfg.Training.ExampleFramingEnabled() {
+		f := cfg.Training.ExampleFraming
+		fmt.Printf("  [%s] example framing: content_len=%d bos_id=%d eos_id=%d examples/batch=%d\n",
+			name, f.ContentLen, f.BosID, f.EosID, batchSize)
+	}
 
 	// Build IR program
 	prog, err := BuildIRProgramFromConfig(cfg)
@@ -805,9 +810,22 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 			}
 		}
-		evalLoss, err := causalEval.evaluateCausalGPU(currentProgramKey, lastTrainBatch.x, lastTrainBatch.y)
+		finalEvalBatch := objectiveBatch{x: lastTrainBatch.x, y: lastTrainBatch.y}
+		if cfg.Training.ExampleFramingEnabled() {
+			var err error
+			finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveCausal, seqLen)
+			if err != nil {
+				return TrainResult{}, fmt.Errorf("prepare final framed training loss batch: %w", err)
+			}
+		}
+		var evalLoss float32
+		if cfg.Training.ExampleFramingEnabled() {
+			evalLoss, err = causalEval.evaluateCausalObjectiveTrainingLossGPU(currentProgramKey, finalEvalBatch)
+		} else {
+			evalLoss, err = causalEval.evaluateCausalObjectiveGPU(currentProgramKey, finalEvalBatch)
+		}
 		if err != nil {
-			return TrainResult{}, fmt.Errorf("evaluate final unmasked training loss: %w", err)
+			return TrainResult{}, fmt.Errorf("evaluate final training loss: %w", err)
 		}
 		lastUnmaskedLoss = float64(evalLoss)
 	}
@@ -824,23 +842,27 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 	// Full BPB evaluation if requested
 	if opts.DoFullEval {
-		if cfg.Training.TTTSteps > 0 {
-			if cfg.Training.TTTMode == "lora" {
-				fmt.Printf("  [%s] computing full validation BPB with LoRA-TTT (steps=%d lr=%g rank=%d)...\n", name, cfg.Training.TTTSteps, cfg.Training.TTTLR, cfg.Training.TTTRank)
-			} else {
-				fmt.Printf("  [%s] computing full validation BPB with score-first TTT (steps=%d lr=%g)...\n", name, cfg.Training.TTTSteps, cfg.Training.TTTLR)
-			}
+		if cfg.Training.ExampleFramingEnabled() {
+			fmt.Printf("  [%s] full validation BPB failed: training.example_framing is not supported by continuous-stream full eval in v1\n", name)
 		} else {
-			fmt.Printf("  [%s] computing full validation BPB...\n", name)
-		}
-		lutDir := opts.LUTDir
-		if lutDir == "" {
-			lutDir = "data"
-		}
-		if err := causalEval.withCausalEvalProgram(currentProgramKey, func() error {
-			return runFullEval(cfg, valPattern, trainer, lutDir)
-		}); err != nil {
-			fmt.Printf("  [%s] full validation BPB failed: %v\n", name, err)
+			if cfg.Training.TTTSteps > 0 {
+				if cfg.Training.TTTMode == "lora" {
+					fmt.Printf("  [%s] computing full validation BPB with LoRA-TTT (steps=%d lr=%g rank=%d)...\n", name, cfg.Training.TTTSteps, cfg.Training.TTTLR, cfg.Training.TTTRank)
+				} else {
+					fmt.Printf("  [%s] computing full validation BPB with score-first TTT (steps=%d lr=%g)...\n", name, cfg.Training.TTTSteps, cfg.Training.TTTLR)
+				}
+			} else {
+				fmt.Printf("  [%s] computing full validation BPB...\n", name)
+			}
+			lutDir := opts.LUTDir
+			if lutDir == "" {
+				lutDir = "data"
+			}
+			if err := causalEval.withCausalEvalProgram(currentProgramKey, func() error {
+				return runFullEval(cfg, valPattern, trainer, lutDir)
+			}); err != nil {
+				fmt.Printf("  [%s] full validation BPB failed: %v\n", name, err)
+			}
 		}
 	}
 

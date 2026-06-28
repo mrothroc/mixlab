@@ -131,6 +131,9 @@ func runFullEvalLogprobs(session *InferenceSession, valPattern, lutDir string, e
 	cfg := session.Config()
 	seqLen := cfg.SeqLen
 	batchTokens := cfg.Training.BatchTokens
+	if cfg.Training.ExampleFramingEnabled() {
+		return fmt.Errorf("training.example_framing is not supported by continuous-stream per-token eval/export in v1")
+	}
 	if batchTokens%seqLen != 0 {
 		return fmt.Errorf("batch_tokens (%d) must be divisible by seq_len (%d)", batchTokens, seqLen)
 	}

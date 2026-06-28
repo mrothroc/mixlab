@@ -449,6 +449,31 @@ func TestPrepareObjectiveBatchSegmentIDsFromBoundaryToken(t *testing.T) {
 	}
 }
 
+func TestPrepareObjectiveBatchExampleFramingCausalLossMask(t *testing.T) {
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 6
+	cfg.Training.BatchTokens = 12
+	cfg.Training.ExampleFraming = &arch.ExampleFramingSpec{ContentLen: 4, BosID: 1, EosID: 2}
+	batch := trainBatch{
+		x: []int{1, 10, 11, 12, 13, 2, 1, 20, 21, 22, 23, 2},
+		y: []int{10, 11, 12, 13, 2, 2, 20, 21, 22, 23, 2, 2},
+	}
+	got, err := prepareObjectiveBatchWithSeqLen(cfg, batch, 0, arch.ObjectiveCausal, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepare framed causal batch: %v", err)
+	}
+	if !reflect.DeepEqual(got.x, batch.x) {
+		t.Fatalf("x = %v, want %v", got.x, batch.x)
+	}
+	if !reflect.DeepEqual(got.y, batch.y) {
+		t.Fatalf("y = %v, want %v", got.y, batch.y)
+	}
+	wantMask := []float32{1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 0}
+	if !reflect.DeepEqual(got.lossMask, wantMask) {
+		t.Fatalf("lossMask = %v, want %v", got.lossMask, wantMask)
+	}
+}
+
 func TestPrepareObjectiveBatchSegmentIDsUseUnmaskedMLMTokens(t *testing.T) {
 	cfg := objectiveTestConfig()
 	cfg.SeqLen = 4

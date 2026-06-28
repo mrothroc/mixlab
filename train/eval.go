@@ -125,6 +125,9 @@ func runFullEvalWithTTT(
 	seqLen := cfg.SeqLen
 	batchTokens := cfg.Training.BatchTokens
 	vocab := cfg.VocabSize
+	if cfg.Training.ExampleFramingEnabled() {
+		return fmt.Errorf("training.example_framing is not supported by continuous-stream full BPB eval in v1")
+	}
 	if tttSteps < 0 {
 		return fmt.Errorf("ttt_steps must be >= 0")
 	}

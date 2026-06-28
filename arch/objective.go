@@ -92,6 +92,10 @@ func (t TrainingSpec) AttentionSegmentMaskEnabled() bool {
 	return t.EffectiveAttentionSegmentMask() == AttentionSegmentMaskBoundaryToken
 }
 
+func (t TrainingSpec) ExampleFramingEnabled() bool {
+	return t.ExampleFraming != nil
+}
+
 func (t TrainingSpec) DefaultConcreteObjective() string {
 	obj := t.EffectiveObjective()
 	if obj == ObjectiveHybrid {
@@ -101,7 +105,7 @@ func (t TrainingSpec) DefaultConcreteObjective() string {
 }
 
 func (t TrainingSpec) NeedsMaskedLoss() bool {
-	return isMaskedTrainingObjective(t.DefaultConcreteObjective())
+	return isMaskedTrainingObjective(t.DefaultConcreteObjective()) || t.ExampleFramingEnabled()
 }
 
 func validateTrainingObjective(cfg *ArchConfig, source string) error {
@@ -233,6 +237,69 @@ func validateTrainingAttentionSegmentMask(cfg *ArchConfig, source string) error 
 	}
 	if !hasPlain {
 		return fmt.Errorf("config %q training.attention_segment_mask requires at least one type=plain block", source)
+	}
+	return nil
+}
+
+func validateTrainingExampleFraming(cfg *ArchConfig, source string) error {
+	t := &cfg.Training
+	if t.ExampleFraming == nil {
+		return nil
+	}
+	f := t.ExampleFraming
+	if !f.contentLenSet {
+		return fmt.Errorf("config %q training.example_framing.content_len is required", source)
+	}
+	if f.ContentLen <= 0 {
+		return fmt.Errorf("config %q has invalid training.example_framing.content_len=%d (must be > 0)", source, f.ContentLen)
+	}
+	if !f.bosIDSet {
+		return fmt.Errorf("config %q training.example_framing.bos_id is required", source)
+	}
+	if !f.eosIDSet {
+		return fmt.Errorf("config %q training.example_framing.eos_id is required", source)
+	}
+	if f.BosID < 0 || f.BosID >= cfg.VocabSize {
+		return fmt.Errorf("config %q has invalid training.example_framing.bos_id=%d (must be in [0,%d))", source, f.BosID, cfg.VocabSize)
+	}
+	if f.EosID < 0 || f.EosID >= cfg.VocabSize {
+		return fmt.Errorf("config %q has invalid training.example_framing.eos_id=%d (must be in [0,%d))", source, f.EosID, cfg.VocabSize)
+	}
+	if cfg.SeqLen != f.ContentLen+2 {
+		return fmt.Errorf("config %q training.example_framing requires seq_len=%d (content_len+2), got seq_len=%d", source, f.ContentLen+2, cfg.SeqLen)
+	}
+	if t.BatchTokens <= 0 || t.BatchTokens%cfg.SeqLen != 0 {
+		return fmt.Errorf("config %q training.example_framing requires batch_tokens (%d) to be divisible by seq_len (%d)", source, t.BatchTokens, cfg.SeqLen)
+	}
+	if t.EffectiveObjective() != ObjectiveCausal {
+		return fmt.Errorf("config %q training.example_framing only supports training.objective=\"causal\" in v1", source)
+	}
+	if cfg.MTP != nil {
+		return fmt.Errorf("config %q training.example_framing cannot be combined with top-level mtp in v1", source)
+	}
+	if t.FirstByteMask {
+		return fmt.Errorf("config %q training.example_framing cannot be combined with training.first_byte_mask in v1", source)
+	}
+	if t.Distillation != nil {
+		return fmt.Errorf("config %q training.example_framing cannot be combined with training.distillation in v1", source)
+	}
+	if t.Data2Vec != nil {
+		return fmt.Errorf("config %q training.example_framing cannot be combined with training.data2vec in v1", source)
+	}
+	if t.Diffusion != nil || t.UsesBlockDiffusionObjective() {
+		return fmt.Errorf("config %q training.example_framing cannot be combined with block_diffusion in v1", source)
+	}
+	if t.AttentionSegmentMaskEnabled() {
+		return fmt.Errorf("config %q training.example_framing cannot be combined with training.attention_segment_mask in v1", source)
+	}
+	if t.TTTSteps > 0 {
+		return fmt.Errorf("config %q training.example_framing cannot be combined with training.ttt_steps in v1", source)
+	}
+	if len(t.SeqLenSchedule) > 0 {
+		return fmt.Errorf("config %q training.example_framing cannot be combined with training.seq_len_schedule in v1", source)
+	}
+	if t.ShuffleChunkTokens > 0 && t.ShuffleChunkTokens != f.ContentLen {
+		return fmt.Errorf("config %q training.example_framing requires training.shuffle_chunk_tokens to be omitted or equal content_len=%d", source, f.ContentLen)
 	}
 	return nil
 }

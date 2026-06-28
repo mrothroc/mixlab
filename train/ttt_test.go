@@ -8,15 +8,16 @@ import (
 )
 
 type fakeTTTTrainer struct {
-	loss       float32
-	delta      float32
-	loraDelta  float32
-	evalCalls  int
-	trainCalls int
-	loraCalls  int
-	lrs        []float32
-	events     []string
-	pending    *float32
+	loss                       float32
+	delta                      float32
+	loraDelta                  float32
+	evalCalls                  int
+	trainCalls                 int
+	loraCalls                  int
+	objectiveTrainingLossCalls int
+	lrs                        []float32
+	events                     []string
+	pending                    *float32
 }
 
 func (t *fakeTTTTrainer) TrainStepGPU(_ []int, _ []int, _, _ int, lr float32) (float32, error) {
@@ -66,6 +67,12 @@ func (t *fakeTTTTrainer) EvaluateGPU(_ []int, _ []int, _, _ int) (float32, error
 
 func (t *fakeTTTTrainer) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error) {
 	return t.EvaluateGPU(batch.x, batch.y, batchSize, seqLen)
+}
+
+func (t *fakeTTTTrainer) EvaluateObjectiveTrainingLossGPU(_ objectiveBatch, _, _ int) (float32, error) {
+	t.objectiveTrainingLossCalls++
+	t.events = append(t.events, "objective_training_loss")
+	return t.loss, nil
 }
 
 func (t *fakeTTTTrainer) EvaluatePerTokenGPU(_ []int, _ []int, _, _ int) ([]float32, error) {
@@ -137,6 +144,27 @@ func TestMeanValidationLossWithTTTDisabledMatchesNormalEval(t *testing.T) {
 	}
 	if tttDisabledTrainer.trainCalls != 0 {
 		t.Fatalf("disabled TTT train calls = %d, want 0", tttDisabledTrainer.trainCalls)
+	}
+}
+
+func TestMeanValidationLossUsesTrainingLossForMaskedValidationBatches(t *testing.T) {
+	valSet := &data.ValSet{Batches: []data.ValBatch{
+		{X: []int{1, 2}, Y: []int{2, 3}, LossMask: []float32{1, 0}},
+		{X: []int{3, 4}, Y: []int{4, 5}, LossMask: []float32{1, 0}},
+	}}
+	trainer := &fakeTTTTrainer{loss: 1.75}
+	got, err := meanValidationLoss(valSet, trainer, 1, 2)
+	if err != nil {
+		t.Fatalf("meanValidationLoss: %v", err)
+	}
+	if got != 1.75 {
+		t.Fatalf("masked validation loss = %g, want 1.75", got)
+	}
+	if trainer.objectiveTrainingLossCalls != 2 {
+		t.Fatalf("objectiveTrainingLossCalls=%d, want 2", trainer.objectiveTrainingLossCalls)
+	}
+	if trainer.evalCalls != 0 {
+		t.Fatalf("dense eval calls=%d, want 0", trainer.evalCalls)
 	}
 }
 

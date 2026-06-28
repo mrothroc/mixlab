@@ -42,6 +42,9 @@ func CountIRWeightsFromConfig(cfg *ArchConfig) (int, error) {
 }
 
 func effectiveShuffleChunkTokens(cfg *ArchConfig) int {
+	if cfg.Training.ExampleFramingEnabled() {
+		return cfg.Training.ExampleFraming.ContentLen
+	}
 	if cfg.Training.ShuffleChunkTokens > 0 {
 		return cfg.Training.ShuffleChunkTokens
 	}
@@ -49,8 +52,16 @@ func effectiveShuffleChunkTokens(cfg *ArchConfig) int {
 }
 
 func effectiveLoaderOptions(cfg *ArchConfig) data.LoaderOptions {
-	return data.LoaderOptions{
+	opts := data.LoaderOptions{
 		ChunkSize:      effectiveShuffleChunkTokens(cfg),
 		NoShardShuffle: cfg.Data.NoShardShuffle,
 	}
+	if cfg.Training.ExampleFramingEnabled() {
+		opts.Framing = data.ExampleFraming{
+			ContentLen: cfg.Training.ExampleFraming.ContentLen,
+			BosID:      cfg.Training.ExampleFraming.BosID,
+			EosID:      cfg.Training.ExampleFraming.EosID,
+		}
+	}
+	return opts
 }

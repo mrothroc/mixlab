@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mrothroc/mixlab/arch"
+	"github.com/mrothroc/mixlab/data"
 )
 
 type objectiveBatch struct {
@@ -88,6 +89,9 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 	}
 	if err != nil {
 		return objectiveBatch{}, err
+	}
+	if cfg.Training.ExampleFramingEnabled() && canonicalObjective(objective) == arch.ObjectiveCausal {
+		prepared.lossMask = data.FramedCausalLossMask(need, seqLen)
 	}
 	if cfg.Training.AttentionSegmentMaskEnabled() {
 		if err := attachSegmentIDs(cfg, &prepared, need, seqLen); err != nil {

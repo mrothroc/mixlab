@@ -78,11 +78,21 @@ func (c causalEvalSwitcher) withCausalEvalProgram(currentKey trainingProgramCach
 	return runErr
 }
 
-func (c causalEvalSwitcher) evaluateCausalGPU(currentKey trainingProgramCacheKey, x, y []int) (float32, error) {
+func (c causalEvalSwitcher) evaluateCausalObjectiveGPU(currentKey trainingProgramCacheKey, batch objectiveBatch) (float32, error) {
 	var loss float32
 	err := c.withCausalEvalProgram(currentKey, func() error {
 		var evalErr error
-		loss, evalErr = c.trainer.EvaluateGPU(x, y, c.batchSize, c.seqLen)
+		loss, evalErr = c.trainer.EvaluateObjectiveGPU(batch, c.batchSize, c.seqLen)
+		return evalErr
+	})
+	return loss, err
+}
+
+func (c causalEvalSwitcher) evaluateCausalObjectiveTrainingLossGPU(currentKey trainingProgramCacheKey, batch objectiveBatch) (float32, error) {
+	var loss float32
+	err := c.withCausalEvalProgram(currentKey, func() error {
+		var evalErr error
+		loss, evalErr = evaluateObjectiveTrainingLossGPU(c.trainer, batch, c.batchSize, c.seqLen)
 		return evalErr
 	})
 	return loss, err

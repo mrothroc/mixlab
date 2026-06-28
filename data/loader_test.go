@@ -422,6 +422,120 @@ func TestNewLoader_NextBatch(t *testing.T) {
 	}
 }
 
+func TestNewLoader_FramedBatchWrapsRowsAndDropsRaggedTails(t *testing.T) {
+	dir := t.TempDir()
+	writeShard(t, dir, "shard_00.bin", []uint16{10, 11, 12, 99, 98})
+	writeShard(t, dir, "shard_01.bin", []uint16{20, 21, 22})
+
+	loader, err := NewLoaderWithOptions(filepath.Join(dir, "shard_*.bin"), 0, LoaderOptions{
+		NoShardShuffle: true,
+		Framing:        ExampleFraming{ContentLen: 3, BosID: 1, EosID: 2},
+	})
+	if err != nil {
+		t.Fatalf("NewLoaderWithOptions: %v", err)
+	}
+
+	x, y, err := loader.NextBatch(10, 5)
+	if err != nil {
+		t.Fatalf("NextBatch framed: %v", err)
+	}
+	wantX := []int{1, 10, 11, 12, 2, 1, 20, 21, 22, 2}
+	wantY := []int{10, 11, 12, 2, 2, 20, 21, 22, 2, 2}
+	if !slices.Equal(x, wantX) {
+		t.Fatalf("x = %v, want %v", x, wantX)
+	}
+	if !slices.Equal(y, wantY) {
+		t.Fatalf("y = %v, want %v", y, wantY)
+	}
+}
+
+func TestNewLoader_FramedBatchDisablesRandomStartOffset(t *testing.T) {
+	dir := t.TempDir()
+	tokens := make([]uint16, 10050)
+	for i := range tokens {
+		tokens[i] = uint16(i % 1000)
+	}
+	writeShard(t, dir, "shard_00.bin", tokens)
+
+	loader, err := NewLoaderWithOptions(filepath.Join(dir, "shard_*.bin"), 99, LoaderOptions{
+		Framing: ExampleFraming{ContentLen: 10000, BosID: 1, EosID: 2},
+	})
+	if err != nil {
+		t.Fatalf("NewLoaderWithOptions: %v", err)
+	}
+	x, _, err := loader.NextBatch(10002, 10002)
+	if err != nil {
+		t.Fatalf("NextBatch framed: %v", err)
+	}
+	if x[0] != 1 || x[1] != 0 || x[2] != 1 {
+		t.Fatalf("framed row starts %v, want BOS followed by token stream start", x[:3])
+	}
+}
+
+func TestNewLoader_FramedChunkShufflePreservesContentChunks(t *testing.T) {
+	dir := t.TempDir()
+	tokens := []uint16{10, 11, 12, 20, 21, 22, 30, 31, 32, 40, 41, 42}
+	writeShard(t, dir, "shard_00.bin", tokens)
+
+	loader, err := NewLoaderWithOptions(filepath.Join(dir, "shard_*.bin"), 123, LoaderOptions{
+		Framing: ExampleFraming{ContentLen: 3, BosID: 1, EosID: 2},
+	})
+	if err != nil {
+		t.Fatalf("NewLoaderWithOptions: %v", err)
+	}
+	x, _, err := loader.NextBatch(20, 5)
+	if err != nil {
+		t.Fatalf("NextBatch framed: %v", err)
+	}
+	chunks := map[[3]int]bool{
+		{10, 11, 12}: true,
+		{20, 21, 22}: true,
+		{30, 31, 32}: true,
+		{40, 41, 42}: true,
+	}
+	seen := make(map[[3]int]bool)
+	for row := 0; row < 20; row += 5 {
+		if x[row] != 1 || x[row+4] != 2 {
+			t.Fatalf("row %d framing = %v, want BOS/EOS", row/5, x[row:row+5])
+		}
+		chunk := [3]int{x[row+1], x[row+2], x[row+3]}
+		if !chunks[chunk] {
+			t.Fatalf("row %d content chunk = %v, want one original contiguous chunk", row/5, chunk)
+		}
+		seen[chunk] = true
+	}
+	if len(seen) != len(chunks) {
+		t.Fatalf("seen chunks=%v, want all original chunks", seen)
+	}
+}
+
+func TestFramedCausalLossMask(t *testing.T) {
+	got := FramedCausalLossMask(10, 5)
+	want := []float32{1, 1, 1, 1, 0, 1, 1, 1, 1, 0}
+	if !slices.Equal(got, want) {
+		t.Fatalf("FramedCausalLossMask = %v, want %v", got, want)
+	}
+}
+
+func TestNewValSet_FramedBatchesCarryLossMask(t *testing.T) {
+	dir := t.TempDir()
+	writeShard(t, dir, "shard_00.bin", []uint16{10, 11, 12, 20, 21, 22})
+
+	vs, err := NewValSetWithOptions(filepath.Join(dir, "shard_*.bin"), 0, 1, 10, 5, LoaderOptions{
+		Framing: ExampleFraming{ContentLen: 3, BosID: 1, EosID: 2},
+	})
+	if err != nil {
+		t.Fatalf("NewValSetWithOptions: %v", err)
+	}
+	if len(vs.Batches) != 1 {
+		t.Fatalf("batches=%d, want 1", len(vs.Batches))
+	}
+	want := []float32{1, 1, 1, 1, 0, 1, 1, 1, 1, 0}
+	if !slices.Equal(vs.Batches[0].LossMask, want) {
+		t.Fatalf("val loss mask=%v, want %v", vs.Batches[0].LossMask, want)
+	}
+}
+
 func TestNewLoader_BadParams(t *testing.T) {
 	dir := t.TempDir()
 	tokens := make([]uint16, 100)

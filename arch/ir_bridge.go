@@ -39,42 +39,45 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	}
 	if len(cfg.RecurrencePhases) > 0 {
 		return buildIRProgramFromConfigWithStateAndOrder(cfg, TrainingProgramState{
-			RecurrenceActive:     true,
-			HeadUntied:           cfg.MTPUntieEnabled(),
-			Objective:            ObjectiveCausal,
-			DistillationInactive: true,
-			Data2VecInactive:     true,
-			ZLossInactive:        true,
-			DropoutInactive:      true,
-			SegmentMaskInactive:  true,
+			RecurrenceActive:       true,
+			HeadUntied:             cfg.MTPUntieEnabled(),
+			Objective:              ObjectiveCausal,
+			DistillationInactive:   true,
+			Data2VecInactive:       true,
+			ZLossInactive:          true,
+			DropoutInactive:        true,
+			SegmentMaskInactive:    true,
+			ExampleFramingInactive: true,
 		}, nil, cfg.RecurrencePhases[len(cfg.RecurrencePhases)-1].Order, false)
 	}
 	return buildIRProgramFromConfigWithState(cfg, TrainingProgramState{
-		RecurrenceActive:     true,
-		HeadUntied:           cfg.MTPUntieEnabled(),
-		Objective:            ObjectiveCausal,
-		DistillationInactive: true,
-		Data2VecInactive:     true,
-		ZLossInactive:        true,
-		DropoutInactive:      true,
-		SegmentMaskInactive:  true,
+		RecurrenceActive:       true,
+		HeadUntied:             cfg.MTPUntieEnabled(),
+		Objective:              ObjectiveCausal,
+		DistillationInactive:   true,
+		Data2VecInactive:       true,
+		ZLossInactive:          true,
+		DropoutInactive:        true,
+		SegmentMaskInactive:    true,
+		ExampleFramingInactive: true,
 	}, nil, false)
 }
 
 // TrainingProgramState selects training-time graph schedules that can switch
 // without changing the weight layout.
 type TrainingProgramState struct {
-	RecurrenceActive     bool
-	HeadUntied           bool
-	MTPAuxInactive       bool
-	DistillationInactive bool
-	Data2VecInactive     bool
-	ZLossInactive        bool
-	DropoutInactive      bool
-	Objective            string
-	HiddenCaptureTopK    int
-	HiddenCapturePrefix  string
-	SegmentMaskInactive  bool
+	RecurrenceActive       bool
+	HeadUntied             bool
+	MTPAuxInactive         bool
+	DistillationInactive   bool
+	Data2VecInactive       bool
+	ZLossInactive          bool
+	DropoutInactive        bool
+	Objective              string
+	HiddenCaptureTopK      int
+	HiddenCapturePrefix    string
+	SegmentMaskInactive    bool
+	ExampleFramingInactive bool
 }
 
 // BuildTrainingIRProgramFromConfig constructs a training program with MTP
@@ -177,6 +180,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		embeddingDropout = 0
 	}
 	segmentAttentionMask := cfg.Training.AttentionSegmentMaskEnabled() && !state.SegmentMaskInactive
+	framedCausalLoss := cfg.Training.ExampleFramingEnabled() && !state.ExampleFramingInactive
 
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		cfg.ModelDim,
@@ -220,6 +224,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		data2vec,
 		newData2VecHiddenCapture(state.HiddenCaptureTopK, len(cfg.Blocks), state.HiddenCapturePrefix),
 		segmentAttentionMask,
+		framedCausalLoss,
 		cfg.EffectiveNormSpec(),
 		cfg.EffectiveNormPlacement(),
 		cfg.FFNInternalNorm,

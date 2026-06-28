@@ -529,6 +529,19 @@ func (t *mlxGPUTrainer) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, se
 	return t.evaluatePreparedInputs(inputs)
 }
 
+// EvaluateObjectiveTrainingLossGPU evaluates the graph's optimizer loss output
+// directly, even when a separate dense eval_loss output is available.
+func (t *mlxGPUTrainer) EvaluateObjectiveTrainingLossGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error) {
+	if err := t.FlushGPU(); err != nil {
+		return 0, err
+	}
+	inputs, err := t.makeObjectiveInputs(batch, batchSize, seqLen)
+	if err != nil {
+		return 0, err
+	}
+	return gpu.TrainerEvaluate(t.handle, inputs)
+}
+
 func (t *mlxGPUTrainer) evaluatePreparedInputs(inputs []gpu.TensorInput) (float32, error) {
 	loss, err := gpu.TrainerEvaluate(t.handle, inputs)
 	if err != nil || t.evalLossOutputName == "" || t.evalLossOutputName == "loss" {

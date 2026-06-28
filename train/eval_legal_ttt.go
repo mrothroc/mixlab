@@ -72,6 +72,9 @@ func runFullEvalLegalChunkSGDWithTrainer(cfg *ArchConfig, valPattern string, tra
 	name := cfg.Name
 	seqLen := cfg.SeqLen
 	batchTokens := cfg.Training.BatchTokens
+	if cfg.Training.ExampleFramingEnabled() {
+		return fmt.Errorf("training.example_framing is not supported by continuous-stream legal_chunk_sgd eval in v1")
+	}
 	if batchTokens%seqLen != 0 {
 		return fmt.Errorf("batch_tokens (%d) must be divisible by seq_len (%d)", batchTokens, seqLen)
 	}

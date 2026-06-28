@@ -21,6 +21,19 @@ const (
 type LoaderOptions struct {
 	ChunkSize      int
 	NoShardShuffle bool
+	Framing        ExampleFraming
+}
+
+// ExampleFraming configures loader-side BOS/EOS wrapping for raw token
+// streams. A zero ContentLen disables framing.
+type ExampleFraming struct {
+	ContentLen int
+	BosID      int
+	EosID      int
+}
+
+func (f ExampleFraming) Enabled() bool {
+	return f.ContentLen > 0
 }
 
 // tokenStream reads tokens sequentially from binary shards.
@@ -60,7 +73,7 @@ func newTokenStreamWithOptions(pattern string, seed int64, opts LoaderOptions) (
 	}
 	shuffleChunks(toks, opts.ChunkSize, rng)
 	s := &tokenStream{files: files, tok: toks, rng: rng, chunkSize: opts.ChunkSize}
-	if len(toks) > 10000 {
+	if !opts.Framing.Enabled() && len(toks) > 10000 {
 		s.pos = rng.Intn(len(toks) / 2)
 	}
 	return s, nil
@@ -118,9 +131,30 @@ func (s *tokenStream) Take(n int) ([]uint16, error) {
 	return out, nil
 }
 
+// TakeAlignedChunk returns the next complete n-token chunk. It skips ragged
+// shard tails and never joins content across shard boundaries.
+func (s *tokenStream) TakeAlignedChunk(n int) ([]uint16, error) {
+	if n <= 0 {
+		return nil, fmt.Errorf("token count must be > 0; pass a positive chunk size")
+	}
+	for attempts := 0; attempts <= len(s.files); attempts++ {
+		usable := (len(s.tok) / n) * n
+		if s.pos+n <= usable {
+			out := append([]uint16(nil), s.tok[s.pos:s.pos+n]...)
+			s.pos += n
+			return out, nil
+		}
+		if err := s.advance(); err != nil {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("no shard contains a complete %d-token framed content chunk", n)
+}
+
 // Loader wraps a TokenStream to produce batches for training.
 type Loader struct {
-	stream *tokenStream
+	stream  *tokenStream
+	framing ExampleFraming
 }
 
 // NewLoader creates a Loader from a glob pattern for binary shard files.
@@ -143,6 +177,9 @@ func normalizeLoaderOptions(opts LoaderOptions, defaultChunkSize int) LoaderOpti
 	if opts.ChunkSize <= 0 {
 		opts.ChunkSize = defaultChunkSize
 	}
+	if opts.Framing.Enabled() {
+		opts.ChunkSize = opts.Framing.ContentLen
+	}
 	return opts
 }
 
@@ -153,7 +190,7 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 	if err != nil {
 		return nil, err
 	}
-	return &Loader{stream: s}, nil
+	return &Loader{stream: s, framing: opts.Framing}, nil
 }
 
 // NextBatch returns x (input tokens) and y (target tokens, shifted by 1).
@@ -161,6 +198,9 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 func (l *Loader) NextBatch(batchTokens, seqLen int) (x []int, y []int, err error) {
 	if batchTokens <= 0 || seqLen <= 0 || batchTokens%seqLen != 0 {
 		return nil, nil, fmt.Errorf("invalid batch shape: batchTokens=%d seqLen=%d; pass positive values with batchTokens divisible by seqLen", batchTokens, seqLen)
+	}
+	if l.framing.Enabled() {
+		return l.nextFramedBatch(batchTokens, seqLen)
 	}
 	tok, err := l.stream.Take(batchTokens + 1)
 	if err != nil {
@@ -175,10 +215,41 @@ func (l *Loader) NextBatch(batchTokens, seqLen int) (x []int, y []int, err error
 	return x, y, nil
 }
 
+func (l *Loader) nextFramedBatch(batchTokens, seqLen int) (x []int, y []int, err error) {
+	f := l.framing
+	if f.ContentLen <= 0 {
+		return nil, nil, fmt.Errorf("invalid framed content length=%d", f.ContentLen)
+	}
+	if seqLen != f.ContentLen+2 {
+		return nil, nil, fmt.Errorf("invalid framed batch shape: seqLen=%d content_len=%d; seqLen must equal content_len+2", seqLen, f.ContentLen)
+	}
+	batchSize := batchTokens / seqLen
+	x = make([]int, batchTokens)
+	y = make([]int, batchTokens)
+	for b := 0; b < batchSize; b++ {
+		content, err := l.stream.TakeAlignedChunk(f.ContentLen)
+		if err != nil {
+			return nil, nil, err
+		}
+		row := b * seqLen
+		x[row] = f.BosID
+		for i, tok := range content {
+			x[row+1+i] = int(tok)
+		}
+		x[row+seqLen-1] = f.EosID
+		for i := 0; i < seqLen-1; i++ {
+			y[row+i] = x[row+i+1]
+		}
+		y[row+seqLen-1] = f.EosID
+	}
+	return x, y, nil
+}
+
 // ValBatch holds a single validation batch.
 type ValBatch struct {
-	X []int
-	Y []int
+	X        []int
+	Y        []int
+	LossMask []float32
 }
 
 // ValSet holds fixed batches for repeatable evaluation.
@@ -209,12 +280,31 @@ func NewValSetWithOptions(pattern string, seed int64, nBatches, batchTokens, seq
 		if err != nil {
 			break
 		}
-		vs.Batches = append(vs.Batches, ValBatch{X: x, Y: y})
+		var lossMask []float32
+		if opts.Framing.Enabled() {
+			lossMask = FramedCausalLossMask(batchTokens, seqLen)
+		}
+		vs.Batches = append(vs.Batches, ValBatch{X: x, Y: y, LossMask: lossMask})
 	}
 	if len(vs.Batches) == 0 {
 		return nil, fmt.Errorf("no validation batches loaded from %q; check the validation glob or reduce seq_len/batch_tokens", pattern)
 	}
 	return vs, nil
+}
+
+// FramedCausalLossMask masks the final input position of every example row,
+// where no within-example next-token target exists.
+func FramedCausalLossMask(batchTokens, seqLen int) []float32 {
+	if batchTokens <= 0 || seqLen <= 0 || batchTokens%seqLen != 0 {
+		return nil
+	}
+	mask := make([]float32, batchTokens)
+	for rowStart := 0; rowStart < batchTokens; rowStart += seqLen {
+		for pos := 0; pos < seqLen-1; pos++ {
+			mask[rowStart+pos] = 1
+		}
+	}
+	return mask
 }
 
 // LoadDataShard reads a single binary shard file.

@@ -899,6 +899,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `hybrid_mix_granularity` | string | No | `"batch"` | Hybrid mixing granularity: `"batch"` preserves the existing one-objective-per-step behavior, while `"example"` samples causal vs secondary objective independently for each sequence in the batch and applies matching per-sequence attention masks. |
 | `attention_segment_mask` | string | No | Disabled | Optional packed-sequence block-diagonal attention masking. Omit, `""`, or `"none"` disables it; `"boundary_token"` derives per-row segment IDs from `attention_segment_boundary_token_id` and applies segment masking to `plain` self-attention during training. |
 | `attention_segment_boundary_token_id` | integer | Required for `attention_segment_mask: "boundary_token"` | None | Boundary token id already present in packed training shards. The boundary token starts a new segment and belongs to that new segment. Must be in `[0, vocab_size)`. |
+| `example_framing` | object | No | Disabled | Optional raw-stream example framing. When set, the loader slices each shard into `content_len` chunks, wraps every row as `[bos_id] + content + [eos_id]`, and masks the final row position from causal loss. Requires `seq_len = content_len + 2`. |
 | `distillation` | object | No | Disabled | Optional internal-teacher distillation block for causal LM training. |
 | `data2vec` | object | No | Disabled | Optional online EMA representation-distillation auxiliary loss for masked objectives. |
 | `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
@@ -989,6 +990,18 @@ Masked objectives emit a training loss averaged only over rows where `loss_mask 
 For diffusion experiments, compare against causal and MLM baselines that keep the same supported Transformer backbone, vocabulary, context length, optimizer settings, data, and training-token budget. Use causal validation BPB/per-token NLL for apples-to-apples model comparison, and report diffusion masked training loss separately because it is not the same metric as next-token validation loss.
 
 `attention_segment_mask: "boundary_token"` is for packed training streams that already contain a reliable document/segment marker. Mixlab derives `segment_ids` from the unmasked input tokens, then masks `plain` self-attention so tokens attend only within their segment. Causal, bidirectional, and per-example hybrid masks still apply inside each segment. V1 supports `plain` self-attention stacks with position-wise FFN/MoE blocks; fixed-teacher distillation, recurrent blocks, cross-attention, custom token mixers, and inference/generation segmentation are out of scope.
+
+`example_framing` is for raw continuous token shards that should train as independent fixed examples. It shuffles `content_len` raw-token chunks, drops ragged shard tails, prepends `bos_id`, appends `eos_id`, and masks the final EOS input position so it never predicts the next example. V1 is causal-training-only and rejects masked objectives, hybrid, block diffusion, MTP, first-byte masked loss, distillation, data2vec, attention segment masking, TTT eval settings, and `seq_len_schedule`.
+
+```json
+{
+  "seq_len": 514,
+  "training": {
+    "batch_tokens": 8224,
+    "example_framing": {"content_len": 512, "bos_id": 1, "eos_id": 2}
+  }
+}
+```
 
 `mlm_mask_prob_schedule` changes the mask ratio deterministically. With the default `"step"` mode, `[[0, 0.30], [5000, 0.15]]` uses a 30% mask rate until step 5000, then 15%. With `"linear"` mode, Mixlab interpolates between adjacent entries, so the same schedule gradually decays from 30% to 15% over the first 5000 steps. It applies to MLM, MNTP, and masked hybrid batches; causal hybrid batches ignore it because they do not use masked-objective rows.
 

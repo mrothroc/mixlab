@@ -191,6 +191,115 @@ func TestTrainingAttentionSegmentMaskValidation(t *testing.T) {
 	}
 }
 
+func TestTrainingExampleFramingValidation(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"seq_len": 6,
+		"training": {
+			"steps": 1, "lr": 0.001, "batch_tokens": 12,
+			"example_framing": {"content_len": 4, "bos_id": 0, "eos_id": 2}
+		}`)
+	if !cfg.Training.ExampleFramingEnabled() {
+		t.Fatal("example framing should be enabled")
+	}
+	if cfg.Training.ExampleFraming.BosID != 0 {
+		t.Fatalf("bos_id=%d, want explicit 0", cfg.Training.ExampleFraming.BosID)
+	}
+
+	tests := []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name: "missing content len",
+			body: `"training": {"steps": 1, "lr": 0.001, "batch_tokens": 4,
+				"example_framing": {"bos_id": 1, "eos_id": 2}}`,
+			wantErr: "content_len is required",
+		},
+		{
+			name: "missing bos",
+			body: `"seq_len": 6, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 12,
+				"example_framing": {"content_len": 4, "eos_id": 2}}`,
+			wantErr: "bos_id is required",
+		},
+		{
+			name: "missing eos",
+			body: `"seq_len": 6, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 12,
+				"example_framing": {"content_len": 4, "bos_id": 1}}`,
+			wantErr: "eos_id is required",
+		},
+		{
+			name: "bad seq len",
+			body: `"seq_len": 5, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 10,
+				"example_framing": {"content_len": 4, "bos_id": 1, "eos_id": 2}}`,
+			wantErr: "requires seq_len=6",
+		},
+		{
+			name: "bad batch tokens",
+			body: `"seq_len": 6, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 10,
+				"example_framing": {"content_len": 4, "bos_id": 1, "eos_id": 2}}`,
+			wantErr: "batch_tokens",
+		},
+		{
+			name: "bad bos id",
+			body: `"seq_len": 6, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 12,
+				"example_framing": {"content_len": 4, "bos_id": 32, "eos_id": 2}}`,
+			wantErr: "bos_id=32",
+		},
+		{
+			name: "non causal objective",
+			body: `"seq_len": 6, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 12,
+				"objective": "mlm", "mlm_mask_token_id": 7,
+				"example_framing": {"content_len": 4, "bos_id": 1, "eos_id": 2}}`,
+			wantErr: "only supports training.objective=\"causal\"",
+		},
+		{
+			name: "mtp",
+			body: `"seq_len": 6, "mtp": {"n": 2}, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 12,
+				"example_framing": {"content_len": 4, "bos_id": 1, "eos_id": 2}}`,
+			wantErr: "top-level mtp",
+		},
+		{
+			name: "first byte mask",
+			body: `"seq_len": 6, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 12,
+				"first_byte_mask": true,
+				"example_framing": {"content_len": 4, "bos_id": 1, "eos_id": 2}}`,
+			wantErr: "first_byte_mask",
+		},
+		{
+			name: "distillation",
+			body: `"seq_len": 6, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 12,
+				"distillation": {"teacher_checkpoints": ["a.safetensors"], "teacher_configs": ["a.json"]},
+				"example_framing": {"content_len": 4, "bos_id": 1, "eos_id": 2}}`,
+			wantErr: "distillation",
+		},
+		{
+			name: "attention segment mask",
+			body: `"seq_len": 6, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 12,
+				"attention_segment_mask": "boundary_token", "attention_segment_boundary_token_id": 1,
+				"example_framing": {"content_len": 4, "bos_id": 1, "eos_id": 2}}`,
+			wantErr: "attention_segment_mask",
+		},
+		{
+			name: "shuffle conflict",
+			body: `"seq_len": 6, "training": {"steps": 1, "lr": 0.001, "batch_tokens": 12,
+				"shuffle_chunk_tokens": 8,
+				"example_framing": {"content_len": 4, "bos_id": 1, "eos_id": 2}}`,
+			wantErr: "shuffle_chunk_tokens",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseArchConfig([]byte(objectiveConfigJSON(tt.body)), tt.name)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestTrainingRecipeKnobValidationAndDefaults(t *testing.T) {
 	cfg := parseObjectiveConfig(t, `"training": {
 		"steps": 10,
@@ -369,6 +478,38 @@ func TestBuildIRProgram_MLMUsesMaskedLossAndBidirectionalPlainAttention(t *testi
 	}
 	if n := countOps(prog, OpCausalMask); n != 0 {
 		t.Fatalf("MLM default plain attention emitted %d causal masks, want 0", n)
+	}
+}
+
+func TestBuildIRProgram_ExampleFramingCausalUsesMaskedLoss(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"seq_len": 6,
+		"training": {
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 12,
+			"example_framing": {"content_len": 4, "bos_id": 1, "eos_id": 2}
+		}`)
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	if !programDeclaresInputArch(prog, "loss_mask") {
+		t.Fatal("framed causal program missing loss_mask input")
+	}
+	if n := countOps(prog, OpMaskedCrossEntropy); n != 1 {
+		t.Fatalf("OpMaskedCrossEntropy count = %d, want 1", n)
+	}
+	if n := countOps(prog, OpMaskedCEPerToken); n != 1 {
+		t.Fatalf("OpMaskedCEPerToken count = %d, want 1", n)
+	}
+
+	defaultCfg := parseObjectiveConfig(t, `"training": {"steps": 1, "lr": 0.001, "batch_tokens": 8}`)
+	defaultProg, err := BuildTrainingIRProgramFromConfig(defaultCfg, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig default: %v", err)
+	}
+	if programDeclaresInputArch(defaultProg, "loss_mask") {
+		t.Fatal("default causal program declares loss_mask")
 	}
 }
 
