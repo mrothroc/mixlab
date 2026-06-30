@@ -168,19 +168,6 @@ func TestExportHFUnsupportedValidation(t *testing.T) {
 			}`,
 			wantErr: "training.objective",
 		},
-		{
-			name: "hybrid block_diffusion secondary is native-only",
-			config: `{
-				"model_dim": 4, "vocab_size": 7, "seq_len": 4,
-				"blocks": [{"type": "plain", "heads": 2}, {"type": "swiglu"}],
-				"training": {
-					"steps": 1, "batch_tokens": 4,
-					"objective": "hybrid", "hybrid_secondary_objective": "block_diffusion",
-					"mlm_mask_token_id": 5, "diffusion": {"block_size": 2}
-				}
-			}`,
-			wantErr: "training.objective",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -466,6 +453,54 @@ func TestExportHFHybridObjectiveExportsCausalEval(t *testing.T) {
 	block := blocks[0].(map[string]any)
 	if got := block["attention_mask"]; got != "causal" {
 		t.Fatalf("exported hybrid attention_mask=%v, want causal", got)
+	}
+}
+
+func TestExportHFHybridBlockDiffusionExportsCausalView(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+		"name": "hf_hybrid_block_diffusion_eval",
+		"model_dim": 4,
+		"vocab_size": 9,
+		"seq_len": 4,
+		"mlp_mult": 1.0,
+		"blocks": [{"type": "plain", "heads": 2, "attention_mask": "bidirectional"}],
+		"training": {
+			"steps": 1,
+			"batch_tokens": 4,
+			"seed": 334,
+			"objective": "hybrid",
+			"hybrid_secondary_objective": "block_diffusion",
+			"hybrid_clm_fraction": 0.5,
+			"mlm_mask_token_id": 1,
+			"diffusion": {"block_size": 2}
+		}
+	}`)
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+	var cfg map[string]any
+	readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+	blocks := cfg["blocks"].([]any)
+	block := blocks[0].(map[string]any)
+	if got := block["attention_mask"]; got != "causal" {
+		t.Fatalf("exported hybrid block-diffusion attention_mask=%v, want causal", got)
+	}
+	if masked, ok := cfg["masked_blocks"]; ok {
+		t.Fatalf("hybrid block-diffusion export unexpectedly wrote masked_blocks: %#v", masked)
+	}
+	autoMap, ok := cfg["auto_map"].(map[string]any)
+	if !ok {
+		t.Fatalf("config.json missing auto_map: %#v", cfg["auto_map"])
+	}
+	if _, ok := autoMap["AutoModelForMaskedLM"]; ok {
+		t.Fatalf("hybrid block-diffusion export unexpectedly registered AutoModelForMaskedLM: %#v", autoMap)
 	}
 }
 

@@ -285,6 +285,28 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// Hybrid block-diffusion export intentionally exposes only the
+			// causal evaluation view; the diffusion sampler is native-only.
+			name: "hybrid_block_diffusion_causal_view",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 4, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 2, "attention_mask": "bidirectional"},
+					{"type": "swiglu"}
+				],
+				"training": {
+					"steps": 1,
+					"batch_tokens": 4,
+					"seed": 9393,
+					"objective": "hybrid",
+					"hybrid_clm_fraction": 0.5,
+					"hybrid_secondary_objective": "block_diffusion",
+					"mlm_mask_token_id": 1,
+					"diffusion": {"block_size": 2}
+				}
+			}`,
+		},
+		{
 			// BERT-style masked-LM transform head: the parity script compares
 			// causal logits and loads/runs the real exported AutoModelForMaskedLM
 			// path so the generated Python transform stack is exercised.

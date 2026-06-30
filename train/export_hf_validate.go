@@ -3,6 +3,8 @@ package train
 import (
 	"fmt"
 	"strings"
+
+	"github.com/mrothroc/mixlab/arch"
 )
 
 func validateHFExportConfig(cfg *ArchConfig) error {
@@ -33,8 +35,8 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 	if len(cfg.Recurrence) > 0 || len(cfg.RecurrencePhases) > 0 {
 		return unsupportedHFExport("recurrence", "weight sharing and recurrence phases are planned for later HF coverage")
 	}
-	if cfg.Training.UsesBlockDiffusionObjective() {
-		return unsupportedHFExport("training.objective", "block_diffusion generation/export semantics are native-only in this release")
+	if cfg.Training.EffectiveObjective() == arch.ObjectiveBlockDiffusion {
+		return unsupportedHFExport("training.objective", "pure block_diffusion has native-only generation semantics; export the causal view of a hybrid checkpoint instead")
 	}
 	switch cfg.Training.EffectiveObjective() {
 	case "causal", "hybrid", "mlm", "mntp":

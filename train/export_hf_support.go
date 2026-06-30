@@ -44,7 +44,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "geglu", Status: hfExportSupported, Reason: "Bias-free GEGLU FFN export is covered by native-vs-HF parity tests."},
 		{Feature: "mlp", Status: hfExportSupported, Reason: "Bias-free MLP export supports silu, gelu, relu, and leaky_relu_sq."},
 		{Feature: "moe", Status: hfExportSupported, Reason: "Sequential linear-router top-k MoE export supports swiglu, geglu, and mlp experts."},
-		{Feature: "hybrid_objective_eval", Status: hfExportSupported, Reason: "Hybrid configs export the causal next-token evaluation graph."},
+		{Feature: "hybrid_objective_eval", Status: hfExportSupported, Reason: "Hybrid configs export the causal next-token evaluation graph. Hybrid block-diffusion exports drop the native-only diffusion sampler and expose only this causal view."},
 		{Feature: "hgrn2", Status: hfExportGated, Reason: "Matrix-state scan export is intentionally gated until the PyTorch template has explicit recurrent-state parity coverage."},
 		{Feature: "mlstm", Status: hfExportGated, Reason: "Stabilized matrix-memory scan export is intentionally gated until the PyTorch template has explicit recurrent-state parity coverage."},
 		{Feature: "gated_deltanet", Status: hfExportGated, Reason: "Chunked delta-rule recurrence uses native scan semantics that are not yet mirrored in the HF template."},
