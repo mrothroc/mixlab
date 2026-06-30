@@ -115,6 +115,46 @@ if FORM[form_id] == "raw":
 When `-logits-out` is combined with `-logprobs-out`, recovered NLLs match the
 values in `logprobs.bin` to float32/float16 tolerance.
 
+## `score-diffusion`
+
+Score already-tokenized candidate sequences with the native block-diffusion
+forward:
+
+```bash
+./mixlab -mode score-diffusion \
+  -config examples/hybrid_block_diffusion_tiny.json \
+  -safetensors-load runs/hybrid-block-diffusion.safetensors \
+  -score-in candidates.jsonl \
+  -score-out scores.jsonl
+```
+
+| Flag | Description |
+|------|-------------|
+| `-config` | Required. Must be a pure `block_diffusion` config or a hybrid config whose secondary objective is `block_diffusion`. |
+| `-safetensors-load` | Required. Checkpoint to score with. |
+| `-score-in` | Required. JSONL input with `{"id": "...", "tokens": [...]}` records. Tokens are raw token IDs; mixlab does not tokenize text in this mode. |
+| `-score-out` | Required. JSONL output with `logprob_sum`, `logprob_mean`, and `per_token` block-causal PLL values. |
+| `-score-mode` | Scoring mode. V1 supports only `block_causal`, the default. |
+| `-score-skip-first` | Globally skip the first N tokens when summing scores. Per-record `score_from` overrides this value. |
+| `-score-position-batch` | Number of masked positions per forward. `0` auto-selects a value targeting about 256 MiB of logits output. |
+
+Input JSONL:
+
+```json
+{"id":"case_0","tokens":[1,815,22,4],"score_from":1}
+```
+
+Output JSONL:
+
+```json
+{"id":"case_0","n_tokens":3,"score_from":1,"logprob_sum":-7.42,"logprob_mean":-2.47,"per_token":[-2.1,-2.8,-2.52]}
+```
+
+`score-diffusion` masks each scored position exactly once and runs the
+prefix-plus-block attention graph used by block-diffusion training. The result
+is a deterministic block-causal pseudo-log-likelihood for forced-choice ranking,
+not a true normalized sequence likelihood.
+
 ## `hiddenstats`
 
 Export one batch of hidden states:

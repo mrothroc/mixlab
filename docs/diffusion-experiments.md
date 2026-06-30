@@ -55,6 +55,24 @@ Optional per-token exports make ranking and uncertainty analysis reusable:
   -uncertainty-out runs/hybrid.uncertainty.bin
 ```
 
+Use native block-diffusion PLL scoring when forced-choice ranking should use the
+diffusion forward instead of causal next-token likelihood:
+
+```bash
+./mixlab -mode score-diffusion \
+  -config examples/hybrid_block_diffusion_tiny.json \
+  -safetensors-load runs/hybrid-block-diffusion.safetensors \
+  -score-in runs/candidates.tokens.jsonl \
+  -score-out runs/hybrid.diffusion_scores.jsonl \
+  -score-skip-first 1
+```
+
+The input is JSONL with caller-tokenized token IDs, for example
+`{"id":"case_0","tokens":[1,815,22,4],"score_from":1}`. The score is a
+deterministic block-causal pseudo-log-likelihood under the prefix-plus-block
+attention graph. It is useful for comparing candidate sentences, but it is not a
+true normalized sequence likelihood.
+
 ## Sample And Trace
 
 `generate-diffusion` works with pure `block_diffusion` checkpoints and hybrid

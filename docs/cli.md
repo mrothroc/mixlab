@@ -20,6 +20,7 @@ mode-specific flags.
 | `hiddenstats` | Export one batch of hidden states as float32 binary. | [cli-eval.md](cli-eval.md) |
 | `generate` | Generate token IDs from a causal checkpoint. | [cli-generate.md](cli-generate.md) |
 | `generate-diffusion` | Generate token IDs from a block-diffusion checkpoint. | [cli-generate.md](cli-generate.md) |
+| `score-diffusion` | Score token-id sequences with native block-diffusion PLL. | [cli-eval.md](cli-eval.md) |
 | `export-hf` | Export supported safetensors checkpoints to Hugging Face directories. | [cli-export.md](cli-export.md) |
 | `parity` | Compare native Mixlab inference against a Hugging Face export. | [cli-export.md](cli-export.md) |
 

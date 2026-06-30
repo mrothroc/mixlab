@@ -96,6 +96,10 @@ func RunGenerateDiffusionWithOptions(opts GenerateDiffusionOptions) error {
 	return runGenerateDiffusionWithOptions(opts)
 }
 
+func RunScoreDiffusionWithOptions(opts ScoreDiffusionOptions) error {
+	return runScoreDiffusionWithOptions(opts)
+}
+
 func RunHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath string) error {
 	return runHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath)
 }
