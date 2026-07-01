@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
+	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
@@ -47,8 +47,9 @@ func main() {
 	scoreIn := flag.String("score-in", "", "JSONL token-id sequences to score (score-diffusion mode)")
 	scoreOut := flag.String("score-out", "", "JSONL output path for diffusion PLL scores (score-diffusion mode)")
 	scoreMode := flag.String("score-mode", "block_causal", "diffusion scoring mode: block_causal")
-	scoreSkipFirst := flag.Int("score-skip-first", 0, "globally skip the first N tokens when scoring diffusion PLLs")
+	scoreSkipFirst := flag.Int("score-skip-first", 0, "globally skip the first N tokens when scoring JSONL token sequences")
 	scorePositionBatch := flag.Int("score-position-batch", 0, "masked positions per diffusion scoring forward; <=0 auto-selects a memory-bounded value")
+	scoreBatch := flag.Int("score-batch", 0, "sequence rows per ELECTRA detector scoring forward; <=0 uses a conservative default")
 	prompt := flag.String("prompt", "", "prompt for generate mode, e.g. token_ids:0,1,2")
 	logprobsOut := flag.String("logprobs-out", "", "write per-token eval NLLs to a binary file (eval mode)")
 	ranksOut := flag.String("ranks-out", "", "write per-token target ranks to a binary file (eval mode); can be combined with -logprobs-out for a single eval pass")
@@ -268,6 +269,15 @@ func main() {
 			ScoreSkipFirst:     *scoreSkipFirst,
 			ScorePositionBatch: *scorePositionBatch,
 		}))
+	case "score-electra":
+		must(train.RunScoreElectraWithOptions(train.ScoreElectraOptions{
+			ConfigPath:      *configPath,
+			SafetensorsLoad: *safetensorsLoad,
+			ScoreIn:         *scoreIn,
+			ScoreOut:        *scoreOut,
+			ScoreSkipFirst:  *scoreSkipFirst,
+			ScoreBatch:      *scoreBatch,
+		}))
 	case "parity":
 		must(train.RunParity(train.ParityOptions{
 			ConfigPath:      *configPath,
@@ -280,7 +290,7 @@ func main() {
 			LogitTokens:     *parityLogitTokens,
 		}))
 	default:
-		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, export-hf, parity)", *mode))
+		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, export-hf, parity)", *mode))
 	}
 }
 
@@ -289,7 +299,7 @@ type flagGroup struct {
 	Names []string
 }
 
-var supportedModes = []string{"smoke", "arch", "arch_race", "prepare", "count", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "export-hf", "parity"}
+var supportedModes = []string{"smoke", "arch", "arch_race", "prepare", "count", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "export-hf", "parity"}
 
 var modeFlagGroups = map[string][]flagGroup{
 	"arch": {
@@ -334,6 +344,10 @@ var modeFlagGroups = map[string][]flagGroup{
 	"score-diffusion": {
 		{"Required", []string{"config", "safetensors-load", "score-in", "score-out"}},
 		{"Scoring", []string{"score-mode", "score-skip-first", "score-position-batch"}},
+	},
+	"score-electra": {
+		{"Required", []string{"config", "safetensors-load", "score-in", "score-out"}},
+		{"Scoring", []string{"score-skip-first", "score-batch"}},
 	},
 	"export-hf": {
 		{"Required", []string{"config", "safetensors-load"}},

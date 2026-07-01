@@ -13,6 +13,7 @@ const (
 	ObjectiveMNTP           = "mntp"
 	ObjectiveBlockDiffusion = "block_diffusion"
 	ObjectiveMultihead      = "multihead"
+	ObjectiveRTD            = "rtd"
 	// ObjectiveHybridExample is an internal concrete training objective used
 	// for per-example hybrid batches. Public configs still use objective=hybrid.
 	ObjectiveHybridExample = "hybrid_example"
@@ -160,6 +161,9 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	}
 	if t.Objective == ObjectiveMultihead {
 		return validateTrainingMultihead(cfg, source)
+	}
+	if t.RTD != nil {
+		return fmt.Errorf("config %q sets training.rtd but training.objective=%q; RTD is only valid with training.objective=\"multihead\"", source, t.Objective)
 	}
 	t.HybridMixGranularity = t.EffectiveHybridMixGranularity()
 	switch t.HybridMixGranularity {

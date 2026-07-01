@@ -262,6 +262,7 @@ type TrainingSpec struct {
 	AttentionSegmentMask              string              `json:"attention_segment_mask,omitempty"`
 	AttentionSegmentBoundaryTokenID   int                 `json:"attention_segment_boundary_token_id,omitempty"`
 	ExampleFraming                    *ExampleFramingSpec `json:"example_framing,omitempty"`
+	RTD                               *RTDSpec            `json:"rtd,omitempty"`
 	Distillation                      *DistillationSpec   `json:"distillation,omitempty"`
 	Data2Vec                          *Data2VecSpec       `json:"data2vec,omitempty"`
 	ZLoss                             float64             `json:"z_loss,omitempty"`
@@ -463,6 +464,9 @@ func (t *TrainingSpec) ApplyDefaults() {
 	t.AttentionSegmentMask = t.EffectiveAttentionSegmentMask()
 	if t.Data2Vec != nil {
 		t.Data2Vec.applyDefaults()
+	}
+	if t.RTD != nil {
+		t.RTD.applyDefaults(t.MLMMaskProb)
 	}
 	if !t.weightDecaySet && t.WeightDecay == 0 {
 		t.WeightDecay = d.WeightDecay

@@ -155,6 +155,33 @@ prefix-plus-block attention graph used by block-diffusion training. The result
 is a deterministic block-causal pseudo-log-likelihood for forced-choice ranking,
 not a true normalized sequence likelihood.
 
+## `score-electra`
+
+Score already-tokenized candidate sequences with a native multihead RTD
+detector. The mode reads `head_<rtd-head>_logits` and reports per-token
+`log P(original)` from `log_sigmoid(detector_logit)`.
+
+```bash
+./mixlab -mode score-electra \
+  -config examples/multihead_mntp_rtd_tiny.json \
+  -safetensors-load runs/mntp-rtd.safetensors \
+  -score-in candidates.jsonl \
+  -score-out electra_scores.jsonl
+```
+
+| Flag | Description |
+|------|-------------|
+| `-config` | Required. Must be a multihead config with `training.rtd` and exactly one `objective: "rtd"` detector head. |
+| `-safetensors-load` | Required. Checkpoint to score with. |
+| `-score-in` | Required. JSONL input with `{"id": "...", "tokens": [...]}` records. Tokens are raw token IDs. |
+| `-score-out` | Required. JSONL output with `logprob_sum`, `logprob_mean`, and scored `per_token` values. |
+| `-score-skip-first` | Globally skip the first N tokens when summing scores. Per-record `score_from` overrides this value. |
+| `-score-batch` | Sequence rows per detector forward. `0` uses a conservative default. |
+
+`score-electra` does not run generator corruption. It evaluates the supplied
+sequence as-is and is intended as a native detector-based ranking signal, not a
+normalized language-model likelihood.
+
 ## `hiddenstats`
 
 Export one batch of hidden states:

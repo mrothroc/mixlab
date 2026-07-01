@@ -212,6 +212,55 @@ mx::array masked_smooth_l1_mean(
   return mx::sum(masked) / denom;
 }
 
+mx::array masked_bce_with_logits_mean(
+    const mx::array& logits,
+    const mx::array& targets,
+    const mx::array& loss_mask) {
+  if (loss_mask.ndim() != 1 || loss_mask.shape(0) != targets.shape(0)) {
+    throw std::runtime_error("masked BCE mask must be a rank-1 vector matching targets");
+  }
+  mx::array l = mx::astype(logits, mx::float32);
+  if (l.ndim() == 2 && l.shape(1) == 1) {
+    l = mx::reshape(l, {l.shape(0)});
+  }
+  if (l.ndim() != 1 || l.shape(0) != targets.shape(0)) {
+    throw std::runtime_error("masked BCE logits must have shape [rows] or [rows, 1]");
+  }
+  auto y = mx::astype(mx::greater(mx::astype(targets, mx::int32), mx::array(0, mx::int32)), mx::float32);
+  auto per_row =
+      mx::maximum(l, mx::array(0.0f, mx::float32)) - y * l +
+      mx::log(mx::array(1.0f, mx::float32) + mx::exp(-mx::abs(l)));
+  auto mask = mx::astype(
+      mx::greater(mx::astype(loss_mask, mx::float32), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto denom = mx::maximum(mx::sum(mask), mx::array(1.0f, mx::float32));
+  return mx::sum(per_row * mask) / denom;
+}
+
+mx::array masked_binary_accuracy(
+    const mx::array& logits,
+    const mx::array& targets,
+    const mx::array& loss_mask) {
+  if (loss_mask.ndim() != 1 || loss_mask.shape(0) != targets.shape(0)) {
+    throw std::runtime_error("masked binary accuracy mask must be a rank-1 vector matching targets");
+  }
+  mx::array l = mx::astype(logits, mx::float32);
+  if (l.ndim() == 2 && l.shape(1) == 1) {
+    l = mx::reshape(l, {l.shape(0)});
+  }
+  if (l.ndim() != 1 || l.shape(0) != targets.shape(0)) {
+    throw std::runtime_error("masked binary accuracy logits must have shape [rows] or [rows, 1]");
+  }
+  auto pred = mx::greater(l, mx::array(0.0f, mx::float32));
+  auto truth = mx::greater(mx::astype(targets, mx::int32), mx::array(0, mx::int32));
+  auto correct = mx::astype(mx::equal(pred, truth), mx::float32);
+  auto mask = mx::astype(
+      mx::greater(mx::astype(loss_mask, mx::float32), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto denom = mx::maximum(mx::sum(mask), mx::array(1.0f, mx::float32));
+  return mx::sum(correct * mask) / denom;
+}
+
 mx::array z_loss_mean(const mx::array& logits) {
   if (logits.ndim() != 2) {
     throw std::runtime_error("z_loss expects logits shape [rows, vocab]");
@@ -2673,6 +2722,20 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           throw std::runtime_error("OP_MASKED_SMOOTH_L1 requires beta float param");
         }
         set_out(op, 0, masked_smooth_l1_mean(get(op, 0), get(op, 1), get(op, 2), op.float_params[0]));
+        break;
+      }
+      case OP_MASKED_BCE_WITH_LOGITS: {
+        set_out(op, 0, masked_bce_with_logits_mean(
+            get(op, 0),
+            mx::astype(get(op, 1), mx::int32),
+            get(op, 2)));
+        break;
+      }
+      case OP_MASKED_BINARY_ACCURACY: {
+        set_out(op, 0, masked_binary_accuracy(
+            get(op, 0),
+            mx::astype(get(op, 1), mx::int32),
+            get(op, 2)));
         break;
       }
       case OP_Z_LOSS: {

@@ -9,6 +9,7 @@ import (
 const (
 	MultiheadOutputLinear  = "linear"
 	MultiheadOutputBERTMLM = "bert_mlm"
+	MultiheadOutputBinary  = "binary"
 )
 
 func normalizeMultiheadOutputHead(raw string, objective string) string {
@@ -18,6 +19,8 @@ func normalizeMultiheadOutputHead(raw string, objective string) string {
 		switch normalizeTrainingObjective(objective) {
 		case ObjectiveMLM, ObjectiveMNTP:
 			return MultiheadOutputBERTMLM
+		case ObjectiveRTD:
+			return MultiheadOutputBinary
 		default:
 			return MultiheadOutputLinear
 		}
@@ -25,6 +28,8 @@ func normalizeMultiheadOutputHead(raw string, objective string) string {
 		return MultiheadOutputLinear
 	case "bert", "bert_mlm", "mlm_bert":
 		return MultiheadOutputBERTMLM
+	case "binary", "rtd":
+		return MultiheadOutputBinary
 	default:
 		return mode
 	}
@@ -82,6 +87,7 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 	totalWeight := 0.0
 	diffusionHeads := 0
 	exportableHeads := 0
+	rtdHeads := 0
 	usesAdaLN := false
 	for i := range t.Heads {
 		h := &t.Heads[i]
@@ -95,9 +101,9 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		seen[h.Name] = i
 		h.Objective = normalizeTrainingObjective(h.Objective)
 		switch h.Objective {
-		case ObjectiveCausal, ObjectiveMLM, ObjectiveMNTP, ObjectiveBlockDiffusion:
+		case ObjectiveCausal, ObjectiveMLM, ObjectiveMNTP, ObjectiveBlockDiffusion, ObjectiveRTD:
 		default:
-			return fmt.Errorf("config %q training.heads[%d].objective=%q is invalid for multihead (must be causal, mlm, mntp, or block_diffusion)", source, i, h.Objective)
+			return fmt.Errorf("config %q training.heads[%d].objective=%q is invalid for multihead (must be causal, mlm, mntp, block_diffusion, or rtd)", source, i, h.Objective)
 		}
 		if !h.lossWeightSet && h.LossWeight == 0 {
 			h.LossWeight = 1
@@ -114,14 +120,15 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		}
 		h.OutputHead = normalizeMultiheadOutputHead(h.OutputHead, h.Objective)
 		switch h.OutputHead {
-		case MultiheadOutputLinear, MultiheadOutputBERTMLM:
+		case MultiheadOutputLinear, MultiheadOutputBERTMLM, MultiheadOutputBinary:
 		default:
-			return fmt.Errorf("config %q training.heads[%d].output_head=%q must be \"linear\" or \"bert_mlm\"", source, i, h.OutputHead)
+			return fmt.Errorf("config %q training.heads[%d].output_head=%q must be \"linear\", \"bert_mlm\", or \"binary\"", source, i, h.OutputHead)
 		}
 		if !h.finalNormSet {
 			h.FinalNorm = true
 		}
-		if h.OutputHead == MultiheadOutputBERTMLM {
+		switch {
+		case h.OutputHead == MultiheadOutputBERTMLM:
 			if h.Objective != ObjectiveMLM && h.Objective != ObjectiveMNTP {
 				return fmt.Errorf("config %q training.heads[%d].output_head=\"bert_mlm\" requires objective mlm or mntp", source, i)
 			}
@@ -129,7 +136,12 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 				return fmt.Errorf("config %q training.heads[%d].output_head=\"bert_mlm\" requires tie_embeddings=true", source, i)
 			}
 			h.TieEmbeddings = true
-		} else if !h.tieEmbeddingsSet {
+		case h.OutputHead == MultiheadOutputBinary:
+			if h.Objective != ObjectiveRTD {
+				return fmt.Errorf("config %q training.heads[%d].output_head=\"binary\" requires objective rtd", source, i)
+			}
+			h.TieEmbeddings = false
+		case !h.tieEmbeddingsSet:
 			h.TieEmbeddings = h.Objective != ObjectiveBlockDiffusion && cfg.TieEmbeddings
 		}
 		if h.Objective == ObjectiveBlockDiffusion {
@@ -145,11 +157,34 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 				usesAdaLN = true
 			}
 		} else {
-			exportableHeads++
+			if h.Objective == ObjectiveRTD {
+				rtdHeads++
+			} else {
+				exportableHeads++
+			}
 			if h.Diffusion != nil {
 				return fmt.Errorf("config %q training.heads[%d].diffusion is only valid with objective=\"block_diffusion\"", source, i)
 			}
 		}
+	}
+	if t.RTD != nil {
+		if t.RTD.Generator != "tied" {
+			return fmt.Errorf("config %q training.rtd.generator=%q is staged for a later release; v1 supports \"tied\"", source, t.RTD.Generator)
+		}
+		if rtdHeads != 1 {
+			return fmt.Errorf("config %q training.rtd requires exactly one multihead objective=\"rtd\" head, got %d", source, rtdHeads)
+		}
+		if !finiteInClosedRange(t.RTD.MaskProb, 0, 1) {
+			return fmt.Errorf("config %q training.rtd.mask_prob=%g must be in [0,1]", source, t.RTD.MaskProb)
+		}
+		if t.RTD.SampleTemperature <= 0 || math.IsNaN(t.RTD.SampleTemperature) || math.IsInf(t.RTD.SampleTemperature, 0) {
+			return fmt.Errorf("config %q training.rtd.sample_temperature=%g must be finite and > 0", source, t.RTD.SampleTemperature)
+		}
+		if t.RTD.DiscriminatorLossWeight < 0 || math.IsNaN(t.RTD.DiscriminatorLossWeight) || math.IsInf(t.RTD.DiscriminatorLossWeight, 0) {
+			return fmt.Errorf("config %q training.rtd.discriminator_loss_weight=%g must be finite and >= 0", source, t.RTD.DiscriminatorLossWeight)
+		}
+	} else if rtdHeads > 0 {
+		return fmt.Errorf("config %q multihead objective=\"rtd\" requires training.rtd", source)
 	}
 	if totalWeight <= 0 {
 		return fmt.Errorf("config %q training.objective=\"multihead\" requires positive total head loss_weight", source)
@@ -157,32 +192,47 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 	if exportableHeads == 0 {
 		return fmt.Errorf("config %q training.objective=\"multihead\" requires at least one non-block_diffusion export/scorer head", source)
 	}
-	if diffusionHeads == 0 {
-		return fmt.Errorf("config %q training.objective=\"multihead\" requires at least one block_diffusion head", source)
-	}
 	if strings.TrimSpace(t.ExportHead) == "" {
 		for _, h := range t.Heads {
-			if h.Objective != ObjectiveBlockDiffusion {
+			if h.Objective != ObjectiveBlockDiffusion && h.Objective != ObjectiveRTD {
 				t.ExportHead = h.Name
 				break
 			}
 		}
 	} else if idx, ok := seen[strings.TrimSpace(t.ExportHead)]; !ok {
 		return fmt.Errorf("config %q training.export_head=%q does not match any training.heads[].name", source, t.ExportHead)
-	} else if t.Heads[idx].Objective == ObjectiveBlockDiffusion {
-		return fmt.Errorf("config %q training.export_head=%q cannot select a block_diffusion head for HF export in v1", source, t.ExportHead)
+	} else if t.Heads[idx].Objective == ObjectiveBlockDiffusion || t.Heads[idx].Objective == ObjectiveRTD {
+		return fmt.Errorf("config %q training.export_head=%q cannot select a %s head for HF export in v1", source, t.ExportHead, t.Heads[idx].Objective)
 	}
 	if strings.TrimSpace(t.DiffusionHead) == "" {
-		for _, h := range t.Heads {
-			if h.Objective == ObjectiveBlockDiffusion {
-				t.DiffusionHead = h.Name
-				break
+		if diffusionHeads > 0 {
+			for _, h := range t.Heads {
+				if h.Objective == ObjectiveBlockDiffusion {
+					t.DiffusionHead = h.Name
+					break
+				}
 			}
 		}
 	} else if idx, ok := seen[strings.TrimSpace(t.DiffusionHead)]; !ok {
 		return fmt.Errorf("config %q training.diffusion_head=%q does not match any training.heads[].name", source, t.DiffusionHead)
 	} else if t.Heads[idx].Objective != ObjectiveBlockDiffusion {
 		return fmt.Errorf("config %q training.diffusion_head=%q must select a block_diffusion head", source, t.DiffusionHead)
+	}
+	if t.RTD != nil {
+		if strings.TrimSpace(t.RTD.GeneratorHead) == "" {
+			t.RTD.GeneratorHead = t.ExportHead
+		}
+		idx, ok := seen[strings.TrimSpace(t.RTD.GeneratorHead)]
+		if !ok {
+			return fmt.Errorf("config %q training.rtd.generator_head=%q does not match any training.heads[].name", source, t.RTD.GeneratorHead)
+		}
+		h := &t.Heads[idx]
+		if h.Objective != ObjectiveMLM && h.Objective != ObjectiveMNTP {
+			return fmt.Errorf("config %q training.rtd.generator_head=%q must select an mlm or mntp head", source, t.RTD.GeneratorHead)
+		}
+		if h.OutputHead != MultiheadOutputBERTMLM && h.OutputHead != MultiheadOutputLinear {
+			return fmt.Errorf("config %q training.rtd.generator_head=%q must emit vocab logits", source, t.RTD.GeneratorHead)
+		}
 	}
 	if usesAdaLN && cfg.EffectiveNormPlacement() == NormPlacementPost {
 		return fmt.Errorf("config %q multihead diffusion timestep_conditioning=\"adaln\" requires pre or sandwich norm placement in v1", source)
@@ -340,6 +390,11 @@ func multiheadHeadWeightShapes(modelDim, vocabSize int, blocks []BlockSpec, norm
 		if !h.TieEmbeddings {
 			shapes = append(shapes, WeightMeta{Name: prefix + "_proj", Shape: []int{modelDim, vocabSize}})
 		}
+	case MultiheadOutputBinary:
+		shapes = append(shapes,
+			WeightMeta{Name: prefix + "_binary_proj", Shape: []int{modelDim, 1}},
+			WeightMeta{Name: prefix + "_binary_bias", Shape: []int{1}, InitZero: true},
+		)
 	}
 	return shapes
 }

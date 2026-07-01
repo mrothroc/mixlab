@@ -82,6 +82,8 @@ const (
 	OpSegmentAttentionMask = 89 // OP_SEGMENT_ATTENTION_MASK
 	OpBlockDiffusionMask   = 90 // OP_BLOCK_DIFFUSION_MASK
 	OpGELUExact            = 91 // OP_GELU_EXACT
+	OpMaskedBCEWithLogits  = 92 // OP_MASKED_BCE_WITH_LOGITS
+	OpMaskedBinaryAccuracy = 93 // OP_MASKED_BINARY_ACCURACY
 
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -281,6 +283,16 @@ func (p *Program) DistillationKL(logits, teacherProbs, output string) {
 // MaskedSmoothL1 emits mean Huber/SmoothL1 loss over rows where mask > 0.
 func (p *Program) MaskedSmoothL1(pred, target, mask string, beta float32, output string) {
 	p.AddOp(OpMaskedSmoothL1, []string{pred, target, mask}, []string{output}, []float32{beta}, nil)
+}
+
+// MaskedBCEWithLogits emits mean binary cross-entropy over rows where mask > 0.
+func (p *Program) MaskedBCEWithLogits(logits, targets, mask, output string) {
+	p.AddOp(OpMaskedBCEWithLogits, []string{logits, targets, mask}, []string{output}, nil, nil)
+}
+
+// MaskedBinaryAccuracy emits mean binary accuracy over rows where mask > 0.
+func (p *Program) MaskedBinaryAccuracy(logits, targets, mask, output string) {
+	p.AddOp(OpMaskedBinaryAccuracy, []string{logits, targets, mask}, []string{output}, nil, nil)
 }
 
 // ZLoss emits mean(square(logsumexp(logits))) over token rows.

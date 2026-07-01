@@ -288,6 +288,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		programCache[key] = built
 		return built, nil
 	}
+	rtdGenerator := newRTDGeneratorPrograms(cfg, recurrencePhasesScheduled)
+	rtdGeneratorProgramForKey := rtdGenerator.programForKey
 	currentProgramKey := trainingProgramCacheKey{
 		recurrencePhase: currentRecurrencePhase,
 		recurrenceOn:    recurrenceActive,
@@ -488,6 +490,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("prepare step 0 objective batch: %w", err)
 		}
+		prepared, err = maybeAttachRTDCorruption(trainer, cfg, batch, 0, prepared, currentBatchSize, currentSeqLen, currentObjective, currentProgramKey, rtdGeneratorProgramForKey, initialProg)
+		if err != nil {
+			stopInitialSubmit()
+			return TrainResult{}, err
+		}
 		prepared, err = attachDistillationTeacherProbs(distiller, prepared, currentBatchSize, currentSeqLen)
 		if err != nil {
 			stopInitialSubmit()
@@ -580,12 +587,21 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				currentBatchSize = nextBatchSize
 				currentProgramKey = nextProgramKey
 			}
+			activeProg, err := trainingProgramForKey(nextProgramKey)
+			if err != nil {
+				return 0, fmt.Errorf("resolve active IR program at step %d: %w", nextStep, err)
+			}
 			submitStart := time.Now()
 			stopSubmit := startSlowTrainingPhaseLogger(name, nextStep, "submit_step")
 			prepared, err := prepareObjectiveBatchWithSeqLen(cfg, batch, nextStep, nextObjective, nextSeqLen)
 			if err != nil {
 				stopSubmit()
 				return 0, fmt.Errorf("prepare step %d objective batch: %w", nextStep, err)
+			}
+			prepared, err = maybeAttachRTDCorruption(trainer, cfg, batch, nextStep, prepared, nextBatchSize, nextSeqLen, nextObjective, nextProgramKey, rtdGeneratorProgramForKey, activeProg)
+			if err != nil {
+				stopSubmit()
+				return 0, err
 			}
 			prepared, err = attachDistillationTeacherProbs(distiller, prepared, nextBatchSize, nextSeqLen)
 			if err != nil {
@@ -608,6 +624,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		canSubmitNextBeforeCollect := func(step int) bool {
 			if !stepLookaheadEnabled ||
 				data2vec != nil ||
+				rtdActive(cfg) ||
 				step >= steps-1 ||
 				shouldLogTrainingStep(step, steps, logEvery) ||
 				shouldWriteCheckpoint(step, opts.CheckpointEvery) ||

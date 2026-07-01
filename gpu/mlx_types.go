@@ -83,6 +83,8 @@ const (
 	OpSegmentAttentionMask = 89
 	OpBlockDiffusionMask   = 90
 	OpGELUExact            = 91
+	OpMaskedBCEWithLogits  = 92
+	OpMaskedBinaryAccuracy = 93
 )
 
 const (

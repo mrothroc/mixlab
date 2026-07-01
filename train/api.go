@@ -100,6 +100,10 @@ func RunScoreDiffusionWithOptions(opts ScoreDiffusionOptions) error {
 	return runScoreDiffusionWithOptions(opts)
 }
 
+func RunScoreElectraWithOptions(opts ScoreElectraOptions) error {
+	return runScoreElectraWithOptions(opts)
+}
+
 func RunHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath string) error {
 	return runHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath)
 }

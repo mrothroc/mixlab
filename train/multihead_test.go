@@ -1,6 +1,7 @@
 package train
 
 import (
+	"math"
 	"reflect"
 	"testing"
 )
@@ -86,6 +87,69 @@ func TestExpandBatchForMultiheadDiffusionUsesDenoiserRows(t *testing.T) {
 	}
 }
 
+func TestRTDGeneratorCorruptionForMNTP(t *testing.T) {
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"seed": 11,
+		"mlm_mask_prob": 1.0,
+		"mlm_mask_token_id": 31,
+		"rtd": {"generator": "tied", "generator_head": "scorer", "mask_prob": 1.0, "sample_temperature": 1.0},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	raw := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 9, 6, 7, 8, 9},
+	}
+	prepared, err := prepareMultiheadBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareMultiheadBatch: %v", err)
+	}
+	probe, err := prepareRTDGeneratorProbeBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareRTDGeneratorProbeBatch: %v", err)
+	}
+	logits := make([]float32, cfg.Training.BatchTokens*cfg.VocabSize)
+	for i := range logits {
+		logits[i] = -100
+	}
+	for row := 0; row < cfg.Training.BatchTokens; row++ {
+		sample := 9
+		if row == 0 {
+			sample = raw.x[1] // Same-token sample should stay labeled original.
+		}
+		logits[row*cfg.VocabSize+sample] = 100
+	}
+	if err := applyRTDGeneratorCorruption(cfg, raw, 3, cfg.SeqLen, probe, logits, &prepared); err != nil {
+		t.Fatalf("applyRTDGeneratorCorruption: %v", err)
+	}
+	rtdOffset := cfg.Training.BatchTokens
+	if !reflect.DeepEqual(prepared.diffusionBlockStart[2:], []int32{0, 0}) || !reflect.DeepEqual(prepared.diffusionBlockEnd[2:], []int32{4, 4}) {
+		t.Fatalf("RTD boundaries=%v/%v, want full bidirectional", prepared.diffusionBlockStart[2:], prepared.diffusionBlockEnd[2:])
+	}
+	if prepared.x[rtdOffset] != 1 || prepared.y[rtdOffset] != 1 {
+		t.Fatalf("position 0 x/y=%d/%d, want original label", prepared.x[rtdOffset], prepared.y[rtdOffset])
+	}
+	if prepared.x[rtdOffset+1] != 2 || prepared.y[rtdOffset+1] != 1 {
+		t.Fatalf("same-token replacement x/y=%d/%d, want original label", prepared.x[rtdOffset+1], prepared.y[rtdOffset+1])
+	}
+	for _, pos := range []int{2, 3, 5, 6, 7} {
+		if prepared.x[rtdOffset+pos] != 9 || prepared.y[rtdOffset+pos] != 0 {
+			t.Fatalf("replacement pos %d x/y=%d/%d, want 9/0", pos, prepared.x[rtdOffset+pos], prepared.y[rtdOffset+pos])
+		}
+	}
+	for i := 0; i < cfg.Training.BatchTokens; i++ {
+		if prepared.lossMask[rtdOffset+i] != 1 {
+			t.Fatalf("RTD loss mask[%d]=%g, want 1", i, prepared.lossMask[rtdOffset+i])
+		}
+	}
+}
+
 func TestScoreDiffusionMultiheadReadsDenoiserOutput(t *testing.T) {
 	cfg := parseTrainMultiheadConfig(t, `"training": {
 		"objective": "multihead",
@@ -115,6 +179,50 @@ func TestScoreDiffusionMultiheadReadsDenoiserOutput(t *testing.T) {
 	}
 	if !reflect.DeepEqual(eval.batchSizes, []int{4, 4}) {
 		t.Fatalf("batch sizes=%v, want expanded [4 4]", eval.batchSizes)
+	}
+}
+
+func TestScoreElectraReadsDetectorOutput(t *testing.T) {
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"mlm_mask_token_id": 31,
+		"rtd": {"generator": "tied", "generator_head": "scorer"},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	eval := &fakeDiffusionGenerationEvaluator{
+		expectedOutput: "head_detector_logits",
+		logitsForBatch: func(batch objectiveBatch, call int) []float32 {
+			out := make([]float32, 8)
+			for i := range out {
+				out[i] = float32(i - 3)
+			}
+			return out
+		},
+	}
+	got, err := scoreElectraTokens(cfg, eval, []int{4, 5, 6, 7}, 1, 2)
+	if err != nil {
+		t.Fatalf("scoreElectraTokens: %v", err)
+	}
+	want := []float64{logSigmoid(-2), logSigmoid(-1), logSigmoid(0)}
+	if len(got) != len(want) {
+		t.Fatalf("scores len=%d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if math.Abs(got[i]-want[i]) > 1e-6 {
+			t.Fatalf("score[%d]=%g want %g", i, got[i], want[i])
+		}
+	}
+	if !reflect.DeepEqual(eval.readNames, []string{"head_detector_logits"}) {
+		t.Fatalf("read names=%v", eval.readNames)
+	}
+	if !reflect.DeepEqual(eval.batchSizes, []int{4}) {
+		t.Fatalf("batch sizes=%v, want expanded [4]", eval.batchSizes)
 	}
 }
 

@@ -191,8 +191,19 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		weighted := headPrefix + "_loss_weighted"
 		prog.Slice("targets", rowStart, rowStart+rawRows, 1, 0, targets)
 		prog.Slice("loss_mask", rowStart, rowStart+rawRows, 1, 0, mask)
-		prog.MaskedCrossEntropy(logits, targets, mask, loss)
-		prog.ScalarMul(loss, float32(head.LossWeight), weighted)
+		lossWeight := float32(head.LossWeight)
+		if head.Objective == ObjectiveRTD {
+			prog.MaskedBCEWithLogits(logits, targets, mask, loss)
+			acc := headPrefix + "_accuracy"
+			prog.MaskedBinaryAccuracy(logits, targets, mask, acc)
+			prog.DeclareOutput(acc, TensorFloat32, []int{1})
+			if cfg.Training.RTD != nil {
+				lossWeight *= float32(cfg.Training.RTD.DiscriminatorLossWeight)
+			}
+		} else {
+			prog.MaskedCrossEntropy(logits, targets, mask, loss)
+		}
+		prog.ScalarMul(loss, lossWeight, weighted)
 		if lossAccum == "" {
 			lossAccum = weighted
 		} else {
@@ -206,9 +217,20 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 			prog.ScalarMul(loss, 1.0, "eval_loss")
 			prog.ScalarMul(logits, 1.0, "logits")
 		}
-		if head.Name == exportHeadName || head.Name == diffusionHeadName {
+		generatorOutputName := ""
+		if cfg.Training.RTD != nil {
+			generatorOutputName = cfg.Training.RTD.GeneratorHead
+		}
+		if head.Name == exportHeadName || head.Name == diffusionHeadName || head.Name == generatorOutputName {
 			prog.ScalarMul(logits, 1.0, headPrefix+"_logits")
-			prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawRows, V})
+			outCols := V
+			if head.Objective == ObjectiveRTD {
+				outCols = 1
+			}
+			prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawRows, outCols})
+		} else if head.Objective == ObjectiveRTD {
+			prog.ScalarMul(logits, 1.0, headPrefix+"_logits")
+			prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawRows, 1})
 		}
 	}
 	if lossAccum == "" {
@@ -292,6 +314,14 @@ func emitMultiheadHeadLogitsIR(prog *Program, prefix string, head MultiheadHeadS
 		}
 		prog.MatMul(hidden, weightName(wi), logits)
 		return logits, wi + 1, nil
+	case MultiheadOutputBinary:
+		mm := prefix + "_binary_mm"
+		logits := prefix + "_logits_raw"
+		prog.MatMul(hidden, weightName(wi), mm)
+		wi++
+		prog.Add(mm, weightName(wi), logits)
+		wi++
+		return logits, wi, nil
 	default:
 		return "", wi, fmt.Errorf("unsupported multihead output_head=%q", head.OutputHead)
 	}

@@ -1,0 +1,47 @@
+{
+  "name": "multihead-mntp-rtd-tiny",
+  "model_dim": 32,
+  "vocab_size": 128,
+  "seq_len": 16,
+  "mlp_mult": 2.0,
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "geglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "geglu"}
+  ],
+  "training": {
+    "objective": "multihead",
+    "steps": 200,
+    "lr": 0.0003,
+    "batch_tokens": 64,
+    "seed": 42,
+    "mlm_mask_prob": 0.15,
+    "mlm_mask_token_id": 1,
+    "export_head": "scorer",
+    "rtd": {
+      "generator": "tied",
+      "generator_head": "scorer",
+      "mask_prob": 0.2,
+      "sample_temperature": 1.0,
+      "discriminator_loss_weight": 50.0
+    },
+    "heads": [
+      {
+        "name": "scorer",
+        "objective": "mntp",
+        "loss_weight": 0.8,
+        "output_head": "bert_mlm",
+        "tie_embeddings": true,
+        "final_norm": true
+      },
+      {
+        "name": "detector",
+        "objective": "rtd",
+        "loss_weight": 1.0,
+        "output_head": "binary",
+        "final_norm": true
+      }
+    ]
+  }
+}

@@ -90,6 +90,26 @@ func TestMultiheadValidationErrors(t *testing.T) {
 				"heads": [{"name": "s", "objective": "mntp"}, {"name": "d", "objective": "block_diffusion"}]}`,
 			want: "must sum to 1.0",
 		},
+		{
+			name: "rtd requires training rtd",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "detector", "objective": "rtd"}]}`,
+			want: "requires training.rtd",
+		},
+		{
+			name: "rtd generator must be tied",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"rtd": {"generator": {"type": "dedicated", "model_dim": 8, "layers": 1, "heads": 1}},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "detector", "objective": "rtd"}]}`,
+			want: "v1 supports \"tied\"",
+		},
+		{
+			name: "rtd generator head must be masked",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"rtd": {"generator": "tied", "generator_head": "c"},
+				"heads": [{"name": "c", "objective": "causal"}, {"name": "detector", "objective": "rtd"}]}`,
+			want: "must select an mlm or mntp head",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -101,6 +121,58 @@ func TestMultiheadValidationErrors(t *testing.T) {
 				t.Fatalf("error=%q, want substring %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestMultiheadRTDConfigWeightShapesAndIR(t *testing.T) {
+	cfg := parseMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"mlm_mask_token_id": 31,
+		"export_head": "scorer",
+		"rtd": {"generator": "tied", "generator_head": "scorer", "mask_prob": 0.2, "sample_temperature": 1.3, "discriminator_loss_weight": 50},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	if cfg.Training.DiffusionHead != "" {
+		t.Fatalf("diffusion_head=%q, want empty", cfg.Training.DiffusionHead)
+	}
+	if cfg.Training.Heads[1].OutputHead != MultiheadOutputBinary {
+		t.Fatalf("detector output_head=%q, want binary", cfg.Training.Heads[1].OutputHead)
+	}
+	shapes, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesFromConfig: %v", err)
+	}
+	for _, want := range []string{"head_detector_binary_proj", "head_detector_binary_bias"} {
+		if countWeightNames(shapes, want) != 1 {
+			t.Fatalf("weight %q count=%d, want 1 in %+v", want, countWeightNames(shapes, want), shapes)
+		}
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	if prog.NumWeights != len(shapes) {
+		t.Fatalf("prog weights=%d shapes=%d", prog.NumWeights, len(shapes))
+	}
+	if countOps(prog, OpMaskedCrossEntropy) != 1 {
+		t.Fatalf("OpMaskedCrossEntropy count=%d, want 1", countOps(prog, OpMaskedCrossEntropy))
+	}
+	if countOps(prog, OpMaskedBCEWithLogits) != 1 {
+		t.Fatalf("OpMaskedBCEWithLogits count=%d, want 1", countOps(prog, OpMaskedBCEWithLogits))
+	}
+	if countOps(prog, OpMaskedBinaryAccuracy) != 1 {
+		t.Fatalf("OpMaskedBinaryAccuracy count=%d, want 1", countOps(prog, OpMaskedBinaryAccuracy))
+	}
+	for _, want := range []string{"head_scorer_logits", "head_detector_logits", "head_detector_accuracy"} {
+		if !programDeclaresOutputArch(prog, want) {
+			t.Fatalf("missing output %q: %+v", want, prog.Outputs)
+		}
 	}
 }
 

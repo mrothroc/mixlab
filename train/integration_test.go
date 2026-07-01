@@ -79,10 +79,17 @@ func generateSyntheticBatch(rng *rand.Rand, batchTokens, vocabSize int) (x, y []
 // TestBlockDiffusionMaskMatchesOracle, and the arch/train objective tests). This
 // covers both pure block-diffusion configs and hybrid configs whose secondary
 // objective is block diffusion, since both resolve a forward graph that declares
-// the diffusion block-boundary inputs.
+// the diffusion block-boundary inputs. The multihead objective is likewise
+// excluded: its trunk runs every plain block under the block-diffusion mask op,
+// so its graph declares the per-row diffusion block-boundary inputs (and, with
+// RTD, requires a generator forward pass) that the synthetic harness cannot
+// supply; it is exercised by dedicated multihead/RTD tests instead.
 func syntheticBatchUnsupportedReason(cfg *arch.ArchConfig) string {
 	if cfg.Training.UsesBlockDiffusionObjective() {
 		return "block_diffusion needs per-example diffusion block-boundary inputs the synthetic next-token harness cannot supply; covered by dedicated block-diffusion tests"
+	}
+	if cfg.Training.MultiheadEnabled() {
+		return "multihead needs per-row diffusion block-boundary inputs (and an RTD generator pass) the synthetic next-token harness cannot supply; covered by dedicated multihead/RTD tests"
 	}
 	return ""
 }
