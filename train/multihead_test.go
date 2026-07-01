@@ -213,6 +213,51 @@ func TestRTDDedicatedGeneratorCorruptionAndInputs(t *testing.T) {
 	}
 }
 
+func TestRTDSampleTokenFromLogitsHandlesNonFiniteRows(t *testing.T) {
+	tests := []struct {
+		name   string
+		logits []float32
+		u      float64
+		want   int
+	}{
+		{
+			name:   "all nan falls back to uniform",
+			logits: []float32{float32(math.NaN()), float32(math.NaN()), float32(math.NaN()), float32(math.NaN())},
+			u:      0.75,
+			want:   3,
+		},
+		{
+			name:   "all negative infinity falls back to uniform",
+			logits: []float32{float32(math.Inf(-1)), float32(math.Inf(-1)), float32(math.Inf(-1)), float32(math.Inf(-1))},
+			u:      0.25,
+			want:   1,
+		},
+		{
+			name:   "finite logits ignore nan",
+			logits: []float32{float32(math.NaN()), -1, 3, float32(math.NaN())},
+			u:      0.99,
+			want:   2,
+		},
+		{
+			name:   "positive infinity dominates",
+			logits: []float32{1, float32(math.Inf(1)), 0, float32(math.Inf(1))},
+			u:      0.75,
+			want:   3,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := sampleTokenFromLogits(tt.logits, 1.0, tt.u)
+			if err != nil {
+				t.Fatalf("sampleTokenFromLogits: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("sampleTokenFromLogits=%d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestScoreDiffusionMultiheadReadsDenoiserOutput(t *testing.T) {
 	cfg := parseTrainMultiheadConfig(t, `"training": {
 		"objective": "multihead",

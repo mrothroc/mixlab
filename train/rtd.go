@@ -417,26 +417,35 @@ func sampleTokenFromLogits(logits []float32, temperature float64, u float64) (in
 	if temperature <= 0 || math.IsNaN(temperature) || math.IsInf(temperature, 0) {
 		return 0, fmt.Errorf("invalid temperature=%g", temperature)
 	}
+	positiveInf := make([]int, 0)
+	for i, v := range logits {
+		if math.IsInf(float64(v), 1) {
+			positiveInf = append(positiveInf, i)
+		}
+	}
+	if len(positiveInf) > 0 {
+		return positiveInf[uniformSampleIndex(len(positiveInf), u)], nil
+	}
 	maxVal := math.Inf(-1)
 	for _, v := range logits {
 		scaled := float64(v) / temperature
-		if !math.IsNaN(scaled) && scaled > maxVal {
+		if !math.IsNaN(scaled) && !math.IsInf(scaled, 0) && scaled > maxVal {
 			maxVal = scaled
 		}
 	}
 	if math.IsInf(maxVal, -1) {
-		return 0, fmt.Errorf("all logits are non-finite")
+		return uniformSampleIndex(len(logits), u), nil
 	}
 	total := 0.0
 	for _, v := range logits {
 		scaled := float64(v)/temperature - maxVal
-		if math.IsNaN(scaled) {
+		if math.IsNaN(scaled) || math.IsInf(scaled, 0) {
 			continue
 		}
 		total += math.Exp(scaled)
 	}
 	if total <= 0 || math.IsNaN(total) || math.IsInf(total, 0) {
-		return 0, fmt.Errorf("non-finite sampling normalization")
+		return uniformSampleIndex(len(logits), u), nil
 	}
 	if u < 0 {
 		u = 0
@@ -446,15 +455,40 @@ func sampleTokenFromLogits(logits []float32, temperature float64, u float64) (in
 	}
 	threshold := u * total
 	cumulative := 0.0
+	lastFinite := -1
 	for i, v := range logits {
 		scaled := float64(v)/temperature - maxVal
-		if math.IsNaN(scaled) {
+		if math.IsNaN(scaled) || math.IsInf(scaled, 0) {
 			continue
 		}
+		lastFinite = i
 		cumulative += math.Exp(scaled)
 		if cumulative >= threshold {
 			return i, nil
 		}
 	}
-	return len(logits) - 1, nil
+	if lastFinite >= 0 {
+		return lastFinite, nil
+	}
+	return uniformSampleIndex(len(logits), u), nil
+}
+
+func uniformSampleIndex(n int, u float64) int {
+	if n <= 1 {
+		return 0
+	}
+	if u < 0 || math.IsNaN(u) {
+		u = 0
+	}
+	if u >= 1 {
+		u = math.Nextafter(1, 0)
+	}
+	idx := int(u * float64(n))
+	if idx < 0 {
+		return 0
+	}
+	if idx >= n {
+		return n - 1
+	}
+	return idx
 }
