@@ -196,23 +196,17 @@ func attachRTDTiedGeneratorCorruption(
 		}
 		return switcher.SetProgramGPU(restoreProg)
 	}
-	if _, err := trainer.EvaluateObjectiveGPU(probe, batchSize, seqLen); err != nil {
-		if restoreErr := restore(); restoreErr != nil {
-			return objectiveBatch{}, fmt.Errorf("evaluate RTD generator: %w; restore program: %v", err, restoreErr)
-		}
-		return objectiveBatch{}, fmt.Errorf("evaluate RTD generator: %w", err)
-	}
 	outputName, err := rtdGeneratorLogitsOutputName(cfg)
 	if err != nil {
 		_ = restore()
 		return objectiveBatch{}, err
 	}
-	logits, err := readTrainerOutput(trainer, outputName, []int{need, cfg.VocabSize})
+	logits, err := evaluateRTDGeneratorLogits(trainer, probe, batchSize, seqLen, outputName, []int{need, cfg.VocabSize})
 	if err != nil {
 		if restoreErr := restore(); restoreErr != nil {
-			return objectiveBatch{}, fmt.Errorf("read RTD generator logits: %w; restore program: %v", err, restoreErr)
+			return objectiveBatch{}, fmt.Errorf("evaluate RTD generator logits: %w; restore program: %v", err, restoreErr)
 		}
-		return objectiveBatch{}, fmt.Errorf("read RTD generator logits: %w", err)
+		return objectiveBatch{}, fmt.Errorf("evaluate RTD generator logits: %w", err)
 	}
 	if err := restore(); err != nil {
 		return objectiveBatch{}, fmt.Errorf("restore training program after RTD generator: %w", err)
@@ -254,18 +248,12 @@ func attachRTDDedicatedGeneratorCorruption(
 		}
 		return switcher.SetProgramGPU(restoreProg)
 	}
-	if _, err := trainer.EvaluateObjectiveGPU(prepared, batchSize, seqLen); err != nil {
-		if restoreErr := restore(); restoreErr != nil {
-			return objectiveBatch{}, fmt.Errorf("evaluate RTD dedicated generator: %w; restore program: %v", err, restoreErr)
-		}
-		return objectiveBatch{}, fmt.Errorf("evaluate RTD dedicated generator: %w", err)
-	}
-	logits, err := readTrainerOutput(trainer, arch.RTDGeneratorLogitsName, []int{need, cfg.VocabSize})
+	logits, err := evaluateRTDGeneratorLogits(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, []int{need, cfg.VocabSize})
 	if err != nil {
 		if restoreErr := restore(); restoreErr != nil {
-			return objectiveBatch{}, fmt.Errorf("read RTD dedicated generator logits: %w; restore program: %v", err, restoreErr)
+			return objectiveBatch{}, fmt.Errorf("evaluate RTD dedicated generator logits: %w; restore program: %v", err, restoreErr)
 		}
-		return objectiveBatch{}, fmt.Errorf("read RTD dedicated generator logits: %w", err)
+		return objectiveBatch{}, fmt.Errorf("evaluate RTD dedicated generator logits: %w", err)
 	}
 	if err := restore(); err != nil {
 		return objectiveBatch{}, fmt.Errorf("restore training program after RTD dedicated generator: %w", err)
@@ -274,6 +262,47 @@ func attachRTDDedicatedGeneratorCorruption(
 		return objectiveBatch{}, err
 	}
 	return prepared, nil
+}
+
+func evaluateRTDGeneratorLogits(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, outputName string, shape []int) ([]float32, error) {
+	if outputName == "" {
+		return nil, fmt.Errorf("RTD generator output name is empty")
+	}
+	if outEval, ok := trainer.(gpuObjectiveOutputEvaluator); ok {
+		out, err := outEval.EvaluateObjectiveOutputGPU(batch, batchSize, seqLen, outputName)
+		if err != nil {
+			return nil, err
+		}
+		if err := validateRTDGeneratorLogitsShape(outputName, out, shape); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+	if _, err := trainer.EvaluateObjectiveGPU(batch, batchSize, seqLen); err != nil {
+		return nil, err
+	}
+	out, err := readTrainerOutput(trainer, outputName, shape)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateRTDGeneratorLogitsShape(outputName, out, shape); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func validateRTDGeneratorLogitsShape(outputName string, logits []float32, shape []int) error {
+	want := 1
+	for _, dim := range shape {
+		if dim <= 0 {
+			return fmt.Errorf("invalid RTD generator output %q shape %v", outputName, shape)
+		}
+		want *= dim
+	}
+	if len(logits) != want {
+		return fmt.Errorf("RTD generator output %q length=%d, want %d for shape %v", outputName, len(logits), want, shape)
+	}
+	return nil
 }
 
 func applyRTDGeneratorCorruption(cfg *ArchConfig, batch trainBatch, step, seqLen int, probe objectiveBatch, logits []float32, prepared *objectiveBatch) error {

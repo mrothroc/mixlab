@@ -33,6 +33,10 @@ type gpuObjectiveEvaluator interface {
 	EvaluateObjectiveGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error)
 }
 
+type gpuObjectiveOutputEvaluator interface {
+	EvaluateObjectiveOutputGPU(batch objectiveBatch, batchSize, seqLen int, outputName string) ([]float32, error)
+}
+
 func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, lr float32) error {
 	if batch.batchSizeOverride > 0 {
 		batchSize = batch.batchSizeOverride

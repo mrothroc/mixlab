@@ -186,6 +186,18 @@ func TestMultiheadRTDDedicatedGeneratorWeightShapesAndIR(t *testing.T) {
 			t.Fatalf("missing output %q: %+v", want, prog.Outputs)
 		}
 	}
+	finalNormReadsGeneratorStream := false
+	for _, op := range prog.Ops {
+		if op.Code == OpRMSNorm && len(op.Outputs) == 1 && op.Outputs[0] == "rtd_generator_final_norm" {
+			if len(op.Inputs) == 0 || op.Inputs[0] != "rtd_generator_x" {
+				t.Fatalf("rtd generator final norm inputs=%v, want first input rtd_generator_x", op.Inputs)
+			}
+			finalNormReadsGeneratorStream = true
+		}
+	}
+	if !finalNormReadsGeneratorStream {
+		t.Fatal("missing rtd_generator_final_norm RMSNorm op")
+	}
 }
 
 func TestMultiheadRTDConfigWeightShapesAndIR(t *testing.T) {

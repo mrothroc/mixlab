@@ -1,4 +1,4 @@
-//go:build mlx && cgo && darwin
+//go:build mlx && cgo && (darwin || linux)
 
 package gpu
 

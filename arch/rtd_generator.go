@@ -107,7 +107,6 @@ func emitRTDDedicatedGeneratorIR(prog *Program, cfg *ArchConfig, wi, rawBatch in
 		if err != nil {
 			return "", "", wi, fmt.Errorf("rtd generator layer %d: %w", layerIdx, err)
 		}
-		stream = "x"
 	}
 	wi, err := emitNamedNormIR(prog, stream, wi, "rtd_generator_final_norm", cfg.EffectiveNormSpec())
 	if err != nil {
