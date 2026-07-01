@@ -34,9 +34,10 @@ Masked objectives use MLM fields such as `mlm_mask_prob`,
 `hybrid_clm_fraction` and `hybrid_secondary_objective`.
 
 Multihead configs use `training.heads`, `export_head`, optional
-`diffusion_head`, and optional auxiliary settings such as `training.rtd`. They
-are intended for recipes such as an MNTP/BERT-MLM scorer head plus a native
-block-diffusion denoiser or ELECTRA-style RTD detector over the same trunk.
+`diffusion_head`, and optional auxiliary settings such as `training.rtd` and
+`training.minimal_pair`. They are intended for recipes such as an MNTP/BERT-MLM
+scorer head plus a native block-diffusion denoiser, ELECTRA-style RTD detector,
+or native energy/ranking head over the same trunk.
 
 ## Optimizers
 
@@ -56,6 +57,7 @@ rates/weight decay are documented in the full reference.
 | `distillation` | In-training fixed-teacher ensemble distillation for causal LM. |
 | `data2vec` | EMA self-distillation for masked objective paths. |
 | `rtd` | ELECTRA-style replaced-token detection auxiliary for multihead training. |
+| `minimal_pair` | Clean/corrupt pair data for native multihead energy ranking. |
 | `mtp` | Parameter-free multi-token prediction auxiliary loss. |
 | `first_byte_mask` | First-byte masked loss path. |
 | `attention_segment_mask` | Block-diagonal segment attention for packed training sequences. |

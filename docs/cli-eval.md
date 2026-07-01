@@ -182,6 +182,43 @@ detector. The mode reads `head_<rtd-head>_logits` and reports per-token
 sequence as-is and is intended as a native detector-based ranking signal, not a
 normalized language-model likelihood.
 
+## `score-ebm`
+
+Score already-tokenized sequences or clean/corrupt pairs with a native
+multihead energy head. Lower energy is better.
+
+```bash
+./mixlab -mode score-ebm \
+  -config examples/multihead_mntp_energy_tiny.json \
+  -safetensors-load runs/mntp-energy.safetensors \
+  -score-in pairs.jsonl \
+  -score-out ebm_scores.jsonl
+```
+
+Input JSONL can contain single-sequence rows:
+
+```json
+{"id":"case_0","tokens":[1,10,11,2]}
+```
+
+or pair rows:
+
+```json
+{"id":"pair_0","clean":[1,10,11,2],"corrupt":[1,10,19,2],"family":"agreement"}
+```
+
+Pair outputs include `energy_clean`, `energy_corrupt`, `margin`, and
+`correct`; the mode appends a `__summary__` row with aggregate and per-family
+pair accuracy when pair rows were scored.
+
+| Flag | Description |
+|------|-------------|
+| `-config` | Required. Must be a multihead config with an `objective: "energy"` head. |
+| `-safetensors-load` | Required. Checkpoint to score with. |
+| `-score-in` | Required. JSONL input with `tokens` rows or `clean`/`corrupt` pair rows. |
+| `-score-out` | Required. JSONL output path. |
+| `-score-batch` | Even sequence rows per energy forward. `0` uses a conservative default. |
+
 ## `hiddenstats`
 
 Export one batch of hidden states:

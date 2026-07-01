@@ -261,6 +261,67 @@ mx::array masked_binary_accuracy(
   return mx::sum(correct * mask) / denom;
 }
 
+struct EnergyPairwiseResult {
+  mx::array loss;
+  mx::array accuracy;
+  mx::array clean_mean;
+  mx::array corrupt_mean;
+};
+
+EnergyPairwiseResult energy_pairwise_loss(
+    const mx::array& logits,
+    const mx::array& row_mask,
+    int loss_kind,
+    float margin) {
+  mx::array l = mx::astype(logits, mx::float32);
+  if (l.ndim() == 2 && l.shape(1) == 1) {
+    l = mx::reshape(l, {l.shape(0)});
+  }
+  if (l.ndim() != 1) {
+    throw std::runtime_error("energy pairwise logits must have shape [rows] or [rows,1]");
+  }
+  if (row_mask.ndim() != 1 || row_mask.shape(0) != l.shape(0)) {
+    throw std::runtime_error("energy pairwise row_mask must be a rank-1 vector matching rows");
+  }
+  const int rows = static_cast<int>(l.shape(0));
+  if (rows <= 0 || (rows % 2) != 0) {
+    throw std::runtime_error("energy pairwise rows must be a positive even number");
+  }
+  if (!(margin > 0.0f) || !std::isfinite(margin)) {
+    throw std::runtime_error("energy pairwise margin must be finite and > 0");
+  }
+  auto clean = mx::slice(l, {0}, {rows}, {2});
+  auto corrupt = mx::slice(l, {1}, {rows}, {2});
+  auto mask_f = mx::astype(row_mask, mx::float32);
+  auto clean_mask = mx::astype(
+      mx::greater(mx::slice(mask_f, {0}, {rows}, {2}), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto corrupt_mask = mx::astype(
+      mx::greater(mx::slice(mask_f, {1}, {rows}, {2}), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto pair_mask = clean_mask * corrupt_mask;
+  auto denom = mx::maximum(mx::sum(pair_mask), mx::array(1.0f, mx::float32));
+  auto diff = clean - corrupt;
+  mx::array per_pair = mx::array(0.0f, mx::float32);
+  if (loss_kind == 0) {
+    per_pair =
+        mx::maximum(diff, mx::array(0.0f, mx::float32)) +
+        mx::log(mx::array(1.0f, mx::float32) + mx::exp(-mx::abs(diff)));
+  } else if (loss_kind == 1) {
+    per_pair = mx::maximum(
+        mx::array(margin, mx::float32) + diff,
+        mx::array(0.0f, mx::float32));
+  } else {
+    throw std::runtime_error("energy pairwise loss kind must be 0 (logistic) or 1 (hinge)");
+  }
+  auto correct = mx::astype(mx::less(diff, mx::array(0.0f, mx::float32)), mx::float32);
+  return EnergyPairwiseResult{
+      mx::sum(per_pair * pair_mask) / denom,
+      mx::sum(correct * pair_mask) / denom,
+      mx::sum(clean * pair_mask) / denom,
+      mx::sum(corrupt * pair_mask) / denom};
+}
+
 mx::array z_loss_mean(const mx::array& logits) {
   if (logits.ndim() != 2) {
     throw std::runtime_error("z_loss expects logits shape [rows, vocab]");
@@ -2736,6 +2797,20 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
             get(op, 0),
             mx::astype(get(op, 1), mx::int32),
             get(op, 2)));
+        break;
+      }
+      case OP_ENERGY_PAIRWISE_LOSS: {
+        if (op.n_outputs != 4) {
+          throw std::runtime_error("OP_ENERGY_PAIRWISE_LOSS requires four outputs");
+        }
+        if (op.n_int_params < 1 || op.n_float_params < 1) {
+          throw std::runtime_error("OP_ENERGY_PAIRWISE_LOSS requires loss kind and margin params");
+        }
+        auto result = energy_pairwise_loss(get(op, 0), get(op, 1), op.int_params[0], op.float_params[0]);
+        set_out(op, 0, result.loss);
+        set_out(op, 1, result.accuracy);
+        set_out(op, 2, result.clean_mean);
+        set_out(op, 3, result.corrupt_mean);
         break;
       }
       case OP_Z_LOSS: {

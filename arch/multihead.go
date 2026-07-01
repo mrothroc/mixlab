@@ -10,6 +10,7 @@ const (
 	MultiheadOutputLinear  = "linear"
 	MultiheadOutputBERTMLM = "bert_mlm"
 	MultiheadOutputBinary  = "binary"
+	MultiheadOutputScalar  = "scalar"
 )
 
 func normalizeMultiheadOutputHead(raw string, objective string) string {
@@ -21,6 +22,8 @@ func normalizeMultiheadOutputHead(raw string, objective string) string {
 			return MultiheadOutputBERTMLM
 		case ObjectiveRTD:
 			return MultiheadOutputBinary
+		case ObjectiveEnergy:
+			return MultiheadOutputScalar
 		default:
 			return MultiheadOutputLinear
 		}
@@ -30,6 +33,8 @@ func normalizeMultiheadOutputHead(raw string, objective string) string {
 		return MultiheadOutputBERTMLM
 	case "binary", "rtd":
 		return MultiheadOutputBinary
+	case "scalar", "energy":
+		return MultiheadOutputScalar
 	default:
 		return mode
 	}
@@ -88,6 +93,7 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 	diffusionHeads := 0
 	exportableHeads := 0
 	rtdHeads := 0
+	energyHeads := 0
 	usesAdaLN := false
 	for i := range t.Heads {
 		h := &t.Heads[i]
@@ -101,9 +107,9 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		seen[h.Name] = i
 		h.Objective = normalizeTrainingObjective(h.Objective)
 		switch h.Objective {
-		case ObjectiveCausal, ObjectiveMLM, ObjectiveMNTP, ObjectiveBlockDiffusion, ObjectiveRTD:
+		case ObjectiveCausal, ObjectiveMLM, ObjectiveMNTP, ObjectiveBlockDiffusion, ObjectiveRTD, ObjectiveEnergy:
 		default:
-			return fmt.Errorf("config %q training.heads[%d].objective=%q is invalid for multihead (must be causal, mlm, mntp, block_diffusion, or rtd)", source, i, h.Objective)
+			return fmt.Errorf("config %q training.heads[%d].objective=%q is invalid for multihead (must be causal, mlm, mntp, block_diffusion, rtd, or energy)", source, i, h.Objective)
 		}
 		if !h.lossWeightSet && h.LossWeight == 0 {
 			h.LossWeight = 1
@@ -120,9 +126,9 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		}
 		h.OutputHead = normalizeMultiheadOutputHead(h.OutputHead, h.Objective)
 		switch h.OutputHead {
-		case MultiheadOutputLinear, MultiheadOutputBERTMLM, MultiheadOutputBinary:
+		case MultiheadOutputLinear, MultiheadOutputBERTMLM, MultiheadOutputBinary, MultiheadOutputScalar:
 		default:
-			return fmt.Errorf("config %q training.heads[%d].output_head=%q must be \"linear\", \"bert_mlm\", or \"binary\"", source, i, h.OutputHead)
+			return fmt.Errorf("config %q training.heads[%d].output_head=%q must be \"linear\", \"bert_mlm\", \"binary\", or \"scalar\"", source, i, h.OutputHead)
 		}
 		if !h.finalNormSet {
 			h.FinalNorm = true
@@ -141,6 +147,11 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 				return fmt.Errorf("config %q training.heads[%d].output_head=\"binary\" requires objective rtd", source, i)
 			}
 			h.TieEmbeddings = false
+		case h.OutputHead == MultiheadOutputScalar:
+			if h.Objective != ObjectiveEnergy {
+				return fmt.Errorf("config %q training.heads[%d].output_head=\"scalar\" requires objective energy", source, i)
+			}
+			h.TieEmbeddings = false
 		case !h.tieEmbeddingsSet:
 			h.TieEmbeddings = h.Objective != ObjectiveBlockDiffusion && cfg.TieEmbeddings
 		}
@@ -157,9 +168,12 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 				usesAdaLN = true
 			}
 		} else {
-			if h.Objective == ObjectiveRTD {
+			switch h.Objective {
+			case ObjectiveRTD:
 				rtdHeads++
-			} else {
+			case ObjectiveEnergy:
+				energyHeads++
+			default:
 				exportableHeads++
 			}
 			if h.Diffusion != nil {
@@ -195,6 +209,19 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 	} else if rtdHeads > 0 {
 		return fmt.Errorf("config %q multihead objective=\"rtd\" requires training.rtd", source)
 	}
+	if t.MinimalPair != nil {
+		if energyHeads == 0 {
+			return fmt.Errorf("config %q training.minimal_pair requires a multihead objective=\"energy\" head", source)
+		}
+		if err := validateMinimalPairSpec(cfg, source); err != nil {
+			return err
+		}
+	} else if energyHeads > 0 {
+		return fmt.Errorf("config %q multihead objective=\"energy\" requires training.minimal_pair", source)
+	}
+	if energyHeads > 0 && (t.BatchTokens <= 0 || cfg.SeqLen <= 0 || (t.BatchTokens/cfg.SeqLen)%2 != 0) {
+		return fmt.Errorf("config %q multihead objective=\"energy\" requires an even number of sequence rows per batch", source)
+	}
 	if totalWeight <= 0 {
 		return fmt.Errorf("config %q training.objective=\"multihead\" requires positive total head loss_weight", source)
 	}
@@ -210,7 +237,7 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		}
 	} else if idx, ok := seen[strings.TrimSpace(t.ExportHead)]; !ok {
 		return fmt.Errorf("config %q training.export_head=%q does not match any training.heads[].name", source, t.ExportHead)
-	} else if t.Heads[idx].Objective == ObjectiveBlockDiffusion || t.Heads[idx].Objective == ObjectiveRTD {
+	} else if t.Heads[idx].Objective == ObjectiveBlockDiffusion || t.Heads[idx].Objective == ObjectiveRTD || t.Heads[idx].Objective == ObjectiveEnergy {
 		return fmt.Errorf("config %q training.export_head=%q cannot select a %s head for HF export in v1", source, t.ExportHead, t.Heads[idx].Objective)
 	}
 	if strings.TrimSpace(t.DiffusionHead) == "" {
@@ -444,6 +471,11 @@ func multiheadHeadWeightShapes(modelDim, vocabSize int, blocks []BlockSpec, norm
 		shapes = append(shapes,
 			WeightMeta{Name: prefix + "_binary_proj", Shape: []int{modelDim, 1}},
 			WeightMeta{Name: prefix + "_binary_bias", Shape: []int{1}, InitZero: true},
+		)
+	case MultiheadOutputScalar:
+		shapes = append(shapes,
+			WeightMeta{Name: prefix + "_energy_proj", Shape: []int{modelDim, 1}},
+			WeightMeta{Name: prefix + "_energy_bias", Shape: []int{1}, InitZero: true},
 		)
 	}
 	return shapes

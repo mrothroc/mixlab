@@ -163,6 +163,17 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		} else {
 			prog.Slice("x", rowStart, rowStart+rawRows, 1, 0, headIn)
 		}
+		headMask := headPrefix + "_loss_mask"
+		prog.Slice("loss_mask", rowStart, rowStart+rawRows, 1, 0, headMask)
+		if head.Objective == ObjectiveEnergy {
+			if cfg.Training.MinimalPair == nil {
+				return nil, fmt.Errorf("energy head %q requires training.minimal_pair", head.Name)
+			}
+			seqHidden := headPrefix + "_sequence_hidden"
+			prog.Reshape(headIn, []int{rawBatch, T, D}, headPrefix+"_hidden_btd")
+			prog.MeanAxis(headPrefix+"_hidden_btd", 1, seqHidden)
+			headIn = seqHidden
+		}
 		if head.FinalNorm {
 			normOut := headPrefix + "_final_norm"
 			wi, err = emitNamedNormIR(prog, headIn, wi, normOut, norm)
@@ -186,13 +197,25 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 			logits = capped
 		}
 		targets := headPrefix + "_targets"
-		mask := headPrefix + "_loss_mask"
+		mask := headMask
 		loss := headPrefix + "_loss"
 		weighted := headPrefix + "_loss_weighted"
-		prog.Slice("targets", rowStart, rowStart+rawRows, 1, 0, targets)
-		prog.Slice("loss_mask", rowStart, rowStart+rawRows, 1, 0, mask)
+		if head.Objective != ObjectiveEnergy {
+			prog.Slice("targets", rowStart, rowStart+rawRows, 1, 0, targets)
+		}
 		lossWeight := float32(head.LossWeight)
-		if head.Objective == ObjectiveRTD {
+		switch head.Objective {
+		case ObjectiveEnergy:
+			rowMask := headPrefix + "_row_mask"
+			acc := headPrefix + "_pair_accuracy"
+			cleanMean := headPrefix + "_clean_energy_mean"
+			corruptMean := headPrefix + "_corrupt_energy_mean"
+			prog.Slice(mask, 0, rawRows, T, 0, rowMask)
+			prog.EnergyPairwiseLoss(logits, rowMask, cfg.Training.MinimalPair.LossKind(), float32(cfg.Training.MinimalPair.Margin), loss, acc, cleanMean, corruptMean)
+			prog.DeclareOutput(acc, TensorFloat32, []int{1})
+			prog.DeclareOutput(cleanMean, TensorFloat32, []int{1})
+			prog.DeclareOutput(corruptMean, TensorFloat32, []int{1})
+		case ObjectiveRTD:
 			prog.MaskedBCEWithLogits(logits, targets, mask, loss)
 			acc := headPrefix + "_accuracy"
 			prog.MaskedBinaryAccuracy(logits, targets, mask, acc)
@@ -200,7 +223,7 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 			if cfg.Training.RTD != nil {
 				lossWeight *= float32(cfg.Training.RTD.DiscriminatorLossWeight)
 			}
-		} else {
+		default:
 			prog.MaskedCrossEntropy(logits, targets, mask, loss)
 		}
 		prog.ScalarMul(loss, lossWeight, weighted)
@@ -224,13 +247,24 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		if head.Name == exportHeadName || head.Name == diffusionHeadName || head.Name == generatorOutputName {
 			prog.ScalarMul(logits, 1.0, headPrefix+"_logits")
 			outCols := V
-			if head.Objective == ObjectiveRTD {
+			outRows := rawRows
+			switch head.Objective {
+			case ObjectiveRTD:
 				outCols = 1
+			case ObjectiveEnergy:
+				outCols = 1
+				outRows = rawBatch
 			}
-			prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawRows, outCols})
-		} else if head.Objective == ObjectiveRTD {
-			prog.ScalarMul(logits, 1.0, headPrefix+"_logits")
-			prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawRows, 1})
+			prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{outRows, outCols})
+		} else {
+			switch head.Objective {
+			case ObjectiveRTD:
+				prog.ScalarMul(logits, 1.0, headPrefix+"_logits")
+				prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawRows, 1})
+			case ObjectiveEnergy:
+				prog.ScalarMul(logits, 1.0, headPrefix+"_logits")
+				prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawBatch, 1})
+			}
 		}
 	}
 	prog.Slice("x", 0, rawRows, 1, 0, "x_hidden_flat")
@@ -333,6 +367,14 @@ func emitMultiheadHeadLogitsIR(prog *Program, prefix string, head MultiheadHeadS
 		return logits, wi + 1, nil
 	case MultiheadOutputBinary:
 		mm := prefix + "_binary_mm"
+		logits := prefix + "_logits_raw"
+		prog.MatMul(hidden, weightName(wi), mm)
+		wi++
+		prog.Add(mm, weightName(wi), logits)
+		wi++
+		return logits, wi, nil
+	case MultiheadOutputScalar:
+		mm := prefix + "_energy_mm"
 		logits := prefix + "_logits_raw"
 		prog.MatMul(hidden, weightName(wi), mm)
 		wi++

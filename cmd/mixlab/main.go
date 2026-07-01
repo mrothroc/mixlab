@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
+	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
@@ -82,6 +82,10 @@ func main() {
 	prepTextField := flag.String("text-field", "text", "JSON field for text in JSONL (prepare mode)")
 	prepCharVocabSize := flag.Int("char-vocab-size", 0, "write tokenizer-level char_features.bin with this char vocab size; 0 disables (prepare mode)")
 	prepCharMaxPerToken := flag.Int("char-max-per-token", 16, "fixed char feature slots per token when -char-vocab-size is enabled (prepare mode)")
+	prepMinimalPairOut := flag.String("minimal-pair-out", "", "write corpus-derived minimal-pair JSONL to this path (prepare mode)")
+	prepMinimalPairCorruptions := flag.String("minimal-pair-corruptions", "agreement,attractor,word_order", "comma-separated minimal-pair corruption families (prepare mode)")
+	prepMinimalPairMaxPairs := flag.Int("minimal-pair-max-pairs", 0, "maximum generated minimal pairs; 0 lets prepare choose from input size (prepare mode)")
+	prepMinimalPairSeed := flag.Int("minimal-pair-seed", 1234, "deterministic seed for minimal-pair generation (prepare mode)")
 
 	flag.Usage = func() {
 		printUsage(os.Stderr, requestedHelpMode(os.Args[1:]))
@@ -150,14 +154,18 @@ func main() {
 		prepareOutput, err := aliasedStringFlagValue(*prepOutput, "prepare-output-dir", *prepareOutputDir, providedFlags)
 		must(err)
 		must(train.RunPrepare(train.PrepareOptions{
-			Input:           *prepInput,
-			Output:          prepareOutput,
-			VocabSize:       *prepVocabSize,
-			ValSplit:        *prepValSplit,
-			TokenizerPath:   *prepTokenizerPath,
-			TextFieldName:   *prepTextField,
-			CharVocabSize:   *prepCharVocabSize,
-			CharMaxPerToken: *prepCharMaxPerToken,
+			Input:                  *prepInput,
+			Output:                 prepareOutput,
+			VocabSize:              *prepVocabSize,
+			ValSplit:               *prepValSplit,
+			TokenizerPath:          *prepTokenizerPath,
+			TextFieldName:          *prepTextField,
+			CharVocabSize:          *prepCharVocabSize,
+			CharMaxPerToken:        *prepCharMaxPerToken,
+			MinimalPairOut:         *prepMinimalPairOut,
+			MinimalPairCorruptions: *prepMinimalPairCorruptions,
+			MinimalPairMaxPairs:    *prepMinimalPairMaxPairs,
+			MinimalPairSeed:        *prepMinimalPairSeed,
 		}))
 		return
 	}
@@ -282,6 +290,14 @@ func main() {
 			ScoreSkipFirst:  *scoreSkipFirst,
 			ScoreBatch:      *scoreBatch,
 		}))
+	case "score-ebm":
+		must(train.RunScoreEBMWithOptions(train.ScoreEBMOptions{
+			ConfigPath:      *configPath,
+			SafetensorsLoad: *safetensorsLoad,
+			ScoreIn:         *scoreIn,
+			ScoreOut:        *scoreOut,
+			ScoreBatch:      *scoreBatch,
+		}))
 	case "parity":
 		must(train.RunParity(train.ParityOptions{
 			ConfigPath:      *configPath,
@@ -294,7 +310,7 @@ func main() {
 			LogitTokens:     *parityLogitTokens,
 		}))
 	default:
-		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, export-hf, parity)", *mode))
+		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity)", *mode))
 	}
 }
 
@@ -303,7 +319,7 @@ type flagGroup struct {
 	Names []string
 }
 
-var supportedModes = []string{"smoke", "arch", "arch_race", "prepare", "count", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "export-hf", "parity"}
+var supportedModes = []string{"smoke", "arch", "arch_race", "prepare", "count", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "export-hf", "parity"}
 
 var modeFlagGroups = map[string][]flagGroup{
 	"arch": {
@@ -325,6 +341,7 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Output", []string{"prepare-output-dir", "output"}},
 		{"Tokenizer/data", []string{"vocab-size", "val-split", "tokenizer-path", "text-field"}},
 		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},
+		{"Minimal pair artifact", []string{"minimal-pair-out", "minimal-pair-corruptions", "minimal-pair-max-pairs", "minimal-pair-seed"}},
 	},
 	"count": {
 		{"Required", []string{"config"}},
@@ -353,6 +370,10 @@ var modeFlagGroups = map[string][]flagGroup{
 	"score-electra": {
 		{"Required", []string{"config", "safetensors-load", "score-in", "score-out"}},
 		{"Scoring", []string{"score-skip-first", "score-batch"}},
+	},
+	"score-ebm": {
+		{"Required", []string{"config", "safetensors-load", "score-in", "score-out"}},
+		{"Scoring", []string{"score-batch"}},
 	},
 	"export-hf": {
 		{"Required", []string{"config", "safetensors-load"}},

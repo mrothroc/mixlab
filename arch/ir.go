@@ -84,6 +84,7 @@ const (
 	OpGELUExact            = 91 // OP_GELU_EXACT
 	OpMaskedBCEWithLogits  = 92 // OP_MASKED_BCE_WITH_LOGITS
 	OpMaskedBinaryAccuracy = 93 // OP_MASKED_BINARY_ACCURACY
+	OpEnergyPairwiseLoss   = 94 // OP_ENERGY_PAIRWISE_LOSS
 
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -293,6 +294,14 @@ func (p *Program) MaskedBCEWithLogits(logits, targets, mask, output string) {
 // MaskedBinaryAccuracy emits mean binary accuracy over rows where mask > 0.
 func (p *Program) MaskedBinaryAccuracy(logits, targets, mask, output string) {
 	p.AddOp(OpMaskedBinaryAccuracy, []string{logits, targets, mask}, []string{output}, nil, nil)
+}
+
+// EnergyPairwiseLoss emits pairwise ranking loss/diagnostics over contiguous
+// clean/corrupt row pairs. lossKind is EnergyPairLossLogistic or
+// EnergyPairLossHinge; rowMask marks active rows and both rows in a pair must
+// be active for that pair to contribute.
+func (p *Program) EnergyPairwiseLoss(logits, rowMask string, lossKind int, margin float32, loss, accuracy, cleanMean, corruptMean string) {
+	p.AddOp(OpEnergyPairwiseLoss, []string{logits, rowMask}, []string{loss, accuracy, cleanMean, corruptMean}, []float32{margin}, []int{lossKind})
 }
 
 // ZLoss emits mean(square(logsumexp(logits))) over token rows.

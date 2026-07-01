@@ -66,6 +66,8 @@ func prepareSingleMultiheadView(cfg *ArchConfig, batch trainBatch, step, need, s
 		return prepareBlockDiffusionBatch(cfg, batch, step, need, seqLen)
 	case arch.ObjectiveRTD:
 		return prepareRTDBatch(batch, need)
+	case arch.ObjectiveEnergy:
+		return prepareEnergyPlaceholderBatch(batch, need)
 	case arch.ObjectiveCausal:
 		return objectiveBatch{x: batch.x[:need], y: batch.y[:need], unmaskedX: batch.x[:need]}, nil
 	default:
@@ -91,7 +93,7 @@ func fillHeadDiffusionBoundaries(starts, ends []int32, prepared objectiveBatch, 
 	case arch.ObjectiveBlockDiffusion:
 		copy(starts, prepared.diffusionBlockStart[:len(starts)])
 		copy(ends, prepared.diffusionBlockEnd[:len(ends)])
-	case arch.ObjectiveMLM, arch.ObjectiveMNTP, arch.ObjectiveRTD:
+	case arch.ObjectiveMLM, arch.ObjectiveMNTP, arch.ObjectiveRTD, arch.ObjectiveEnergy:
 		for i := range starts {
 			starts[i] = 0
 			ends[i] = int32(seqLen)
@@ -112,6 +114,13 @@ func prepareRTDBatch(batch trainBatch, need int) (objectiveBatch, error) {
 		y[i] = 1
 		lossMask[i] = 1
 	}
+	return objectiveBatch{x: x, y: y, lossMask: lossMask, unmaskedX: append([]int(nil), batch.x[:need]...)}, nil
+}
+
+func prepareEnergyPlaceholderBatch(batch trainBatch, need int) (objectiveBatch, error) {
+	x := append([]int(nil), batch.x[:need]...)
+	y := make([]int, need)
+	lossMask := make([]float32, need)
 	return objectiveBatch{x: x, y: y, lossMask: lossMask, unmaskedX: append([]int(nil), batch.x[:need]...)}, nil
 }
 

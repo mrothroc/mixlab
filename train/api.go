@@ -112,6 +112,10 @@ func RunScoreElectraWithOptions(opts ScoreElectraOptions) error {
 	return runScoreElectraWithOptions(opts)
 }
 
+func RunScoreEBMWithOptions(opts ScoreEBMOptions) error {
+	return runScoreEBMWithOptions(opts)
+}
+
 func RunHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath string) error {
 	return runHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath)
 }

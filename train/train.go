@@ -160,6 +160,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		fmt.Printf("  [%s] example framing: content_len=%d bos_id=%d eos_id=%d examples/batch=%d\n",
 			name, f.ContentLen, f.BosID, f.EosID, batchSize)
 	}
+	pairSampler, err := newMinimalPairSampler(cfg)
+	if err != nil {
+		return TrainResult{}, err
+	}
+	if pairSampler != nil {
+		fmt.Printf("  [%s] minimal pairs: source=%s records=%d loss=%s margin=%g pair_batch_fraction=%.3f\n",
+			name, pairSampler.path, len(pairSampler.records), cfg.Training.MinimalPair.Loss, cfg.Training.MinimalPair.Margin, cfg.Training.MinimalPair.PairBatchFraction)
+	}
 
 	// Build IR program
 	prog, err := BuildIRProgramFromConfig(cfg)
@@ -423,6 +431,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("prepare step 0 objective batch: %w", err)
 		}
+		prepared, err = maybeAttachMinimalPairs(pairSampler, cfg, 0, prepared, currentBatchSize, currentSeqLen)
+		if err != nil {
+			stopInitialSubmit()
+			return TrainResult{}, fmt.Errorf("prepare step 0 minimal-pair batch: %w", err)
+		}
 		prepared, err = maybeAttachRTDCorruption(trainer, cfg, batch, 0, prepared, currentBatchSize, currentSeqLen, currentObjective)
 		if err != nil {
 			stopInitialSubmit()
@@ -526,6 +539,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if err != nil {
 				stopSubmit()
 				return 0, fmt.Errorf("prepare step %d objective batch: %w", nextStep, err)
+			}
+			prepared, err = maybeAttachMinimalPairs(pairSampler, cfg, nextStep, prepared, nextBatchSize, nextSeqLen)
+			if err != nil {
+				stopSubmit()
+				return 0, fmt.Errorf("prepare step %d minimal-pair batch: %w", nextStep, err)
 			}
 			prepared, err = maybeAttachRTDCorruption(trainer, cfg, batch, nextStep, prepared, nextBatchSize, nextSeqLen, nextObjective)
 			if err != nil {
@@ -711,7 +729,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					var valAvg float64
 					var err error
 					if cfg.Training.MultiheadEnabled() {
-						valAvg, err = meanMultiheadValidationLoss(cfg, valSet, trainer, step, batchSize, seqLen)
+						valAvg, err = meanMultiheadValidationLoss(cfg, valSet, trainer, pairSampler, step, batchSize, seqLen)
 					} else {
 						valAvg, err = causalEval.meanValidationLossCausal(currentProgramKey, valSet)
 					}
@@ -821,6 +839,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveMultihead, seqLen)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("prepare final multihead training loss batch: %w", err)
+			}
+			finalEvalBatch, err = maybeAttachMinimalPairs(pairSampler, cfg, steps, finalEvalBatch, batchSize, seqLen)
+			if err != nil {
+				return TrainResult{}, fmt.Errorf("prepare final minimal-pair training loss batch: %w", err)
 			}
 		} else if cfg.Training.ExampleFramingEnabled() {
 			var err error

@@ -22,6 +22,7 @@ mode-specific flags.
 | `generate-diffusion` | Generate token IDs from a block-diffusion checkpoint. | [cli-generate.md](cli-generate.md) |
 | `score-diffusion` | Score token-id sequences with native block-diffusion PLL. | [cli-eval.md](cli-eval.md) |
 | `score-electra` | Score token-id sequences with a native RTD detector head. | [cli-eval.md](cli-eval.md) |
+| `score-ebm` | Score token-id sequences or pairs with a native energy head. | [cli-eval.md](cli-eval.md) |
 | `export-hf` | Export supported safetensors checkpoints to Hugging Face directories. | [cli-export.md](cli-export.md) |
 | `parity` | Compare native Mixlab inference against a Hugging Face export. | [cli-export.md](cli-export.md) |
 

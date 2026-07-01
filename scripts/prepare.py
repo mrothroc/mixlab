@@ -15,6 +15,8 @@ Usage:
 import argparse
 import json
 import os
+import random
+import re
 import struct
 import sys
 from pathlib import Path
@@ -28,6 +30,7 @@ CHAR_FEATURE_VERSION = 1
 CHAR_FEATURE_ENCODING_BYTELEVEL = 1
 HEADER_INTS = 256
 TOKENS_PER_SHARD = 1_000_000
+WORD_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 
 
 def read_input_texts(input_path: str, text_field: str) -> list[str]:
@@ -240,6 +243,205 @@ def write_char_features(tokenizer, output_dir: str, char_vocab_size: int, char_m
     )
 
 
+def split_words(text: str) -> list[str]:
+    return WORD_RE.findall(text)
+
+
+def join_words(words: list[str]) -> str:
+    out = ""
+    for tok in words:
+        if not out:
+            out = tok
+        elif re.match(r"^[^\w\s]$", tok):
+            out += tok
+        elif out.endswith(("(", "[", "{", "“", '"', "'")):
+            out += tok
+        else:
+            out += " " + tok
+    return out
+
+
+AGREEMENT_FLIPS = {
+    "is": "are",
+    "are": "is",
+    "was": "were",
+    "were": "was",
+    "has": "have",
+    "have": "has",
+    "does": "do",
+    "do": "does",
+}
+
+
+def corrupt_word_order(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
+    candidates = [i for i in range(len(words) - 1) if words[i].isalnum() and words[i + 1].isalnum()]
+    if not candidates:
+        return None
+    i = rng.choice(candidates)
+    out = words[:]
+    out[i], out[i + 1] = out[i + 1], out[i]
+    return out, "word_order"
+
+
+def corrupt_agreement(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
+    candidates = [i for i, w in enumerate(words) if w.lower() in AGREEMENT_FLIPS]
+    if not candidates:
+        # Fallback: flip a simple present-tense suffix on a later alphabetic token.
+        candidates = [i for i, w in enumerate(words) if i > 0 and w.isalpha() and len(w) > 3]
+        if not candidates:
+            return None
+        i = rng.choice(candidates)
+        out = words[:]
+        if out[i].lower().endswith("s"):
+            out[i] = out[i][:-1]
+        else:
+            out[i] = out[i] + "s"
+        return out, "agreement"
+    i = rng.choice(candidates)
+    out = words[:]
+    repl = AGREEMENT_FLIPS[out[i].lower()]
+    out[i] = repl.capitalize() if out[i][:1].isupper() else repl
+    return out, "agreement"
+
+
+def corrupt_attractor(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
+    out = corrupt_agreement(words, rng)
+    if out is None:
+        return None
+    corrupted, _ = out
+    return corrupted, "attractor"
+
+
+def corrupt_npi_licensor(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
+    lower = [w.lower() for w in words]
+    if any(w in {"any", "ever", "anyone", "anything", "anybody"} for w in lower):
+        licensors = [i for i, w in enumerate(lower) if w in {"not", "n't", "never", "no"}]
+        if licensors:
+            out = [w for i, w in enumerate(words) if i != rng.choice(licensors)]
+            return out, "npi_licensor"
+    verbs = [i for i, w in enumerate(lower) if w in {"is", "are", "was", "were", "has", "have", "do", "does", "did"}]
+    if verbs:
+        i = rng.choice(verbs)
+        return words[:i] + ["not"] + words[i:], "npi_licensor"
+    return None
+
+
+def corrupt_quantifier_scope(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
+    flips = {"all": "some", "some": "all", "every": "some", "each": "some", "no": "some", "many": "few", "few": "many"}
+    candidates = [i for i, w in enumerate(words) if w.lower() in flips]
+    if not candidates:
+        return None
+    i = rng.choice(candidates)
+    out = words[:]
+    repl = flips[out[i].lower()]
+    out[i] = repl.capitalize() if out[i][:1].isupper() else repl
+    return out, "quantifier_scope"
+
+
+def corrupt_filler_gap(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
+    lower = [w.lower() for w in words]
+    wh = [i for i, w in enumerate(lower) if w in {"who", "what", "which", "where", "when"}]
+    if wh and len(words) > 4:
+        i = rng.choice(wh)
+        candidates = [j for j, w in enumerate(words) if j != i and w.isalpha()]
+        if candidates:
+            j = rng.choice(candidates)
+            out = words[:]
+            out[i], out[j] = out[j], out[i]
+            return out, "filler_gap"
+    return corrupt_word_order(words, rng)
+
+
+CORRUPTORS = {
+    "agreement": corrupt_agreement,
+    "attractor": corrupt_attractor,
+    "word_order": corrupt_word_order,
+    "npi_licensor": corrupt_npi_licensor,
+    "quantifier_scope": corrupt_quantifier_scope,
+    "filler_gap": corrupt_filler_gap,
+}
+
+
+def sentence_candidates(texts: list[str]) -> list[str]:
+    out = []
+    for text in texts:
+        for sent in re.split(r"(?<=[.!?])\s+|\n+", text):
+            sent = sent.strip()
+            if sent:
+                out.append(sent)
+    return out
+
+
+def write_minimal_pairs(
+    tokenizer,
+    texts: list[str],
+    output_path: str,
+    corruptions: str,
+    max_pairs: int,
+    seed: int,
+):
+    if not output_path:
+        return
+    families = [c.strip() for c in corruptions.split(",") if c.strip()]
+    if not families:
+        raise ValueError("--minimal-pair-corruptions must include at least one family")
+    unknown = [c for c in families if c not in CORRUPTORS]
+    if unknown:
+        raise ValueError(f"unsupported minimal-pair corruptions: {', '.join(unknown)}")
+    rng = random.Random(seed)
+    candidates = sentence_candidates(texts)
+    rng.shuffle(candidates)
+    if max_pairs <= 0:
+        max_pairs = min(max(1, len(candidates) * 2), 10000)
+
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    seen: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
+    counts = {family: 0 for family in families}
+    rejects = {family: 0 for family in families}
+    written = 0
+    attempts = 0
+    max_attempts = max_pairs * 50
+    with open(output_path, "w", encoding="utf-8") as f:
+        while written < max_pairs and attempts < max_attempts and candidates:
+            attempts += 1
+            clean_text = candidates[attempts % len(candidates)]
+            words = split_words(clean_text)
+            if len([w for w in words if w.isalnum()]) < 3:
+                continue
+            family = families[attempts % len(families)]
+            result = CORRUPTORS[family](words, rng)
+            if result is None:
+                rejects[family] += 1
+                continue
+            corrupt_words, actual_family = result
+            corrupt_text = join_words(corrupt_words)
+            if corrupt_text == clean_text:
+                rejects[actual_family] = rejects.get(actual_family, 0) + 1
+                continue
+            clean_ids = tokenizer.encode(clean_text).ids
+            corrupt_ids = tokenizer.encode(corrupt_text).ids
+            if not clean_ids or not corrupt_ids:
+                rejects[actual_family] = rejects.get(actual_family, 0) + 1
+                continue
+            key = (tuple(clean_ids), tuple(corrupt_ids))
+            if key in seen:
+                rejects[actual_family] = rejects.get(actual_family, 0) + 1
+                continue
+            seen.add(key)
+            rec = {
+                "id": f"mp_{written:08d}",
+                "clean": clean_ids,
+                "corrupt": corrupt_ids,
+                "family": actual_family,
+            }
+            f.write(json.dumps(rec, separators=(",", ":")) + "\n")
+            counts[actual_family] = counts.get(actual_family, 0) + 1
+            written += 1
+    print(f"Saved {written} minimal pairs to {output_path}")
+    print(f"Minimal-pair accepted by family: {counts}")
+    print(f"Minimal-pair rejected by family: {rejects}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Prepare binary shards for mixlab training")
     parser.add_argument("--input", required=True, help="Input text file, JSONL, or directory")
@@ -252,6 +454,14 @@ def main():
     parser.add_argument("--no-shuffle", action="store_true", help="Disable token shuffling within shards")
     parser.add_argument("--char-vocab-size", type=int, default=0, help="Write tokenizer-level char_features.bin; 0 disables")
     parser.add_argument("--char-max-per-token", type=int, default=16, help="Fixed char feature slots per token")
+    parser.add_argument("--minimal-pair-out", default="", help="Write corpus-derived minimal-pair JSONL")
+    parser.add_argument(
+        "--minimal-pair-corruptions",
+        default="agreement,attractor,word_order",
+        help="Comma-separated minimal-pair corruption families",
+    )
+    parser.add_argument("--minimal-pair-max-pairs", type=int, default=0, help="Maximum generated minimal pairs; 0 auto-selects")
+    parser.add_argument("--minimal-pair-seed", type=int, default=1234, help="Deterministic minimal-pair seed")
     args = parser.parse_args()
 
     tokens_per_shard = args.tokens_per_shard
@@ -271,6 +481,14 @@ def main():
         tokenizer = train_bpe_tokenizer(texts, args.vocab_size, args.output)
 
     write_char_features(tokenizer, args.output, args.char_vocab_size, args.char_max_per_token)
+    write_minimal_pairs(
+        tokenizer,
+        texts,
+        args.minimal_pair_out,
+        args.minimal_pair_corruptions,
+        args.minimal_pair_max_pairs,
+        args.minimal_pair_seed,
+    )
 
     # Tokenize
     all_tokens = tokenize_texts(tokenizer, texts)

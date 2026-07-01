@@ -650,7 +650,7 @@ void mlx_ir_program_add_op(
   if (!p) {
     return;
   }
-  if (n_inputs < 0 || n_inputs > 256 || n_outputs < 0 || n_outputs > 3) {
+  if (n_inputs < 0 || n_inputs > 256 || n_outputs < 0 || n_outputs > 4) {
     return;
   }
   if (n_float_params < 0 || n_float_params > 4 || n_int_params < 0 || n_int_params > 8) {

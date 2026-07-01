@@ -85,6 +85,7 @@ const (
 	OpGELUExact            = 91
 	OpMaskedBCEWithLogits  = 92
 	OpMaskedBinaryAccuracy = 93
+	OpEnergyPairwiseLoss   = 94
 )
 
 const (

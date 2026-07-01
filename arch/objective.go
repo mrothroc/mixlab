@@ -14,6 +14,7 @@ const (
 	ObjectiveBlockDiffusion = "block_diffusion"
 	ObjectiveMultihead      = "multihead"
 	ObjectiveRTD            = "rtd"
+	ObjectiveEnergy         = "energy"
 	// ObjectiveHybridExample is an internal concrete training objective used
 	// for per-example hybrid batches. Public configs still use objective=hybrid.
 	ObjectiveHybridExample = "hybrid_example"
@@ -98,7 +99,7 @@ func (t TrainingSpec) MultiheadExportHead() *MultiheadHeadSpec {
 		}
 	}
 	for i := range t.Heads {
-		if t.Heads[i].Objective != ObjectiveBlockDiffusion {
+		if t.Heads[i].Objective != ObjectiveBlockDiffusion && t.Heads[i].Objective != ObjectiveRTD && t.Heads[i].Objective != ObjectiveEnergy {
 			return &t.Heads[i]
 		}
 	}
@@ -164,6 +165,9 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	}
 	if t.RTD != nil {
 		return fmt.Errorf("config %q sets training.rtd but training.objective=%q; RTD is only valid with training.objective=\"multihead\"", source, t.Objective)
+	}
+	if t.MinimalPair != nil {
+		return fmt.Errorf("config %q sets training.minimal_pair but training.objective=%q; minimal_pair is only valid with training.objective=\"multihead\"", source, t.Objective)
 	}
 	t.HybridMixGranularity = t.EffectiveHybridMixGranularity()
 	switch t.HybridMixGranularity {

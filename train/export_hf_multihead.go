@@ -31,6 +31,9 @@ func materializeMultiheadHFExportWeights(exportCfg, sourceCfg *ArchConfig, sourc
 	if head.Objective == arch.ObjectiveBlockDiffusion {
 		return nil, nil, unsupportedHFExport("training.export_head", "block_diffusion heads are native-only")
 	}
+	if head.Objective == arch.ObjectiveEnergy {
+		return nil, nil, unsupportedHFExport("training.export_head", "energy heads are native-only")
+	}
 	if !head.FinalNorm {
 		return nil, nil, unsupportedHFExport("training.export_head.final_norm", "HF export requires the scorer head final norm in v1")
 	}

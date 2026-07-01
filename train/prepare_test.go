@@ -1,6 +1,7 @@
 package train
 
 import (
+	"bytes"
 	"encoding/binary"
 	"os"
 	"os/exec"
@@ -36,6 +37,7 @@ func TestPrepareScript(t *testing.T) {
 	tmpDir := t.TempDir()
 	inputFile := filepath.Join(tmpDir, "test_corpus.txt")
 	outputDir := filepath.Join(tmpDir, "shards")
+	pairPath := filepath.Join(outputDir, "pairs.train.jsonl")
 
 	// Write a small but non-trivial corpus (repeat to get enough tokens).
 	corpus := "The quick brown fox jumps over the lazy dog. " +
@@ -60,6 +62,10 @@ func TestPrepareScript(t *testing.T) {
 		"--tokens-per-shard", "500",
 		"--char-vocab-size", "257",
 		"--char-max-per-token", "8",
+		"--minimal-pair-out", pairPath,
+		"--minimal-pair-corruptions", "agreement,attractor,word_order,npi_licensor,quantifier_scope,filler_gap",
+		"--minimal-pair-max-pairs", "12",
+		"--minimal-pair-seed", "7",
 	)
 	prepCmd.Stdout = os.Stdout
 	prepCmd.Stderr = os.Stderr
@@ -141,6 +147,20 @@ func TestPrepareScript(t *testing.T) {
 	}
 	if header(3) != 257 || header(4) != 8 {
 		t.Fatalf("bad char feature config: char_vocab=%d max=%d", header(3), header(4))
+	}
+	pairBlob, err := os.ReadFile(pairPath)
+	if err != nil {
+		t.Fatalf("minimal pair artifact not found: %v", err)
+	}
+	records, err := decodeMinimalPairJSONL(bytes.NewReader(pairBlob), pairPath, 256)
+	if err != nil {
+		t.Fatalf("decode minimal pair artifact: %v", err)
+	}
+	if len(records) == 0 {
+		t.Fatal("minimal pair artifact has no records")
+	}
+	if records[0].Family == "" {
+		t.Fatalf("minimal pair record missing family: %+v", records[0])
 	}
 
 	// Verify the Loader can read the shards end-to-end.

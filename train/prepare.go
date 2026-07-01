@@ -10,14 +10,18 @@ import (
 
 // PrepareOptions holds flags for the prepare command.
 type PrepareOptions struct {
-	Input           string
-	Output          string
-	VocabSize       int
-	ValSplit        float64
-	TokenizerPath   string
-	TextFieldName   string
-	CharVocabSize   int
-	CharMaxPerToken int
+	Input                  string
+	Output                 string
+	VocabSize              int
+	ValSplit               float64
+	TokenizerPath          string
+	TextFieldName          string
+	CharVocabSize          int
+	CharMaxPerToken        int
+	MinimalPairOut         string
+	MinimalPairCorruptions string
+	MinimalPairMaxPairs    int
+	MinimalPairSeed        int
 }
 
 // runPrepare shells out to scripts/prepare.py to tokenize raw text into binary shards.
@@ -52,6 +56,18 @@ func runPrepare(opts PrepareOptions) error {
 	}
 	if opts.CharMaxPerToken > 0 {
 		args = append(args, "--char-max-per-token", fmt.Sprintf("%d", opts.CharMaxPerToken))
+	}
+	if opts.MinimalPairOut != "" {
+		args = append(args, "--minimal-pair-out", opts.MinimalPairOut)
+	}
+	if opts.MinimalPairCorruptions != "" {
+		args = append(args, "--minimal-pair-corruptions", opts.MinimalPairCorruptions)
+	}
+	if opts.MinimalPairMaxPairs > 0 {
+		args = append(args, "--minimal-pair-max-pairs", fmt.Sprintf("%d", opts.MinimalPairMaxPairs))
+	}
+	if opts.MinimalPairSeed != 0 {
+		args = append(args, "--minimal-pair-seed", fmt.Sprintf("%d", opts.MinimalPairSeed))
 	}
 
 	fmt.Printf("Running: python3 %s\n", strings.Join(args, " "))

@@ -98,13 +98,14 @@ enum OpType {
   OP_GELU_EXACT = 91,
   OP_MASKED_BCE_WITH_LOGITS = 92,
   OP_MASKED_BINARY_ACCURACY = 93,
+  OP_ENERGY_PAIRWISE_LOSS = 94,
 };
 
 struct IRop {
   int type = 0;
   std::string inputs[256];
   int n_inputs = 0;
-  std::string outputs[3];
+  std::string outputs[4];
   int n_outputs = 0;
 
   float float_params[4] = {0.0f, 0.0f, 0.0f, 0.0f};

@@ -252,6 +252,111 @@ func TestMultiheadRTDConfigWeightShapesAndIR(t *testing.T) {
 	}
 }
 
+func TestMultiheadEnergyConfigWeightShapesAndIR(t *testing.T) {
+	cfg := parseMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"mlm_mask_token_id": 31,
+		"export_head": "scorer",
+		"minimal_pair": {"path": "pairs.jsonl", "loss": "hinge", "margin": 0.75, "pair_batch_fraction": 0.5},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.7},
+			{"name": "energy", "objective": "energy", "loss_weight": 0.3}
+		]
+	}`)
+	if cfg.Training.Heads[1].OutputHead != MultiheadOutputScalar {
+		t.Fatalf("energy output_head=%q, want scalar", cfg.Training.Heads[1].OutputHead)
+	}
+	if cfg.Training.MinimalPair.LossKind() != EnergyPairLossHinge {
+		t.Fatalf("minimal_pair loss kind=%d, want hinge", cfg.Training.MinimalPair.LossKind())
+	}
+	shapes, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesFromConfig: %v", err)
+	}
+	for _, want := range []string{"head_energy_energy_proj", "head_energy_energy_bias"} {
+		if countWeightNames(shapes, want) != 1 {
+			t.Fatalf("weight %q count=%d, want 1 in %+v", want, countWeightNames(shapes, want), shapes)
+		}
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	if countOps(prog, OpEnergyPairwiseLoss) != 1 {
+		t.Fatalf("OpEnergyPairwiseLoss count=%d, want 1", countOps(prog, OpEnergyPairwiseLoss))
+	}
+	for _, want := range []string{
+		"head_energy_pair_accuracy",
+		"head_energy_clean_energy_mean",
+		"head_energy_corrupt_energy_mean",
+		"head_energy_logits",
+		"logits",
+		"eval_loss",
+		"per_token_nll",
+	} {
+		if !programDeclaresOutputArch(prog, want) {
+			t.Fatalf("missing output %q: %+v", want, prog.Outputs)
+		}
+	}
+}
+
+func TestMultiheadEnergyValidationErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "energy requires minimal pair",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "e", "objective": "energy"}]}`,
+			want: "requires training.minimal_pair",
+		},
+		{
+			name: "minimal pair requires energy",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"minimal_pair": {"path": "pairs.jsonl"},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "d", "objective": "block_diffusion"}]}`,
+			want: "requires a multihead objective=\"energy\" head",
+		},
+		{
+			name: "bad loss",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"minimal_pair": {"path": "pairs.jsonl", "loss": "bad"},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "e", "objective": "energy"}]}`,
+			want: "minimal_pair.loss",
+		},
+		{
+			name: "energy export head",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"export_head": "e", "minimal_pair": {"path": "pairs.jsonl"},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "e", "objective": "energy"}]}`,
+			want: "cannot select a energy head",
+		},
+		{
+			name: "odd raw batch",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 12, "mlm_mask_token_id": 31,
+				"minimal_pair": {"path": "pairs.jsonl"},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "e", "objective": "energy"}]}`,
+			want: "even number of sequence rows",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseArchConfig([]byte(multiheadConfigJSON(tt.body)), tt.name)
+			if err == nil {
+				t.Fatal("expected validation error")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%q, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestMultiheadWeightShapesAndIR(t *testing.T) {
 	cfg := parseMultiheadConfig(t, `"training": {
 		"objective": "multihead",
