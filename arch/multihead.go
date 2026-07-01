@@ -168,9 +168,6 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		}
 	}
 	if t.RTD != nil {
-		if t.RTD.Generator != "tied" {
-			return fmt.Errorf("config %q training.rtd.generator=%q is staged for a later release; v1 supports \"tied\"", source, t.RTD.Generator)
-		}
 		if rtdHeads != 1 {
 			return fmt.Errorf("config %q training.rtd requires exactly one multihead objective=\"rtd\" head, got %d", source, rtdHeads)
 		}
@@ -182,6 +179,18 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		}
 		if t.RTD.DiscriminatorLossWeight < 0 || math.IsNaN(t.RTD.DiscriminatorLossWeight) || math.IsInf(t.RTD.DiscriminatorLossWeight, 0) {
 			return fmt.Errorf("config %q training.rtd.discriminator_loss_weight=%g must be finite and >= 0", source, t.RTD.DiscriminatorLossWeight)
+		}
+		switch t.RTD.Generator {
+		case "tied":
+			if t.RTD.DedicatedGenerator != nil {
+				return fmt.Errorf("config %q training.rtd.generator has dedicated generator fields but type=\"tied\"", source)
+			}
+		case "dedicated":
+			if err := validateRTDDedicatedGenerator(cfg, source); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("config %q training.rtd.generator=%q must be \"tied\" or a dedicated generator object", source, t.RTD.Generator)
 		}
 	} else if rtdHeads > 0 {
 		return fmt.Errorf("config %q multihead objective=\"rtd\" requires training.rtd", source)
@@ -219,19 +228,23 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		return fmt.Errorf("config %q training.diffusion_head=%q must select a block_diffusion head", source, t.DiffusionHead)
 	}
 	if t.RTD != nil {
-		if strings.TrimSpace(t.RTD.GeneratorHead) == "" {
-			t.RTD.GeneratorHead = t.ExportHead
-		}
-		idx, ok := seen[strings.TrimSpace(t.RTD.GeneratorHead)]
-		if !ok {
-			return fmt.Errorf("config %q training.rtd.generator_head=%q does not match any training.heads[].name", source, t.RTD.GeneratorHead)
-		}
-		h := &t.Heads[idx]
-		if h.Objective != ObjectiveMLM && h.Objective != ObjectiveMNTP {
-			return fmt.Errorf("config %q training.rtd.generator_head=%q must select an mlm or mntp head", source, t.RTD.GeneratorHead)
-		}
-		if h.OutputHead != MultiheadOutputBERTMLM && h.OutputHead != MultiheadOutputLinear {
-			return fmt.Errorf("config %q training.rtd.generator_head=%q must emit vocab logits", source, t.RTD.GeneratorHead)
+		if t.RTD.Generator == "tied" {
+			if strings.TrimSpace(t.RTD.GeneratorHead) == "" {
+				t.RTD.GeneratorHead = t.ExportHead
+			}
+			idx, ok := seen[strings.TrimSpace(t.RTD.GeneratorHead)]
+			if !ok {
+				return fmt.Errorf("config %q training.rtd.generator_head=%q does not match any training.heads[].name", source, t.RTD.GeneratorHead)
+			}
+			h := &t.Heads[idx]
+			if h.Objective != ObjectiveMLM && h.Objective != ObjectiveMNTP {
+				return fmt.Errorf("config %q training.rtd.generator_head=%q must select an mlm or mntp head", source, t.RTD.GeneratorHead)
+			}
+			if h.OutputHead != MultiheadOutputBERTMLM && h.OutputHead != MultiheadOutputLinear {
+				return fmt.Errorf("config %q training.rtd.generator_head=%q must emit vocab logits", source, t.RTD.GeneratorHead)
+			}
+		} else if strings.TrimSpace(t.RTD.GeneratorHead) != "" {
+			return fmt.Errorf("config %q training.rtd.generator_head is only valid with generator=\"tied\"", source)
 		}
 	}
 	if usesAdaLN && cfg.EffectiveNormPlacement() == NormPlacementPost {
@@ -252,6 +265,38 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		default:
 			return fmt.Errorf("config %q blocks[%d].type=%q cannot be combined with training.objective=\"multihead\" in v1; supported blocks are plain self-attention plus position-wise FFN/MoE blocks", source, i, block.Type)
 		}
+	}
+	return nil
+}
+
+func validateRTDDedicatedGenerator(cfg *ArchConfig, source string) error {
+	if cfg == nil || cfg.Training.RTD == nil {
+		return fmt.Errorf("config %q training.rtd.generator is missing", source)
+	}
+	d := cfg.Training.RTD.DedicatedGenerator
+	if d == nil {
+		return fmt.Errorf("config %q training.rtd.generator=\"dedicated\" requires a generator object with model_dim, layers, and heads", source)
+	}
+	if strings.ToLower(strings.TrimSpace(d.Type)) != "dedicated" {
+		return fmt.Errorf("config %q training.rtd.generator.type=%q must be \"dedicated\"", source, d.Type)
+	}
+	if d.ModelDim <= 0 {
+		return fmt.Errorf("config %q training.rtd.generator.model_dim=%d must be > 0", source, d.ModelDim)
+	}
+	if d.Layers <= 0 {
+		return fmt.Errorf("config %q training.rtd.generator.layers=%d must be > 0", source, d.Layers)
+	}
+	if d.Heads <= 0 {
+		return fmt.Errorf("config %q training.rtd.generator.heads=%d must be > 0", source, d.Heads)
+	}
+	if d.ModelDim%d.Heads != 0 {
+		return fmt.Errorf("config %q training.rtd.generator.model_dim=%d must be divisible by heads=%d", source, d.ModelDim, d.Heads)
+	}
+	if d.MLPMult <= 0 || math.IsNaN(d.MLPMult) || math.IsInf(d.MLPMult, 0) {
+		return fmt.Errorf("config %q training.rtd.generator.mlp_mult=%g must be finite and > 0", source, d.MLPMult)
+	}
+	if d.GeneratorLossWeight < 0 || math.IsNaN(d.GeneratorLossWeight) || math.IsInf(d.GeneratorLossWeight, 0) {
+		return fmt.Errorf("config %q training.rtd.generator.generator_loss_weight=%g must be finite and >= 0", source, d.GeneratorLossWeight)
 	}
 	return nil
 }
@@ -340,6 +385,11 @@ func collectMultiheadWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, erro
 	for _, h := range cfg.Training.Heads {
 		shapes = append(shapes, multiheadHeadWeightShapes(cfg.ModelDim, cfg.VocabSize, cfg.Blocks, cfg.EffectiveNormSpec(), h)...)
 	}
+	rtdGeneratorShapes, err := rtdDedicatedGeneratorWeightShapes(cfg)
+	if err != nil {
+		return nil, err
+	}
+	shapes = append(shapes, rtdGeneratorShapes...)
 	return shapes, nil
 }
 

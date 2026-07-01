@@ -15,7 +15,7 @@ func rtdActive(cfg *ArchConfig) bool {
 }
 
 // rtdGeneratorPrograms builds and caches the dropout-free forward program used
-// to sample the tied RTD generator's replacement tokens, keyed by the same
+// to sample RTD generator replacement tokens, keyed by the same
 // training program cache key as the main step programs.
 type rtdGeneratorPrograms struct {
 	cfg                       *ArchConfig
@@ -84,7 +84,11 @@ func maybeAttachRTDCorruption(
 	if err != nil {
 		return objectiveBatch{}, fmt.Errorf("build step %d RTD generator program: %w", step, err)
 	}
-	prepared, err = attachRTDTiedGeneratorCorruption(trainer, cfg, batch, step, prepared, batchSize, seqLen, rtdProg, restoreProg)
+	if cfg.Training.RTD.DedicatedGeneratorEnabled() {
+		prepared, err = attachRTDDedicatedGeneratorCorruption(trainer, cfg, batch, step, prepared, batchSize, seqLen, rtdProg, restoreProg)
+	} else {
+		prepared, err = attachRTDTiedGeneratorCorruption(trainer, cfg, batch, step, prepared, batchSize, seqLen, rtdProg, restoreProg)
+	}
 	if err != nil {
 		return objectiveBatch{}, fmt.Errorf("prepare step %d RTD corruption: %w", step, err)
 	}
@@ -141,6 +145,25 @@ func prepareRTDGeneratorProbeBatch(cfg *ArchConfig, batch trainBatch, step, need
 	probeCfg.Training.MLMMaskProb = cfg.Training.RTD.MaskProb
 	probeCfg.Training.MLMMaskProbSchedule = nil
 	return prepareMultiheadBatch(&probeCfg, batch, step, need, seqLen)
+}
+
+func prepareRTDDedicatedGeneratorProbeBatch(cfg *ArchConfig, batch trainBatch, step, need int) (objectiveBatch, error) {
+	if !rtdActive(cfg) || !cfg.Training.RTD.DedicatedGeneratorEnabled() {
+		return objectiveBatch{}, fmt.Errorf("dedicated training.rtd generator is not active")
+	}
+	probeCfg := *cfg
+	probeCfg.Training.MLMMaskProb = cfg.Training.RTD.MaskProb
+	probeCfg.Training.MLMMaskProbSchedule = nil
+	return prepareMLMBatch(&probeCfg, batch, step, need)
+}
+
+func attachDedicatedGeneratorInputs(prepared *objectiveBatch, probe objectiveBatch) {
+	if prepared == nil {
+		return
+	}
+	prepared.rtdGeneratorX = append(prepared.rtdGeneratorX[:0], probe.x...)
+	prepared.rtdGeneratorY = append(prepared.rtdGeneratorY[:0], probe.y...)
+	prepared.rtdGeneratorLossMask = append(prepared.rtdGeneratorLossMask[:0], probe.lossMask...)
 }
 
 func attachRTDTiedGeneratorCorruption(
@@ -200,6 +223,59 @@ func attachRTDTiedGeneratorCorruption(
 	return prepared, nil
 }
 
+func attachRTDDedicatedGeneratorCorruption(
+	trainer GPUTrainer,
+	cfg *ArchConfig,
+	batch trainBatch,
+	step int,
+	prepared objectiveBatch,
+	batchSize, seqLen int,
+	generatorProg, restoreProg *arch.Program,
+) (objectiveBatch, error) {
+	if !rtdActive(cfg) {
+		return prepared, nil
+	}
+	switcher, ok := trainer.(gpuProgramSwitcher)
+	if !ok {
+		return objectiveBatch{}, fmt.Errorf("trainer does not support RTD generator program switching")
+	}
+	need := cfg.Training.BatchTokens
+	probe, err := prepareRTDDedicatedGeneratorProbeBatch(cfg, batch, step, need)
+	if err != nil {
+		return objectiveBatch{}, err
+	}
+	attachDedicatedGeneratorInputs(&prepared, probe)
+	if err := switcher.SetProgramGPU(generatorProg); err != nil {
+		return objectiveBatch{}, fmt.Errorf("switch to RTD dedicated generator program: %w", err)
+	}
+	restore := func() error {
+		if restoreProg == nil {
+			return nil
+		}
+		return switcher.SetProgramGPU(restoreProg)
+	}
+	if _, err := trainer.EvaluateObjectiveGPU(prepared, batchSize, seqLen); err != nil {
+		if restoreErr := restore(); restoreErr != nil {
+			return objectiveBatch{}, fmt.Errorf("evaluate RTD dedicated generator: %w; restore program: %v", err, restoreErr)
+		}
+		return objectiveBatch{}, fmt.Errorf("evaluate RTD dedicated generator: %w", err)
+	}
+	logits, err := readTrainerOutput(trainer, arch.RTDGeneratorLogitsName, []int{need, cfg.VocabSize})
+	if err != nil {
+		if restoreErr := restore(); restoreErr != nil {
+			return objectiveBatch{}, fmt.Errorf("read RTD dedicated generator logits: %w; restore program: %v", err, restoreErr)
+		}
+		return objectiveBatch{}, fmt.Errorf("read RTD dedicated generator logits: %w", err)
+	}
+	if err := restore(); err != nil {
+		return objectiveBatch{}, fmt.Errorf("restore training program after RTD dedicated generator: %w", err)
+	}
+	if err := applyRTDDedicatedGeneratorCorruption(cfg, batch, step, seqLen, probe, logits, &prepared); err != nil {
+		return objectiveBatch{}, err
+	}
+	return prepared, nil
+}
+
 func applyRTDGeneratorCorruption(cfg *ArchConfig, batch trainBatch, step, seqLen int, probe objectiveBatch, logits []float32, prepared *objectiveBatch) error {
 	if cfg == nil || cfg.Training.RTD == nil || prepared == nil {
 		return fmt.Errorf("invalid RTD corruption inputs")
@@ -250,6 +326,55 @@ func applyRTDGeneratorCorruption(cfg *ArchConfig, batch trainBatch, step, seqLen
 		outPos := rtdOffset + replacementPos
 		prepared.x[outPos] = sampled
 		if sampled != batch.x[replacementPos] {
+			prepared.y[outPos] = 0
+		}
+	}
+	return nil
+}
+
+func applyRTDDedicatedGeneratorCorruption(cfg *ArchConfig, batch trainBatch, step, seqLen int, probe objectiveBatch, logits []float32, prepared *objectiveBatch) error {
+	if cfg == nil || cfg.Training.RTD == nil || prepared == nil {
+		return fmt.Errorf("invalid dedicated RTD corruption inputs")
+	}
+	need := cfg.Training.BatchTokens
+	if need <= 0 || seqLen <= 0 || need%seqLen != 0 {
+		return fmt.Errorf("invalid RTD batch shape need=%d seq_len=%d", need, seqLen)
+	}
+	if len(batch.x) < need {
+		return fmt.Errorf("RTD raw batch has %d tokens, need %d", len(batch.x), need)
+	}
+	if len(probe.lossMask) < need {
+		return fmt.Errorf("RTD dedicated generator probe loss mask has %d entries, need %d", len(probe.lossMask), need)
+	}
+	if len(logits) != need*cfg.VocabSize {
+		return fmt.Errorf("RTD dedicated generator logits length=%d, want %d", len(logits), need*cfg.VocabSize)
+	}
+	rtdIdx := multiheadHeadIndexByObjective(cfg, arch.ObjectiveRTD)
+	if rtdIdx < 0 {
+		return fmt.Errorf("RTD head index not found")
+	}
+	rtdOffset := rtdIdx * need
+	if len(prepared.x) < rtdOffset+need || len(prepared.y) < rtdOffset+need || len(prepared.lossMask) < rtdOffset+need {
+		return fmt.Errorf("RTD expanded batch shape mismatch")
+	}
+	copy(prepared.x[rtdOffset:rtdOffset+need], batch.x[:need])
+	for i := 0; i < need; i++ {
+		prepared.y[rtdOffset+i] = 1
+		prepared.lossMask[rtdOffset+i] = 1
+	}
+	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, rtdGeneratorSalt^0xd1b54a32d192ed03)
+	for pos := 0; pos < need; pos++ {
+		if probe.lossMask[pos] <= 0 {
+			continue
+		}
+		row := logits[pos*cfg.VocabSize : (pos+1)*cfg.VocabSize]
+		sampled, err := sampleTokenFromLogits(row, cfg.Training.RTD.SampleTemperature, rng.Float64())
+		if err != nil {
+			return fmt.Errorf("sample dedicated RTD replacement at position %d: %w", pos, err)
+		}
+		outPos := rtdOffset + pos
+		prepared.x[outPos] = sampled
+		if sampled != batch.x[pos] {
 			prepared.y[outPos] = 0
 		}
 	}

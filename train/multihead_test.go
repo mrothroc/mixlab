@@ -150,6 +150,69 @@ func TestRTDGeneratorCorruptionForMNTP(t *testing.T) {
 	}
 }
 
+func TestRTDDedicatedGeneratorCorruptionAndInputs(t *testing.T) {
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"seed": 11,
+		"mlm_mask_prob": 1.0,
+		"mlm_mask_token_id": 31,
+		"rtd": {"generator": {"type": "dedicated", "model_dim": 8, "layers": 1, "heads": 2}, "mask_prob": 1.0, "sample_temperature": 1.0},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	raw := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 9, 6, 7, 8, 9},
+	}
+	prepared, err := prepareMultiheadBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareMultiheadBatch: %v", err)
+	}
+	probe, err := prepareRTDDedicatedGeneratorProbeBatch(cfg, raw, 3, cfg.Training.BatchTokens)
+	if err != nil {
+		t.Fatalf("prepareRTDDedicatedGeneratorProbeBatch: %v", err)
+	}
+	attachDedicatedGeneratorInputs(&prepared, probe)
+	if !reflect.DeepEqual(prepared.rtdGeneratorX, probe.x) ||
+		!reflect.DeepEqual(prepared.rtdGeneratorY, probe.y) ||
+		!reflect.DeepEqual(prepared.rtdGeneratorLossMask, probe.lossMask) {
+		t.Fatalf("dedicated generator inputs not attached")
+	}
+	logits := make([]float32, cfg.Training.BatchTokens*cfg.VocabSize)
+	for i := range logits {
+		logits[i] = -100
+	}
+	for row := 0; row < cfg.Training.BatchTokens; row++ {
+		sample := 9
+		if row == 0 {
+			sample = raw.x[0] // Same-token sample should stay labeled original.
+		}
+		logits[row*cfg.VocabSize+sample] = 100
+	}
+	if err := applyRTDDedicatedGeneratorCorruption(cfg, raw, 3, cfg.SeqLen, probe, logits, &prepared); err != nil {
+		t.Fatalf("applyRTDDedicatedGeneratorCorruption: %v", err)
+	}
+	rtdOffset := cfg.Training.BatchTokens
+	if prepared.x[rtdOffset] != 1 || prepared.y[rtdOffset] != 1 {
+		t.Fatalf("same-token replacement x/y=%d/%d, want original label", prepared.x[rtdOffset], prepared.y[rtdOffset])
+	}
+	for pos := 1; pos < cfg.Training.BatchTokens; pos++ {
+		if prepared.x[rtdOffset+pos] != 9 || prepared.y[rtdOffset+pos] != 0 {
+			t.Fatalf("replacement pos %d x/y=%d/%d, want 9/0", pos, prepared.x[rtdOffset+pos], prepared.y[rtdOffset+pos])
+		}
+	}
+	for i := 0; i < cfg.Training.BatchTokens; i++ {
+		if prepared.lossMask[rtdOffset+i] != 1 {
+			t.Fatalf("RTD loss mask[%d]=%g, want 1", i, prepared.lossMask[rtdOffset+i])
+		}
+	}
+}
+
 func TestScoreDiffusionMultiheadReadsDenoiserOutput(t *testing.T) {
 	cfg := parseTrainMultiheadConfig(t, `"training": {
 		"objective": "multihead",

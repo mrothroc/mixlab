@@ -7,8 +7,7 @@ import (
 )
 
 // RTDSpec configures ELECTRA-style replaced-token detection for multihead
-// training. R1 supports generator="tied"; dedicated generator objects are
-// parsed so they can fail with a clear staged-feature validation error.
+// training. generator may be "tied" or a dedicated generator object.
 type RTDSpec struct {
 	Generator                  string                 `json:"generator,omitempty"`
 	GeneratorHead              string                 `json:"generator_head,omitempty"`
@@ -28,6 +27,27 @@ type RTDDedicatedGenerator struct {
 	Heads               int     `json:"heads,omitempty"`
 	MLPMult             float64 `json:"mlp_mult,omitempty"`
 	GeneratorLossWeight float64 `json:"generator_loss_weight,omitempty"`
+
+	mlpMultSet             bool
+	generatorLossWeightSet bool
+}
+
+func (d *RTDDedicatedGenerator) UnmarshalJSON(data []byte) error {
+	type Alias RTDDedicatedGenerator
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	var alias Alias
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&alias); err != nil {
+		return err
+	}
+	*d = RTDDedicatedGenerator(alias)
+	_, d.mlpMultSet = raw["mlp_mult"]
+	_, d.generatorLossWeightSet = raw["generator_loss_weight"]
+	return nil
 }
 
 func (r *RTDSpec) UnmarshalJSON(data []byte) error {
@@ -92,4 +112,31 @@ func (r *RTDSpec) applyDefaults(defaultMaskProb float64) {
 	if !r.discriminatorLossWeightSet && r.DiscriminatorLossWeight == 0 {
 		r.DiscriminatorLossWeight = 50
 	}
+	if r.DedicatedGenerator != nil {
+		r.DedicatedGenerator.applyDefaults()
+	}
+}
+
+func (r *RTDDedicatedGenerator) applyDefaults() {
+	if r == nil {
+		return
+	}
+	r.Type = strings.ToLower(strings.TrimSpace(r.Type))
+	if r.Type == "" {
+		r.Type = "dedicated"
+	}
+	if !r.mlpMultSet && r.MLPMult == 0 {
+		r.MLPMult = 4.0
+	}
+	if !r.generatorLossWeightSet && r.GeneratorLossWeight == 0 {
+		r.GeneratorLossWeight = 1.0
+	}
+}
+
+func (r *RTDSpec) DedicatedGeneratorEnabled() bool {
+	return r != nil && r.Generator == "dedicated" && r.DedicatedGenerator != nil
+}
+
+func (t TrainingSpec) RTDDedicatedGeneratorEnabled() bool {
+	return t.RTD != nil && t.RTD.DedicatedGeneratorEnabled()
 }

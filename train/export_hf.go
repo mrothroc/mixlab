@@ -185,6 +185,7 @@ func hfExportInferenceConfig(cfg *ArchConfig) *ArchConfig {
 			out.Training.ExportHead = ""
 			out.Training.DiffusionHead = ""
 			out.Training.Diffusion = nil
+			out.Training.RTD = nil
 			out.Training.Data2Vec = nil
 			out.Training.Distillation = nil
 			out.LayerAggregation = head.LayerAggregation

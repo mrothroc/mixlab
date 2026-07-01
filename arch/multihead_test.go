@@ -97,11 +97,11 @@ func TestMultiheadValidationErrors(t *testing.T) {
 			want: "requires training.rtd",
 		},
 		{
-			name: "rtd generator must be tied",
+			name: "rtd dedicated generator bad heads",
 			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
-				"rtd": {"generator": {"type": "dedicated", "model_dim": 8, "layers": 1, "heads": 1}},
+				"rtd": {"generator": {"type": "dedicated", "model_dim": 10, "layers": 1, "heads": 4}},
 				"heads": [{"name": "s", "objective": "mntp"}, {"name": "detector", "objective": "rtd"}]}`,
-			want: "v1 supports \"tied\"",
+			want: "must be divisible",
 		},
 		{
 			name: "rtd generator head must be masked",
@@ -121,6 +121,70 @@ func TestMultiheadValidationErrors(t *testing.T) {
 				t.Fatalf("error=%q, want substring %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestMultiheadRTDDedicatedGeneratorWeightShapesAndIR(t *testing.T) {
+	cfg := parseMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"mlm_mask_token_id": 31,
+		"export_head": "scorer",
+		"rtd": {"generator": {"type": "dedicated", "model_dim": 8, "layers": 1, "heads": 2, "generator_loss_weight": 0.25}},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	if !cfg.Training.RTDDedicatedGeneratorEnabled() {
+		t.Fatal("dedicated RTD generator should be enabled")
+	}
+	if cfg.Training.RTD.DedicatedGenerator.MLPMult != 4.0 {
+		t.Fatalf("dedicated mlp_mult=%g, want default 4", cfg.Training.RTD.DedicatedGenerator.MLPMult)
+	}
+	shapes, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesFromConfig: %v", err)
+	}
+	for _, want := range []string{
+		"rtd_generator_embed",
+		"rtd_generator_l0_norm_scale",
+		"rtd_generator_l0_wq",
+		"rtd_generator_l0_ff_gate",
+		"rtd_generator_l0_ff2",
+		"rtd_generator_final_norm",
+		"rtd_generator_mlm_dense",
+		"rtd_generator_mlm_dense_bias",
+		"rtd_generator_mlm_output_bias",
+	} {
+		if countWeightNames(shapes, want) != 1 {
+			t.Fatalf("weight %q count=%d, want 1 in %+v", want, countWeightNames(shapes, want), shapes)
+		}
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	if prog.NumWeights != len(shapes) {
+		t.Fatalf("prog weights=%d shapes=%d", prog.NumWeights, len(shapes))
+	}
+	for _, want := range []string{"rtd_generator_tokens", "rtd_generator_targets", "rtd_generator_loss_mask"} {
+		if !programDeclaresInputArch(prog, want) {
+			t.Fatalf("missing input %q: %+v", want, prog.Inputs)
+		}
+	}
+	if countOps(prog, OpMaskedCrossEntropy) != 2 {
+		t.Fatalf("OpMaskedCrossEntropy count=%d, want scorer+generator", countOps(prog, OpMaskedCrossEntropy))
+	}
+	if countOps(prog, OpMaskedBCEWithLogits) != 1 {
+		t.Fatalf("OpMaskedBCEWithLogits count=%d, want 1", countOps(prog, OpMaskedBCEWithLogits))
+	}
+	for _, want := range []string{"rtd_generator_loss", RTDGeneratorLogitsName} {
+		if !programDeclaresOutputArch(prog, want) {
+			t.Fatalf("missing output %q: %+v", want, prog.Outputs)
+		}
 	}
 }
 

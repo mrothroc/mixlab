@@ -57,6 +57,20 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 	if t.data2VecInput && len(t.data2VecMaskBuf) < need {
 		t.data2VecMaskBuf = make([]float32, need)
 	}
+	rtdGeneratorNeed := 0
+	rtdGeneratorBatchSize := t.rtdGeneratorBatchSize
+	rtdGeneratorSeqLen := t.rtdGeneratorSeqLen
+	if t.rtdGeneratorInput {
+		if rtdGeneratorBatchSize <= 0 || rtdGeneratorSeqLen <= 0 {
+			return nil, fmt.Errorf("program declares rtd_generator_tokens with invalid shape [%d,%d]", rtdGeneratorBatchSize, rtdGeneratorSeqLen)
+		}
+		rtdGeneratorNeed = rtdGeneratorBatchSize * rtdGeneratorSeqLen
+		if len(t.rtdGeneratorTokBuf) < rtdGeneratorNeed {
+			t.rtdGeneratorTokBuf = make([]int32, rtdGeneratorNeed)
+			t.rtdGeneratorTgtBuf = make([]int32, rtdGeneratorNeed)
+			t.rtdGeneratorLossBuf = make([]float32, rtdGeneratorNeed)
+		}
+	}
 	for i := 0; i < need; i++ {
 		t.tokBuf[i] = int32(batch.x[i])
 		t.tgtBuf[i] = int32(batch.y[i])
@@ -166,6 +180,32 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		inputs = append(inputs,
 			gpu.TensorInput{Name: "data2vec_targets", DType: gpu.TensorFloat32, Shape: []int{need, modelDim}, Data: t.data2VecTargetBuf[:needData2VecTargets]},
 			gpu.TensorInput{Name: "data2vec_loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.data2VecMaskBuf[:need]},
+		)
+	}
+	if t.rtdGeneratorInput {
+		if len(batch.rtdGeneratorX) >= rtdGeneratorNeed {
+			for i := 0; i < rtdGeneratorNeed; i++ {
+				t.rtdGeneratorTokBuf[i] = int32(batch.rtdGeneratorX[i])
+			}
+		} else {
+			clear(t.rtdGeneratorTokBuf[:rtdGeneratorNeed])
+		}
+		if len(batch.rtdGeneratorY) >= rtdGeneratorNeed {
+			for i := 0; i < rtdGeneratorNeed; i++ {
+				t.rtdGeneratorTgtBuf[i] = int32(batch.rtdGeneratorY[i])
+			}
+		} else {
+			clear(t.rtdGeneratorTgtBuf[:rtdGeneratorNeed])
+		}
+		if len(batch.rtdGeneratorLossMask) >= rtdGeneratorNeed {
+			copy(t.rtdGeneratorLossBuf[:rtdGeneratorNeed], batch.rtdGeneratorLossMask[:rtdGeneratorNeed])
+		} else {
+			clear(t.rtdGeneratorLossBuf[:rtdGeneratorNeed])
+		}
+		inputs = append(inputs,
+			gpu.TensorInput{Name: "rtd_generator_tokens", DType: gpu.TensorInt32, Shape: []int{rtdGeneratorBatchSize, rtdGeneratorSeqLen}, Data: t.rtdGeneratorTokBuf[:rtdGeneratorNeed]},
+			gpu.TensorInput{Name: "rtd_generator_targets", DType: gpu.TensorInt32, Shape: []int{rtdGeneratorNeed}, Data: t.rtdGeneratorTgtBuf[:rtdGeneratorNeed]},
+			gpu.TensorInput{Name: "rtd_generator_loss_mask", DType: gpu.TensorFloat32, Shape: []int{rtdGeneratorNeed}, Data: t.rtdGeneratorLossBuf[:rtdGeneratorNeed]},
 		)
 	}
 	if t.firstByteMaskInput {

@@ -9,6 +9,7 @@ func TestClassifyWeightOptimizer(t *testing.T) {
 		want   optimizerClass
 	}{
 		{"embed", OptimizerWeightMetadata{Name: "embed", Shape: []int{128, 256}}, optimizerClassEmbed},
+		{"rtd_generator_embed", OptimizerWeightMetadata{Name: "rtd_generator_embed", Shape: []int{128, 64}}, optimizerClassEmbed},
 		{"char_table", OptimizerWeightMetadata{Name: "char_table", Shape: []int{257, 32}}, optimizerClassEmbed},
 		{"bigram_table", OptimizerWeightMetadata{Name: "bigram_table", Shape: []int{64, 32}}, optimizerClassEmbed},
 		{"trigram_table", OptimizerWeightMetadata{Name: "trigram_table", Shape: []int{64, 32}}, optimizerClassEmbed},

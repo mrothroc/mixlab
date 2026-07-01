@@ -27,6 +27,8 @@ type mlxGPUTrainer struct {
 	bigramVocabSize          int
 	trigramVocabSize         int
 	declaredTargetSize       int
+	rtdGeneratorBatchSize    int
+	rtdGeneratorSeqLen       int
 	charInput                bool
 	firstByteMaskInput       bool
 	lossMaskInput            bool
@@ -34,6 +36,7 @@ type mlxGPUTrainer struct {
 	segmentIDsInput          bool
 	teacherProbsInput        bool
 	data2VecInput            bool
+	rtdGeneratorInput        bool
 	diffusionBlockStartInput bool
 	diffusionBlockEndInput   bool
 	diffusionTimestepInput   bool
@@ -49,6 +52,9 @@ type mlxGPUTrainer struct {
 	teacherProbBuf         []float32
 	data2VecTargetBuf      []float32
 	data2VecMaskBuf        []float32
+	rtdGeneratorTokBuf     []int32
+	rtdGeneratorTgtBuf     []int32
+	rtdGeneratorLossBuf    []float32
 	charBuf                []int32
 	bigramBuf              []int32
 	trigramBuf             []int32
@@ -176,6 +182,8 @@ func initMLXGPUTrainer(
 	declaredTargetSize := 0
 	declaredBatchSize := 0
 	declaredSeqLen := 0
+	rtdGeneratorBatchSize := 0
+	rtdGeneratorSeqLen := 0
 	charInput := false
 	firstByteMaskInput := false
 	lossMaskInput := false
@@ -183,6 +191,7 @@ func initMLXGPUTrainer(
 	segmentIDsInput := false
 	teacherProbsInput := false
 	data2VecInput := false
+	rtdGeneratorInput := false
 	diffusionBlockStartInput := false
 	diffusionBlockEndInput := false
 	diffusionTimestepInput := false
@@ -212,6 +221,13 @@ func initMLXGPUTrainer(
 		}
 		if inp.Name == "data2vec_targets" {
 			data2VecInput = true
+		}
+		if inp.Name == "rtd_generator_tokens" {
+			rtdGeneratorInput = true
+			if len(inp.Shape) == 2 {
+				rtdGeneratorBatchSize = inp.Shape[0]
+				rtdGeneratorSeqLen = inp.Shape[1]
+			}
 		}
 		if inp.Name == "diffusion_block_start" {
 			diffusionBlockStartInput = true
@@ -278,6 +294,8 @@ func initMLXGPUTrainer(
 		bigramVocabSize:          cfg.BigramVocabSize,
 		trigramVocabSize:         cfg.TrigramVocabSize,
 		declaredTargetSize:       declaredTargetSize,
+		rtdGeneratorBatchSize:    rtdGeneratorBatchSize,
+		rtdGeneratorSeqLen:       rtdGeneratorSeqLen,
 		charInput:                charInput,
 		firstByteMaskInput:       firstByteMaskInput,
 		lossMaskInput:            lossMaskInput,
@@ -285,6 +303,7 @@ func initMLXGPUTrainer(
 		segmentIDsInput:          segmentIDsInput,
 		teacherProbsInput:        teacherProbsInput,
 		data2VecInput:            data2VecInput,
+		rtdGeneratorInput:        rtdGeneratorInput,
 		diffusionBlockStartInput: diffusionBlockStartInput,
 		diffusionBlockEndInput:   diffusionBlockEndInput,
 		diffusionTimestepInput:   diffusionTimestepInput,
@@ -299,6 +318,9 @@ func initMLXGPUTrainer(
 		teacherProbBuf:           make([]float32, batchElems*cfg.VocabSize),
 		data2VecTargetBuf:        make([]float32, batchElems*cfg.ModelDim),
 		data2VecMaskBuf:          make([]float32, batchElems),
+		rtdGeneratorTokBuf:       make([]int32, cfg.Training.BatchTokens),
+		rtdGeneratorTgtBuf:       make([]int32, cfg.Training.BatchTokens),
+		rtdGeneratorLossBuf:      make([]float32, cfg.Training.BatchTokens),
 		charBuf:                  make([]int32, batchElems*cfg.CharMaxPerToken),
 		bigramBuf:                make([]int32, batchElems),
 		trigramBuf:               make([]int32, batchElems),
@@ -516,6 +538,16 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.segmentIDsInput = programDeclaresInput(irProg, "segment_ids")
 	t.teacherProbsInput = programDeclaresInput(irProg, "teacher_probs")
 	t.data2VecInput = programDeclaresInput(irProg, "data2vec_targets")
+	t.rtdGeneratorInput = programDeclaresInput(irProg, "rtd_generator_tokens")
+	t.rtdGeneratorBatchSize = 0
+	t.rtdGeneratorSeqLen = 0
+	for _, inp := range irProg.Inputs {
+		if inp.Name == "rtd_generator_tokens" && len(inp.Shape) == 2 {
+			t.rtdGeneratorBatchSize = inp.Shape[0]
+			t.rtdGeneratorSeqLen = inp.Shape[1]
+			break
+		}
+	}
 	t.diffusionBlockStartInput = programDeclaresInput(irProg, "diffusion_block_start")
 	t.diffusionBlockEndInput = programDeclaresInput(irProg, "diffusion_block_end")
 	t.diffusionTimestepInput = programDeclaresInput(irProg, "diffusion_timestep")

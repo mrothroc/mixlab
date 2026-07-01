@@ -189,6 +189,52 @@ func TestMLXGPUTrainerMakeObjectiveInputs_DiffusionBlocks(t *testing.T) {
 	}
 }
 
+func TestMLXGPUTrainerMakeObjectiveInputs_RTDGeneratorUsesRawBatchShape(t *testing.T) {
+	trainer := &mlxGPUTrainer{
+		rtdGeneratorInput:     true,
+		rtdGeneratorBatchSize: 2,
+		rtdGeneratorSeqLen:    3,
+		tokBuf:                make([]int32, 12),
+		tgtBuf:                make([]int32, 12),
+		rtdGeneratorTokBuf:    make([]int32, 6),
+		rtdGeneratorTgtBuf:    make([]int32, 6),
+		rtdGeneratorLossBuf:   make([]float32, 6),
+	}
+	batch := objectiveBatch{
+		x:                    []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+		y:                    []int{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13},
+		rtdGeneratorX:        []int{21, 22, 23, 24, 25, 26},
+		rtdGeneratorY:        []int{31, 32, 33, 34, 35, 36},
+		rtdGeneratorLossMask: []float32{1, 0, 1, 0, 1, 0},
+	}
+
+	inputs, err := trainer.makeObjectiveInputs(batch, 4, 3)
+	if err != nil {
+		t.Fatalf("makeObjectiveInputs: %v", err)
+	}
+	toks := findTensorInput(t, inputs, "rtd_generator_tokens")
+	if !reflect.DeepEqual(toks.Shape, []int{2, 3}) {
+		t.Fatalf("rtd_generator_tokens shape=%v, want [2 3]", toks.Shape)
+	}
+	if got := toks.Data.([]int32); !reflect.DeepEqual(got, []int32{21, 22, 23, 24, 25, 26}) {
+		t.Fatalf("rtd_generator_tokens data=%v", got)
+	}
+	targets := findTensorInput(t, inputs, "rtd_generator_targets")
+	if !reflect.DeepEqual(targets.Shape, []int{6}) {
+		t.Fatalf("rtd_generator_targets shape=%v, want [6]", targets.Shape)
+	}
+	if got := targets.Data.([]int32); !reflect.DeepEqual(got, []int32{31, 32, 33, 34, 35, 36}) {
+		t.Fatalf("rtd_generator_targets data=%v", got)
+	}
+	mask := findTensorInput(t, inputs, "rtd_generator_loss_mask")
+	if !reflect.DeepEqual(mask.Shape, []int{6}) {
+		t.Fatalf("rtd_generator_loss_mask shape=%v, want [6]", mask.Shape)
+	}
+	if got := mask.Data.([]float32); !reflect.DeepEqual(got, []float32{1, 0, 1, 0, 1, 0}) {
+		t.Fatalf("rtd_generator_loss_mask data=%v", got)
+	}
+}
+
 func TestMLXGPUTrainerMakeObjectiveInputs_RequiresDiffusionBlocks(t *testing.T) {
 	trainer := &mlxGPUTrainer{
 		tokBuf:                   make([]int32, 4),

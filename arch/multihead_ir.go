@@ -233,6 +233,25 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 			prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawRows, 1})
 		}
 	}
+	prog.Slice("x", 0, rawRows, 1, 0, "x_hidden_flat")
+	prog.Reshape("x_hidden_flat", []int{rawBatch, T, D}, "x_hidden")
+	if cfg.Training.RTDDedicatedGeneratorEnabled() {
+		var generatorLogits string
+		generatorLogits, _, wi, err = emitRTDDedicatedGeneratorIR(prog, cfg, wi, rawBatch, hiddenDropout)
+		if err != nil {
+			return nil, err
+		}
+		prog.MaskedCrossEntropy(generatorLogits, "rtd_generator_targets", "rtd_generator_loss_mask", "rtd_generator_loss")
+		prog.ScalarMul("rtd_generator_loss", float32(cfg.Training.RTD.DedicatedGenerator.GeneratorLossWeight), "rtd_generator_loss_weighted")
+		if lossAccum == "" {
+			lossAccum = "rtd_generator_loss_weighted"
+		} else {
+			prog.Add(lossAccum, "rtd_generator_loss_weighted", "rtd_generator_loss_accum")
+			lossAccum = "rtd_generator_loss_accum"
+		}
+		prog.DeclareOutput("rtd_generator_loss", TensorFloat32, []int{1})
+		prog.DeclareOutput(generatorLogits, TensorFloat32, []int{rawRows, V})
+	}
 	if lossAccum == "" {
 		return nil, fmt.Errorf("multihead graph emitted no losses")
 	}
@@ -246,8 +265,6 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		prog.DeclareOutput("moe_aux_loss", TensorFloat32, []int{1})
 		prog.DeclareOutput("moe_router_entropy", TensorFloat32, []int{1})
 	}
-	prog.Slice("x", 0, rawRows, 1, 0, "x_hidden_flat")
-	prog.Reshape("x_hidden_flat", []int{rawBatch, T, D}, "x_hidden")
 	prog.DeclareOutput("x_hidden", TensorFloat32, []int{rawBatch, T, D})
 	if wi != nWeights {
 		return nil, fmt.Errorf("multihead IR weight count mismatch: emitted=%d expected=%d", wi, nWeights)

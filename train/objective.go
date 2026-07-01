@@ -11,20 +11,23 @@ import (
 )
 
 type objectiveBatch struct {
-	x                   []int
-	y                   []int
-	batchSizeOverride   int
-	lossMask            []float32
-	attentionCausal     []int32
-	segmentIDs          []int32
-	maskedLossMask      []float32
-	teacherProbs        []float32
-	unmaskedX           []int
-	data2vecTargets     []float32
-	data2vecMask        []float32
-	diffusionBlockStart []int32
-	diffusionBlockEnd   []int32
-	diffusionTimestep   []float32
+	x                    []int
+	y                    []int
+	batchSizeOverride    int
+	lossMask             []float32
+	attentionCausal      []int32
+	segmentIDs           []int32
+	maskedLossMask       []float32
+	teacherProbs         []float32
+	unmaskedX            []int
+	data2vecTargets      []float32
+	data2vecMask         []float32
+	diffusionBlockStart  []int32
+	diffusionBlockEnd    []int32
+	diffusionTimestep    []float32
+	rtdGeneratorX        []int
+	rtdGeneratorY        []int
+	rtdGeneratorLossMask []float32
 }
 
 func objectiveForStep(spec TrainingSpec, step int) string {

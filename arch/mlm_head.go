@@ -69,24 +69,37 @@ func validateMLMHead(cfg *ArchConfig, source string) error {
 }
 
 func emitBERTMLMHeadIR(prog *Program, hidden string, wi int, modelDim, vocabSize int, eps, dropout float32) (string, int, error) {
+	return emitBERTMLMHeadIRTiedTo(prog, "mlm_head", hidden, wi, weightName(0), modelDim, vocabSize, eps, dropout)
+}
+
+func emitBERTMLMHeadIRTiedTo(prog *Program, prefix, hidden string, wi int, tiedEmbeddingWeight string, modelDim, vocabSize int, eps, dropout float32) (string, int, error) {
 	if modelDim <= 0 || vocabSize <= 0 {
 		return "", wi, fmt.Errorf("invalid BERT MLM head shape D=%d V=%d", modelDim, vocabSize)
 	}
-	prog.LayerNormNoAffine(hidden, "mlm_head_ln1", eps)
-	prog.MatMul("mlm_head_ln1", weightName(wi), "mlm_head_dense_mm")
+	ln1 := prefix + "_ln1"
+	denseMM := prefix + "_dense_mm"
+	denseOut := prefix + "_dense_out"
+	gelu := prefix + "_gelu"
+	ln2 := prefix + "_ln2"
+	drop := prefix + "_dropout"
+	tied := prefix + "_tied_weight"
+	logitsMM := prefix + "_logits_mm"
+	logits := prefix + "_logits"
+	prog.LayerNormNoAffine(hidden, ln1, eps)
+	prog.MatMul(ln1, weightName(wi), denseMM)
 	wi++
-	prog.Add("mlm_head_dense_mm", weightName(wi), "mlm_head_dense_out")
+	prog.Add(denseMM, weightName(wi), denseOut)
 	wi++
-	prog.GELU("mlm_head_dense_out", "mlm_head_gelu")
-	prog.LayerNormNoAffine("mlm_head_gelu", "mlm_head_ln2", eps)
-	headInput := "mlm_head_ln2"
+	prog.GELU(denseOut, gelu)
+	prog.LayerNormNoAffine(gelu, ln2, eps)
+	headInput := ln2
 	if dropout > 0 {
-		prog.Dropout(headInput, dropout, "mlm_head_dropout")
-		headInput = "mlm_head_dropout"
+		prog.Dropout(headInput, dropout, drop)
+		headInput = drop
 	}
-	prog.Transpose(weightName(0), []int{1, 0}, "mlm_head_tied_weight")
-	prog.MatMul(headInput, "mlm_head_tied_weight", "mlm_head_logits_mm")
-	prog.Add("mlm_head_logits_mm", weightName(wi), "mlm_head_logits")
+	prog.Transpose(tiedEmbeddingWeight, []int{1, 0}, tied)
+	prog.MatMul(headInput, tied, logitsMM)
+	prog.Add(logitsMM, weightName(wi), logits)
 	wi++
-	return "mlm_head_logits", wi, nil
+	return logits, wi, nil
 }
