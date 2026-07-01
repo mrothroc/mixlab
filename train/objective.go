@@ -444,8 +444,11 @@ func deriveSegmentIDs(tokens []int, need, seqLen, boundary int) []int32 {
 }
 
 func deterministicObjectiveRNG(seed int64, step int, salt uint64) *rand.Rand {
-	mixed := splitmix64(uint64(seed) ^ uint64(step+1)*0x9e3779b97f4a7c15 ^ salt)
-	return rand.New(rand.NewSource(int64(mixed)))
+	return rand.New(rand.NewSource(int64(deterministicObjectiveSeed(seed, step, salt))))
+}
+
+func deterministicObjectiveSeed(seed int64, step int, salt uint64) uint64 {
+	return splitmix64(uint64(seed) ^ uint64(step+1)*0x9e3779b97f4a7c15 ^ salt)
 }
 
 func splitmix64(x uint64) uint64 {

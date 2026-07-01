@@ -580,7 +580,7 @@ func (t *mlxGPUTrainer) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, se
 	return t.evaluatePreparedInputs(inputs)
 }
 
-func (t *mlxGPUTrainer) EvaluateObjectiveOutputGPU(batch objectiveBatch, batchSize, seqLen int, outputName string) ([]float32, error) {
+func (t *mlxGPUTrainer) SampleObjectiveOutputCategoricalGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error) {
 	if batch.batchSizeOverride > 0 {
 		batchSize = batch.batchSizeOverride
 	}
@@ -591,7 +591,15 @@ func (t *mlxGPUTrainer) EvaluateObjectiveOutputGPU(batch objectiveBatch, batchSi
 	if err != nil {
 		return nil, err
 	}
-	return gpu.EvalProgramOutput(t.prog, t.handles, inputs, outputName)
+	raw, err := gpu.TrainerSampleCategoricalOutput(t.handle, inputs, outputName, rows, vocab, float32(temperature), seed)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]int, len(raw))
+	for i, v := range raw {
+		out[i] = int(v)
+	}
+	return out, nil
 }
 
 // EvaluateObjectiveTrainingLossGPU evaluates the graph's optimizer loss output

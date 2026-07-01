@@ -209,6 +209,17 @@ int mlx_ir_trainer_read_output(
     const char* output_name,
     float* out,
     int out_size);
+int mlx_ir_trainer_sample_categorical_output(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char* output_name,
+    int rows,
+    int vocab,
+    float temperature,
+    uint64_t seed,
+    int* out,
+    int out_size);
 float mlx_ir_trainer_evaluate(int64_t trainer, const int* tokens, const int* targets, int B, int T);
 int mlx_ir_trainer_num_weights(int64_t trainer);
 int mlx_ir_trainer_weight_size(int64_t trainer, int weight_idx);

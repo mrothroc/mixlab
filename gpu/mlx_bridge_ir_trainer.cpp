@@ -474,6 +474,52 @@ int mlx_ir_trainer_read_output(int64_t trainer, const char* output_name, float* 
   }
 }
 
+int mlx_ir_trainer_sample_categorical_output(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char* output_name,
+    int rows,
+    int vocab,
+    float temperature,
+    uint64_t seed,
+    int* out,
+    int out_size) {
+  if (!inputs || n_inputs <= 0 || !output_name || output_name[0] == '\0' ||
+      rows <= 0 || vocab <= 0 || !(temperature > 0.0f) || !std::isfinite(temperature) ||
+      !out || out_size != rows) {
+    return -1;
+  }
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return -1;
+    }
+    auto* t = get_ir_trainer(trainer);
+    if (!t) {
+      return -1;
+    }
+    auto tensor_map = to_tensor_map(inputs, n_inputs);
+    auto sampled = t->sample_categorical_output(
+        tensor_map,
+        output_name,
+        rows,
+        vocab,
+        temperature,
+        seed);
+    if (static_cast<int>(sampled.size()) != out_size) {
+      return -1;
+    }
+    std::memcpy(out, sampled.data(), static_cast<size_t>(out_size) * sizeof(int32_t));
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_sample_categorical_output", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_sample_categorical_output unknown exception" << std::endl;
+    return -1;
+  }
+}
+
 float mlx_ir_trainer_evaluate(int64_t trainer, const int* tokens, const int* targets, int B, int T) {
   if (!tokens || !targets || B <= 0 || T <= 0) {
     return std::nanf("");

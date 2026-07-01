@@ -107,12 +107,12 @@ func multiheadHeadIndexByName(cfg *ArchConfig, name string) int {
 	return -1
 }
 
-func multiheadHeadIndexByObjective(cfg *ArchConfig, objective string) int {
+func multiheadRTDHeadIndex(cfg *ArchConfig) int {
 	if cfg == nil {
 		return -1
 	}
 	for i, head := range cfg.Training.Heads {
-		if head.Objective == objective {
+		if head.Objective == arch.ObjectiveRTD {
 			return i
 		}
 	}
@@ -120,7 +120,7 @@ func multiheadHeadIndexByObjective(cfg *ArchConfig, objective string) int {
 }
 
 func rtdHeadLogitsOutputName(cfg *ArchConfig) (string, error) {
-	idx := multiheadHeadIndexByObjective(cfg, arch.ObjectiveRTD)
+	idx := multiheadRTDHeadIndex(cfg)
 	if idx < 0 {
 		return "", fmt.Errorf("config has no multihead objective=%q head", arch.ObjectiveRTD)
 	}
@@ -201,6 +201,22 @@ func attachRTDTiedGeneratorCorruption(
 		_ = restore()
 		return objectiveBatch{}, err
 	}
+	samples, sampledOnDevice, err := sampleRTDGeneratorReplacements(trainer, probe, batchSize, seqLen, outputName, need, cfg.VocabSize, cfg.Training.RTD.SampleTemperature, deterministicObjectiveSeed(cfg.Training.Seed, step, rtdGeneratorSalt))
+	if err != nil {
+		if restoreErr := restore(); restoreErr != nil {
+			return objectiveBatch{}, fmt.Errorf("sample RTD generator replacements: %w; restore program: %v", err, restoreErr)
+		}
+		return objectiveBatch{}, fmt.Errorf("sample RTD generator replacements: %w", err)
+	}
+	if sampledOnDevice {
+		if err := restore(); err != nil {
+			return objectiveBatch{}, fmt.Errorf("restore training program after RTD generator: %w", err)
+		}
+		if err := applyRTDGeneratorSampledCorruption(cfg, batch, seqLen, probe, samples, &prepared); err != nil {
+			return objectiveBatch{}, err
+		}
+		return prepared, nil
+	}
 	logits, err := evaluateRTDGeneratorLogits(trainer, probe, batchSize, seqLen, outputName, []int{need, cfg.VocabSize})
 	if err != nil {
 		if restoreErr := restore(); restoreErr != nil {
@@ -248,6 +264,22 @@ func attachRTDDedicatedGeneratorCorruption(
 		}
 		return switcher.SetProgramGPU(restoreProg)
 	}
+	samples, sampledOnDevice, err := sampleRTDGeneratorReplacements(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, need, cfg.VocabSize, cfg.Training.RTD.SampleTemperature, deterministicObjectiveSeed(cfg.Training.Seed, step, rtdGeneratorSalt^0xd1b54a32d192ed03))
+	if err != nil {
+		if restoreErr := restore(); restoreErr != nil {
+			return objectiveBatch{}, fmt.Errorf("sample RTD dedicated generator replacements: %w; restore program: %v", err, restoreErr)
+		}
+		return objectiveBatch{}, fmt.Errorf("sample RTD dedicated generator replacements: %w", err)
+	}
+	if sampledOnDevice {
+		if err := restore(); err != nil {
+			return objectiveBatch{}, fmt.Errorf("restore training program after RTD dedicated generator: %w", err)
+		}
+		if err := applyRTDDedicatedGeneratorSampledCorruption(cfg, batch, seqLen, probe, samples, &prepared); err != nil {
+			return objectiveBatch{}, err
+		}
+		return prepared, nil
+	}
 	logits, err := evaluateRTDGeneratorLogits(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, []int{need, cfg.VocabSize})
 	if err != nil {
 		if restoreErr := restore(); restoreErr != nil {
@@ -264,19 +296,29 @@ func attachRTDDedicatedGeneratorCorruption(
 	return prepared, nil
 }
 
+func sampleRTDGeneratorReplacements(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, bool, error) {
+	sampler, ok := trainer.(gpuObjectiveCategoricalSampler)
+	if !ok {
+		return nil, false, nil
+	}
+	samples, err := sampler.SampleObjectiveOutputCategoricalGPU(batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed)
+	if err != nil {
+		return nil, true, err
+	}
+	if len(samples) != rows {
+		return nil, true, fmt.Errorf("RTD generator sampled %d rows, want %d", len(samples), rows)
+	}
+	for i, sample := range samples {
+		if sample < 0 || sample >= vocab {
+			return nil, true, fmt.Errorf("RTD generator sampled token %d at row %d outside vocab [0,%d)", sample, i, vocab)
+		}
+	}
+	return samples, true, nil
+}
+
 func evaluateRTDGeneratorLogits(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, outputName string, shape []int) ([]float32, error) {
 	if outputName == "" {
 		return nil, fmt.Errorf("RTD generator output name is empty")
-	}
-	if outEval, ok := trainer.(gpuObjectiveOutputEvaluator); ok {
-		out, err := outEval.EvaluateObjectiveOutputGPU(batch, batchSize, seqLen, outputName)
-		if err != nil {
-			return nil, err
-		}
-		if err := validateRTDGeneratorLogitsShape(outputName, out, shape); err != nil {
-			return nil, err
-		}
-		return out, nil
 	}
 	if _, err := trainer.EvaluateObjectiveGPU(batch, batchSize, seqLen); err != nil {
 		return nil, err
@@ -320,7 +362,7 @@ func applyRTDGeneratorCorruption(cfg *ArchConfig, batch trainBatch, step, seqLen
 		return fmt.Errorf("RTD generator logits length=%d, want %d", len(logits), need*cfg.VocabSize)
 	}
 	generatorIdx := multiheadHeadIndexByName(cfg, cfg.Training.RTD.GeneratorHead)
-	rtdIdx := multiheadHeadIndexByObjective(cfg, arch.ObjectiveRTD)
+	rtdIdx := multiheadRTDHeadIndex(cfg)
 	if generatorIdx < 0 || rtdIdx < 0 {
 		return fmt.Errorf("RTD generator/head indices not found")
 	}
@@ -361,6 +403,60 @@ func applyRTDGeneratorCorruption(cfg *ArchConfig, batch trainBatch, step, seqLen
 	return nil
 }
 
+func applyRTDGeneratorSampledCorruption(cfg *ArchConfig, batch trainBatch, seqLen int, probe objectiveBatch, samples []int, prepared *objectiveBatch) error {
+	if cfg == nil || cfg.Training.RTD == nil || prepared == nil {
+		return fmt.Errorf("invalid RTD sampled corruption inputs")
+	}
+	need := cfg.Training.BatchTokens
+	if need <= 0 || seqLen <= 0 || need%seqLen != 0 {
+		return fmt.Errorf("invalid RTD batch shape need=%d seq_len=%d", need, seqLen)
+	}
+	if len(batch.x) < need {
+		return fmt.Errorf("RTD raw batch has %d tokens, need %d", len(batch.x), need)
+	}
+	if len(samples) < need {
+		return fmt.Errorf("RTD generator samples length=%d, want at least %d", len(samples), need)
+	}
+	generatorIdx := multiheadHeadIndexByName(cfg, cfg.Training.RTD.GeneratorHead)
+	rtdIdx := multiheadRTDHeadIndex(cfg)
+	if generatorIdx < 0 || rtdIdx < 0 {
+		return fmt.Errorf("RTD generator/head indices not found")
+	}
+	generatorHead := cfg.Training.Heads[generatorIdx]
+	generatorOffset := generatorIdx * need
+	rtdOffset := rtdIdx * need
+	if len(probe.lossMask) < generatorOffset+need || len(prepared.x) < rtdOffset+need || len(prepared.y) < rtdOffset+need || len(prepared.lossMask) < rtdOffset+need {
+		return fmt.Errorf("RTD expanded batch shape mismatch")
+	}
+	copy(prepared.x[rtdOffset:rtdOffset+need], batch.x[:need])
+	for i := 0; i < need; i++ {
+		prepared.y[rtdOffset+i] = 1
+		prepared.lossMask[rtdOffset+i] = 1
+	}
+	for pos := 0; pos < need; pos++ {
+		if probe.lossMask[generatorOffset+pos] <= 0 {
+			continue
+		}
+		replacementPos := pos
+		if generatorHead.Objective == arch.ObjectiveMNTP {
+			if pos%seqLen == seqLen-1 {
+				continue
+			}
+			replacementPos = pos + 1
+		}
+		sampled := samples[pos]
+		if sampled < 0 || sampled >= cfg.VocabSize {
+			return fmt.Errorf("RTD generator sampled token %d at position %d outside vocab [0,%d)", sampled, pos, cfg.VocabSize)
+		}
+		outPos := rtdOffset + replacementPos
+		prepared.x[outPos] = sampled
+		if sampled != batch.x[replacementPos] {
+			prepared.y[outPos] = 0
+		}
+	}
+	return nil
+}
+
 func applyRTDDedicatedGeneratorCorruption(cfg *ArchConfig, batch trainBatch, step, seqLen int, probe objectiveBatch, logits []float32, prepared *objectiveBatch) error {
 	if cfg == nil || cfg.Training.RTD == nil || prepared == nil {
 		return fmt.Errorf("invalid dedicated RTD corruption inputs")
@@ -378,7 +474,7 @@ func applyRTDDedicatedGeneratorCorruption(cfg *ArchConfig, batch trainBatch, ste
 	if len(logits) != need*cfg.VocabSize {
 		return fmt.Errorf("RTD dedicated generator logits length=%d, want %d", len(logits), need*cfg.VocabSize)
 	}
-	rtdIdx := multiheadHeadIndexByObjective(cfg, arch.ObjectiveRTD)
+	rtdIdx := multiheadRTDHeadIndex(cfg)
 	if rtdIdx < 0 {
 		return fmt.Errorf("RTD head index not found")
 	}
@@ -400,6 +496,53 @@ func applyRTDDedicatedGeneratorCorruption(cfg *ArchConfig, batch trainBatch, ste
 		sampled, err := sampleTokenFromLogits(row, cfg.Training.RTD.SampleTemperature, rng.Float64())
 		if err != nil {
 			return fmt.Errorf("sample dedicated RTD replacement at position %d: %w", pos, err)
+		}
+		outPos := rtdOffset + pos
+		prepared.x[outPos] = sampled
+		if sampled != batch.x[pos] {
+			prepared.y[outPos] = 0
+		}
+	}
+	return nil
+}
+
+func applyRTDDedicatedGeneratorSampledCorruption(cfg *ArchConfig, batch trainBatch, seqLen int, probe objectiveBatch, samples []int, prepared *objectiveBatch) error {
+	if cfg == nil || cfg.Training.RTD == nil || prepared == nil {
+		return fmt.Errorf("invalid dedicated RTD sampled corruption inputs")
+	}
+	need := cfg.Training.BatchTokens
+	if need <= 0 || seqLen <= 0 || need%seqLen != 0 {
+		return fmt.Errorf("invalid RTD batch shape need=%d seq_len=%d", need, seqLen)
+	}
+	if len(batch.x) < need {
+		return fmt.Errorf("RTD raw batch has %d tokens, need %d", len(batch.x), need)
+	}
+	if len(probe.lossMask) < need {
+		return fmt.Errorf("RTD dedicated generator probe loss mask has %d entries, need %d", len(probe.lossMask), need)
+	}
+	if len(samples) < need {
+		return fmt.Errorf("RTD dedicated generator samples length=%d, want at least %d", len(samples), need)
+	}
+	rtdIdx := multiheadRTDHeadIndex(cfg)
+	if rtdIdx < 0 {
+		return fmt.Errorf("RTD head index not found")
+	}
+	rtdOffset := rtdIdx * need
+	if len(prepared.x) < rtdOffset+need || len(prepared.y) < rtdOffset+need || len(prepared.lossMask) < rtdOffset+need {
+		return fmt.Errorf("RTD expanded batch shape mismatch")
+	}
+	copy(prepared.x[rtdOffset:rtdOffset+need], batch.x[:need])
+	for i := 0; i < need; i++ {
+		prepared.y[rtdOffset+i] = 1
+		prepared.lossMask[rtdOffset+i] = 1
+	}
+	for pos := 0; pos < need; pos++ {
+		if probe.lossMask[pos] <= 0 {
+			continue
+		}
+		sampled := samples[pos]
+		if sampled < 0 || sampled >= cfg.VocabSize {
+			return fmt.Errorf("RTD dedicated generator sampled token %d at position %d outside vocab [0,%d)", sampled, pos, cfg.VocabSize)
 		}
 		outPos := rtdOffset + pos
 		prepared.x[outPos] = sampled

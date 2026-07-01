@@ -12,6 +12,7 @@
 #include <iostream>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <stdexcept>
@@ -2887,6 +2888,57 @@ std::vector<float> IRTrainer::evaluate_per_token(const TensorMap& inputs) {
   mx::eval(flat);
   std::vector<float> result(static_cast<size_t>(flat.shape(0)));
   std::memcpy(result.data(), flat.data<float>(), result.size() * sizeof(float));
+  return result;
+}
+
+std::vector<int32_t> IRTrainer::sample_categorical_output(
+    const TensorMap& inputs,
+    const std::string& output_name,
+    int rows,
+    int vocab,
+    float temperature,
+    uint64_t seed) {
+  flush();
+  if (weights.empty()) {
+    throw std::runtime_error("IR trainer has no weights");
+  }
+  if (output_name.empty()) {
+    throw std::runtime_error("output name is required");
+  }
+  if (rows <= 0 || vocab <= 0 || !(temperature > 0.0f) || !std::isfinite(temperature)) {
+    throw std::runtime_error("invalid categorical sampler shape or temperature");
+  }
+  auto effective = effective_compute_weights(weights, compute_dtype);
+  auto logits = mx::astype(ir_interpret(program, effective, inputs, output_name, false), mx::float32);
+  if (logits.ndim() != 2 || logits.shape(0) != rows || logits.shape(1) != vocab) {
+    throw std::runtime_error(
+        "categorical sampler output shape mismatch for " + output_name);
+  }
+
+  auto finite = mx::isfinite(logits);
+  auto positive_inf = mx::logical_and(mx::isinf(logits), logits > mx::array(0.0f, mx::float32));
+  auto finite_count = mx::sum(mx::astype(finite, mx::float32), 1, true);
+  auto positive_inf_count = mx::sum(mx::astype(positive_inf, mx::float32), 1, true);
+  auto has_finite = finite_count > mx::array(0.0f, mx::float32);
+  auto has_positive_inf = positive_inf_count > mx::array(0.0f, mx::float32);
+
+  auto scaled = logits / mx::array(temperature, mx::float32);
+  auto minus_large = mx::full_like(scaled, -1e9f);
+  auto finite_logits = mx::where(finite, scaled, minus_large);
+  auto inf_logits = mx::where(positive_inf, mx::zeros_like(scaled), minus_large);
+  auto uniform_logits = mx::zeros_like(scaled);
+  auto sample_logits = mx::where(
+      has_positive_inf,
+      inf_logits,
+      mx::where(has_finite, finite_logits, uniform_logits));
+
+  auto key = mx::random::key(seed);
+  auto sampled = mx::reshape(
+      mx::astype(mx::random::categorical(sample_logits, 1, std::make_optional(key)), mx::int32),
+      {static_cast<mx::ShapeElem>(rows)});
+  mx::eval(sampled);
+  std::vector<int32_t> result(static_cast<size_t>(rows));
+  std::memcpy(result.data(), sampled.data<int32_t>(), result.size() * sizeof(int32_t));
   return result;
 }
 

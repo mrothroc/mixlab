@@ -150,6 +150,51 @@ func TestRTDGeneratorCorruptionForMNTP(t *testing.T) {
 	}
 }
 
+func TestRTDGeneratorSampledCorruptionForMNTP(t *testing.T) {
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"seed": 11,
+		"mlm_mask_prob": 1.0,
+		"mlm_mask_token_id": 31,
+		"rtd": {"generator": "tied", "generator_head": "scorer", "mask_prob": 1.0, "sample_temperature": 1.0},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	raw := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 9, 6, 7, 8, 9},
+	}
+	prepared, err := prepareMultiheadBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareMultiheadBatch: %v", err)
+	}
+	probe, err := prepareRTDGeneratorProbeBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareRTDGeneratorProbeBatch: %v", err)
+	}
+	samples := []int{raw.x[1], 9, 9, 9, 9, 9, 9, 9}
+	if err := applyRTDGeneratorSampledCorruption(cfg, raw, cfg.SeqLen, probe, samples, &prepared); err != nil {
+		t.Fatalf("applyRTDGeneratorSampledCorruption: %v", err)
+	}
+	rtdOffset := cfg.Training.BatchTokens
+	if prepared.x[rtdOffset] != 1 || prepared.y[rtdOffset] != 1 {
+		t.Fatalf("position 0 x/y=%d/%d, want original label", prepared.x[rtdOffset], prepared.y[rtdOffset])
+	}
+	if prepared.x[rtdOffset+1] != 2 || prepared.y[rtdOffset+1] != 1 {
+		t.Fatalf("same-token replacement x/y=%d/%d, want original label", prepared.x[rtdOffset+1], prepared.y[rtdOffset+1])
+	}
+	for _, pos := range []int{2, 3, 5, 6, 7} {
+		if prepared.x[rtdOffset+pos] != 9 || prepared.y[rtdOffset+pos] != 0 {
+			t.Fatalf("replacement pos %d x/y=%d/%d, want 9/0", pos, prepared.x[rtdOffset+pos], prepared.y[rtdOffset+pos])
+		}
+	}
+}
+
 func TestRTDDedicatedGeneratorCorruptionAndInputs(t *testing.T) {
 	cfg := parseTrainMultiheadConfig(t, `"training": {
 		"objective": "multihead",

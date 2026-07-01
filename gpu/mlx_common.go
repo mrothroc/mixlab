@@ -387,6 +387,26 @@ func EvalProgramOutputs(program *Program, weightHandles []int64, inputs []Tensor
 	return evalProgramOutputs(program, weightHandles, inputs, outputNames, outputSizes)
 }
 
+func TrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, outputName string, rows, vocab int, temperature float32, seed uint64) ([]int32, error) {
+	if t == 0 {
+		return nil, fmt.Errorf("invalid trainer handle; create the trainer before sampling named outputs")
+	}
+	if outputName == "" {
+		return nil, fmt.Errorf("output name is required")
+	}
+	if rows <= 0 || vocab <= 0 {
+		return nil, fmt.Errorf("invalid categorical output shape rows=%d vocab=%d", rows, vocab)
+	}
+	if temperature <= 0 {
+		return nil, fmt.Errorf("categorical temperature must be > 0, got %g", temperature)
+	}
+	out := make([]int32, rows)
+	if err := mlxTrainerSampleCategoricalOutput(t, inputs, outputName, rows, vocab, temperature, seed, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func EvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) (float32, [][]float32, error) {
 	if program == nil || program.handle == 0 {
 		return 0, nil, fmt.Errorf("invalid GPU program; create and populate a gpu.Program before evaluating gradients")

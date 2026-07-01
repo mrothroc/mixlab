@@ -134,3 +134,34 @@ func evalProgramOutputs(program *Program, weightHandles []int64, inputs []Tensor
 	}
 	return out, nil
 }
+
+func mlxTrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, outputName string, rows, vocab int, temperature float32, seed uint64, out []int32) error {
+	if len(out) != rows {
+		return fmt.Errorf("categorical output buffer length=%d, want rows=%d", len(out), rows)
+	}
+	cInputs, cleanup, err := marshalTensorInputs(inputs)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	cName := C.CString(outputName)
+	defer C.free(unsafe.Pointer(cName))
+
+	rc := int(C.mlx_ir_trainer_sample_categorical_output(
+		C.int64_t(t),
+		(*C.mlx_tensor_input)(unsafe.Pointer(&cInputs[0])),
+		C.int(len(cInputs)),
+		cName,
+		C.int(rows),
+		C.int(vocab),
+		C.float(temperature),
+		C.uint64_t(seed),
+		(*C.int)(unsafe.Pointer(&out[0])),
+		C.int(len(out)),
+	))
+	if rc != 0 {
+		return fmt.Errorf("mlx_ir_trainer_sample_categorical_output failed for %q", outputName)
+	}
+	return nil
+}

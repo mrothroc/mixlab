@@ -144,6 +144,13 @@ struct IRTrainer {
   float evaluate(const mlx::core::array& tokens, const mlx::core::array& targets);
   float evaluate_named(const TensorMap& inputs);
   std::vector<float> evaluate_per_token(const TensorMap& inputs);
+  std::vector<int32_t> sample_categorical_output(
+      const TensorMap& inputs,
+      const std::string& output_name,
+      int rows,
+      int vocab,
+      float temperature,
+      uint64_t seed);
   float evaluate_lora_named(const TensorMap& inputs, int rank, int steps, float lr);
   float compute_mean_square_grads_named(const TensorMap& inputs, const std::string& output_name);
   mlx::core::array read_output(const std::string& output_name) const;
