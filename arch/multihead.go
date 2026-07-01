@@ -1,0 +1,321 @@
+package arch
+
+import (
+	"fmt"
+	"math"
+	"strings"
+)
+
+const (
+	MultiheadOutputLinear  = "linear"
+	MultiheadOutputBERTMLM = "bert_mlm"
+)
+
+func normalizeMultiheadOutputHead(raw string, objective string) string {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	switch mode {
+	case "", "default":
+		switch normalizeTrainingObjective(objective) {
+		case ObjectiveMLM, ObjectiveMNTP:
+			return MultiheadOutputBERTMLM
+		default:
+			return MultiheadOutputLinear
+		}
+	case "linear", "lm", "lm_head":
+		return MultiheadOutputLinear
+	case "bert", "bert_mlm", "mlm_bert":
+		return MultiheadOutputBERTMLM
+	default:
+		return mode
+	}
+}
+
+func validateTrainingMultihead(cfg *ArchConfig, source string) error {
+	t := &cfg.Training
+	if len(t.Heads) < 2 {
+		return fmt.Errorf("config %q training.objective=\"multihead\" requires at least two training.heads entries", source)
+	}
+	if t.Diffusion != nil {
+		return fmt.Errorf("config %q training.objective=\"multihead\" requires per-head diffusion configs; remove top-level training.diffusion", source)
+	}
+	if cfg.EffectiveLayerAggregation() != LayerAggregationNone {
+		return fmt.Errorf("config %q training.objective=\"multihead\" requires top-level layer_aggregation to be omitted or \"none\"; set per-head layer_aggregation instead", source)
+	}
+	if cfg.MTP != nil {
+		return fmt.Errorf("config %q training.objective=\"multihead\" cannot be combined with top-level mtp in v1", source)
+	}
+	if t.FirstByteMask {
+		return fmt.Errorf("config %q training.objective=\"multihead\" cannot be combined with training.first_byte_mask in v1", source)
+	}
+	if t.Distillation != nil {
+		return fmt.Errorf("config %q training.objective=\"multihead\" cannot be combined with training.distillation in v1", source)
+	}
+	if t.Data2VecActive() {
+		return fmt.Errorf("config %q training.objective=\"multihead\" cannot be combined with training.data2vec in v1", source)
+	}
+	if t.ExampleFramingEnabled() {
+		return fmt.Errorf("config %q training.objective=\"multihead\" cannot be combined with training.example_framing in v1", source)
+	}
+	if t.AttentionSegmentMaskEnabled() {
+		return fmt.Errorf("config %q training.objective=\"multihead\" cannot be combined with training.attention_segment_mask in v1", source)
+	}
+	if cfg.UNet || cfg.ParallelResidual || cfg.Backout != nil || len(cfg.Recurrence) > 0 || len(cfg.RecurrencePhases) > 0 || cfg.executionOrderSet {
+		return fmt.Errorf("config %q training.objective=\"multihead\" does not support unet, parallel_residual, backout, recurrence, or custom execution order in v1", source)
+	}
+	if t.MLMMaskProb < 0 || t.MLMMaskProb > 1 || math.IsNaN(t.MLMMaskProb) {
+		return fmt.Errorf("config %q has invalid training.mlm_mask_prob=%g (must be in [0,1])", source, t.MLMMaskProb)
+	}
+	for name, value := range map[string]float64{
+		"mlm_mask_token_prob":     t.MLMMaskTokenProb,
+		"mlm_random_token_prob":   t.MLMRandomTokenProb,
+		"mlm_kept_unchanged_prob": t.MLMKeptUnchangedProb,
+	} {
+		if value < 0 || value > 1 || math.IsNaN(value) {
+			return fmt.Errorf("config %q has invalid training.%s=%g (must be in [0,1])", source, name, value)
+		}
+	}
+	if probSum := t.MLMMaskTokenProb + t.MLMRandomTokenProb + t.MLMKeptUnchangedProb; math.Abs(probSum-1.0) > 1e-6 {
+		return fmt.Errorf("config %q has invalid MLM replacement probabilities: mlm_mask_token_prob + mlm_random_token_prob + mlm_kept_unchanged_prob = %g (must sum to 1.0)", source, probSum)
+	}
+
+	seen := make(map[string]int, len(t.Heads))
+	totalWeight := 0.0
+	diffusionHeads := 0
+	exportableHeads := 0
+	usesAdaLN := false
+	for i := range t.Heads {
+		h := &t.Heads[i]
+		h.Name = strings.TrimSpace(h.Name)
+		if h.Name == "" {
+			return fmt.Errorf("config %q training.heads[%d].name is required", source, i)
+		}
+		if prev, ok := seen[h.Name]; ok {
+			return fmt.Errorf("config %q training.heads[%d].name=%q duplicates training.heads[%d]", source, i, h.Name, prev)
+		}
+		seen[h.Name] = i
+		h.Objective = normalizeTrainingObjective(h.Objective)
+		switch h.Objective {
+		case ObjectiveCausal, ObjectiveMLM, ObjectiveMNTP, ObjectiveBlockDiffusion:
+		default:
+			return fmt.Errorf("config %q training.heads[%d].objective=%q is invalid for multihead (must be causal, mlm, mntp, or block_diffusion)", source, i, h.Objective)
+		}
+		if !h.lossWeightSet && h.LossWeight == 0 {
+			h.LossWeight = 1
+		}
+		if h.LossWeight < 0 || math.IsNaN(h.LossWeight) || math.IsInf(h.LossWeight, 0) {
+			return fmt.Errorf("config %q training.heads[%d].loss_weight=%g must be finite and >= 0", source, i, h.LossWeight)
+		}
+		totalWeight += h.LossWeight
+		h.LayerAggregation = normalizeLayerAggregation(h.LayerAggregation)
+		switch h.LayerAggregation {
+		case LayerAggregationNone, LayerAggregationDWA:
+		default:
+			return fmt.Errorf("config %q training.heads[%d].layer_aggregation=%q must be \"none\" or \"dwa\"", source, i, h.LayerAggregation)
+		}
+		h.OutputHead = normalizeMultiheadOutputHead(h.OutputHead, h.Objective)
+		switch h.OutputHead {
+		case MultiheadOutputLinear, MultiheadOutputBERTMLM:
+		default:
+			return fmt.Errorf("config %q training.heads[%d].output_head=%q must be \"linear\" or \"bert_mlm\"", source, i, h.OutputHead)
+		}
+		if !h.finalNormSet {
+			h.FinalNorm = true
+		}
+		if h.OutputHead == MultiheadOutputBERTMLM {
+			if h.Objective != ObjectiveMLM && h.Objective != ObjectiveMNTP {
+				return fmt.Errorf("config %q training.heads[%d].output_head=\"bert_mlm\" requires objective mlm or mntp", source, i)
+			}
+			if h.tieEmbeddingsSet && !h.TieEmbeddings {
+				return fmt.Errorf("config %q training.heads[%d].output_head=\"bert_mlm\" requires tie_embeddings=true", source, i)
+			}
+			h.TieEmbeddings = true
+		} else if !h.tieEmbeddingsSet {
+			h.TieEmbeddings = h.Objective != ObjectiveBlockDiffusion && cfg.TieEmbeddings
+		}
+		if h.Objective == ObjectiveBlockDiffusion {
+			diffusionHeads++
+			if h.Diffusion == nil {
+				h.Diffusion = &DiffusionSpec{}
+			}
+			h.Diffusion.applyDefaults(cfg.SeqLen)
+			if err := validateMultiheadDiffusionSpec(cfg, h.Diffusion, source, i); err != nil {
+				return err
+			}
+			if h.Diffusion.TimestepConditioning == DiffusionTimestepConditioningAdaLN {
+				usesAdaLN = true
+			}
+		} else {
+			exportableHeads++
+			if h.Diffusion != nil {
+				return fmt.Errorf("config %q training.heads[%d].diffusion is only valid with objective=\"block_diffusion\"", source, i)
+			}
+		}
+	}
+	if totalWeight <= 0 {
+		return fmt.Errorf("config %q training.objective=\"multihead\" requires positive total head loss_weight", source)
+	}
+	if exportableHeads == 0 {
+		return fmt.Errorf("config %q training.objective=\"multihead\" requires at least one non-block_diffusion export/scorer head", source)
+	}
+	if diffusionHeads == 0 {
+		return fmt.Errorf("config %q training.objective=\"multihead\" requires at least one block_diffusion head", source)
+	}
+	if strings.TrimSpace(t.ExportHead) == "" {
+		for _, h := range t.Heads {
+			if h.Objective != ObjectiveBlockDiffusion {
+				t.ExportHead = h.Name
+				break
+			}
+		}
+	} else if idx, ok := seen[strings.TrimSpace(t.ExportHead)]; !ok {
+		return fmt.Errorf("config %q training.export_head=%q does not match any training.heads[].name", source, t.ExportHead)
+	} else if t.Heads[idx].Objective == ObjectiveBlockDiffusion {
+		return fmt.Errorf("config %q training.export_head=%q cannot select a block_diffusion head for HF export in v1", source, t.ExportHead)
+	}
+	if strings.TrimSpace(t.DiffusionHead) == "" {
+		for _, h := range t.Heads {
+			if h.Objective == ObjectiveBlockDiffusion {
+				t.DiffusionHead = h.Name
+				break
+			}
+		}
+	} else if idx, ok := seen[strings.TrimSpace(t.DiffusionHead)]; !ok {
+		return fmt.Errorf("config %q training.diffusion_head=%q does not match any training.heads[].name", source, t.DiffusionHead)
+	} else if t.Heads[idx].Objective != ObjectiveBlockDiffusion {
+		return fmt.Errorf("config %q training.diffusion_head=%q must select a block_diffusion head", source, t.DiffusionHead)
+	}
+	if usesAdaLN && cfg.EffectiveNormPlacement() == NormPlacementPost {
+		return fmt.Errorf("config %q multihead diffusion timestep_conditioning=\"adaln\" requires pre or sandwich norm placement in v1", source)
+	}
+	if !t.mlmMaskTokenIDSet || t.MLMMaskTokenID < 0 || t.MLMMaskTokenID >= cfg.VocabSize {
+		return fmt.Errorf("config %q training.mlm_mask_token_id is required and must be in [0,%d) for multihead masked/diffusion heads", source, cfg.VocabSize)
+	}
+	for i, block := range cfg.Blocks {
+		if block.WindowSize > 0 {
+			return fmt.Errorf("config %q blocks[%d].window_size cannot be combined with training.objective=\"multihead\" in v1", source, i)
+		}
+		if blockTypeKey(block) == "custom" {
+			return fmt.Errorf("config %q blocks[%d].type=\"custom\" cannot be combined with training.objective=\"multihead\" in v1", source, i)
+		}
+		switch blockTypeKey(block) {
+		case "plain", "swiglu", "geglu", "mlp", "moe":
+		default:
+			return fmt.Errorf("config %q blocks[%d].type=%q cannot be combined with training.objective=\"multihead\" in v1; supported blocks are plain self-attention plus position-wise FFN/MoE blocks", source, i, block.Type)
+		}
+	}
+	return nil
+}
+
+func validateMultiheadDiffusionSpec(cfg *ArchConfig, d *DiffusionSpec, source string, headIdx int) error {
+	if d.BlockSize <= 0 {
+		return fmt.Errorf("config %q training.heads[%d].diffusion.block_size=%d must be > 0", source, headIdx, d.BlockSize)
+	}
+	if d.BlockSize > cfg.SeqLen || cfg.SeqLen%d.BlockSize != 0 {
+		return fmt.Errorf("config %q training.heads[%d].diffusion.block_size=%d must divide seq_len=%d", source, headIdx, d.BlockSize, cfg.SeqLen)
+	}
+	if d.StepsPerBlock <= 0 {
+		return fmt.Errorf("config %q training.heads[%d].diffusion.steps_per_block=%d must be > 0", source, headIdx, d.StepsPerBlock)
+	}
+	if !finiteInClosedRange(d.MinMaskFraction, 0, 1) || !finiteInClosedRange(d.MaxMaskFraction, 0, 1) || d.MaxMaskFraction <= 0 || d.MinMaskFraction > d.MaxMaskFraction {
+		return fmt.Errorf("config %q training.heads[%d].diffusion has invalid mask fraction range [%g,%g]", source, headIdx, d.MinMaskFraction, d.MaxMaskFraction)
+	}
+	if !finiteInClosedRange(d.ConfidenceThreshold, 0, 1) {
+		return fmt.Errorf("config %q training.heads[%d].diffusion.confidence_threshold=%g must be in [0,1]", source, headIdx, d.ConfidenceThreshold)
+	}
+	if d.CommitFloor <= 0 || d.CommitFloor > d.BlockSize {
+		return fmt.Errorf("config %q training.heads[%d].diffusion.commit_floor=%d must be in [1,block_size=%d]", source, headIdx, d.CommitFloor, d.BlockSize)
+	}
+	switch d.TimestepConditioning {
+	case DiffusionTimestepConditioningNone, DiffusionTimestepConditioningAdaLN:
+	default:
+		return fmt.Errorf("config %q training.heads[%d].diffusion.timestep_conditioning=%q must be \"none\" or \"adaln\"", source, headIdx, d.TimestepConditioning)
+	}
+	if d.TimestepConditioning == DiffusionTimestepConditioningAdaLN && d.TimestepConditionDim <= 0 {
+		return fmt.Errorf("config %q training.heads[%d].diffusion.timestep_conditioning_dim=%d must be > 0", source, headIdx, d.TimestepConditionDim)
+	}
+	return nil
+}
+
+func multiheadUsesAdaLN(t TrainingSpec) bool {
+	if !t.MultiheadEnabled() {
+		return false
+	}
+	for _, h := range t.Heads {
+		if h.Objective == ObjectiveBlockDiffusion && h.Diffusion != nil && h.Diffusion.TimestepConditioning == DiffusionTimestepConditioningAdaLN {
+			return true
+		}
+	}
+	return false
+}
+
+func multiheadAdaLNDim(t TrainingSpec) int {
+	for _, h := range t.Heads {
+		if h.Objective == ObjectiveBlockDiffusion && h.Diffusion != nil && h.Diffusion.TimestepConditioning == DiffusionTimestepConditioningAdaLN {
+			if h.Diffusion.TimestepConditionDim > 0 {
+				return h.Diffusion.TimestepConditionDim
+			}
+		}
+	}
+	return 0
+}
+
+func collectMultiheadWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil config")
+	}
+	refs := identityWeightRefs(cfg.Blocks)
+	shapes := []WeightMeta{{Name: "embed", Shape: []int{cfg.VocabSize, cfg.ModelDim}}}
+	shapes = append(shapes, positionalEmbeddingWeightShapes(cfg.ModelDim, cfg.EffectiveMaxPositions(), cfg.EffectivePositionalEmbedding())...)
+	shapes = append(shapes, charWeightShapes(cfg.ModelDim, cfg.CharVocabSize, cfg.EffectiveCharDim())...)
+	shapes = append(shapes, bigramWeightShapes(cfg.ModelDim, cfg.BigramVocabSize, cfg.EffectiveBigramDim())...)
+	shapes = append(shapes, trigramWeightShapes(cfg.ModelDim, cfg.TrigramVocabSize, cfg.EffectiveTrigramDim())...)
+	sharedRel, err := sharedRelativeAttentionWeightShapes(cfg.ModelDim, cfg.Blocks)
+	if err != nil {
+		return nil, err
+	}
+	shapes = append(shapes, sharedRel...)
+	blockShapes, err := blockRangeWeightShapesWithRefs(cfg.Blocks, refs, 0, len(cfg.Blocks), cfg.ModelDim, cfg.SeqLen, 1, cfg.VocabSize, cfg.EffectiveMLPMult(), cfg.BlockScales, cfg.ResidMix)
+	if err != nil {
+		return nil, fmt.Errorf("blocks: %w", err)
+	}
+	shapes = append(shapes, blockShapes...)
+	if multiheadUsesAdaLN(cfg.Training) {
+		condDim := multiheadAdaLNDim(cfg.Training)
+		for i := range cfg.Blocks {
+			shapes = append(shapes,
+				WeightMeta{Name: fmt.Sprintf("adaln_%d_w1", i), Shape: []int{1, condDim}},
+				WeightMeta{Name: fmt.Sprintf("adaln_%d_w2", i), Shape: []int{condDim, 2 * cfg.ModelDim}, InitZero: true},
+			)
+		}
+	}
+	for _, h := range cfg.Training.Heads {
+		shapes = append(shapes, multiheadHeadWeightShapes(cfg.ModelDim, cfg.VocabSize, cfg.Blocks, cfg.EffectiveNormSpec(), h)...)
+	}
+	return shapes, nil
+}
+
+func multiheadHeadWeightShapes(modelDim, vocabSize int, blocks []BlockSpec, norm NormSpec, h MultiheadHeadSpec) []WeightMeta {
+	prefix := "head_" + h.Name
+	var shapes []WeightMeta
+	if h.LayerAggregation == LayerAggregationDWA {
+		if n, err := dwaSublayerCount(blocks); err == nil {
+			shapes = append(shapes, WeightMeta{Name: prefix + "_dwa_alpha", Shape: []int{n + 1}, InitMode: dwaAlphaInitMode})
+		}
+	}
+	if h.FinalNorm {
+		shapes = append(shapes, normWeights(prefix+"_final_norm", modelDim, norm)...)
+	}
+	switch h.OutputHead {
+	case MultiheadOutputBERTMLM:
+		shapes = append(shapes,
+			WeightMeta{Name: prefix + "_mlm_dense", Shape: []int{modelDim, modelDim}},
+			WeightMeta{Name: prefix + "_mlm_dense_bias", Shape: []int{modelDim}, InitZero: true},
+			WeightMeta{Name: prefix + "_mlm_output_bias", Shape: []int{vocabSize}, InitZero: true},
+		)
+	case MultiheadOutputLinear:
+		if !h.TieEmbeddings {
+			shapes = append(shapes, WeightMeta{Name: prefix + "_proj", Shape: []int{modelDim, vocabSize}})
+		}
+	}
+	return shapes
+}

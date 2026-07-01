@@ -1,0 +1,49 @@
+{
+  "name": "multihead-mntp-diffusion-tiny",
+  "model_dim": 64,
+  "vocab_size": 512,
+  "seq_len": 32,
+  "tie_embeddings": true,
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "multihead",
+    "steps": 200,
+    "lr": 0.0003,
+    "batch_tokens": 256,
+    "seed": 42,
+    "mlm_mask_token_id": 103,
+    "mlm_mask_prob": 0.15,
+    "export_head": "scorer",
+    "diffusion_head": "denoiser",
+    "heads": [
+      {
+        "name": "scorer",
+        "objective": "mntp",
+        "loss_weight": 0.7,
+        "output_head": "bert_mlm",
+        "tie_embeddings": true,
+        "final_norm": true
+      },
+      {
+        "name": "denoiser",
+        "objective": "block_diffusion",
+        "loss_weight": 0.3,
+        "output_head": "linear",
+        "tie_embeddings": false,
+        "final_norm": true,
+        "diffusion": {
+          "block_size": 8,
+          "min_mask_fraction": 0.05,
+          "max_mask_fraction": 1.0,
+          "steps_per_block": 8,
+          "commit_floor": 1,
+          "timestep_conditioning": "adaln",
+          "timestep_conditioning_dim": 32
+        }
+      }
+    ]
+  }
+}

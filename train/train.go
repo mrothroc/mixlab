@@ -77,6 +77,9 @@ type gpuObjectiveEvaluator interface {
 }
 
 func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, lr float32) error {
+	if batch.batchSizeOverride > 0 {
+		batchSize = batch.batchSizeOverride
+	}
 	if batch.lossMask == nil {
 		return trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, lr)
 	}
@@ -327,6 +330,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			fmt.Printf("  [%s] hybrid diffusion: block_size=%d steps_per_block=%d confidence_threshold=%.3f commit_floor=%d\n",
 				name, cfg.Training.Diffusion.BlockSize, cfg.Training.Diffusion.StepsPerBlock, cfg.Training.Diffusion.ConfidenceThreshold, cfg.Training.Diffusion.CommitFloor)
 		}
+	case arch.ObjectiveMultihead:
+		fmt.Printf("  [%s] training objective: multihead export_head=%s diffusion_head=%s heads=[%s]\n",
+			name, cfg.Training.ExportHead, cfg.Training.DiffusionHead, formatMultiheadHeadsForLog(cfg.Training.Heads))
 	}
 	if len(cfg.Training.SeqLenSchedule) > 0 {
 		fmt.Printf("  [%s] seq_len schedule: max=%d active_step0=%d\n", name, seqLen, currentSeqLen)
@@ -724,7 +730,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				if valSet != nil && len(valSet.Batches) > 0 && shouldRunValidationStep(step, steps, valEvery) {
 					valStart := time.Now()
 					stopValidation := startSlowTrainingPhaseLogger(name, step, "validation")
-					valAvg, err := causalEval.meanValidationLossCausal(currentProgramKey, valSet)
+					var valAvg float64
+					var err error
+					if cfg.Training.MultiheadEnabled() {
+						valAvg, err = meanMultiheadValidationLoss(cfg, valSet, trainer, step, batchSize, seqLen)
+					} else {
+						valAvg, err = causalEval.meanValidationLossCausal(currentProgramKey, valSet)
+					}
 					stopValidation()
 					valDuration = time.Since(valStart)
 					if err == nil {
@@ -811,7 +823,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 		}
 		finalEvalBatch := objectiveBatch{x: lastTrainBatch.x, y: lastTrainBatch.y}
-		if cfg.Training.ExampleFramingEnabled() {
+		if cfg.Training.MultiheadEnabled() {
+			var err error
+			finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveMultihead, seqLen)
+			if err != nil {
+				return TrainResult{}, fmt.Errorf("prepare final multihead training loss batch: %w", err)
+			}
+		} else if cfg.Training.ExampleFramingEnabled() {
 			var err error
 			finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveCausal, seqLen)
 			if err != nil {
@@ -819,9 +837,12 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 		}
 		var evalLoss float32
-		if cfg.Training.ExampleFramingEnabled() {
+		switch {
+		case cfg.Training.MultiheadEnabled():
+			evalLoss, err = evaluateObjectiveTrainingLossGPU(trainer, finalEvalBatch, batchSize, seqLen)
+		case cfg.Training.ExampleFramingEnabled():
 			evalLoss, err = causalEval.evaluateCausalObjectiveTrainingLossGPU(currentProgramKey, finalEvalBatch)
-		} else {
+		default:
 			evalLoss, err = causalEval.evaluateCausalObjectiveGPU(currentProgramKey, finalEvalBatch)
 		}
 		if err != nil {
@@ -842,9 +863,12 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 	// Full BPB evaluation if requested
 	if opts.DoFullEval {
-		if cfg.Training.ExampleFramingEnabled() {
+		switch {
+		case cfg.Training.MultiheadEnabled():
+			fmt.Printf("  [%s] full validation BPB failed: training.objective=multihead is not supported by continuous-stream full eval in v1\n", name)
+		case cfg.Training.ExampleFramingEnabled():
 			fmt.Printf("  [%s] full validation BPB failed: training.example_framing is not supported by continuous-stream full eval in v1\n", name)
-		} else {
+		default:
 			if cfg.Training.TTTSteps > 0 {
 				if cfg.Training.TTTMode == "lora" {
 					fmt.Printf("  [%s] computing full validation BPB with LoRA-TTT (steps=%d lr=%g rank=%d)...\n", name, cfg.Training.TTTSteps, cfg.Training.TTTLR, cfg.Training.TTTRank)
@@ -882,6 +906,15 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	fmt.Println(result.formatSummary())
 
 	return result, nil
+}
+
+func formatMultiheadHeadsForLog(heads []arch.MultiheadHeadSpec) string {
+	parts := make([]string, 0, len(heads))
+	for _, h := range heads {
+		parts = append(parts, fmt.Sprintf("%s:%s weight=%g output=%s agg=%s",
+			h.Name, h.Objective, h.LossWeight, h.OutputHead, h.LayerAggregation))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // readTrainerWeights reads weights from a trainer via the weight-reading interface.

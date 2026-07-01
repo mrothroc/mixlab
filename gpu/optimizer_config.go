@@ -162,7 +162,7 @@ func classifyWeightOptimizer(ws OptimizerWeightMetadata) (optimizerClass, error)
 	switch {
 	case ws.Name == "embed" || ws.Name == "char_table" || ws.Name == "bigram_table" || ws.Name == "trigram_table":
 		return optimizerClassEmbed, nil
-	case ws.Name == "head":
+	case ws.Name == "head" || strings.HasPrefix(ws.Name, "head_"):
 		return optimizerClassHead, nil
 	case ws.IsNormScale:
 		return optimizerClassScalar, nil

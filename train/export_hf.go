@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/mrothroc/mixlab/arch"
 )
 
 //go:embed hf_templates/configuration_mixlab.py hf_templates/modeling_mixlab.py
@@ -110,15 +112,19 @@ func runExportHF(opts ExportHFOptions) error {
 		return err
 	}
 
-	shapes, err := computeWeightShapes(exportCfg)
+	shapeCfg := exportCfg
+	if cfg.Training.MultiheadEnabled() {
+		shapeCfg = cfg
+	}
+	sourceShapes, err := computeWeightShapes(shapeCfg)
 	if err != nil {
 		return fmt.Errorf("compute weight shapes: %w", err)
 	}
-	weights, err := loadSafetensorsWeights(opts.SafetensorsLoad, shapes)
+	weights, err := loadSafetensorsWeights(opts.SafetensorsLoad, sourceShapes)
 	if err != nil {
 		return fmt.Errorf("load safetensors %q: %w", opts.SafetensorsLoad, err)
 	}
-	exportShapes, exportWeights, err := materializeHFExportWeights(exportCfg, shapes, weights)
+	exportShapes, exportWeights, err := materializeHFExportWeights(exportCfg, cfg, sourceShapes, weights)
 	if err != nil {
 		return err
 	}
@@ -161,7 +167,7 @@ func runExportHF(opts ExportHFOptions) error {
 		return err
 	}
 
-	fmt.Printf("exported Hugging Face model to %s (%d tensors)\n", opts.OutputDir, len(weights))
+	fmt.Printf("exported Hugging Face model to %s (%d tensors)\n", opts.OutputDir, len(exportWeights))
 	return nil
 }
 
@@ -172,15 +178,38 @@ func hfExportInferenceConfig(cfg *ArchConfig) *ArchConfig {
 	out := *cfg
 	out.Training = cfg.Training
 	out.Training.Data2Vec = nil
+	if cfg.Training.MultiheadEnabled() {
+		if head, ok := multiheadExportHeadSpec(cfg); ok {
+			out.Training.Objective = head.Objective
+			out.Training.Heads = nil
+			out.Training.ExportHead = ""
+			out.Training.DiffusionHead = ""
+			out.Training.Diffusion = nil
+			out.Training.Data2Vec = nil
+			out.Training.Distillation = nil
+			out.LayerAggregation = head.LayerAggregation
+			out.TieEmbeddings = head.TieEmbeddings
+			switch head.OutputHead {
+			case arch.MultiheadOutputBERTMLM:
+				out.MLMHead = arch.MLMHeadBERT
+				out.TieEmbeddings = true
+			default:
+				out.MLMHead = arch.MLMHeadLinear
+			}
+		}
+	}
 	return &out
 }
 
-func materializeHFExportWeights(cfg *ArchConfig, shapes []WeightShape, weights [][]float32) ([]WeightShape, [][]float32, error) {
+func materializeHFExportWeights(cfg, sourceCfg *ArchConfig, shapes []WeightShape, weights [][]float32) ([]WeightShape, [][]float32, error) {
 	if cfg == nil {
 		return nil, nil, fmt.Errorf("nil config")
 	}
 	if len(shapes) != len(weights) {
 		return nil, nil, fmt.Errorf("weight shape/data count mismatch: shapes=%d weights=%d", len(shapes), len(weights))
+	}
+	if sourceCfg != nil && sourceCfg.Training.MultiheadEnabled() {
+		return materializeMultiheadHFExportWeights(cfg, sourceCfg, shapes, weights)
 	}
 	if hasWeightShapeName(shapes, "head") {
 		return shapes, weights, nil

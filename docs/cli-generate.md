@@ -29,8 +29,9 @@ those drive `generate-diffusion` instead.
 
 ## `generate-diffusion`
 
-Generate from a `training.objective: "block_diffusion"` checkpoint or a hybrid
-checkpoint with `training.hybrid_secondary_objective: "block_diffusion"`.
+Generate from a `training.objective: "block_diffusion"` checkpoint, a hybrid
+checkpoint with `training.hybrid_secondary_objective: "block_diffusion"`, or a
+multihead checkpoint with a configured `training.diffusion_head`.
 
 ```bash
 ./mixlab -mode generate-diffusion \
@@ -47,7 +48,7 @@ positions per pass so every block completes.
 
 | Flag | Description |
 |------|-------------|
-| `-config` | Required. Must set `training.objective: "block_diffusion"` or hybrid with `hybrid_secondary_objective: "block_diffusion"`. |
+| `-config` | Required. Must set `training.objective: "block_diffusion"`, hybrid with `hybrid_secondary_objective: "block_diffusion"`, or multihead with a block-diffusion `diffusion_head`. |
 | `-safetensors-load` | Required. Trained block-diffusion weights. |
 | `-prompt` | Prompt token IDs in `token_ids:0,1,2` form. |
 | `-max-tokens` | Maximum generated tokens, capped at `seq_len - prompt`. Default: `256`. |
@@ -62,3 +63,6 @@ By default, diffusion sampling is deterministic argmax over unresolved
 positions. `-temperature` and `-top-k` still apply only to causal `generate`;
 use the diffusion-specific temperature/top-k flags for stochastic diffusion
 sampling.
+
+For `training.objective: "multihead"`, `generate-diffusion` reads
+`head_<diffusion_head>_logits` and ignores scorer-only export heads.

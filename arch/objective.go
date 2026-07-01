@@ -12,6 +12,7 @@ const (
 	ObjectiveHybrid         = "hybrid"
 	ObjectiveMNTP           = "mntp"
 	ObjectiveBlockDiffusion = "block_diffusion"
+	ObjectiveMultihead      = "multihead"
 	// ObjectiveHybridExample is an internal concrete training objective used
 	// for per-example hybrid batches. Public configs still use objective=hybrid.
 	ObjectiveHybridExample = "hybrid_example"
@@ -77,7 +78,48 @@ func (t TrainingSpec) EffectiveHybridSecondaryObjective() string {
 func (t TrainingSpec) UsesBlockDiffusionObjective() bool {
 	obj := t.EffectiveObjective()
 	return obj == ObjectiveBlockDiffusion ||
-		(obj == ObjectiveHybrid && t.EffectiveHybridSecondaryObjective() == ObjectiveBlockDiffusion)
+		(obj == ObjectiveHybrid && t.EffectiveHybridSecondaryObjective() == ObjectiveBlockDiffusion) ||
+		(obj == ObjectiveMultihead && t.MultiheadDiffusionHead() != nil)
+}
+
+func (t TrainingSpec) MultiheadEnabled() bool {
+	return t.EffectiveObjective() == ObjectiveMultihead
+}
+
+func (t TrainingSpec) MultiheadExportHead() *MultiheadHeadSpec {
+	if !t.MultiheadEnabled() {
+		return nil
+	}
+	name := strings.TrimSpace(t.ExportHead)
+	for i := range t.Heads {
+		if name != "" && t.Heads[i].Name == name {
+			return &t.Heads[i]
+		}
+	}
+	for i := range t.Heads {
+		if t.Heads[i].Objective != ObjectiveBlockDiffusion {
+			return &t.Heads[i]
+		}
+	}
+	return nil
+}
+
+func (t TrainingSpec) MultiheadDiffusionHead() *MultiheadHeadSpec {
+	if !t.MultiheadEnabled() {
+		return nil
+	}
+	name := strings.TrimSpace(t.DiffusionHead)
+	for i := range t.Heads {
+		if name != "" && t.Heads[i].Name == name {
+			return &t.Heads[i]
+		}
+	}
+	for i := range t.Heads {
+		if t.Heads[i].Objective == ObjectiveBlockDiffusion {
+			return &t.Heads[i]
+		}
+	}
+	return nil
 }
 
 func (t TrainingSpec) EffectiveAttentionSegmentMask() string {
@@ -112,9 +154,12 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	t := &cfg.Training
 	t.Objective = normalizeTrainingObjective(t.Objective)
 	switch t.Objective {
-	case ObjectiveCausal, ObjectiveMLM, ObjectiveHybrid, ObjectiveMNTP, ObjectiveBlockDiffusion:
+	case ObjectiveCausal, ObjectiveMLM, ObjectiveHybrid, ObjectiveMNTP, ObjectiveBlockDiffusion, ObjectiveMultihead:
 	default:
-		return fmt.Errorf("config %q has invalid training.objective=%q (must be \"causal\", \"mlm\", \"hybrid\", \"mntp\", or \"block_diffusion\")", source, t.Objective)
+		return fmt.Errorf("config %q has invalid training.objective=%q (must be \"causal\", \"mlm\", \"hybrid\", \"mntp\", \"block_diffusion\", or \"multihead\")", source, t.Objective)
+	}
+	if t.Objective == ObjectiveMultihead {
+		return validateTrainingMultihead(cfg, source)
 	}
 	t.HybridMixGranularity = t.EffectiveHybridMixGranularity()
 	switch t.HybridMixGranularity {

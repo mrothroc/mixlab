@@ -243,6 +243,9 @@ type TrainingSpec struct {
 	LR                                float64             `json:"lr"`
 	Phases                            []TrainingPhase     `json:"phases,omitempty"`
 	Objective                         string              `json:"objective,omitempty"`
+	ExportHead                        string              `json:"export_head,omitempty"`
+	DiffusionHead                     string              `json:"diffusion_head,omitempty"`
+	Heads                             []MultiheadHeadSpec `json:"heads,omitempty"`
 	Diffusion                         *DiffusionSpec      `json:"diffusion,omitempty"`
 	MLMMaskProb                       float64             `json:"mlm_mask_prob,omitempty"`
 	MLMMaskTokenID                    int                 `json:"mlm_mask_token_id,omitempty"`

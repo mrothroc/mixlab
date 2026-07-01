@@ -108,6 +108,7 @@ type layerAggregationBuildState struct {
 	weightStart int
 	step        int
 	history     []string
+	captureOnly bool
 }
 
 func newLayerAggregationBuildState(prog *Program, mode string, weightStart int, stream string) *layerAggregationBuildState {
@@ -122,6 +123,15 @@ func newLayerAggregationBuildState(prog *Program, mode string, weightStart int, 
 	}
 }
 
+func newLayerAggregationCaptureState(prog *Program, stream string) *layerAggregationBuildState {
+	static := "dwa_static_embeddings"
+	prog.ScalarMul(stream, 1.0, static)
+	return &layerAggregationBuildState{
+		history:     []string{static},
+		captureOnly: true,
+	}
+}
+
 func (d *layerAggregationBuildState) apply(prog *Program, stream string) {
 	if d == nil {
 		return
@@ -129,6 +139,10 @@ func (d *layerAggregationBuildState) apply(prog *Program, stream string) {
 	state := fmt.Sprintf("dwa_state_%d", d.step)
 	prog.ScalarMul(stream, 1.0, state)
 	d.history = append(d.history, state)
+	if d.captureOnly {
+		d.step++
+		return
+	}
 
 	alpha := weightName(d.weightStart + d.step)
 	sum := ""
@@ -152,4 +166,27 @@ func (d *layerAggregationBuildState) apply(prog *Program, stream string) {
 		sum = out
 	}
 	d.step++
+}
+
+func emitLayerAggregationFromHistory(prog *Program, history []string, alphaStart int, rowStart, rows int, outPrefix string) (string, error) {
+	if len(history) < 2 {
+		return "", fmt.Errorf("layer aggregation history is empty")
+	}
+	current := ""
+	for i, hist := range history {
+		hSlice := fmt.Sprintf("%s_hist_%d", outPrefix, i)
+		alphaPart := fmt.Sprintf("%s_alpha_%d", outPrefix, i)
+		term := fmt.Sprintf("%s_term_%d", outPrefix, i)
+		prog.Slice(hist, rowStart, rowStart+rows, 1, 0, hSlice)
+		prog.Slice(weightName(alphaStart), i, i+1, 1, 1, alphaPart)
+		prog.Mul(hSlice, alphaPart, term)
+		if i == 0 {
+			current = term
+			continue
+		}
+		next := fmt.Sprintf("%s_sum_%d", outPrefix, i)
+		prog.Add(current, term, next)
+		current = next
+	}
+	return current, nil
 }

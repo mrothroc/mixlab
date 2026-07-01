@@ -280,7 +280,9 @@ type fakeDiffusionGenerationEvaluator struct {
 	batches        []objectiveBatch
 	batchSizes     []int
 	seqLens        []int
+	readNames      []string
 	readShapes     [][]int
+	expectedOutput string
 	logitsForBatch func(batch objectiveBatch, call int) []float32
 	readCalls      int
 }
@@ -293,9 +295,14 @@ func (f *fakeDiffusionGenerationEvaluator) EvaluateObjectiveGPU(batch objectiveB
 }
 
 func (f *fakeDiffusionGenerationEvaluator) ReadOutput(name string, shape []int) ([]float32, error) {
-	if name != "logits" {
+	expected := f.expectedOutput
+	if expected == "" {
+		expected = "logits"
+	}
+	if name != expected {
 		return nil, fmt.Errorf("unexpected output %q", name)
 	}
+	f.readNames = append(f.readNames, name)
 	f.readShapes = append(f.readShapes, append([]int(nil), shape...))
 	if f.logitsForBatch == nil {
 		return nil, fmt.Errorf("no fake logits configured")
@@ -305,6 +312,13 @@ func (f *fakeDiffusionGenerationEvaluator) ReadOutput(name string, shape []int) 
 	}
 	logits := f.logitsForBatch(f.batches[len(f.batches)-1], f.readCalls)
 	f.readCalls++
+	want := 1
+	for _, dim := range shape {
+		want *= dim
+	}
+	if len(logits) > want {
+		logits = logits[:want]
+	}
 	return append([]float32(nil), logits...), nil
 }
 
@@ -316,6 +330,8 @@ func cloneDiffusionObjectiveBatch(batch objectiveBatch) objectiveBatch {
 		unmaskedX:           append([]int(nil), batch.unmaskedX...),
 		diffusionBlockStart: append([]int32(nil), batch.diffusionBlockStart...),
 		diffusionBlockEnd:   append([]int32(nil), batch.diffusionBlockEnd...),
+		diffusionTimestep:   append([]float32(nil), batch.diffusionTimestep...),
+		batchSizeOverride:   batch.batchSizeOverride,
 	}
 }
 

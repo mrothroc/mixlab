@@ -3,6 +3,7 @@ package train
 import (
 	"fmt"
 
+	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/data"
 )
 
@@ -11,6 +12,9 @@ type gpuObjectiveTrainingLossEvaluator interface {
 }
 
 func evaluateObjectiveTrainingLossGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int) (float32, error) {
+	if batch.batchSizeOverride > 0 {
+		batchSize = batch.batchSizeOverride
+	}
 	if evaluator, ok := trainer.(gpuObjectiveTrainingLossEvaluator); ok {
 		return evaluator.EvaluateObjectiveTrainingLossGPU(batch, batchSize, seqLen)
 	}
@@ -20,6 +24,38 @@ func evaluateObjectiveTrainingLossGPU(trainer GPUTrainer, batch objectiveBatch, 
 // meanValidationLoss computes the mean loss across validation batches.
 func meanValidationLoss(valSet *data.ValSet, trainer GPUTrainer, batchSize, seqLen int) (float64, error) {
 	return meanValidationLossWithTTT(valSet, trainer, batchSize, seqLen, "full", 0, 0, 0)
+}
+
+func meanMultiheadValidationLoss(cfg *ArchConfig, valSet *data.ValSet, trainer GPUTrainer, step, batchSize, seqLen int) (float64, error) {
+	if cfg == nil {
+		return 0, fmt.Errorf("nil config")
+	}
+	if valSet == nil || len(valSet.Batches) == 0 {
+		return 0, fmt.Errorf("no validation batches")
+	}
+	sum := 0.0
+	count := 0
+	failures := 0
+	for _, vb := range valSet.Batches {
+		batch, err := prepareObjectiveBatchWithSeqLen(cfg, trainBatch{x: vb.X, y: vb.Y}, step, arch.ObjectiveMultihead, seqLen)
+		if err != nil {
+			return 0, err
+		}
+		loss, err := evaluateObjectiveTrainingLossGPU(trainer, batch, batchSize, seqLen)
+		if err != nil {
+			failures++
+			continue
+		}
+		sum += float64(loss)
+		count++
+	}
+	if count == 0 {
+		return 0, fmt.Errorf("validation evaluation failed for all %d batches", len(valSet.Batches))
+	}
+	if failures > 0 {
+		fmt.Printf("  warning: %d/%d val batches failed, using %d successful\n", failures, len(valSet.Batches), count)
+	}
+	return sum / float64(count), nil
 }
 
 // meanValidationLossWithTTT computes score-first validation loss and, when

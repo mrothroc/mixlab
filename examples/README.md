@@ -62,6 +62,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [hybrid_tiny.json](hybrid_tiny.json) | Hybrid transformer | Causal plus masked-objective training, with per-batch default mixing and optional per-example mixing |
 | [block_diffusion_tiny.json](block_diffusion_tiny.json) | Block diffusion | Block-wise masked-diffusion objective (`training.objective: "block_diffusion"`); train, then sample with `-mode generate-diffusion` |
 | [hybrid_block_diffusion_tiny.json](hybrid_block_diffusion_tiny.json) | Hybrid block diffusion | Batch-level causal plus block-diffusion schedule |
+| [multihead_mntp_diffusion_tiny.json](multihead_mntp_diffusion_tiny.json) | Multihead scorer + denoiser | Shared trunk with an MNTP/BERT-MLM scorer head and native block-diffusion denoiser head |
 | [block_diffusion_sampler_sweep.json](block_diffusion_sampler_sweep.json) | Block diffusion sampler variant | Same tiny block-diffusion backbone with more aggressive sampler defaults |
 | [distillation_tiny.json](distillation_tiny.json) | Teacher distillation | Causal LM with internal teacher ensemble loss |
 | [data2vec_hybrid_tiny.json](data2vec_hybrid_tiny.json) | EMA representation distillation | Hybrid masked training with data2vec auxiliary loss |
@@ -85,6 +86,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **Masked objectives**: Use `mlm_tiny.json` as the smallest bidirectional MLM starting point.
 - **Hybrid objectives**: Use `hybrid_tiny.json` for GPT-BERT-style causal plus masked-objective training. Set `training.hybrid_mix_granularity: "example"` when you want mixed causal and masked sequences in the same batch.
 - **Block diffusion**: Use `block_diffusion_tiny.json` for the v1 block-wise masked-diffusion objective. Use `hybrid_block_diffusion_tiny.json` to mix causal and block-diffusion batches, and `block_diffusion_sampler_sweep.json` for a sampler-settings variant. Train them like any other config, then sample with `-mode generate-diffusion`. Compare diffusion runs against causal and MLM baselines on the same backbone, using causal validation loss for apples-to-apples model comparison.
+- **Dual-head scoring/denoising**: Use `multihead_mntp_diffusion_tiny.json` when you want one shared trunk trained with a masked scorer head plus a native block-diffusion denoiser head. `export-hf` exports the scorer head only; `generate-diffusion` and `score-diffusion` use the configured denoiser head.
 - **Internal distillation**: Use `distillation_tiny.json` after training teacher checkpoints with matching `vocab_size` and `seq_len`.
 - **EMA representation distillation**: Use `data2vec_hybrid_tiny.json` for experimental online data2vec-style hidden-state targets on masked objective steps. The current implementation prioritizes correctness and uses CPU EMA weight refreshes.
 - **Averaged checkpoints**: Use `swa_ema_tiny.json` to keep both live final and SWA/EMA averaged weights.

@@ -13,6 +13,7 @@ import (
 type objectiveBatch struct {
 	x                   []int
 	y                   []int
+	batchSizeOverride   int
 	lossMask            []float32
 	attentionCausal     []int32
 	segmentIDs          []int32
@@ -23,6 +24,7 @@ type objectiveBatch struct {
 	data2vecMask        []float32
 	diffusionBlockStart []int32
 	diffusionBlockEnd   []int32
+	diffusionTimestep   []float32
 }
 
 func objectiveForStep(spec TrainingSpec, step int) string {
@@ -34,6 +36,8 @@ func objectiveForStep(spec TrainingSpec, step int) string {
 		return arch.ObjectiveMNTP
 	case arch.ObjectiveBlockDiffusion:
 		return arch.ObjectiveBlockDiffusion
+	case arch.ObjectiveMultihead:
+		return arch.ObjectiveMultihead
 	case arch.ObjectiveHybrid:
 		causalFraction := spec.EffectiveHybridCLMFractionForStep(step)
 		if spec.EffectiveHybridMixGranularity() == arch.HybridMixGranularityExample {
@@ -82,6 +86,8 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 		prepared, err = prepareMNTPBatch(cfg, batch, step, need, seqLen)
 	case arch.ObjectiveBlockDiffusion:
 		prepared, err = prepareBlockDiffusionBatch(cfg, batch, step, need, seqLen)
+	case arch.ObjectiveMultihead:
+		prepared, err = prepareMultiheadBatch(cfg, batch, step, need, seqLen)
 	case arch.ObjectiveHybridExample:
 		prepared, err = prepareHybridExampleBatch(cfg, batch, step, need, seqLen)
 	default:
@@ -109,6 +115,8 @@ func canonicalObjective(objective string) string {
 		return arch.ObjectiveMNTP
 	case arch.ObjectiveBlockDiffusion:
 		return arch.ObjectiveBlockDiffusion
+	case arch.ObjectiveMultihead:
+		return arch.ObjectiveMultihead
 	case arch.ObjectiveHybridExample:
 		return arch.ObjectiveHybridExample
 	case arch.ObjectiveHybrid:

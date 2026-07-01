@@ -286,12 +286,18 @@ func scoreDiffusionTokens(cfg *ArchConfig, evaluator diffusionGenerationEvaluato
 		if err != nil {
 			return nil, err
 		}
-		if _, err := evaluator.EvaluateObjectiveGPU(batch, positionBatch, cfg.SeqLen); err != nil {
+		batch = expandBatchForMultiheadDiffusion(cfg, batch, positionBatch, cfg.SeqLen)
+		evalBatchSize := positionBatch
+		if batch.batchSizeOverride > 0 {
+			evalBatchSize = batch.batchSizeOverride
+		}
+		if _, err := evaluator.EvaluateObjectiveGPU(batch, evalBatchSize, cfg.SeqLen); err != nil {
 			return nil, err
 		}
-		logits, err := evaluator.ReadOutput("logits", []int{positionBatch * cfg.SeqLen, cfg.VocabSize})
+		outputName := diffusionLogitsOutputName(cfg)
+		logits, err := evaluator.ReadOutput(outputName, []int{positionBatch * cfg.SeqLen, cfg.VocabSize})
 		if err != nil {
-			return nil, fmt.Errorf("read logits: %w", err)
+			return nil, fmt.Errorf("read %s: %w", outputName, err)
 		}
 		want := positionBatch * cfg.SeqLen * cfg.VocabSize
 		if len(logits) != want {
@@ -335,6 +341,7 @@ func diffusionScoringBatch(tokens []int, positions []int, seqLen, maskTokenID, b
 	unmasked := make([]int, need)
 	blockStart := make([]int32, batchSize)
 	blockEnd := make([]int32, batchSize)
+	timestep := make([]float32, batchSize)
 	for row := 0; row < batchSize; row++ {
 		pos := positions[0]
 		if row < len(positions) {
@@ -361,6 +368,7 @@ func diffusionScoringBatch(tokens []int, positions []int, seqLen, maskTokenID, b
 		}
 		blockStart[row] = int32(start)
 		blockEnd[row] = int32(end)
+		timestep[row] = float32(countPositiveMask(lossMask[rowStart:rowStart+seqLen])) / float32(end-start)
 	}
 	return objectiveBatch{
 		x:                   x,
@@ -369,6 +377,7 @@ func diffusionScoringBatch(tokens []int, positions []int, seqLen, maskTokenID, b
 		unmaskedX:           unmasked,
 		diffusionBlockStart: blockStart,
 		diffusionBlockEnd:   blockEnd,
+		diffusionTimestep:   timestep,
 	}, nil
 }
 

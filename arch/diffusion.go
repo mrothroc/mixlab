@@ -3,23 +3,27 @@ package arch
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // DiffusionSpec configures block-diffusion corruption and sampling knobs.
 type DiffusionSpec struct {
-	BlockSize           int     `json:"block_size,omitempty"`
-	StepsPerBlock       int     `json:"steps_per_block,omitempty"`
-	MinMaskFraction     float64 `json:"min_mask_fraction,omitempty"`
-	MaxMaskFraction     float64 `json:"max_mask_fraction,omitempty"`
-	ConfidenceThreshold float64 `json:"confidence_threshold,omitempty"`
-	CommitFloor         int     `json:"commit_floor,omitempty"`
+	BlockSize            int     `json:"block_size,omitempty"`
+	StepsPerBlock        int     `json:"steps_per_block,omitempty"`
+	MinMaskFraction      float64 `json:"min_mask_fraction,omitempty"`
+	MaxMaskFraction      float64 `json:"max_mask_fraction,omitempty"`
+	ConfidenceThreshold  float64 `json:"confidence_threshold,omitempty"`
+	CommitFloor          int     `json:"commit_floor,omitempty"`
+	TimestepConditioning string  `json:"timestep_conditioning,omitempty"`
+	TimestepConditionDim int     `json:"timestep_conditioning_dim,omitempty"`
 
-	blockSizeSet           bool
-	stepsPerBlockSet       bool
-	minMaskFractionSet     bool
-	maxMaskFractionSet     bool
-	confidenceThresholdSet bool
-	commitFloorSet         bool
+	blockSizeSet            bool
+	stepsPerBlockSet        bool
+	minMaskFractionSet      bool
+	maxMaskFractionSet      bool
+	confidenceThresholdSet  bool
+	commitFloorSet          bool
+	timestepConditionDimSet bool
 }
 
 func (d *DiffusionSpec) UnmarshalJSON(data []byte) error {
@@ -40,6 +44,7 @@ func (d *DiffusionSpec) UnmarshalJSON(data []byte) error {
 	_, d.maxMaskFractionSet = fields["max_mask_fraction"]
 	_, d.confidenceThresholdSet = fields["confidence_threshold"]
 	_, d.commitFloorSet = fields["commit_floor"]
+	_, d.timestepConditionDimSet = fields["timestep_conditioning_dim"]
 	return nil
 }
 
@@ -74,6 +79,26 @@ func (d *DiffusionSpec) applyDefaults(seqLen int) {
 	}
 	if !d.commitFloorSet && d.CommitFloor == 0 {
 		d.CommitFloor = 1
+	}
+	d.TimestepConditioning = normalizeDiffusionTimestepConditioning(d.TimestepConditioning)
+	if d.TimestepConditioning == DiffusionTimestepConditioningAdaLN && !d.timestepConditionDimSet && d.TimestepConditionDim == 0 {
+		d.TimestepConditionDim = 128
+	}
+}
+
+const (
+	DiffusionTimestepConditioningNone  = "none"
+	DiffusionTimestepConditioningAdaLN = "adaln"
+)
+
+func normalizeDiffusionTimestepConditioning(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "none", "off", "disabled", "false":
+		return DiffusionTimestepConditioningNone
+	case "adaln", "ada_ln", "ada-layernorm", "ada_layernorm":
+		return DiffusionTimestepConditioningAdaLN
+	default:
+		return strings.ToLower(strings.TrimSpace(raw))
 	}
 }
 
@@ -111,6 +136,14 @@ func validateBlockDiffusionObjective(cfg *ArchConfig, source string) error {
 	}
 	if d.CommitFloor <= 0 || d.CommitFloor > d.BlockSize {
 		return fmt.Errorf("config %q has invalid training.diffusion.commit_floor=%d (must be in [1,block_size=%d])", source, d.CommitFloor, d.BlockSize)
+	}
+	switch d.TimestepConditioning {
+	case DiffusionTimestepConditioningNone, DiffusionTimestepConditioningAdaLN:
+	default:
+		return fmt.Errorf("config %q has invalid training.diffusion.timestep_conditioning=%q (must be \"none\" or \"adaln\")", source, d.TimestepConditioning)
+	}
+	if d.TimestepConditioning == DiffusionTimestepConditioningAdaLN && d.TimestepConditionDim <= 0 {
+		return fmt.Errorf("config %q has invalid training.diffusion.timestep_conditioning_dim=%d (must be > 0 for adaln)", source, d.TimestepConditionDim)
 	}
 	if t.Distillation != nil {
 		return fmt.Errorf("config %q block_diffusion objective paths cannot be combined with training.distillation in v1", source)

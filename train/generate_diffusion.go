@@ -258,12 +258,18 @@ func generateDiffusionTokensWithOptions(cfg *ArchConfig, evaluator diffusionGene
 			if err != nil {
 				return nil, err
 			}
-			if _, err := evaluator.EvaluateObjectiveGPU(batch, 1, cfg.SeqLen); err != nil {
+			batch = expandBatchForMultiheadDiffusion(cfg, batch, 1, cfg.SeqLen)
+			evalBatchSize := 1
+			if batch.batchSizeOverride > 0 {
+				evalBatchSize = batch.batchSizeOverride
+			}
+			if _, err := evaluator.EvaluateObjectiveGPU(batch, evalBatchSize, cfg.SeqLen); err != nil {
 				return nil, err
 			}
-			logits, err := evaluator.ReadOutput("logits", []int{cfg.SeqLen, cfg.VocabSize})
+			outputName := diffusionLogitsOutputName(cfg)
+			logits, err := evaluator.ReadOutput(outputName, []int{cfg.SeqLen, cfg.VocabSize})
 			if err != nil {
-				return nil, fmt.Errorf("read logits: %w", err)
+				return nil, fmt.Errorf("read %s: %w", outputName, err)
 			}
 			if len(logits) != cfg.SeqLen*cfg.VocabSize {
 				return nil, fmt.Errorf("logits length mismatch: got=%d want=%d", len(logits), cfg.SeqLen*cfg.VocabSize)
@@ -374,6 +380,7 @@ func diffusionGenerationBatch(tokens []int, unresolved []int, blockStart, blockE
 		unmaskedX:           append([]int(nil), x...),
 		diffusionBlockStart: []int32{int32(blockStart)},
 		diffusionBlockEnd:   []int32{int32(blockEnd)},
+		diffusionTimestep:   []float32{float32(countPositiveMask(lossMask)) / float32(blockEnd-blockStart)},
 	}, nil
 }
 

@@ -118,7 +118,7 @@ values in `logprobs.bin` to float32/float16 tolerance.
 ## `score-diffusion`
 
 Score already-tokenized candidate sequences with the native block-diffusion
-forward:
+forward. Multihead checkpoints score with the configured `training.diffusion_head`.
 
 ```bash
 ./mixlab -mode score-diffusion \
@@ -130,7 +130,7 @@ forward:
 
 | Flag | Description |
 |------|-------------|
-| `-config` | Required. Must be a pure `block_diffusion` config or a hybrid config whose secondary objective is `block_diffusion`. |
+| `-config` | Required. Must be a pure `block_diffusion` config, a hybrid config whose secondary objective is `block_diffusion`, or a multihead config with a block-diffusion `diffusion_head`. |
 | `-safetensors-load` | Required. Checkpoint to score with. |
 | `-score-in` | Required. JSONL input with `{"id": "...", "tokens": [...]}` records. Tokens are raw token IDs; mixlab does not tokenize text in this mode. |
 | `-score-out` | Required. JSONL output with `logprob_sum`, `logprob_mean`, and `per_token` block-causal PLL values. |

@@ -14,6 +14,7 @@ Start with a small matrix before scaling:
 | MLM baseline | `examples/mlm_tiny.json` or matched local config | Separates masked-objective effects from block denoising |
 | Block diffusion | `examples/block_diffusion_tiny.json` | Pure block-wise masked diffusion |
 | Hybrid diffusion | `examples/hybrid_block_diffusion_tiny.json` | Scheduled causal plus block-diffusion training |
+| Multihead scorer + denoiser | `examples/multihead_mntp_diffusion_tiny.json` | Shared trunk with an MNTP scorer head and native block-diffusion denoiser head |
 | Sampler variant | `examples/block_diffusion_sampler_sweep.json` | Different generation-time denoising settings |
 
 Keep model shape and training budget fixed across rows. Change one objective or
@@ -75,8 +76,9 @@ true normalized sequence likelihood.
 
 ## Sample And Trace
 
-`generate-diffusion` works with pure `block_diffusion` checkpoints and hybrid
-checkpoints whose secondary objective is `block_diffusion`.
+`generate-diffusion` works with pure `block_diffusion` checkpoints, hybrid
+checkpoints whose secondary objective is `block_diffusion`, and multihead
+checkpoints with a block-diffusion `diffusion_head`.
 
 ```bash
 ./mixlab -mode generate-diffusion \

@@ -685,6 +685,9 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
+	if cfg.Training.MultiheadEnabled() {
+		return collectMultiheadWeightShapesFromConfig(cfg)
+	}
 	refs, err := normalizeWeightRefs(cfg.Blocks, cfg.Recurrence)
 	if err != nil {
 		return nil, fmt.Errorf("blocks: %w", err)

@@ -37,6 +37,9 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
+	if cfg.Training.MultiheadEnabled() {
+		return nil, fmt.Errorf("multihead eval IR is not a single-head next-token graph; export the configured scorer head or use native diffusion generation/scoring for the diffusion head")
+	}
 	if len(cfg.RecurrencePhases) > 0 {
 		return buildIRProgramFromConfigWithStateAndOrder(cfg, TrainingProgramState{
 			RecurrenceActive:       true,
@@ -85,6 +88,9 @@ type TrainingProgramState struct {
 func BuildTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingProgramState) (*Program, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
+	}
+	if cfg.Training.MultiheadEnabled() {
+		return buildMultiheadTrainingIRProgramFromConfig(cfg, state)
 	}
 	return buildIRProgramFromConfigWithState(cfg, state, cfg.MTP, cfg.Training.FirstByteMask)
 }

@@ -40,6 +40,9 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 	if t.diffusionBlockEndInput && len(t.diffusionBlockEndBuf) < batchSize {
 		t.diffusionBlockEndBuf = make([]int32, batchSize)
 	}
+	if t.diffusionTimestepInput && len(t.diffusionTimestepBuf) < batchSize {
+		t.diffusionTimestepBuf = make([]float32, batchSize)
+	}
 	if t.charInput && len(t.charBuf) < need*t.charMaxPerToken {
 		t.charBuf = make([]int32, need*t.charMaxPerToken)
 	}
@@ -116,6 +119,16 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		copy(t.diffusionBlockEndBuf[:batchSize], batch.diffusionBlockEnd[:batchSize])
 		inputs = append(inputs, gpu.TensorInput{
 			Name: "diffusion_block_end", DType: gpu.TensorInt32, Shape: []int{batchSize}, Data: t.diffusionBlockEndBuf[:batchSize],
+		})
+	}
+	if t.diffusionTimestepInput {
+		if len(batch.diffusionTimestep) >= batchSize {
+			copy(t.diffusionTimestepBuf[:batchSize], batch.diffusionTimestep[:batchSize])
+		} else {
+			clear(t.diffusionTimestepBuf[:batchSize])
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "diffusion_timestep", DType: gpu.TensorFloat32, Shape: []int{batchSize}, Data: t.diffusionTimestepBuf[:batchSize],
 		})
 	}
 	if t.teacherProbsInput {

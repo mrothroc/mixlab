@@ -27,10 +27,15 @@ exact defaults and validation rules.
 | `"mntp"` | Masked next-token prediction without target leakage. |
 | `"hybrid"` | Per-batch mix of causal and MLM/MNTP secondary objective. |
 | `"block_diffusion"` | Block-wise masked diffusion training. |
+| `"multihead"` | Shared-trunk training with named scorer and denoiser heads. |
 
 Masked objectives use MLM fields such as `mlm_mask_prob`,
 `mlm_mask_token_id`, replacement probabilities, and hybrid fields such as
 `hybrid_clm_fraction` and `hybrid_secondary_objective`.
+
+Multihead configs use `training.heads`, `export_head`, and `diffusion_head`.
+They are intended for recipes such as an MNTP/BERT-MLM scorer head plus a native
+block-diffusion denoiser head over the same trunk.
 
 ## Optimizers
 

@@ -36,6 +36,7 @@ type mlxGPUTrainer struct {
 	data2VecInput            bool
 	diffusionBlockStartInput bool
 	diffusionBlockEndInput   bool
+	diffusionTimestepInput   bool
 	// Pre-allocated input buffers to avoid per-step allocation.
 	tokBuf                 []int32
 	tgtBuf                 []int32
@@ -44,6 +45,7 @@ type mlxGPUTrainer struct {
 	segmentIDBuf           []int32
 	diffusionBlockStartBuf []int32
 	diffusionBlockEndBuf   []int32
+	diffusionTimestepBuf   []float32
 	teacherProbBuf         []float32
 	data2VecTargetBuf      []float32
 	data2VecMaskBuf        []float32
@@ -172,6 +174,8 @@ func initMLXGPUTrainer(
 
 	batchElems := cfg.Training.BatchTokens
 	declaredTargetSize := 0
+	declaredBatchSize := 0
+	declaredSeqLen := 0
 	charInput := false
 	firstByteMaskInput := false
 	lossMaskInput := false
@@ -181,7 +185,13 @@ func initMLXGPUTrainer(
 	data2VecInput := false
 	diffusionBlockStartInput := false
 	diffusionBlockEndInput := false
+	diffusionTimestepInput := false
 	for _, inp := range irProg.Inputs {
+		if inp.Name == "tokens" && len(inp.Shape) == 2 {
+			declaredBatchSize = inp.Shape[0]
+			declaredSeqLen = inp.Shape[1]
+			batchElems = declaredBatchSize * declaredSeqLen
+		}
 		if inp.Name == "targets" && len(inp.Shape) == 1 {
 			declaredTargetSize = inp.Shape[0]
 		}
@@ -208,6 +218,9 @@ func initMLXGPUTrainer(
 		}
 		if inp.Name == "diffusion_block_end" {
 			diffusionBlockEndInput = true
+		}
+		if inp.Name == "diffusion_timestep" {
+			diffusionTimestepInput = true
 		}
 		if inp.Name == "char_ids" {
 			charInput = true
@@ -274,6 +287,7 @@ func initMLXGPUTrainer(
 		data2VecInput:            data2VecInput,
 		diffusionBlockStartInput: diffusionBlockStartInput,
 		diffusionBlockEndInput:   diffusionBlockEndInput,
+		diffusionTimestepInput:   diffusionTimestepInput,
 		tokBuf:                   make([]int32, batchElems),
 		tgtBuf:                   make([]int32, batchElems),
 		lossMaskBuf:              make([]float32, batchElems),
@@ -281,6 +295,7 @@ func initMLXGPUTrainer(
 		segmentIDBuf:             make([]int32, batchElems),
 		diffusionBlockStartBuf:   make([]int32, batchElems),
 		diffusionBlockEndBuf:     make([]int32, batchElems),
+		diffusionTimestepBuf:     make([]float32, batchElems),
 		teacherProbBuf:           make([]float32, batchElems*cfg.VocabSize),
 		data2VecTargetBuf:        make([]float32, batchElems*cfg.ModelDim),
 		data2VecMaskBuf:          make([]float32, batchElems),
@@ -503,6 +518,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.data2VecInput = programDeclaresInput(irProg, "data2vec_targets")
 	t.diffusionBlockStartInput = programDeclaresInput(irProg, "diffusion_block_start")
 	t.diffusionBlockEndInput = programDeclaresInput(irProg, "diffusion_block_end")
+	t.diffusionTimestepInput = programDeclaresInput(irProg, "diffusion_timestep")
 	if t.charInput && len(t.charFeatures) != t.vocabSize*t.charMaxPerToken {
 		return fmt.Errorf("char feature lookup size=%d does not match vocab_size*char_max_per_token=%d", len(t.charFeatures), t.vocabSize*t.charMaxPerToken)
 	}
@@ -519,6 +535,9 @@ func (t *mlxGPUTrainer) EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (fl
 
 // EvaluateObjectiveGPU runs an objective-batch forward pass without gradients and returns the loss.
 func (t *mlxGPUTrainer) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error) {
+	if batch.batchSizeOverride > 0 {
+		batchSize = batch.batchSizeOverride
+	}
 	if err := t.FlushGPU(); err != nil {
 		return 0, err
 	}
@@ -532,6 +551,9 @@ func (t *mlxGPUTrainer) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, se
 // EvaluateObjectiveTrainingLossGPU evaluates the graph's optimizer loss output
 // directly, even when a separate dense eval_loss output is available.
 func (t *mlxGPUTrainer) EvaluateObjectiveTrainingLossGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error) {
+	if batch.batchSizeOverride > 0 {
+		batchSize = batch.batchSizeOverride
+	}
 	if err := t.FlushGPU(); err != nil {
 		return 0, err
 	}
