@@ -191,6 +191,18 @@ func attachRTDDedicatedGeneratorCorruption(
 }
 
 func sampleRTDGeneratorReplacements(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, bool, error) {
+	if !envTruthy("MIXLAB_RTD_COMPILED_GENERATOR_SAMPLER") {
+		if sampler, ok := trainer.(gpuObjectiveCategoricalEagerSampler); ok {
+			samples, err := sampler.SampleObjectiveOutputCategoricalEagerGPU(batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed)
+			if err != nil {
+				return nil, true, err
+			}
+			if err := validateRTDGeneratorSamples(samples, rows, vocab); err != nil {
+				return nil, true, err
+			}
+			return samples, true, nil
+		}
+	}
 	sampler, ok := trainer.(gpuObjectiveCategoricalSampler)
 	if !ok {
 		return nil, false, nil
@@ -199,15 +211,22 @@ func sampleRTDGeneratorReplacements(trainer GPUTrainer, batch objectiveBatch, ba
 	if err != nil {
 		return nil, true, err
 	}
+	if err := validateRTDGeneratorSamples(samples, rows, vocab); err != nil {
+		return nil, true, err
+	}
+	return samples, true, nil
+}
+
+func validateRTDGeneratorSamples(samples []int, rows, vocab int) error {
 	if len(samples) != rows {
-		return nil, true, fmt.Errorf("RTD generator sampled %d rows, want %d", len(samples), rows)
+		return fmt.Errorf("RTD generator sampled %d rows, want %d", len(samples), rows)
 	}
 	for i, sample := range samples {
 		if sample < 0 || sample >= vocab {
-			return nil, true, fmt.Errorf("RTD generator sampled token %d at row %d outside vocab [0,%d)", sample, i, vocab)
+			return fmt.Errorf("RTD generator sampled token %d at row %d outside vocab [0,%d)", sample, i, vocab)
 		}
 	}
-	return samples, true, nil
+	return nil
 }
 
 func evaluateRTDGeneratorLogits(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, outputName string, shape []int) ([]float32, error) {

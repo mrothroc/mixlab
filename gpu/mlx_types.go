@@ -105,6 +105,13 @@ type MemoryStats struct {
 	PeakBytes   uint64
 }
 
+type TrainerCompileStats struct {
+	TrainingStepCacheHits         uint64
+	TrainingStepCacheMisses       uint64
+	CategoricalSamplerCacheHits   uint64
+	CategoricalSamplerCacheMisses uint64
+}
+
 type Program struct {
 	handle      int64
 	nWeights    int

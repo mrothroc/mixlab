@@ -2,7 +2,15 @@ package train
 
 import "strings"
 
+type hfConfigOptions struct {
+	LayerAggregationScope string
+}
+
 func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) error {
+	return writeHFConfigWithOptions(path, cfg, specials, hfConfigOptions{})
+}
+
+func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizerSpecials, opts hfConfigOptions) error {
 	blocks := hfBlockEntries(cfg, false)
 	maskedBlocks := []map[string]any(nil)
 	architectures := []string{"MixlabForCausalLM"}
@@ -35,6 +43,7 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 		LogitSoftcap:          cfg.LogitSoftcap,
 		MLMHead:               hfExportMLMHead(cfg),
 		LayerAggregation:      hfExportLayerAggregation(cfg),
+		LayerAggregationScope: normalizeHFLayerAggregationScope(opts.LayerAggregationScope),
 		HiddenDropout:         cfg.EffectiveHiddenDropout(),
 		EmbeddingDropout:      cfg.EffectiveEmbeddingDropout(),
 		PositionalEmbedding:   cfg.EffectivePositionalEmbedding(),
@@ -62,6 +71,28 @@ func writeHFConfig(path string, cfg *ArchConfig, specials hfTokenizerSpecials) e
 		},
 	}
 	return writeJSONFile(path, doc)
+}
+
+func normalizeHFLayerAggregationScope(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "trunk", "inline":
+		return ""
+	case "head":
+		return "head"
+	default:
+		return raw
+	}
+}
+
+func hfExportLayerAggregationScope(sourceCfg *ArchConfig) string {
+	if sourceCfg == nil || !sourceCfg.Training.MultiheadEnabled() {
+		return ""
+	}
+	head, ok := multiheadExportHeadSpec(sourceCfg)
+	if !ok || head.LayerAggregation != "dwa" {
+		return ""
+	}
+	return "head"
 }
 
 func hfExportMLMHead(cfg *ArchConfig) string {

@@ -37,6 +37,10 @@ type gpuObjectiveCategoricalSampler interface {
 	SampleObjectiveOutputCategoricalGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error)
 }
 
+type gpuObjectiveCategoricalEagerSampler interface {
+	SampleObjectiveOutputCategoricalEagerGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error)
+}
+
 func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, lr float32) error {
 	if batch.batchSizeOverride > 0 {
 		batchSize = batch.batchSizeOverride

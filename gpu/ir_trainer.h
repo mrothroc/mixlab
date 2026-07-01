@@ -108,12 +108,16 @@ struct IRTrainer {
       std::string,
       std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)>>
       compiled_named_step_cache;
+  uint64_t compiled_named_step_cache_hits = 0;
+  uint64_t compiled_named_step_cache_misses = 0;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_categorical_sampler;
   std::string compiled_categorical_sampler_signature;
   std::unordered_map<
       std::string,
       std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)>>
       compiled_categorical_sampler_cache;
+  uint64_t compiled_categorical_sampler_cache_hits = 0;
+  uint64_t compiled_categorical_sampler_cache_misses = 0;
   bool compiled_categorical_sampler_disabled = false;
   bool compiled_categorical_sampler_fallback_logged = false;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_named_update_step;
@@ -158,7 +162,8 @@ struct IRTrainer {
       int rows,
       int vocab,
       float temperature,
-      uint64_t seed);
+      uint64_t seed,
+      bool allow_compile = true);
   float evaluate_lora_named(const TensorMap& inputs, int rank, int steps, float lr);
   float compute_mean_square_grads_named(const TensorMap& inputs, const std::string& output_name);
   mlx::core::array read_output(const std::string& output_name) const;

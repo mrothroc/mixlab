@@ -44,6 +44,7 @@ type hfConfigJSON struct {
 	LogitSoftcap          float32           `json:"logit_softcap,omitempty"`
 	MLMHead               string            `json:"mlm_head,omitempty"`
 	LayerAggregation      string            `json:"layer_aggregation,omitempty"`
+	LayerAggregationScope string            `json:"layer_aggregation_scope,omitempty"`
 	HiddenDropout         float32           `json:"hidden_dropout,omitempty"`
 	EmbeddingDropout      float32           `json:"embedding_dropout,omitempty"`
 	PositionalEmbedding   string            `json:"positional_embedding,omitempty"`
@@ -148,7 +149,9 @@ func runExportHF(opts ExportHFOptions) error {
 	if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("create HF output directory %q: %w", opts.OutputDir, err)
 	}
-	if err := writeHFConfig(filepath.Join(opts.OutputDir, "config.json"), exportCfg, specials); err != nil {
+	if err := writeHFConfigWithOptions(filepath.Join(opts.OutputDir, "config.json"), exportCfg, specials, hfConfigOptions{
+		LayerAggregationScope: hfExportLayerAggregationScope(cfg),
+	}); err != nil {
 		return err
 	}
 	if err := writeHFTemplates(opts.OutputDir); err != nil {

@@ -388,6 +388,14 @@ func EvalProgramOutputs(program *Program, weightHandles []int64, inputs []Tensor
 }
 
 func TrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, outputName string, rows, vocab int, temperature float32, seed uint64) ([]int32, error) {
+	return trainerSampleCategoricalOutput(t, inputs, outputName, rows, vocab, temperature, seed, true)
+}
+
+func TrainerSampleCategoricalOutputEager(t TrainerHandle, inputs []TensorInput, outputName string, rows, vocab int, temperature float32, seed uint64) ([]int32, error) {
+	return trainerSampleCategoricalOutput(t, inputs, outputName, rows, vocab, temperature, seed, false)
+}
+
+func trainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, outputName string, rows, vocab int, temperature float32, seed uint64, allowCompile bool) ([]int32, error) {
 	if t == 0 {
 		return nil, fmt.Errorf("invalid trainer handle; create the trainer before sampling named outputs")
 	}
@@ -401,10 +409,17 @@ func TrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, outpu
 		return nil, fmt.Errorf("categorical temperature must be > 0, got %g", temperature)
 	}
 	out := make([]int32, rows)
-	if err := mlxTrainerSampleCategoricalOutput(t, inputs, outputName, rows, vocab, temperature, seed, out); err != nil {
+	if err := mlxTrainerSampleCategoricalOutput(t, inputs, outputName, rows, vocab, temperature, seed, allowCompile, out); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func TrainerCompileStatsSnapshot(t TrainerHandle) (TrainerCompileStats, error) {
+	if t == 0 {
+		return TrainerCompileStats{}, fmt.Errorf("invalid trainer handle; create the trainer before reading compile stats")
+	}
+	return mlxTrainerCompileStats(t)
 }
 
 func EvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) (float32, [][]float32, error) {

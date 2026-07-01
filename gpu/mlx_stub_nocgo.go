@@ -133,6 +133,14 @@ func TrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, outpu
 	return nil, errNotBuilt
 }
 
+func TrainerSampleCategoricalOutputEager(t TrainerHandle, inputs []TensorInput, outputName string, rows, vocab int, temperature float32, seed uint64) ([]int32, error) {
+	return nil, errNotBuilt
+}
+
+func TrainerCompileStatsSnapshot(t TrainerHandle) (TrainerCompileStats, error) {
+	return TrainerCompileStats{}, errNotBuilt
+}
+
 func EvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) (float32, [][]float32, error) {
 	return 0, nil, errNotBuilt
 }

@@ -2,6 +2,7 @@ package train
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/mrothroc/mixlab/arch"
 )
@@ -30,9 +31,6 @@ func materializeMultiheadHFExportWeights(exportCfg, sourceCfg *ArchConfig, sourc
 	if head.Objective == arch.ObjectiveBlockDiffusion {
 		return nil, nil, unsupportedHFExport("training.export_head", "block_diffusion heads are native-only")
 	}
-	if head.LayerAggregation == arch.LayerAggregationDWA {
-		return nil, nil, unsupportedHFExport("training.export_head.layer_aggregation", "multihead DWA is a head-level aggregation and is not represented in the current HF template")
-	}
 	if !head.FinalNorm {
 		return nil, nil, unsupportedHFExport("training.export_head.final_norm", "HF export requires the scorer head final norm in v1")
 	}
@@ -56,7 +54,24 @@ func materializeMultiheadHFExportWeights(exportCfg, sourceCfg *ArchConfig, sourc
 		}
 		return nil, fmt.Errorf("HF export requires source multihead weight %q shape=%v", name, want)
 	}
+	var headDWAAlpha []float32
+	dwaAlphaCount := 0
+	if head.LayerAggregation == arch.LayerAggregationDWA {
+		var err error
+		dwaAlphaCount, err = hfLayerAggregationPointCount(exportCfg)
+		if err != nil {
+			return nil, nil, err
+		}
+		if dwaAlphaCount <= 0 {
+			return nil, nil, fmt.Errorf("HF export requires at least one DWA aggregation point")
+		}
+		headDWAAlpha, err = take("head_"+head.Name+"_dwa_alpha", []int{dwaAlphaCount + 1})
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	outWeights := make([][]float32, 0, len(exportShapes)+1)
+	dwaAlphaIndex := 0
 	for _, shape := range exportShapes {
 		sourceName := shape.Name
 		switch shape.Name {
@@ -74,6 +89,14 @@ func materializeMultiheadHFExportWeights(exportCfg, sourceCfg *ArchConfig, sourc
 			sourceName = "head_" + head.Name + "_mlm_output_bias"
 		case "head":
 			sourceName = "head_" + head.Name + "_proj"
+		}
+		if head.LayerAggregation == arch.LayerAggregationDWA && strings.HasPrefix(shape.Name, "dwa_alpha_") {
+			if len(shape.Shape) != 1 || shape.Shape[0] <= 0 || shape.Shape[0] > len(headDWAAlpha) {
+				return nil, nil, fmt.Errorf("HF export DWA alpha %q has invalid shape=%v for source length=%d", shape.Name, shape.Shape, len(headDWAAlpha))
+			}
+			outWeights = append(outWeights, append([]float32(nil), headDWAAlpha[:shape.Shape[0]]...))
+			dwaAlphaIndex++
+			continue
 		}
 		weight, err := take(sourceName, shape.Shape)
 		if err != nil {
@@ -93,6 +116,9 @@ func materializeMultiheadHFExportWeights(exportCfg, sourceCfg *ArchConfig, sourc
 		}
 		outShapes = append(outShapes, WeightShape{Name: "head", Shape: []int{exportCfg.ModelDim, exportCfg.VocabSize}})
 		outWeights = append(outWeights, transposeEmbeddingToHead(outWeights[embedIdx], exportCfg.VocabSize, exportCfg.ModelDim))
+	}
+	if head.LayerAggregation == arch.LayerAggregationDWA && dwaAlphaIndex != dwaAlphaCount {
+		return nil, nil, fmt.Errorf("HF export materialized %d DWA alpha tensors, expected %d", dwaAlphaIndex, dwaAlphaCount)
 	}
 	return outShapes, outWeights, nil
 }

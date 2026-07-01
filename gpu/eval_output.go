@@ -135,7 +135,7 @@ func evalProgramOutputs(program *Program, weightHandles []int64, inputs []Tensor
 	return out, nil
 }
 
-func mlxTrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, outputName string, rows, vocab int, temperature float32, seed uint64, out []int32) error {
+func mlxTrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, outputName string, rows, vocab int, temperature float32, seed uint64, allowCompile bool, out []int32) error {
 	if len(out) != rows {
 		return fmt.Errorf("categorical output buffer length=%d, want rows=%d", len(out), rows)
 	}
@@ -148,7 +148,11 @@ func mlxTrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, ou
 	cName := C.CString(outputName)
 	defer C.free(unsafe.Pointer(cName))
 
-	rc := int(C.mlx_ir_trainer_sample_categorical_output(
+	allow := C.int(0)
+	if allowCompile {
+		allow = C.int(1)
+	}
+	rc := int(C.mlx_ir_trainer_sample_categorical_output_with_options(
 		C.int64_t(t),
 		(*C.mlx_tensor_input)(unsafe.Pointer(&cInputs[0])),
 		C.int(len(cInputs)),
@@ -157,6 +161,7 @@ func mlxTrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, ou
 		C.int(vocab),
 		C.float(temperature),
 		C.uint64_t(seed),
+		allow,
 		(*C.int)(unsafe.Pointer(&out[0])),
 		C.int(len(out)),
 	))
@@ -164,4 +169,24 @@ func mlxTrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, ou
 		return fmt.Errorf("mlx_ir_trainer_sample_categorical_output failed for %q", outputName)
 	}
 	return nil
+}
+
+func mlxTrainerCompileStats(t TrainerHandle) (TrainerCompileStats, error) {
+	var trainHits, trainMisses, samplerHits, samplerMisses C.uint64_t
+	rc := int(C.mlx_ir_trainer_compile_stats(
+		C.int64_t(t),
+		&trainHits,
+		&trainMisses,
+		&samplerHits,
+		&samplerMisses,
+	))
+	if rc != 0 {
+		return TrainerCompileStats{}, fmt.Errorf("mlx_ir_trainer_compile_stats failed")
+	}
+	return TrainerCompileStats{
+		TrainingStepCacheHits:         uint64(trainHits),
+		TrainingStepCacheMisses:       uint64(trainMisses),
+		CategoricalSamplerCacheHits:   uint64(samplerHits),
+		CategoricalSamplerCacheMisses: uint64(samplerMisses),
+	}, nil
 }

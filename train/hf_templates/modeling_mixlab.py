@@ -122,6 +122,35 @@ class MixlabDWAState:
             )
 
 
+class MixlabDWAHeadState:
+    def __init__(self, alphas, static_embeddings):
+        self.alphas = alphas
+        self.history = [static_embeddings]
+        self.step = 0
+
+    def apply(self, x):
+        self.history.append(x)
+        self.step += 1
+        return x
+
+    def finish(self):
+        if self.step != len(self.alphas):
+            raise ValueError(
+                f"DWA captured {self.step} residual points, expected {len(self.alphas)}"
+            )
+        if len(self.alphas) == 0:
+            raise ValueError("head-scoped DWA requires at least one alpha vector")
+        alpha = self.alphas[len(self.alphas) - 1].to(device=self.history[-1].device, dtype=self.history[-1].dtype)
+        if alpha.numel() != len(self.history):
+            raise ValueError(
+                f"head-scoped DWA alpha has {alpha.numel()} entries, expected {len(self.history)}"
+            )
+        out = self.history[0] * alpha[0]
+        for idx in range(1, len(self.history)):
+            out = out + self.history[idx] * alpha[idx]
+        return out
+
+
 def count_dwa_points(block_configs):
     count = 0
     for block in block_configs:
@@ -724,6 +753,15 @@ class MixlabModel(PreTrainedModel):
             self.layer_aggregation = "none"
         if self.layer_aggregation not in ("none", "dwa"):
             raise ValueError(f"unsupported exported layer_aggregation {self.layer_aggregation!r}")
+        self.layer_aggregation_scope = str(getattr(config, "layer_aggregation_scope", "") or "trunk").lower()
+        if self.layer_aggregation == "none":
+            self.layer_aggregation_scope = "none"
+        elif self.layer_aggregation_scope in ("", "default", "inline"):
+            self.layer_aggregation_scope = "trunk"
+        if self.layer_aggregation == "dwa" and self.layer_aggregation_scope not in ("trunk", "head"):
+            raise ValueError(
+                f"unsupported exported layer_aggregation_scope {self.layer_aggregation_scope!r}"
+            )
         self.dwa_alphas = nn.ParameterList()
         if self.layer_aggregation == "dwa":
             for idx in range(count_dwa_points(block_configs)):
@@ -873,7 +911,12 @@ class MixlabModel(PreTrainedModel):
         if input_ids is None:
             raise ValueError("input_ids is required")
         x = self._embed_features(input_ids)
-        dwa = MixlabDWAState(self.dwa_alphas, x) if self.layer_aggregation == "dwa" else None
+        dwa = None
+        if self.layer_aggregation == "dwa":
+            if self.layer_aggregation_scope == "head":
+                dwa = MixlabDWAHeadState(self.dwa_alphas, x)
+            else:
+                dwa = MixlabDWAState(self.dwa_alphas, x)
         relative_embeddings = self.relative_embeddings
         if relative_embeddings is not None and self.relative_layer_norm is not None:
             relative_embeddings = self.relative_layer_norm(relative_embeddings)
@@ -883,7 +926,10 @@ class MixlabModel(PreTrainedModel):
             else:
                 x = block(x, dwa)
         if dwa is not None:
-            dwa.finish()
+            if self.layer_aggregation_scope == "head":
+                x = dwa.finish()
+            else:
+                dwa.finish()
         return self.final_norm(x)
 
     def forward(self, input_ids=None, attention_mask=None, **kwargs):

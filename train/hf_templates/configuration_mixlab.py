@@ -21,6 +21,7 @@ class MixlabConfig(PretrainedConfig):
         logit_softcap=0.0,
         mlm_head="linear",
         layer_aggregation="none",
+        layer_aggregation_scope="",
         hidden_dropout=0.0,
         embedding_dropout=0.0,
         positional_embedding="rope",
@@ -54,6 +55,7 @@ class MixlabConfig(PretrainedConfig):
         self.logit_softcap = logit_softcap
         self.mlm_head = mlm_head
         self.layer_aggregation = layer_aggregation
+        self.layer_aggregation_scope = layer_aggregation_scope
         self.hidden_dropout = hidden_dropout
         self.embedding_dropout = embedding_dropout
         self.positional_embedding = positional_embedding

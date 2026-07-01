@@ -485,6 +485,32 @@ int mlx_ir_trainer_sample_categorical_output(
     uint64_t seed,
     int* out,
     int out_size) {
+  return mlx_ir_trainer_sample_categorical_output_with_options(
+      trainer,
+      inputs,
+      n_inputs,
+      output_name,
+      rows,
+      vocab,
+      temperature,
+      seed,
+      1,
+      out,
+      out_size);
+}
+
+int mlx_ir_trainer_sample_categorical_output_with_options(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char* output_name,
+    int rows,
+    int vocab,
+    float temperature,
+    uint64_t seed,
+    int allow_compile,
+    int* out,
+    int out_size) {
   if (!inputs || n_inputs <= 0 || !output_name || output_name[0] == '\0' ||
       rows <= 0 || vocab <= 0 || !(temperature > 0.0f) || !std::isfinite(temperature) ||
       !out || out_size != rows) {
@@ -505,7 +531,8 @@ int mlx_ir_trainer_sample_categorical_output(
         rows,
         vocab,
         temperature,
-        seed);
+        seed,
+        allow_compile != 0);
     if (static_cast<int>(sampled.size()) != out_size) {
       return -1;
     }
@@ -516,6 +543,31 @@ int mlx_ir_trainer_sample_categorical_output(
     return -1;
   } catch (...) {
     std::cerr << "[mlx_bridge] mlx_ir_trainer_sample_categorical_output unknown exception" << std::endl;
+    return -1;
+  }
+}
+
+int mlx_ir_trainer_compile_stats(
+    int64_t trainer,
+    uint64_t* training_step_hits,
+    uint64_t* training_step_misses,
+    uint64_t* categorical_sampler_hits,
+    uint64_t* categorical_sampler_misses) {
+  if (!training_step_hits || !training_step_misses ||
+      !categorical_sampler_hits || !categorical_sampler_misses) {
+    return -1;
+  }
+  try {
+    auto* t = get_ir_trainer(trainer);
+    if (!t) {
+      return -1;
+    }
+    *training_step_hits = t->compiled_named_step_cache_hits;
+    *training_step_misses = t->compiled_named_step_cache_misses;
+    *categorical_sampler_hits = t->compiled_categorical_sampler_cache_hits;
+    *categorical_sampler_misses = t->compiled_categorical_sampler_cache_misses;
+    return 0;
+  } catch (...) {
     return -1;
   }
 }

@@ -2,6 +2,7 @@ package train
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,15 +57,18 @@ func TestExportHFMultiheadExportsScorerOnly(t *testing.T) {
 	}
 }
 
-func TestExportHFMultiheadRejectsHeadLevelDWA(t *testing.T) {
+func TestExportHFMultiheadExportsHeadLevelDWA(t *testing.T) {
 	dir := t.TempDir()
-	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, `{
 		"name": "hf_multihead_dwa",
 		"model_dim": 16,
 		"vocab_size": 32,
 		"seq_len": 4,
 		"tie_embeddings": true,
-		"blocks": [{"type": "plain", "heads": 2}],
+		"blocks": [
+			{"type": "plain", "heads": 2},
+			{"type": "geglu"}
+		],
 		"training": {
 			"objective": "multihead",
 			"steps": 1,
@@ -77,10 +81,54 @@ func TestExportHFMultiheadRejectsHeadLevelDWA(t *testing.T) {
 				 "diffusion": {"block_size": 2}}
 			]
 		}
-	}`)
-	err := RunExportHF(ExportHFOptions{ConfigPath: cfgPath, SafetensorsLoad: weightsPath, OutputDir: filepath.Join(dir, "hf_out"), TokenizerSource: tokenizerDir})
-	if err == nil || !strings.Contains(err.Error(), "training.export_head.layer_aggregation") {
-		t.Fatalf("RunExportHF error=%v, want layer_aggregation rejection", err)
+	}`, func(weights [][]float32, shapes []WeightShape) error {
+		idx := weightShapeIndex(shapes, "head_scorer_dwa_alpha")
+		if idx < 0 {
+			return os.ErrNotExist
+		}
+		copy(weights[idx], []float32{0.125, 0.25, 0.375, 0.5})
+		return nil
+	})
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{ConfigPath: cfgPath, SafetensorsLoad: weightsPath, OutputDir: outDir, TokenizerSource: tokenizerDir}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+	var hfCfg hfConfigJSON
+	readJSONFileForTest(t, filepath.Join(outDir, "config.json"), &hfCfg)
+	if hfCfg.LayerAggregation != "dwa" {
+		t.Fatalf("layer_aggregation=%q, want dwa", hfCfg.LayerAggregation)
+	}
+	if hfCfg.LayerAggregationScope != "head" {
+		t.Fatalf("layer_aggregation_scope=%q, want head", hfCfg.LayerAggregationScope)
+	}
+	var mapping []hfWeightMapping
+	readJSONFileForTest(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+	for _, want := range []string{"dwa_alphas.0", "dwa_alphas.1", "dwa_alphas.2"} {
+		if !containsHFWeight(mapping, want) {
+			t.Fatalf("weight_map missing %q: %+v", want, mapping)
+		}
+	}
+	hfWeights, err := loadHFWeightsForParity(filepath.Join(outDir, "model.safetensors"))
+	if err != nil {
+		t.Fatalf("loadHFWeightsForParity: %v", err)
+	}
+	want := [][]float64{
+		{0.125, 0.25},
+		{0.125, 0.25, 0.375},
+		{0.125, 0.25, 0.375, 0.5},
+	}
+	names := []string{"dwa_alphas.0", "dwa_alphas.1", "dwa_alphas.2"}
+	for i, wantAlpha := range want {
+		name := names[i]
+		got := hfWeights[name]
+		if len(got) != len(wantAlpha) {
+			t.Fatalf("%s length=%d want %d", name, len(got), len(wantAlpha))
+		}
+		for j := range wantAlpha {
+			if math.Abs(got[j]-wantAlpha[j]) > 1e-7 {
+				t.Fatalf("%s[%d]=%g want %g", name, j, got[j], wantAlpha[j])
+			}
+		}
 	}
 }
 

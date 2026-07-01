@@ -241,6 +241,23 @@ func (t *rtdSamplerOnlyTrainer) EvaluateLoRATTTGPU([]int, []int, int, int, int, 
 }
 func (t *rtdSamplerOnlyTrainer) CloseTrainer() {}
 
+type rtdDualSamplerTrainer struct {
+	rtdSamplerOnlyTrainer
+	eagerSamples []int
+	eagerCalls   int
+}
+
+func (t *rtdDualSamplerTrainer) SampleObjectiveOutputCategoricalEagerGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, _ float64, _ uint64) ([]int, error) {
+	t.eagerCalls++
+	t.batch = cloneObjectiveBatchForRTDTest(batch)
+	t.batchSize = batchSize
+	t.seqLen = seqLen
+	t.outputName = outputName
+	t.rows = rows
+	t.vocab = vocab
+	return append([]int(nil), t.eagerSamples...), nil
+}
+
 func cloneObjectiveBatchForRTDTest(batch objectiveBatch) objectiveBatch {
 	return objectiveBatch{
 		x:                    append([]int(nil), batch.x...),
@@ -251,6 +268,88 @@ func cloneObjectiveBatchForRTDTest(batch objectiveBatch) objectiveBatch {
 		rtdGeneratorX:        append([]int(nil), batch.rtdGeneratorX...),
 		rtdGeneratorY:        append([]int(nil), batch.rtdGeneratorY...),
 		rtdGeneratorLossMask: append([]float32(nil), batch.rtdGeneratorLossMask...),
+	}
+}
+
+func TestRTDCorruptionPrefersEagerVectorizedSampler(t *testing.T) {
+	t.Setenv("MIXLAB_RTD_COMPILED_GENERATOR_SAMPLER", "")
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"seed": 11,
+		"mlm_mask_prob": 1.0,
+		"mlm_mask_token_id": 31,
+		"rtd": {"generator": {"type": "dedicated", "model_dim": 8, "layers": 1, "heads": 2}, "mask_prob": 1.0, "sample_temperature": 1.0},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	raw := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 9, 6, 7, 8, 9},
+	}
+	prepared, err := prepareMultiheadBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareMultiheadBatch: %v", err)
+	}
+	trainer := &rtdDualSamplerTrainer{
+		rtdSamplerOnlyTrainer: rtdSamplerOnlyTrainer{samples: []int{7, 7, 7, 7, 7, 7, 7, 7}},
+		eagerSamples:          []int{raw.x[0], 9, 9, 9, 9, 9, 9, 9},
+	}
+	got, err := maybeAttachRTDCorruption(trainer, cfg, raw, 3, prepared, cfg.Training.BatchTokens/cfg.SeqLen, cfg.SeqLen, arch.ObjectiveMultihead)
+	if err != nil {
+		t.Fatalf("maybeAttachRTDCorruption: %v", err)
+	}
+	if trainer.eagerCalls != 1 || trainer.calls != 0 {
+		t.Fatalf("sampler calls eager=%d compiled=%d, want eager only", trainer.eagerCalls, trainer.calls)
+	}
+	rtdOffset := cfg.Training.BatchTokens
+	if got.x[rtdOffset+1] != 9 || got.y[rtdOffset+1] != 0 {
+		t.Fatalf("RTD corruption came from wrong sampler x/y=%d/%d, want eager sample 9/0", got.x[rtdOffset+1], got.y[rtdOffset+1])
+	}
+}
+
+func TestRTDCorruptionCanOptIntoCompiledSampler(t *testing.T) {
+	t.Setenv("MIXLAB_RTD_COMPILED_GENERATOR_SAMPLER", "1")
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"seed": 11,
+		"mlm_mask_prob": 1.0,
+		"mlm_mask_token_id": 31,
+		"rtd": {"generator": {"type": "dedicated", "model_dim": 8, "layers": 1, "heads": 2}, "mask_prob": 1.0, "sample_temperature": 1.0},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	raw := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 9, 6, 7, 8, 9},
+	}
+	prepared, err := prepareMultiheadBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareMultiheadBatch: %v", err)
+	}
+	trainer := &rtdDualSamplerTrainer{
+		rtdSamplerOnlyTrainer: rtdSamplerOnlyTrainer{samples: []int{raw.x[0], 7, 7, 7, 7, 7, 7, 7}},
+		eagerSamples:          []int{9, 9, 9, 9, 9, 9, 9, 9},
+	}
+	got, err := maybeAttachRTDCorruption(trainer, cfg, raw, 3, prepared, cfg.Training.BatchTokens/cfg.SeqLen, cfg.SeqLen, arch.ObjectiveMultihead)
+	if err != nil {
+		t.Fatalf("maybeAttachRTDCorruption: %v", err)
+	}
+	if trainer.calls != 1 || trainer.eagerCalls != 0 {
+		t.Fatalf("sampler calls eager=%d compiled=%d, want compiled only", trainer.eagerCalls, trainer.calls)
+	}
+	rtdOffset := cfg.Training.BatchTokens
+	if got.x[rtdOffset+1] != 7 || got.y[rtdOffset+1] != 0 {
+		t.Fatalf("RTD corruption came from wrong sampler x/y=%d/%d, want compiled sample 7/0", got.x[rtdOffset+1], got.y[rtdOffset+1])
 	}
 }
 

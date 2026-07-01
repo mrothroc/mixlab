@@ -220,6 +220,24 @@ int mlx_ir_trainer_sample_categorical_output(
     uint64_t seed,
     int* out,
     int out_size);
+int mlx_ir_trainer_sample_categorical_output_with_options(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char* output_name,
+    int rows,
+    int vocab,
+    float temperature,
+    uint64_t seed,
+    int allow_compile,
+    int* out,
+    int out_size);
+int mlx_ir_trainer_compile_stats(
+    int64_t trainer,
+    uint64_t* training_step_hits,
+    uint64_t* training_step_misses,
+    uint64_t* categorical_sampler_hits,
+    uint64_t* categorical_sampler_misses);
 float mlx_ir_trainer_evaluate(int64_t trainer, const int* tokens, const int* targets, int B, int T);
 int mlx_ir_trainer_num_weights(int64_t trainer);
 int mlx_ir_trainer_weight_size(int64_t trainer, int weight_idx);

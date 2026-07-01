@@ -92,6 +92,23 @@ bool program_has_fused_canonical_mamba3_block(const IRProgram& program) {
   return program_has_op(program, OP_MAMBA3_CANONICAL_BLOCK);
 }
 
+void log_compile_cache_event(
+    const char* kind,
+    const char* event,
+    int step_count,
+    size_t cache_size,
+    const std::string& signature) {
+  if (!env_truthy("MIXLAB_MLX_COMPILE_LOG")) {
+    return;
+  }
+  std::cerr << "[mlx_ir] compile-cache " << kind
+            << " " << event
+            << " step=" << step_count
+            << " cache_size=" << cache_size
+            << " signature_len=" << signature.size()
+            << std::endl;
+}
+
 bool use_compiled_training_step(const IRProgram& program) {
   if (env_truthy("MIXLAB_FORCE_COMPILED_STEP")) {
     return true;
@@ -2545,8 +2562,22 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       if (!compiled_named_step || compiled_named_step_signature != signature) {
         auto cached = compiled_named_step_cache.find(signature);
         if (cached != compiled_named_step_cache.end()) {
+          compiled_named_step_cache_hits++;
+          log_compile_cache_event(
+              "training_step",
+              "hit",
+              step_count,
+              compiled_named_step_cache.size(),
+              signature);
           compiled_named_step = cached->second;
         } else {
+          compiled_named_step_cache_misses++;
+          log_compile_cache_event(
+              "training_step",
+              "miss",
+              step_count,
+              compiled_named_step_cache.size(),
+              signature);
           const bool compiled_checkpoint_step =
               checkpoint_step &&
               (!program_has_fused_canonical_mamba3_block(program) ||
@@ -2569,6 +2600,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
           compiled_named_step_cache[signature] = compiled_named_step;
         }
         compiled_named_step_signature = signature;
+      } else {
+        compiled_named_step_cache_hits++;
       }
       const auto grad_t0 = HostClock::now();
       step_out = compiled_named_step(args);
@@ -2956,7 +2989,8 @@ std::vector<int32_t> IRTrainer::sample_categorical_output(
     int rows,
     int vocab,
     float temperature,
-    uint64_t seed) {
+    uint64_t seed,
+    bool allow_compile) {
   flush();
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
@@ -3005,15 +3039,30 @@ std::vector<int32_t> IRTrainer::sample_categorical_output(
   };
 
   mx::array sampled = mx::array(0, mx::int32);
-  if (!compiled_categorical_sampler_disabled &&
+  if (allow_compile &&
+      !compiled_categorical_sampler_disabled &&
       !env_truthy("MIXLAB_DISABLE_COMPILED_CATEGORICAL_SAMPLER")) {
     try {
       if (!compiled_categorical_sampler ||
           compiled_categorical_sampler_signature != signature) {
         auto cached = compiled_categorical_sampler_cache.find(signature);
         if (cached != compiled_categorical_sampler_cache.end()) {
+          compiled_categorical_sampler_cache_hits++;
+          log_compile_cache_event(
+              "categorical_sampler",
+              "hit",
+              step_count,
+              compiled_categorical_sampler_cache.size(),
+              signature);
           compiled_categorical_sampler = cached->second;
         } else {
+          compiled_categorical_sampler_cache_misses++;
+          log_compile_cache_event(
+              "categorical_sampler",
+              "miss",
+              step_count,
+              compiled_categorical_sampler_cache.size(),
+              signature);
           const auto local_input_names = input_names;
           const auto local_output_name = output_name;
           compiled_categorical_sampler = mx::compile(
@@ -3050,6 +3099,8 @@ std::vector<int32_t> IRTrainer::sample_categorical_output(
           compiled_categorical_sampler_cache[signature] = compiled_categorical_sampler;
         }
         compiled_categorical_sampler_signature = signature;
+      } else {
+        compiled_categorical_sampler_cache_hits++;
       }
       auto out = compiled_categorical_sampler(args);
       if (out.size() != 1) {

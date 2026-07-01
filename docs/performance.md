@@ -82,6 +82,23 @@ Fields:
 If `data` is consistently high, the loader cannot keep up with the GPU. If
 `gpu` dominates and `data` is near zero, the training pipeline is healthy.
 
+For RTD/ELECTRA runs, Mixlab keeps replacement sampling vectorized on device
+but avoids compiling that sampler by default so it does not compete with the
+main training-step graph cache. To compare the old compiled sampler path:
+
+```bash
+MIXLAB_RTD_COMPILED_GENERATOR_SAMPLER=1 ./mixlab -mode arch ...
+```
+
+To inspect MLX compiled-graph cache behavior, enable:
+
+```bash
+MIXLAB_MLX_COMPILE_LOG=1 ./mixlab -mode arch ...
+```
+
+This prints cache hit/miss lines for the main compiled training step and the
+categorical sampler.
+
 ## Go profiling
 
 mixlab uses standard Go profiling. No extra tooling is needed when profiling is

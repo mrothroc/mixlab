@@ -581,6 +581,14 @@ func (t *mlxGPUTrainer) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, se
 }
 
 func (t *mlxGPUTrainer) SampleObjectiveOutputCategoricalGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error) {
+	return t.sampleObjectiveOutputCategorical(batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed, true)
+}
+
+func (t *mlxGPUTrainer) SampleObjectiveOutputCategoricalEagerGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error) {
+	return t.sampleObjectiveOutputCategorical(batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed, false)
+}
+
+func (t *mlxGPUTrainer) sampleObjectiveOutputCategorical(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64, allowCompile bool) ([]int, error) {
 	if batch.batchSizeOverride > 0 {
 		batchSize = batch.batchSizeOverride
 	}
@@ -591,7 +599,12 @@ func (t *mlxGPUTrainer) SampleObjectiveOutputCategoricalGPU(batch objectiveBatch
 	if err != nil {
 		return nil, err
 	}
-	raw, err := gpu.TrainerSampleCategoricalOutput(t.handle, inputs, outputName, rows, vocab, float32(temperature), seed)
+	var raw []int32
+	if allowCompile {
+		raw, err = gpu.TrainerSampleCategoricalOutput(t.handle, inputs, outputName, rows, vocab, float32(temperature), seed)
+	} else {
+		raw, err = gpu.TrainerSampleCategoricalOutputEager(t.handle, inputs, outputName, rows, vocab, float32(temperature), seed)
+	}
 	if err != nil {
 		return nil, err
 	}
