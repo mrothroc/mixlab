@@ -3,6 +3,7 @@
 package train
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -329,6 +330,49 @@ func TestExportHFNativePythonParity(t *testing.T) {
 			}`,
 		},
 		{
+			// Multihead export: compare the standard scorer-head HF export
+			// against the native eval graph for that export head's single-head
+			// inference view, not the raw multihead training config.
+			name: "multihead_mntp_diffusion_causal_scorer",
+			config: `{
+				"name": "multihead_mntp_diffusion_causal_scorer",
+				"model_dim": 8, "vocab_size": 11, "seq_len": 4, "mlp_mult": 2.0,
+				"tie_embeddings": true,
+				"blocks": [
+					{"type": "plain", "heads": 2},
+					{"type": "swiglu"}
+				],
+				"training": {
+					"steps": 1,
+					"batch_tokens": 4,
+					"seed": 9595,
+					"objective": "multihead",
+					"mlm_mask_token_id": 1,
+					"export_head": "mntp",
+					"diffusion_head": "diff",
+					"heads": [
+						{
+							"name": "mntp",
+							"objective": "mntp",
+							"loss_weight": 0.7,
+							"output_head": "bert_mlm",
+							"tie_embeddings": true,
+							"final_norm": true
+						},
+						{
+							"name": "diff",
+							"objective": "block_diffusion",
+							"loss_weight": 0.3,
+							"output_head": "linear",
+							"tie_embeddings": false,
+							"final_norm": true,
+							"diffusion": {"block_size": 2}
+						}
+					]
+				}
+				}`,
+		},
+		{
 			// XSA projection and sparse per-head attention output gate.
 			name: "xsa_sparse_gate",
 			config: `{
@@ -422,7 +466,7 @@ func runNativePythonParityCase(t *testing.T, python, script, config string) {
 		inputIDs[i] = int(window[i])
 	}
 
-	nativeLogits := nativeMLXLogitsForParity(t, cfgPath, weightsPath, window, seqLen, vocab)
+	nativeLogits := nativeMLXLogitsForParity(t, cfgPath, weightsPath, outDir, window, seqLen, vocab)
 
 	if err := writeJSONFile(filepath.Join(outDir, "parity_tokens.json"), map[string]any{
 		"input_ids": [][]int{inputIDs},
@@ -448,8 +492,15 @@ func runNativePythonParityCase(t *testing.T, python, script, config string) {
 
 // nativeMLXLogitsForParity returns row-major [seqLen*vocab] logits from the
 // native MLX eval forward for the single sequence window[:seqLen].
-func nativeMLXLogitsForParity(t *testing.T, cfgPath, weightsPath string, window []uint16, seqLen, vocab int) []float32 {
+func nativeMLXLogitsForParity(t *testing.T, cfgPath, weightsPath, hfOutDir string, window []uint16, seqLen, vocab int) []float32 {
 	t.Helper()
+	cfg, err := LoadArchConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadArchConfig: %v", err)
+	}
+	if cfg.Training.MultiheadEnabled() {
+		cfgPath, weightsPath = writeHFExportInferenceFixtureForParity(t, cfg, hfOutDir)
+	}
 	sess, err := NewInferenceSession(cfgPath, weightsPath)
 	if err != nil {
 		t.Fatalf("NewInferenceSession: %v", err)
@@ -463,4 +514,57 @@ func nativeMLXLogitsForParity(t *testing.T, cfgPath, weightsPath string, window 
 		t.Fatalf("native logits length=%d, want %d", len(logits), seqLen*vocab)
 	}
 	return logits
+}
+
+func writeHFExportInferenceFixtureForParity(t *testing.T, cfg *ArchConfig, hfOutDir string) (string, string) {
+	t.Helper()
+	exportCfg := hfExportInferenceConfig(cfg)
+	if exportCfg == nil {
+		t.Fatal("hfExportInferenceConfig returned nil")
+	}
+	dir := filepath.Dir(hfOutDir)
+	cfgPath := filepath.Join(dir, "hf_export_inference_config.json")
+	if err := writeJSONFile(cfgPath, exportCfg); err != nil {
+		t.Fatalf("write export inference config: %v", err)
+	}
+	weightsPath := filepath.Join(dir, "hf_export_inference_weights.safetensors")
+	writeNativeSafetensorsFromHFExportForParity(t, exportCfg, hfOutDir, weightsPath)
+	return cfgPath, weightsPath
+}
+
+func writeNativeSafetensorsFromHFExportForParity(t *testing.T, cfg *ArchConfig, hfOutDir, outPath string) {
+	t.Helper()
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes(export inference config): %v", err)
+	}
+	var mappings []hfWeightMapping
+	readJSON(t, filepath.Join(hfOutDir, "weight_map.json"), &mappings)
+	byMixlab := make(map[string]hfWeightMapping, len(mappings))
+	for _, m := range mappings {
+		byMixlab[m.Mixlab] = m
+	}
+	tensors, err := loadSafetensors(filepath.Join(hfOutDir, "model.safetensors"))
+	if err != nil {
+		t.Fatalf("load exported model.safetensors: %v", err)
+	}
+	weights := make([][]float32, len(shapes))
+	for i, shape := range shapes {
+		mixlabName := fmt.Sprintf("w%d_%s", i, shape.Name)
+		mapping, ok := byMixlab[mixlabName]
+		if !ok {
+			t.Fatalf("exported HF weight map missing %q", mixlabName)
+		}
+		if !intSlicesEqual(mapping.Shape, shape.Shape) {
+			t.Fatalf("exported HF weight %q shape=%v, want %v", mixlabName, mapping.Shape, shape.Shape)
+		}
+		weight, err := decodeSafetensorFloat32(mapping.HF, shape.Shape, tensors)
+		if err != nil {
+			t.Fatalf("decode exported HF tensor for %q (%s): %v", mixlabName, mapping.HF, err)
+		}
+		weights[i] = weight
+	}
+	if err := exportSafetensors(outPath, cfg, shapes, weights); err != nil {
+		t.Fatalf("export native safetensors for parity: %v", err)
+	}
 }
