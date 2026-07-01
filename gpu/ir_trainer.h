@@ -108,6 +108,14 @@ struct IRTrainer {
       std::string,
       std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)>>
       compiled_named_step_cache;
+  std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_categorical_sampler;
+  std::string compiled_categorical_sampler_signature;
+  std::unordered_map<
+      std::string,
+      std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)>>
+      compiled_categorical_sampler_cache;
+  bool compiled_categorical_sampler_disabled = false;
+  bool compiled_categorical_sampler_fallback_logged = false;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_named_update_step;
   std::string compiled_named_update_step_signature;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_mamba3_optimizer_update;

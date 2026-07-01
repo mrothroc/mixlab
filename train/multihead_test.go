@@ -4,6 +4,8 @@ import (
 	"math"
 	"reflect"
 	"testing"
+
+	"github.com/mrothroc/mixlab/arch"
 )
 
 func TestPrepareMultiheadBatchExpandsRowsAndBoundaries(t *testing.T) {
@@ -195,6 +197,109 @@ func TestRTDGeneratorSampledCorruptionForMNTP(t *testing.T) {
 	}
 }
 
+type rtdSamplerOnlyTrainer struct {
+	samples    []int
+	calls      int
+	batch      objectiveBatch
+	batchSize  int
+	seqLen     int
+	outputName string
+	rows       int
+	vocab      int
+}
+
+func (t *rtdSamplerOnlyTrainer) SampleObjectiveOutputCategoricalGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, _ float64, _ uint64) ([]int, error) {
+	t.calls++
+	t.batch = cloneObjectiveBatchForRTDTest(batch)
+	t.batchSize = batchSize
+	t.seqLen = seqLen
+	t.outputName = outputName
+	t.rows = rows
+	t.vocab = vocab
+	return append([]int(nil), t.samples...), nil
+}
+
+func (t *rtdSamplerOnlyTrainer) TrainStepGPU([]int, []int, int, int, float32) (float32, error) {
+	return 0, nil
+}
+func (t *rtdSamplerOnlyTrainer) SubmitStepGPU([]int, []int, int, int, float32) error { return nil }
+func (t *rtdSamplerOnlyTrainer) CollectLossGPU() (float32, error)                    { return 0, nil }
+func (t *rtdSamplerOnlyTrainer) FlushGPU() error                                     { return nil }
+func (t *rtdSamplerOnlyTrainer) SetQATGPU(string) error                              { return nil }
+func (t *rtdSamplerOnlyTrainer) SetWeightGPU(string, []float32) error                { return nil }
+func (t *rtdSamplerOnlyTrainer) EvaluateObjectiveGPU(objectiveBatch, int, int) (float32, error) {
+	return 0, nil
+}
+func (t *rtdSamplerOnlyTrainer) EvaluateGPU([]int, []int, int, int) (float32, error) {
+	return 0, nil
+}
+func (t *rtdSamplerOnlyTrainer) EvaluatePerTokenGPU([]int, []int, int, int) ([]float32, error) {
+	return nil, nil
+}
+func (t *rtdSamplerOnlyTrainer) EvaluateLoRATTTGPU([]int, []int, int, int, int, float32, int) (float32, error) {
+	return 0, nil
+}
+func (t *rtdSamplerOnlyTrainer) CloseTrainer() {}
+
+func cloneObjectiveBatchForRTDTest(batch objectiveBatch) objectiveBatch {
+	return objectiveBatch{
+		x:                    append([]int(nil), batch.x...),
+		y:                    append([]int(nil), batch.y...),
+		lossMask:             append([]float32(nil), batch.lossMask...),
+		diffusionBlockStart:  append([]int32(nil), batch.diffusionBlockStart...),
+		diffusionBlockEnd:    append([]int32(nil), batch.diffusionBlockEnd...),
+		rtdGeneratorX:        append([]int(nil), batch.rtdGeneratorX...),
+		rtdGeneratorY:        append([]int(nil), batch.rtdGeneratorY...),
+		rtdGeneratorLossMask: append([]float32(nil), batch.rtdGeneratorLossMask...),
+	}
+}
+
+func TestRTDCorruptionSamplesFromActiveProgramWithoutSwitcher(t *testing.T) {
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"seed": 11,
+		"mlm_mask_prob": 1.0,
+		"mlm_mask_token_id": 31,
+		"rtd": {"generator": "tied", "generator_head": "scorer", "mask_prob": 1.0, "sample_temperature": 1.0},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	raw := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 9, 6, 7, 8, 9},
+	}
+	prepared, err := prepareMultiheadBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareMultiheadBatch: %v", err)
+	}
+	trainer := &rtdSamplerOnlyTrainer{samples: []int{raw.x[1], 9, 9, 9, 9, 9, 9, 9}}
+	got, err := maybeAttachRTDCorruption(trainer, cfg, raw, 3, prepared, cfg.Training.BatchTokens/cfg.SeqLen, cfg.SeqLen, arch.ObjectiveMultihead)
+	if err != nil {
+		t.Fatalf("maybeAttachRTDCorruption: %v", err)
+	}
+	if trainer.calls != 1 {
+		t.Fatalf("sampler calls=%d, want 1", trainer.calls)
+	}
+	if trainer.outputName != "head_scorer_logits" {
+		t.Fatalf("sample output=%q, want head_scorer_logits", trainer.outputName)
+	}
+	if trainer.rows != cfg.Training.BatchTokens || trainer.vocab != cfg.VocabSize {
+		t.Fatalf("sample shape rows=%d vocab=%d, want %d/%d", trainer.rows, trainer.vocab, cfg.Training.BatchTokens, cfg.VocabSize)
+	}
+	rtdOffset := cfg.Training.BatchTokens
+	if got.x[rtdOffset+1] != 2 || got.y[rtdOffset+1] != 1 {
+		t.Fatalf("same-token replacement x/y=%d/%d, want original", got.x[rtdOffset+1], got.y[rtdOffset+1])
+	}
+	if got.x[rtdOffset+2] != 9 || got.y[rtdOffset+2] != 0 {
+		t.Fatalf("replacement x/y=%d/%d, want 9/0", got.x[rtdOffset+2], got.y[rtdOffset+2])
+	}
+}
+
 func TestRTDDedicatedGeneratorCorruptionAndInputs(t *testing.T) {
 	cfg := parseTrainMultiheadConfig(t, `"training": {
 		"objective": "multihead",
@@ -255,6 +360,55 @@ func TestRTDDedicatedGeneratorCorruptionAndInputs(t *testing.T) {
 		if prepared.lossMask[rtdOffset+i] != 1 {
 			t.Fatalf("RTD loss mask[%d]=%g, want 1", i, prepared.lossMask[rtdOffset+i])
 		}
+	}
+}
+
+func TestRTDDedicatedCorruptionSamplesFromActiveProgramWithoutSwitcher(t *testing.T) {
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"seed": 11,
+		"mlm_mask_prob": 1.0,
+		"mlm_mask_token_id": 31,
+		"rtd": {"generator": {"type": "dedicated", "model_dim": 8, "layers": 1, "heads": 2}, "mask_prob": 1.0, "sample_temperature": 1.0},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	raw := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 9, 6, 7, 8, 9},
+	}
+	prepared, err := prepareMultiheadBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareMultiheadBatch: %v", err)
+	}
+	trainer := &rtdSamplerOnlyTrainer{samples: []int{raw.x[0], 9, 9, 9, 9, 9, 9, 9}}
+	got, err := maybeAttachRTDCorruption(trainer, cfg, raw, 3, prepared, cfg.Training.BatchTokens/cfg.SeqLen, cfg.SeqLen, arch.ObjectiveMultihead)
+	if err != nil {
+		t.Fatalf("maybeAttachRTDCorruption: %v", err)
+	}
+	if trainer.calls != 1 {
+		t.Fatalf("sampler calls=%d, want 1", trainer.calls)
+	}
+	if trainer.outputName != arch.RTDGeneratorLogitsName {
+		t.Fatalf("sample output=%q, want %s", trainer.outputName, arch.RTDGeneratorLogitsName)
+	}
+	if len(trainer.batch.rtdGeneratorX) != cfg.Training.BatchTokens ||
+		len(trainer.batch.rtdGeneratorY) != cfg.Training.BatchTokens ||
+		len(trainer.batch.rtdGeneratorLossMask) != cfg.Training.BatchTokens {
+		t.Fatalf("dedicated generator inputs lengths x=%d y=%d mask=%d, want %d",
+			len(trainer.batch.rtdGeneratorX), len(trainer.batch.rtdGeneratorY), len(trainer.batch.rtdGeneratorLossMask), cfg.Training.BatchTokens)
+	}
+	rtdOffset := cfg.Training.BatchTokens
+	if got.x[rtdOffset] != 1 || got.y[rtdOffset] != 1 {
+		t.Fatalf("same-token replacement x/y=%d/%d, want original", got.x[rtdOffset], got.y[rtdOffset])
+	}
+	if got.x[rtdOffset+1] != 9 || got.y[rtdOffset+1] != 0 {
+		t.Fatalf("replacement x/y=%d/%d, want 9/0", got.x[rtdOffset+1], got.y[rtdOffset+1])
 	}
 }
 

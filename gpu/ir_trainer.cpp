@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <numeric>
@@ -1638,6 +1639,64 @@ std::string named_step_signature(
   return oss.str();
 }
 
+std::string categorical_sampler_signature(
+    const IRProgram& program,
+    ComputeDType compute_dtype,
+    const TensorMap& inputs,
+    const std::vector<std::string>& input_names,
+    const std::string& output_name,
+    int rows,
+    int vocab,
+    float temperature,
+    size_t n_weights) {
+  std::ostringstream oss;
+  oss << named_step_signature(
+             program,
+             QATMode::None,
+             compute_dtype,
+             inputs,
+             input_names,
+             std::vector<std::string>{output_name},
+             n_weights)
+      << "|categorical_sampler=1"
+      << "|rows=" << rows
+      << "|vocab=" << vocab
+      << "|temperature=" << std::setprecision(9) << temperature;
+  return oss.str();
+}
+
+mx::array sample_categorical_logits(
+    const mx::array& logits,
+    int rows,
+    int vocab,
+    float temperature,
+    const mx::array& key) {
+  if (logits.ndim() != 2 || logits.shape(0) != rows || logits.shape(1) != vocab) {
+    throw std::runtime_error("categorical sampler output shape mismatch");
+  }
+
+  auto finite = mx::isfinite(logits);
+  auto positive_inf = mx::logical_and(mx::isinf(logits), logits > mx::array(0.0f, mx::float32));
+  auto finite_count = mx::sum(mx::astype(finite, mx::float32), 1, true);
+  auto positive_inf_count = mx::sum(mx::astype(positive_inf, mx::float32), 1, true);
+  auto has_finite = finite_count > mx::array(0.0f, mx::float32);
+  auto has_positive_inf = positive_inf_count > mx::array(0.0f, mx::float32);
+
+  auto scaled = logits / mx::array(temperature, mx::float32);
+  auto minus_large = mx::full_like(scaled, -1e9f);
+  auto finite_logits = mx::where(finite, scaled, minus_large);
+  auto inf_logits = mx::where(positive_inf, mx::zeros_like(scaled), minus_large);
+  auto uniform_logits = mx::zeros_like(scaled);
+  auto sample_logits = mx::where(
+      has_positive_inf,
+      inf_logits,
+      mx::where(has_finite, finite_logits, uniform_logits));
+
+  return mx::reshape(
+      mx::astype(mx::random::categorical(sample_logits, 1, std::make_optional(key)), mx::int32),
+      {static_cast<mx::ShapeElem>(rows)});
+}
+
 bool named_step_metadata_matches(const IRTrainer& trainer, const TensorMap& inputs) {
   if (!trainer.cached_named_step_metadata_valid ||
       trainer.cached_named_step_input_names.size() != inputs.size()) {
@@ -2908,34 +2967,113 @@ std::vector<int32_t> IRTrainer::sample_categorical_output(
   if (rows <= 0 || vocab <= 0 || !(temperature > 0.0f) || !std::isfinite(temperature)) {
     throw std::runtime_error("invalid categorical sampler shape or temperature");
   }
-  auto effective = effective_compute_weights(weights, compute_dtype);
-  auto logits = mx::astype(ir_interpret(program, effective, inputs, output_name, false), mx::float32);
-  if (logits.ndim() != 2 || logits.shape(0) != rows || logits.shape(1) != vocab) {
-    throw std::runtime_error(
-        "categorical sampler output shape mismatch for " + output_name);
+
+  const auto input_names = sorted_input_names(inputs);
+  auto input_arrays_by_name = tensor_map_to_arrays(inputs);
+  std::vector<mx::array> ordered_input_arrays;
+  ordered_input_arrays.reserve(input_names.size());
+  for (const auto& name : input_names) {
+    ordered_input_arrays.push_back(input_arrays_by_name.at(name));
+  }
+  auto key = mx::random::key(seed);
+  std::vector<mx::array> args;
+  args.reserve(weights.size() + ordered_input_arrays.size() + 1);
+  args.insert(args.end(), weights.begin(), weights.end());
+  args.insert(args.end(), ordered_input_arrays.begin(), ordered_input_arrays.end());
+  args.push_back(key);
+
+  const auto signature = categorical_sampler_signature(
+      program,
+      compute_dtype,
+      inputs,
+      input_names,
+      output_name,
+      rows,
+      vocab,
+      temperature,
+      weights.size());
+
+  auto run_eager_sampler = [&]() {
+    auto effective = effective_compute_weights(weights, compute_dtype);
+    auto logits = mx::astype(ir_interpret(program, effective, inputs, output_name, false), mx::float32);
+    try {
+      return sample_categorical_logits(logits, rows, vocab, temperature, key);
+    } catch (const std::exception& e) {
+      throw std::runtime_error(
+          std::string(e.what()) + " for " + output_name);
+    }
+  };
+
+  mx::array sampled = mx::array(0, mx::int32);
+  if (!compiled_categorical_sampler_disabled &&
+      !env_truthy("MIXLAB_DISABLE_COMPILED_CATEGORICAL_SAMPLER")) {
+    try {
+      if (!compiled_categorical_sampler ||
+          compiled_categorical_sampler_signature != signature) {
+        auto cached = compiled_categorical_sampler_cache.find(signature);
+        if (cached != compiled_categorical_sampler_cache.end()) {
+          compiled_categorical_sampler = cached->second;
+        } else {
+          const auto local_input_names = input_names;
+          const auto local_output_name = output_name;
+          compiled_categorical_sampler = mx::compile(
+              [this, local_input_names, local_output_name, rows, vocab, temperature](
+                  const std::vector<mx::array>& fn_args) {
+                const auto n_weights = weights.size();
+                const auto n_inputs = local_input_names.size();
+                if (fn_args.size() != n_weights + n_inputs + 1) {
+                  throw std::runtime_error("categorical sampler argument count mismatch");
+                }
+                std::vector<mx::array> w;
+                w.reserve(n_weights);
+                for (size_t i = 0; i < n_weights; ++i) {
+                  w.push_back(fn_args[i]);
+                }
+                ArrayMap input_map;
+                input_map.reserve(n_inputs);
+                for (size_t i = 0; i < n_inputs; ++i) {
+                  input_map.emplace(local_input_names[i], fn_args[n_weights + i]);
+                }
+                auto effective = effective_compute_weights(w, compute_dtype);
+                auto logits = mx::astype(
+                    ir_interpret(program, effective, input_map, local_output_name, false),
+                    mx::float32);
+                auto sampled = sample_categorical_logits(
+                    logits,
+                    rows,
+                    vocab,
+                    temperature,
+                    fn_args[n_weights + n_inputs]);
+                return std::vector<mx::array>{sampled};
+              },
+              false);
+          compiled_categorical_sampler_cache[signature] = compiled_categorical_sampler;
+        }
+        compiled_categorical_sampler_signature = signature;
+      }
+      auto out = compiled_categorical_sampler(args);
+      if (out.size() != 1) {
+        throw std::runtime_error("compiled categorical sampler output count mismatch");
+      }
+      sampled = out[0];
+    } catch (const std::exception& e) {
+      compiled_categorical_sampler_disabled = true;
+      compiled_categorical_sampler = nullptr;
+      compiled_categorical_sampler_signature.clear();
+      if (!compiled_categorical_sampler_fallback_logged) {
+        std::cerr << "[mlx_ir] compiled categorical sampler failed ("
+                  << e.what()
+                  << "); falling back to eager sampler"
+                  << " (set MIXLAB_DISABLE_COMPILED_CATEGORICAL_SAMPLER=1 to skip compiled retry)"
+                  << std::endl;
+        compiled_categorical_sampler_fallback_logged = true;
+      }
+      sampled = run_eager_sampler();
+    }
+  } else {
+    sampled = run_eager_sampler();
   }
 
-  auto finite = mx::isfinite(logits);
-  auto positive_inf = mx::logical_and(mx::isinf(logits), logits > mx::array(0.0f, mx::float32));
-  auto finite_count = mx::sum(mx::astype(finite, mx::float32), 1, true);
-  auto positive_inf_count = mx::sum(mx::astype(positive_inf, mx::float32), 1, true);
-  auto has_finite = finite_count > mx::array(0.0f, mx::float32);
-  auto has_positive_inf = positive_inf_count > mx::array(0.0f, mx::float32);
-
-  auto scaled = logits / mx::array(temperature, mx::float32);
-  auto minus_large = mx::full_like(scaled, -1e9f);
-  auto finite_logits = mx::where(finite, scaled, minus_large);
-  auto inf_logits = mx::where(positive_inf, mx::zeros_like(scaled), minus_large);
-  auto uniform_logits = mx::zeros_like(scaled);
-  auto sample_logits = mx::where(
-      has_positive_inf,
-      inf_logits,
-      mx::where(has_finite, finite_logits, uniform_logits));
-
-  auto key = mx::random::key(seed);
-  auto sampled = mx::reshape(
-      mx::astype(mx::random::categorical(sample_logits, 1, std::make_optional(key)), mx::int32),
-      {static_cast<mx::ShapeElem>(rows)});
   mx::eval(sampled);
   std::vector<int32_t> result(static_cast<size_t>(rows));
   std::memcpy(result.data(), sampled.data<int32_t>(), result.size() * sizeof(int32_t));
@@ -3101,6 +3239,8 @@ void IRTrainer::set_program(const IRProgram& new_program) {
   cached_named_step_signature.clear();
   compiled_named_step = nullptr;
   compiled_named_step_signature.clear();
+  compiled_categorical_sampler = nullptr;
+  compiled_categorical_sampler_signature.clear();
   compiled_named_update_step = nullptr;
   compiled_named_update_step_signature.clear();
   compiled_mamba3_optimizer_update = nullptr;

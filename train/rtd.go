@@ -14,57 +14,10 @@ func rtdActive(cfg *ArchConfig) bool {
 	return cfg != nil && cfg.Training.MultiheadEnabled() && cfg.Training.RTD != nil
 }
 
-// rtdGeneratorPrograms builds and caches the dropout-free forward program used
-// to sample RTD generator replacement tokens, keyed by the same
-// training program cache key as the main step programs.
-type rtdGeneratorPrograms struct {
-	cfg                       *ArchConfig
-	recurrencePhasesScheduled bool
-	cache                     map[trainingProgramCacheKey]*arch.Program
-}
-
-func newRTDGeneratorPrograms(cfg *ArchConfig, recurrencePhasesScheduled bool) *rtdGeneratorPrograms {
-	return &rtdGeneratorPrograms{
-		cfg:                       cfg,
-		recurrencePhasesScheduled: recurrencePhasesScheduled,
-		cache:                     make(map[trainingProgramCacheKey]*arch.Program),
-	}
-}
-
-func (g *rtdGeneratorPrograms) programForKey(key trainingProgramCacheKey) (*arch.Program, error) {
-	if cached := g.cache[key]; cached != nil {
-		return cached, nil
-	}
-	programCfg := g.cfg
-	if key.seqLen > 0 && key.seqLen != g.cfg.SeqLen {
-		clone := *g.cfg
-		clone.SeqLen = key.seqLen
-		programCfg = &clone
-	}
-	state := TrainingProgramState{
-		RecurrenceActive: key.recurrenceOn,
-		HeadUntied:       key.headUntied,
-		MTPAuxInactive:   !key.mtpAuxOn,
-		Objective:        key.objective,
-		DropoutInactive:  true,
-	}
-	var built *arch.Program
-	var buildErr error
-	if g.recurrencePhasesScheduled {
-		built, buildErr = arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(programCfg, key.recurrencePhase, state)
-	} else {
-		built, buildErr = BuildTrainingIRProgramFromConfig(programCfg, state)
-	}
-	if buildErr != nil {
-		return nil, buildErr
-	}
-	g.cache[key] = built
-	return built, nil
-}
-
-// maybeAttachRTDCorruption resolves the generator program for the step's cache
-// key and applies tied-generator RTD corruption when RTD is active. It is a
-// no-op (returns prepared unchanged) for non-RTD multihead objectives.
+// maybeAttachRTDCorruption applies RTD generator corruption when RTD is active.
+// It samples generator logits from the active multihead program instead of
+// switching to a separate generator program, preserving the MLX compiled
+// training-step cache across RTD steps.
 func maybeAttachRTDCorruption(
 	trainer GPUTrainer,
 	cfg *ArchConfig,
@@ -73,21 +26,15 @@ func maybeAttachRTDCorruption(
 	prepared objectiveBatch,
 	batchSize, seqLen int,
 	objective string,
-	key trainingProgramCacheKey,
-	generatorProgramForKey func(trainingProgramCacheKey) (*arch.Program, error),
-	restoreProg *arch.Program,
 ) (objectiveBatch, error) {
 	if !rtdActive(cfg) || objective != arch.ObjectiveMultihead {
 		return prepared, nil
 	}
-	rtdProg, err := generatorProgramForKey(key)
-	if err != nil {
-		return objectiveBatch{}, fmt.Errorf("build step %d RTD generator program: %w", step, err)
-	}
+	var err error
 	if cfg.Training.RTD.DedicatedGeneratorEnabled() {
-		prepared, err = attachRTDDedicatedGeneratorCorruption(trainer, cfg, batch, step, prepared, batchSize, seqLen, rtdProg, restoreProg)
+		prepared, err = attachRTDDedicatedGeneratorCorruption(trainer, cfg, batch, step, prepared, batchSize, seqLen)
 	} else {
-		prepared, err = attachRTDTiedGeneratorCorruption(trainer, cfg, batch, step, prepared, batchSize, seqLen, rtdProg, restoreProg)
+		prepared, err = attachRTDTiedGeneratorCorruption(trainer, cfg, batch, step, prepared, batchSize, seqLen)
 	}
 	if err != nil {
 		return objectiveBatch{}, fmt.Errorf("prepare step %d RTD corruption: %w", step, err)
@@ -173,45 +120,24 @@ func attachRTDTiedGeneratorCorruption(
 	step int,
 	prepared objectiveBatch,
 	batchSize, seqLen int,
-	generatorProg, restoreProg *arch.Program,
 ) (objectiveBatch, error) {
 	if !rtdActive(cfg) {
 		return prepared, nil
-	}
-	switcher, ok := trainer.(gpuProgramSwitcher)
-	if !ok {
-		return objectiveBatch{}, fmt.Errorf("trainer does not support RTD generator program switching")
 	}
 	need := cfg.Training.BatchTokens
 	probe, err := prepareRTDGeneratorProbeBatch(cfg, batch, step, need, seqLen)
 	if err != nil {
 		return objectiveBatch{}, err
 	}
-	if err := switcher.SetProgramGPU(generatorProg); err != nil {
-		return objectiveBatch{}, fmt.Errorf("switch to RTD generator program: %w", err)
-	}
-	restore := func() error {
-		if restoreProg == nil {
-			return nil
-		}
-		return switcher.SetProgramGPU(restoreProg)
-	}
 	outputName, err := rtdGeneratorLogitsOutputName(cfg)
 	if err != nil {
-		_ = restore()
 		return objectiveBatch{}, err
 	}
 	samples, sampledOnDevice, err := sampleRTDGeneratorReplacements(trainer, probe, batchSize, seqLen, outputName, need, cfg.VocabSize, cfg.Training.RTD.SampleTemperature, deterministicObjectiveSeed(cfg.Training.Seed, step, rtdGeneratorSalt))
 	if err != nil {
-		if restoreErr := restore(); restoreErr != nil {
-			return objectiveBatch{}, fmt.Errorf("sample RTD generator replacements: %w; restore program: %v", err, restoreErr)
-		}
 		return objectiveBatch{}, fmt.Errorf("sample RTD generator replacements: %w", err)
 	}
 	if sampledOnDevice {
-		if err := restore(); err != nil {
-			return objectiveBatch{}, fmt.Errorf("restore training program after RTD generator: %w", err)
-		}
 		if err := applyRTDGeneratorSampledCorruption(cfg, batch, seqLen, probe, samples, &prepared); err != nil {
 			return objectiveBatch{}, err
 		}
@@ -219,13 +145,7 @@ func attachRTDTiedGeneratorCorruption(
 	}
 	logits, err := evaluateRTDGeneratorLogits(trainer, probe, batchSize, seqLen, outputName, []int{need, cfg.VocabSize})
 	if err != nil {
-		if restoreErr := restore(); restoreErr != nil {
-			return objectiveBatch{}, fmt.Errorf("evaluate RTD generator logits: %w; restore program: %v", err, restoreErr)
-		}
 		return objectiveBatch{}, fmt.Errorf("evaluate RTD generator logits: %w", err)
-	}
-	if err := restore(); err != nil {
-		return objectiveBatch{}, fmt.Errorf("restore training program after RTD generator: %w", err)
 	}
 	if err := applyRTDGeneratorCorruption(cfg, batch, step, seqLen, probe, logits, &prepared); err != nil {
 		return objectiveBatch{}, err
@@ -240,14 +160,9 @@ func attachRTDDedicatedGeneratorCorruption(
 	step int,
 	prepared objectiveBatch,
 	batchSize, seqLen int,
-	generatorProg, restoreProg *arch.Program,
 ) (objectiveBatch, error) {
 	if !rtdActive(cfg) {
 		return prepared, nil
-	}
-	switcher, ok := trainer.(gpuProgramSwitcher)
-	if !ok {
-		return objectiveBatch{}, fmt.Errorf("trainer does not support RTD generator program switching")
 	}
 	need := cfg.Training.BatchTokens
 	probe, err := prepareRTDDedicatedGeneratorProbeBatch(cfg, batch, step, need)
@@ -255,26 +170,11 @@ func attachRTDDedicatedGeneratorCorruption(
 		return objectiveBatch{}, err
 	}
 	attachDedicatedGeneratorInputs(&prepared, probe)
-	if err := switcher.SetProgramGPU(generatorProg); err != nil {
-		return objectiveBatch{}, fmt.Errorf("switch to RTD dedicated generator program: %w", err)
-	}
-	restore := func() error {
-		if restoreProg == nil {
-			return nil
-		}
-		return switcher.SetProgramGPU(restoreProg)
-	}
 	samples, sampledOnDevice, err := sampleRTDGeneratorReplacements(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, need, cfg.VocabSize, cfg.Training.RTD.SampleTemperature, deterministicObjectiveSeed(cfg.Training.Seed, step, rtdGeneratorSalt^0xd1b54a32d192ed03))
 	if err != nil {
-		if restoreErr := restore(); restoreErr != nil {
-			return objectiveBatch{}, fmt.Errorf("sample RTD dedicated generator replacements: %w; restore program: %v", err, restoreErr)
-		}
 		return objectiveBatch{}, fmt.Errorf("sample RTD dedicated generator replacements: %w", err)
 	}
 	if sampledOnDevice {
-		if err := restore(); err != nil {
-			return objectiveBatch{}, fmt.Errorf("restore training program after RTD dedicated generator: %w", err)
-		}
 		if err := applyRTDDedicatedGeneratorSampledCorruption(cfg, batch, seqLen, probe, samples, &prepared); err != nil {
 			return objectiveBatch{}, err
 		}
@@ -282,13 +182,7 @@ func attachRTDDedicatedGeneratorCorruption(
 	}
 	logits, err := evaluateRTDGeneratorLogits(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, []int{need, cfg.VocabSize})
 	if err != nil {
-		if restoreErr := restore(); restoreErr != nil {
-			return objectiveBatch{}, fmt.Errorf("evaluate RTD dedicated generator logits: %w; restore program: %v", err, restoreErr)
-		}
 		return objectiveBatch{}, fmt.Errorf("evaluate RTD dedicated generator logits: %w", err)
-	}
-	if err := restore(); err != nil {
-		return objectiveBatch{}, fmt.Errorf("restore training program after RTD dedicated generator: %w", err)
 	}
 	if err := applyRTDDedicatedGeneratorCorruption(cfg, batch, step, seqLen, probe, logits, &prepared); err != nil {
 		return objectiveBatch{}, err

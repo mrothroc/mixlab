@@ -210,8 +210,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		programCache[key] = built
 		return built, nil
 	}
-	rtdGenerator := newRTDGeneratorPrograms(cfg, recurrencePhasesScheduled)
-	rtdGeneratorProgramForKey := rtdGenerator.programForKey
 	currentProgramKey := trainingProgramCacheKey{
 		recurrencePhase: currentRecurrencePhase,
 		recurrenceOn:    recurrenceActive,
@@ -425,7 +423,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("prepare step 0 objective batch: %w", err)
 		}
-		prepared, err = maybeAttachRTDCorruption(trainer, cfg, batch, 0, prepared, currentBatchSize, currentSeqLen, currentObjective, currentProgramKey, rtdGeneratorProgramForKey, initialProg)
+		prepared, err = maybeAttachRTDCorruption(trainer, cfg, batch, 0, prepared, currentBatchSize, currentSeqLen, currentObjective)
 		if err != nil {
 			stopInitialSubmit()
 			return TrainResult{}, err
@@ -522,10 +520,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				currentBatchSize = nextBatchSize
 				currentProgramKey = nextProgramKey
 			}
-			activeProg, err := trainingProgramForKey(nextProgramKey)
-			if err != nil {
-				return 0, fmt.Errorf("resolve active IR program at step %d: %w", nextStep, err)
-			}
 			submitStart := time.Now()
 			stopSubmit := startSlowTrainingPhaseLogger(name, nextStep, "submit_step")
 			prepared, err := prepareObjectiveBatchWithSeqLen(cfg, batch, nextStep, nextObjective, nextSeqLen)
@@ -533,7 +527,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				stopSubmit()
 				return 0, fmt.Errorf("prepare step %d objective batch: %w", nextStep, err)
 			}
-			prepared, err = maybeAttachRTDCorruption(trainer, cfg, batch, nextStep, prepared, nextBatchSize, nextSeqLen, nextObjective, nextProgramKey, rtdGeneratorProgramForKey, activeProg)
+			prepared, err = maybeAttachRTDCorruption(trainer, cfg, batch, nextStep, prepared, nextBatchSize, nextSeqLen, nextObjective)
 			if err != nil {
 				stopSubmit()
 				return 0, err
