@@ -95,7 +95,7 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 
 	blocks := multiheadResolvedBlocks(cfg.Blocks)
 	blockWeightStart := wi
-	blockShapes, err := blockRangeWeightShapesWithRefs(blocks, identityWeightRefs(blocks), 0, len(blocks), D, T, 1, V, cfg.EffectiveMLPMult(), cfg.BlockScales, cfg.ResidMix)
+	blockShapes, err := multiheadTrunkWeightShapes(cfg)
 	if err != nil {
 		return nil, err
 	}

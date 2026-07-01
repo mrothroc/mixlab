@@ -263,7 +263,6 @@ func collectMultiheadWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, erro
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
-	refs := identityWeightRefs(cfg.Blocks)
 	shapes := []WeightMeta{{Name: "embed", Shape: []int{cfg.VocabSize, cfg.ModelDim}}}
 	shapes = append(shapes, positionalEmbeddingWeightShapes(cfg.ModelDim, cfg.EffectiveMaxPositions(), cfg.EffectivePositionalEmbedding())...)
 	shapes = append(shapes, charWeightShapes(cfg.ModelDim, cfg.CharVocabSize, cfg.EffectiveCharDim())...)
@@ -274,7 +273,7 @@ func collectMultiheadWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, erro
 		return nil, err
 	}
 	shapes = append(shapes, sharedRel...)
-	blockShapes, err := blockRangeWeightShapesWithRefs(cfg.Blocks, refs, 0, len(cfg.Blocks), cfg.ModelDim, cfg.SeqLen, 1, cfg.VocabSize, cfg.EffectiveMLPMult(), cfg.BlockScales, cfg.ResidMix)
+	blockShapes, err := multiheadTrunkWeightShapes(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("blocks: %w", err)
 	}
@@ -292,6 +291,31 @@ func collectMultiheadWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, erro
 		shapes = append(shapes, multiheadHeadWeightShapes(cfg.ModelDim, cfg.VocabSize, cfg.Blocks, cfg.EffectiveNormSpec(), h)...)
 	}
 	return shapes, nil
+}
+
+func multiheadTrunkWeightShapes(cfg *ArchConfig) ([]WeightMeta, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil config")
+	}
+	blocks := multiheadResolvedBlocks(cfg.Blocks)
+	sharedRel, err := newSharedRelativeAttentionPlan(cfg.Blocks)
+	if err != nil {
+		return nil, err
+	}
+	return streamWeightShapesWithRefsAndParallelOptions(blocks, identityWeightRefs(blocks), cfg.ModelDim, cfg.SeqLen, 1, cfg.VocabSize, multiheadTrunkWeightShapeOptions(cfg, sharedRel), false)
+}
+
+func multiheadTrunkWeightShapeOptions(cfg *ArchConfig, sharedRel sharedRelativeAttentionPlan) EmitOptions {
+	return EmitOptions{
+		MLPMult:             cfg.EffectiveMLPMult(),
+		BlockScales:         cfg.BlockScales,
+		ResidMix:            cfg.ResidMix,
+		Norm:                cfg.EffectiveNormSpec(),
+		NormPlacement:       cfg.EffectiveNormPlacement(),
+		FFNInternalNorm:     cfg.FFNInternalNorm,
+		PositionalEmbedding: cfg.EffectivePositionalEmbedding(),
+		sharedRelative:      sharedRel,
+	}
 }
 
 func multiheadHeadWeightShapes(modelDim, vocabSize int, blocks []BlockSpec, norm NormSpec, h MultiheadHeadSpec) []WeightMeta {

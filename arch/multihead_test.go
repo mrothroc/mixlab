@@ -175,6 +175,57 @@ func TestMultiheadWeightShapesAndIR(t *testing.T) {
 	}
 }
 
+func TestMultiheadGPTBERTStyleTrunkWeightAccounting(t *testing.T) {
+	cfg := parseMultiheadConfig(t, `
+		"model_dim": 32,
+		"vocab_size": 64,
+		"seq_len": 8,
+		"mlp_mult": 2.0,
+		"norm_type": "layernorm",
+		"norm_affine": false,
+		"ffn_internal_norm": true,
+		"blocks": [
+			{"type": "plain", "heads": 4, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 4,
+			 "relative_attention_parameterization": "shared_qk_reuse", "attn_bias": true, "attn_value_gate": true,
+			 "attn_post_norm": "before_outproj", "ffn_activation": "geglu", "ffn_pre_norm": true},
+			{"type": "plain", "heads": 4, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 4,
+			 "relative_attention_parameterization": "shared_qk_reuse", "attn_bias": true, "attn_value_gate": true,
+			 "attn_post_norm": "before_outproj", "ffn_activation": "geglu", "ffn_pre_norm": true},
+			{"type": "plain", "heads": 4, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 4,
+			 "relative_attention_parameterization": "shared_qk_reuse", "attn_bias": true, "attn_value_gate": true,
+			 "attn_post_norm": "before_outproj", "ffn_activation": "geglu", "ffn_pre_norm": true}
+		],
+		"training": {
+			"objective": "multihead",
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 16,
+			"mlm_mask_token_id": 63,
+			"heads": [
+				{"name": "scorer", "objective": "mntp", "loss_weight": 0.7, "layer_aggregation": "dwa"},
+				{"name": "denoiser", "objective": "block_diffusion", "loss_weight": 0.3,
+				 "diffusion": {"block_size": 4, "timestep_conditioning": "adaln", "timestep_conditioning_dim": 6}}
+			]
+		}`)
+	shapes, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesFromConfig: %v", err)
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	if prog.NumWeights != len(shapes) {
+		t.Fatalf("prog weights=%d shapes=%d", prog.NumWeights, len(shapes))
+	}
+	if countWeightNames(shapes, SharedRelativeEmbeddingsWeightName) != 1 {
+		t.Fatalf("shared relative embedding count=%d, want 1", countWeightNames(shapes, SharedRelativeEmbeddingsWeightName))
+	}
+	if countWeightNames(shapes, "relative_embeddings") != 0 || countWeightNames(shapes, "w_pos_key") != 0 || countWeightNames(shapes, "w_pos_query") != 0 {
+		t.Fatalf("shared_qk_reuse should not emit per-block relative projection weights: %+v", shapes)
+	}
+}
+
 func parseMultiheadConfig(t *testing.T, body string) *ArchConfig {
 	t.Helper()
 	cfg, err := ParseArchConfig([]byte(multiheadConfigJSON(body)), "multihead_test")
@@ -195,4 +246,14 @@ func multiheadConfigJSON(body string) string {
 		"seq_len": 4,
 		` + body + `
 	}`
+}
+
+func countWeightNames(shapes []WeightMeta, name string) int {
+	count := 0
+	for _, shape := range shapes {
+		if shape.Name == name {
+			count++
+		}
+	}
+	return count
 }
