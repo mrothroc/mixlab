@@ -5,6 +5,12 @@ import (
 )
 
 func RunArch(configPath, trainPattern string, opts TrainOptions) error {
+	return withTelemetryRuntime(opts, func(opts TrainOptions) error {
+		return runArch(configPath, trainPattern, opts)
+	})
+}
+
+func runArch(configPath, trainPattern string, opts TrainOptions) error {
 	if configPath == "" {
 		return fmt.Errorf("-config is required for arch mode; pass a JSON config file, e.g.: mixlab -mode arch -config examples/plain_3L.json -train 'data/train_*.bin'")
 	}
@@ -39,7 +45,9 @@ func RunArch(configPath, trainPattern string, opts TrainOptions) error {
 }
 
 func RunArchRace(configsDir, trainPattern string, opts TrainOptions) error {
-	return runArchRace(configsDir, trainPattern, opts)
+	return withTelemetryRuntime(opts, func(opts TrainOptions) error {
+		return runArchRace(configsDir, trainPattern, opts)
+	})
 }
 
 func RunCount(configPath string) error {

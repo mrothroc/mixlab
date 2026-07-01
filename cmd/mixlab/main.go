@@ -67,6 +67,8 @@ func main() {
 	// profiling flags
 	cpuProfile := flag.String("cpuprofile", "", "write CPU profile to file")
 	memProfile := flag.String("memprofile", "", "write memory profile to file")
+	pprofAddr := flag.String("pprof-addr", "", "serve live pprof and Mixlab telemetry HTTP endpoints on this address, e.g. 127.0.0.1:6060")
+	telemetryOut := flag.String("telemetry-out", "", "write periodic Mixlab telemetry snapshots as JSONL")
 
 	// prepare mode flags
 	prepInput := flag.String("input", "", "input text file, JSONL, or directory (prepare mode)")
@@ -194,6 +196,8 @@ func main() {
 		LogEvery:        *logEvery,
 		ValEvery:        *valEvery,
 		Timing:          *timing,
+		PProfAddr:       *pprofAddr,
+		TelemetryOut:    *telemetryOut,
 	}
 	if providedFlags["swa-start"] {
 		v := *swaStart
@@ -307,13 +311,14 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Checkpointing", []string{"safetensors", "safetensors-load", "checkpoint-dir", "checkpoint-every"}},
 		{"Training run controls", []string{"eval", "eval-after-train", "lut-dir", "log-every", "val-every", "timing", "swa-start", "swa-decay", "swa-interval"}},
 		{"Quantization", []string{"quantize", "quant-method", "quant-k", "quant-k-embed"}},
-		{"Profiling", []string{"cpuprofile", "memprofile"}},
+		{"Profiling and telemetry", []string{"cpuprofile", "memprofile", "pprof-addr", "telemetry-out"}},
 	},
 	"arch_race": {
 		{"Required", []string{"configs", "train"}},
 		{"Checkpointing and eval", []string{"safetensors", "safetensors-load", "eval", "eval-after-train", "lut-dir"}},
 		{"Run controls", []string{"log-every", "val-every", "timing"}},
 		{"Quantization", []string{"quantize", "quant-method", "quant-k", "quant-k-embed"}},
+		{"Profiling and telemetry", []string{"cpuprofile", "memprofile", "pprof-addr", "telemetry-out"}},
 	},
 	"prepare": {
 		{"Required", []string{"input"}},

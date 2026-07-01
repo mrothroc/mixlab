@@ -13,87 +13,6 @@ import (
 	"github.com/mrothroc/mixlab/gpu"
 )
 
-// TrainResult holds the outcome of a training run.
-type TrainResult struct {
-	Name      string
-	FirstLoss float64
-	// LastLoss is the value of the IR "loss" output collected at the final
-	// training step — the quantity the optimizer was actually minimising. This
-	// is masked cross-entropy when training.first_byte_mask is enabled, the
-	// MTP-weighted multi-token loss when mtp.n>1, otherwise the standard
-	// next-token cross-entropy.
-	LastLoss float64
-	// LastUnmaskedLoss is the unmasked next-token cross-entropy of the trained
-	// model on the final training batch, measured by an extra forward pass
-	// after the last optimizer update. This is commensurate across runs
-	// regardless of whether training.first_byte_mask or MTP is on, so it can
-	// be compared directly between configurations. NaN when training did not
-	// run (steps == 0).
-	LastUnmaskedLoss float64
-	LastValLoss      float64
-	HasValLoss       bool
-	Delta            float64
-	Elapsed          time.Duration
-	StepFLOPs        int64
-	FLOPsPerTok      int64
-}
-
-// formatSummary returns a one-line summary of the training result.
-func (r TrainResult) formatSummary() string {
-	if r.HasValLoss {
-		return fmt.Sprintf("%-12s first=%.4f last=%.4f val=%.4f delta=%.4f (%s)",
-			r.Name, r.FirstLoss, r.LastLoss, r.LastValLoss, r.Delta, r.Elapsed.Round(time.Millisecond))
-	}
-	return fmt.Sprintf("%-12s first=%.4f last=%.4f delta=%.4f (%s)",
-		r.Name, r.FirstLoss, r.LastLoss, r.Delta, r.Elapsed.Round(time.Millisecond))
-}
-
-// GPUTrainer abstracts the GPU training interface.
-// This is implemented by the MLX backend when available.
-type GPUTrainer interface {
-	TrainStepGPU(xTok, yTok []int, batchSize, seqLen int, lr float32) (float32, error)
-	SubmitStepGPU(xTok, yTok []int, batchSize, seqLen int, lr float32) error
-	CollectLossGPU() (float32, error)
-	FlushGPU() error
-	SetQATGPU(mode string) error
-	SetWeightGPU(name string, data []float32) error
-	EvaluateObjectiveGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error)
-	EvaluateGPU(xTok, yTok []int, batchSize, seqLen int) (float32, error)
-	EvaluatePerTokenGPU(xTok, yTok []int, batchSize, seqLen int) ([]float32, error)
-	EvaluateLoRATTTGPU(xTok, yTok []int, batchSize, seqLen, tttSteps int, tttLR float32, tttRank int) (float32, error)
-	CloseTrainer()
-}
-
-type gpuWeightCopier interface {
-	CopyWeightGPU(dstName, srcName string) error
-}
-
-type gpuObjectiveStepSubmitter interface {
-	SubmitObjectiveStepGPU(batch objectiveBatch, batchSize, seqLen int, lr float32) error
-}
-
-type gpuObjectiveEvaluator interface {
-	EvaluateObjectiveGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error)
-}
-
-func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, lr float32) error {
-	if batch.batchSizeOverride > 0 {
-		batchSize = batch.batchSizeOverride
-	}
-	if batch.lossMask == nil {
-		return trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, lr)
-	}
-	submitter, ok := trainer.(gpuObjectiveStepSubmitter)
-	if !ok {
-		return fmt.Errorf("trainer does not support masked objective batches")
-	}
-	return submitter.SubmitObjectiveStepGPU(batch, batchSize, seqLen, lr)
-}
-
-func evaluateTokensViaObjectiveGPU(trainer gpuObjectiveEvaluator, xTok, yTok []int, batchSize, seqLen int) (float32, error) {
-	return trainer.EvaluateObjectiveGPU(objectiveBatch{x: xTok, y: yTok}, batchSize, seqLen)
-}
-
 // TrainOptions holds optional parameters for runTrain.
 type TrainOptions struct {
 	SafetensorsPath     string // If set, export weights after training
@@ -109,9 +28,12 @@ type TrainOptions struct {
 	LogEvery            int      // Print progress every N steps; 0 uses default/env cadence
 	ValEvery            int      // Run validation every N steps; 0 uses default/env cadence
 	Timing              bool     // If true, print per-step timing breakdown at log intervals
+	PProfAddr           string   // If set, serve live pprof and Mixlab telemetry on this address
+	TelemetryOut        string   // If set, write periodic telemetry snapshots as JSONL
 	SWAStartOverride    *int     // If set, overrides training.swa_start
 	SWADecayOverride    *float32 // If set, overrides training.swa_decay
 	SWAIntervalOverride *int     // If set, overrides training.swa_interval
+	telemetry           *telemetryRuntime
 
 	// OptimizerOverride lets callers customize the optimizer plan that RunArch
 	// builds before the GPU trainer is created.
@@ -438,11 +360,24 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	valEvery := effectiveTrainEvery(opts.ValEvery, "MIXLAB_VAL_EVERY", 100)
 	mlxMemLogEvery := effectiveTrainEvery(0, mlxMemLogEveryEnv, 0)
 	mlxClearCacheEvery := effectiveTrainEvery(0, mlxClearCacheEveryEnv, 0)
+	telemetry := opts.telemetry
+	if telemetry == nil {
+		telemetry = &telemetryRuntime{state: newTelemetryState()}
+	}
 	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
 	// steadyStart is set after step 0 completes — excludes one-time
 	// compile/warmup costs from tok/s and ETA estimates.
 	var steadyStart time.Time
+	telemetry.state.update(telemetryUpdate{
+		Model:       name,
+		Step:        0,
+		TotalSteps:  steps,
+		LR:          sched.At(0),
+		Objective:   currentObjective,
+		SeqLen:      currentSeqLen,
+		BatchTokens: batchTokens,
+	})
 	done := make(chan struct{})
 	batchCh := make(chan trainBatch, 4)
 	var loadWG sync.WaitGroup
@@ -703,7 +638,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step, err)
 			}
-			handleMLXMemoryControls(name, step, mlxMemLogEvery, mlxClearCacheEvery)
 			v := float64(lossV)
 
 			if step == 0 {
@@ -713,6 +647,39 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				steadyStart = time.Now()
 			}
 			lastLoss = v
+			elapsed := time.Since(start)
+			steadyElapsed := elapsed
+			stepsForRate := step + 1
+			if !steadyStart.IsZero() && step >= 1 {
+				steadyElapsed = time.Since(steadyStart)
+				stepsForRate = step
+			}
+			var tokensPerSec float64
+			if steadyElapsed > 0 {
+				tokensPerSec = float64(batchTokens) * float64(stepsForRate) / steadyElapsed.Seconds()
+			}
+			telemetry.state.update(telemetryUpdate{
+				Model:         name,
+				Step:          step,
+				TotalSteps:    steps,
+				Loss:          v,
+				HasLoss:       true,
+				ValLoss:       lastValLoss,
+				HasValLoss:    hasValLoss,
+				LR:            sched.At(step),
+				Objective:     currentObjective,
+				SeqLen:        currentSeqLen,
+				BatchTokens:   batchTokens,
+				Elapsed:       elapsed,
+				SteadyElapsed: steadyElapsed,
+				TokensPerSec:  tokensPerSec,
+				Timing: telemetryTiming{
+					DataMS: float64(dataDuration) / float64(time.Millisecond),
+					GPUMS:  float64(gpuDuration) / float64(time.Millisecond),
+				},
+				HasTiming: true,
+			})
+			handleMLXMemoryControls(name, step, mlxMemLogEvery, mlxClearCacheEvery, telemetry)
 
 			if data2vec != nil {
 				stopData2Vec := startSlowTrainingPhaseLogger(name, step, "data2vec_ema_read")
@@ -768,17 +735,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				// near-instantly when the GPU has already finished.
 				// Anchor the rate calculation at steadyStart (set after step 0)
 				// so the one-time compile/warmup cost doesn't skew estimates.
-				elapsed := time.Since(start)
-				steadyElapsed := elapsed
-				stepsForRate := step + 1
-				if !steadyStart.IsZero() && step >= 1 {
-					steadyElapsed = time.Since(steadyStart)
-					stepsForRate = step
-				}
-				var tokensPerSec float64
-				if steadyElapsed > 0 {
-					tokensPerSec = float64(batchTokens) * float64(stepsForRate) / steadyElapsed.Seconds()
-				}
 				mfuStr := ""
 				if cfg.Training.HardwareTFLOPs > 0 && flops.TrainingFLOPs > 0 && steadyElapsed > 0 {
 					mfu := (float64(flops.TrainingFLOPs) * float64(stepsForRate) / steadyElapsed.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
@@ -799,6 +755,32 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 						float64(gpuDuration)/float64(time.Millisecond),
 						float64(valDuration)/float64(time.Millisecond),
 						float64(logDuration)/float64(time.Millisecond))
+				}
+				telemetry.state.update(telemetryUpdate{
+					Model:         name,
+					Step:          step,
+					TotalSteps:    steps,
+					Loss:          v,
+					HasLoss:       true,
+					ValLoss:       lastValLoss,
+					HasValLoss:    hasValLoss,
+					LR:            sched.At(step),
+					Objective:     currentObjective,
+					SeqLen:        currentSeqLen,
+					BatchTokens:   batchTokens,
+					Elapsed:       time.Since(start),
+					SteadyElapsed: steadyElapsed,
+					TokensPerSec:  tokensPerSec,
+					Timing: telemetryTiming{
+						DataMS:       float64(dataDuration) / float64(time.Millisecond),
+						GPUMS:        float64(gpuDuration) / float64(time.Millisecond),
+						ValidationMS: float64(valDuration) / float64(time.Millisecond),
+						LogMS:        float64(logDuration) / float64(time.Millisecond),
+					},
+					HasTiming: true,
+				})
+				if err := telemetry.writeSnapshot(true); err != nil {
+					return TrainResult{}, err
 				}
 				if ranValidation && hasValLoss && targetValLoss > 0 && lastValLoss <= targetValLoss {
 					fmt.Printf("  [%s] target val loss %.4f reached at step %d (val=%.4f), stopping early\n",
@@ -956,7 +938,7 @@ func readTrainerOutput(trainer GPUTrainer, name string, shape []int) ([]float32,
 	return nil, fmt.Errorf("trainer does not support reading named outputs; ensure you are using the MLX backend")
 }
 
-func handleMLXMemoryControls(name string, step, logEvery, clearEvery int) {
+func handleMLXMemoryControls(name string, step, logEvery, clearEvery int, telemetry *telemetryRuntime) {
 	if clearEvery > 0 && (step+1)%clearEvery == 0 {
 		gpu.ClearMemoryCache()
 	}
@@ -966,8 +948,12 @@ func handleMLXMemoryControls(name string, step, logEvery, clearEvery int) {
 	if step != 0 && (step+1)%logEvery != 0 {
 		return
 	}
+	if telemetry != nil && telemetry.state != nil {
+		fmt.Printf("  [%s] %s\n", name, formatTelemetryLine(telemetry.state.snapshot(true)))
+		return
+	}
 	stats := gpu.MemoryStatsSnapshot()
-	fmt.Printf("  [%s] [mlx-mem] step %d active=%s cache=%s peak=%s\n",
+	fmt.Printf("  [%s] [telemetry] step %d gpu_util=n/a mlx_active=%s mlx_cache=%s mlx_peak=%s\n",
 		name, step, formatMiB(stats.ActiveBytes), formatMiB(stats.CacheBytes), formatMiB(stats.PeakBytes))
 }
 

@@ -54,3 +54,25 @@ func TestAliasedStringFlagValue(t *testing.T) {
 		})
 	}
 }
+
+func TestTelemetryFlagsInTrainingHelpGroups(t *testing.T) {
+	for _, mode := range []string{"arch", "arch_race"} {
+		groups := modeFlagGroups[mode]
+		for _, flagName := range []string{"pprof-addr", "telemetry-out"} {
+			if !flagGroupContains(groups, flagName) {
+				t.Fatalf("%s help groups missing %s", mode, flagName)
+			}
+		}
+	}
+}
+
+func flagGroupContains(groups []flagGroup, name string) bool {
+	for _, group := range groups {
+		for _, got := range group.Names {
+			if got == name {
+				return true
+			}
+		}
+	}
+	return false
+}

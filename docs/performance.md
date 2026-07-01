@@ -53,6 +53,9 @@ Diagnostics:
 MIXLAB_MLX_MEM_LOG_EVERY=100 MIXLAB_MLX_CLEAR_CACHE_EVERY=500 ./mixlab -mode arch ...
 ```
 
+`MIXLAB_MLX_MEM_LOG_EVERY` prints the compact telemetry line at the requested
+cadence, including MLX memory and best-effort GPU utilization when available.
+
 ## Step timing
 
 Add `-timing` to see where each progress interval spends time:
@@ -96,6 +99,48 @@ go tool pprof mem.prof
 
 Both flags are safe for real training runs. The output is a standard pprof
 file that works with `go tool pprof`, Speedscope, and pprof-compatible viewers.
+
+For live profiling, start the debug server:
+
+```bash
+./mixlab -mode arch -config my_model.json -train 'data/*.bin' -pprof-addr 127.0.0.1:6060
+```
+
+Then use standard pprof tooling for Go profiles:
+
+```bash
+go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+go tool pprof http://127.0.0.1:6060/debug/pprof/heap
+```
+
+The same server exposes Mixlab runtime telemetry as gauges rather than pprof
+profiles:
+
+```bash
+curl http://127.0.0.1:6060/debug/mixlab/telemetry | jq .
+curl http://127.0.0.1:6060/debug/vars | jq .
+```
+
+Telemetry includes current step, loss, learning rate, objective, sequence
+length, steady-state tokens/sec, MLX active/cache/peak memory, host RSS, and
+best-effort GPU utilization on macOS from `ioreg`. GPU utilization is omitted
+when the platform does not expose a no-sudo sampler.
+
+To keep a time series for plotting, add:
+
+```bash
+./mixlab -mode arch -config my_model.json -train 'data/*.bin' -telemetry-out run.telemetry.jsonl
+```
+
+The debug server is opt-in and should normally bind to localhost. For remote
+runs, prefer SSH tunneling:
+
+```bash
+ssh -L 6060:127.0.0.1:6060 user@host
+```
+
+Only bind `-pprof-addr 0.0.0.0:6060` on a trusted network, because pprof and
+debug endpoints expose process internals.
 
 ## Remote GPU profiling
 

@@ -50,6 +50,8 @@ Profiling flags:
 |------|-------------|
 | `-cpuprofile FILE` | Write a Go CPU profile. |
 | `-memprofile FILE` | Write a Go heap profile at exit. |
+| `-pprof-addr ADDR` | Serve live pprof and Mixlab telemetry HTTP endpoints, for example `127.0.0.1:6060`. |
+| `-telemetry-out FILE` | Write periodic Mixlab telemetry snapshots as JSONL. |
 
 ## `arch_race`
 
@@ -74,6 +76,8 @@ Common flags:
 | `-log-every N` | Progress interval override. |
 | `-val-every N` | Validation interval override. |
 | `-timing` | Print timing breakdowns. |
+| `-pprof-addr ADDR` | Serve live pprof and Mixlab telemetry HTTP endpoints. |
+| `-telemetry-out FILE` | Write periodic Mixlab telemetry snapshots as JSONL. |
 
 ## Memory And Backend Knobs
 
