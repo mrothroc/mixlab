@@ -373,6 +373,52 @@ func TestExportHFNativePythonParity(t *testing.T) {
 				}`,
 		},
 		{
+			// Multihead export with head-scoped DWA: the HF model records trunk
+			// residual points without rewriting the stream, then aggregates only
+			// the exported scorer head. The native reference below uses the
+			// actual multihead head logits output so this cannot silently compare
+			// against trunk-wide single-head DWA.
+			name: "multihead_mntp_dwa_scorer",
+			config: `{
+				"name": "multihead_mntp_dwa_scorer",
+				"model_dim": 8, "vocab_size": 11, "seq_len": 4, "mlp_mult": 2.0,
+				"tie_embeddings": true,
+				"blocks": [
+					{"type": "plain", "heads": 2},
+					{"type": "swiglu"}
+				],
+				"training": {
+					"steps": 1,
+					"batch_tokens": 4,
+					"seed": 9696,
+					"objective": "multihead",
+					"mlm_mask_token_id": 1,
+					"export_head": "mntp",
+					"diffusion_head": "diff",
+					"heads": [
+						{
+							"name": "mntp",
+							"objective": "mntp",
+							"loss_weight": 0.7,
+							"output_head": "linear",
+							"tie_embeddings": true,
+							"final_norm": true,
+							"layer_aggregation": "dwa"
+						},
+						{
+							"name": "diff",
+							"objective": "block_diffusion",
+							"loss_weight": 0.3,
+							"output_head": "linear",
+							"tie_embeddings": false,
+							"final_norm": true,
+							"diffusion": {"block_size": 2}
+						}
+					]
+				}
+				}`,
+		},
+		{
 			// XSA projection and sparse per-head attention output gate.
 			name: "xsa_sparse_gate",
 			config: `{
@@ -499,6 +545,9 @@ func nativeMLXLogitsForParity(t *testing.T, cfgPath, weightsPath, hfOutDir strin
 		t.Fatalf("LoadArchConfig: %v", err)
 	}
 	if cfg.Training.MultiheadEnabled() {
+		if head := cfg.Training.MultiheadExportHead(); head != nil && head.LayerAggregation == "dwa" {
+			return nativeMultiheadExportHeadLogitsForParity(t, cfg, weightsPath, window, seqLen, vocab)
+		}
 		cfgPath, weightsPath = writeHFExportInferenceFixtureForParity(t, cfg, hfOutDir)
 	}
 	sess, err := NewInferenceSession(cfgPath, weightsPath)
@@ -512,6 +561,91 @@ func nativeMLXLogitsForParity(t *testing.T, cfgPath, weightsPath, hfOutDir strin
 	}
 	if len(logits) != seqLen*vocab {
 		t.Fatalf("native logits length=%d, want %d", len(logits), seqLen*vocab)
+	}
+	return logits
+}
+
+func nativeMultiheadExportHeadLogitsForParity(t *testing.T, cfg *ArchConfig, weightsPath string, window []uint16, seqLen, vocab int) []float32 {
+	t.Helper()
+	head := cfg.Training.MultiheadExportHead()
+	if head == nil {
+		t.Fatal("multihead config has no export head")
+	}
+	rawBatch := cfg.Training.BatchTokens / seqLen
+	if rawBatch <= 0 {
+		rawBatch = 1
+	}
+	headCount := len(cfg.Training.Heads)
+	if headCount <= 0 {
+		t.Fatal("multihead config has no heads")
+	}
+	rawRows := rawBatch * seqLen
+	totalRows := rawBatch * headCount
+	totalTokens := totalRows * seqLen
+	xTok := make([]int, totalTokens)
+	yTok := make([]int, totalTokens)
+	lossMask := make([]float32, totalTokens)
+	diffusionStart := make([]int32, totalRows)
+	diffusionEnd := make([]int32, totalRows)
+	for row := 0; row < totalRows; row++ {
+		for pos := 0; pos < seqLen; pos++ {
+			idx := row*seqLen + pos
+			xTok[idx] = int(window[pos])
+			yTok[idx] = int(window[pos+1])
+			lossMask[idx] = 1
+		}
+		// A zero-length block leaves the block-diffusion mask in its causal
+		// fallback path, matching the exported scorer's next-token view while
+		// still exercising the real multihead head-scoped DWA graph.
+		diffusionStart[row] = 0
+		diffusionEnd[row] = 0
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive:       true,
+		HeadUntied:             cfg.MTPUntieEnabled(),
+		MTPAuxInactive:         true,
+		DistillationInactive:   true,
+		Data2VecInactive:       true,
+		ZLossInactive:          true,
+		DropoutInactive:        true,
+		SegmentMaskInactive:    true,
+		ExampleFramingInactive: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(multihead parity): %v", err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes(multihead parity): %v", err)
+	}
+	loadedWeights, err := loadSafetensorsWeights(weightsPath, shapes)
+	if err != nil {
+		t.Fatalf("load multihead safetensors %q: %v", weightsPath, err)
+	}
+	trainer, err := initGPUTrainer(prog, cfg, loadedWeights, nil)
+	if err != nil {
+		t.Fatalf("initGPUTrainer(multihead parity): %v", err)
+	}
+	defer trainer.CloseTrainer()
+	batch := objectiveBatch{
+		x:                   xTok,
+		y:                   yTok,
+		lossMask:            lossMask,
+		unmaskedX:           append([]int(nil), xTok...),
+		diffusionBlockStart: diffusionStart,
+		diffusionBlockEnd:   diffusionEnd,
+		batchSizeOverride:   totalRows,
+	}
+	if _, err := trainer.EvaluateObjectiveGPU(batch, rawBatch, seqLen); err != nil {
+		t.Fatalf("EvaluateObjectiveGPU(multihead parity): %v", err)
+	}
+	outputName := "logits"
+	logits, err := readTrainerOutput(trainer, outputName, []int{rawRows, vocab})
+	if err != nil {
+		t.Fatalf("read %s: %v", outputName, err)
+	}
+	if len(logits) != seqLen*vocab {
+		t.Fatalf("native multihead logits length=%d, want %d", len(logits), seqLen*vocab)
 	}
 	return logits
 }
