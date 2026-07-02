@@ -185,6 +185,12 @@ float mlx_ir_trainer_evaluate_named(
     int64_t trainer,
     const mlx_tensor_input* inputs,
     int n_inputs);
+float mlx_ir_trainer_evaluate_named_with_outputs(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char** output_names,
+    int n_outputs);
 float mlx_ir_trainer_compute_mean_square_grads_named(
     int64_t trainer,
     const mlx_tensor_input* inputs,

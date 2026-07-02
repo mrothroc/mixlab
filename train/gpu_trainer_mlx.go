@@ -602,71 +602,32 @@ func (t *mlxGPUTrainer) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, se
 	return t.evaluatePreparedInputs(inputs)
 }
 
-func (t *mlxGPUTrainer) SampleObjectiveOutputCategoricalGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error) {
-	return t.sampleObjectiveOutputCategorical(batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed, true)
-}
-
-func (t *mlxGPUTrainer) SampleObjectiveOutputCategoricalEagerGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error) {
-	return t.sampleObjectiveOutputCategorical(batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed, false)
-}
-
-func (t *mlxGPUTrainer) SampleRTDGeneratorOutputCategoricalGPU(batch objectiveBatch, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error) {
-	return t.sampleRTDGeneratorOutputCategorical(batch, outputName, rows, vocab, temperature, seed, true)
-}
-
-func (t *mlxGPUTrainer) SampleRTDGeneratorOutputCategoricalEagerGPU(batch objectiveBatch, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error) {
-	return t.sampleRTDGeneratorOutputCategorical(batch, outputName, rows, vocab, temperature, seed, false)
-}
-
-func (t *mlxGPUTrainer) sampleObjectiveOutputCategorical(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64, allowCompile bool) ([]int, error) {
+func (t *mlxGPUTrainer) EvaluateObjectiveGPUWithOutputs(batch objectiveBatch, batchSize, seqLen int, outputNames []string) (float32, error) {
 	if batch.batchSizeOverride > 0 {
 		batchSize = batch.batchSizeOverride
 	}
 	if err := t.FlushGPU(); err != nil {
-		return nil, err
+		return 0, err
 	}
 	inputs, err := t.makeObjectiveInputs(batch, batchSize, seqLen)
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	var raw []int32
-	if allowCompile {
-		raw, err = gpu.TrainerSampleCategoricalOutput(t.handle, inputs, outputName, rows, vocab, float32(temperature), seed)
-	} else {
-		raw, err = gpu.TrainerSampleCategoricalOutputEager(t.handle, inputs, outputName, rows, vocab, float32(temperature), seed)
+	if len(outputNames) == 0 {
+		return t.evaluatePreparedInputs(inputs)
 	}
+	loss, err := gpu.TrainerEvaluateWithOutputs(t.handle, inputs, outputNames)
+	if err != nil || t.evalLossOutputName == "" || t.evalLossOutputName == "loss" {
+		return loss, err
+	}
+	out, err := gpu.TrainerReadOutput(t.handle, t.evalLossOutputName, []int{1})
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
-	out := make([]int, len(raw))
-	for i, v := range raw {
-		out[i] = int(v)
+	if len(out) != 1 {
+		return 0, fmt.Errorf("eval output %q returned %d values, want 1", t.evalLossOutputName, len(out))
 	}
-	return out, nil
-}
-
-func (t *mlxGPUTrainer) sampleRTDGeneratorOutputCategorical(batch objectiveBatch, outputName string, rows, vocab int, temperature float64, seed uint64, allowCompile bool) ([]int, error) {
-	if err := t.FlushGPU(); err != nil {
-		return nil, err
-	}
-	inputs, err := t.makeRTDGeneratorInputs(batch)
-	if err != nil {
-		return nil, err
-	}
-	var raw []int32
-	if allowCompile {
-		raw, err = gpu.TrainerSampleCategoricalOutput(t.handle, inputs, outputName, rows, vocab, float32(temperature), seed)
-	} else {
-		raw, err = gpu.TrainerSampleCategoricalOutputEager(t.handle, inputs, outputName, rows, vocab, float32(temperature), seed)
-	}
-	if err != nil {
-		return nil, err
-	}
-	out := make([]int, len(raw))
-	for i, v := range raw {
-		out[i] = int(v)
-	}
-	return out, nil
+	return out[0], nil
 }
 
 func (t *mlxGPUTrainer) CompileStatsGPU() (gpu.TrainerCompileStats, error) {

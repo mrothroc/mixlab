@@ -95,6 +95,10 @@ func TrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return 0, errNotBuilt
 }
 
+func TrainerEvaluateWithOutputs(t TrainerHandle, inputs []TensorInput, outputNames []string) (float32, error) {
+	return 0, errNotBuilt
+}
+
 func TrainerComputeMeanSquareGrads(t TrainerHandle, inputs []TensorInput, outputName string) (float32, error) {
 	return 0, errNotBuilt
 }

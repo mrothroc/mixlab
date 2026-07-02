@@ -52,6 +52,43 @@ func TestEnergyMultiheadExampleRunsTwoMLXSteps(t *testing.T) {
 	}
 }
 
+func TestScoreEBMReadsEnergyHeadOutputMLX(t *testing.T) {
+	if !mlxAvailable() || !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+	cfg := parseTrainMinimalPairConfig(t, `"minimal_pair": {"path": "pairs.jsonl"}`)
+	scoreBatch := 2
+	cfg.Training.BatchTokens = scoreBatch * cfg.SeqLen
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		Objective:       "multihead",
+		DropoutInactive: true,
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	trainerIface, err := initGPUTrainer(prog, cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("initGPUTrainer: %v", err)
+	}
+	defer trainerIface.CloseTrainer()
+	evaluator, ok := trainerIface.(diffusionGenerationEvaluator)
+	if !ok {
+		t.Fatalf("trainer does not implement diffusionGenerationEvaluator")
+	}
+	energies, err := scoreEBMSequences(cfg, evaluator, [][]int{{1, 2, 3}, {1, 3, 2}}, scoreBatch)
+	if err != nil {
+		t.Fatalf("scoreEBMSequences: %v", err)
+	}
+	if len(energies) != 2 {
+		t.Fatalf("energies len=%d, want 2", len(energies))
+	}
+	for i, energy := range energies {
+		if math.IsNaN(float64(energy)) || math.IsInf(float64(energy), 0) {
+			t.Fatalf("energy[%d]=%g, want finite", i, energy)
+		}
+	}
+}
+
 func writeMinimalPairFixture(t *testing.T, path string, vocabSize, seqLen, pairs int) {
 	t.Helper()
 	f, err := os.Create(path)

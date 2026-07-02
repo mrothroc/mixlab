@@ -16,6 +16,17 @@ type diffusionGenerationEvaluator interface {
 	ReadOutput(name string, shape []int) ([]float32, error)
 }
 
+type gpuObjectiveOutputEvaluator interface {
+	EvaluateObjectiveGPUWithOutputs(batch objectiveBatch, batchSize, seqLen int, outputNames []string) (float32, error)
+}
+
+func evaluateObjectiveAndCacheOutputs(evaluator diffusionGenerationEvaluator, batch objectiveBatch, batchSize, seqLen int, outputNames ...string) (float32, error) {
+	if outputEvaluator, ok := evaluator.(gpuObjectiveOutputEvaluator); ok {
+		return outputEvaluator.EvaluateObjectiveGPUWithOutputs(batch, batchSize, seqLen, outputNames)
+	}
+	return evaluator.EvaluateObjectiveGPU(batch, batchSize, seqLen)
+}
+
 type diffusionGenerationResult struct {
 	tokens          []int
 	commits         []diffusionCommit
@@ -263,10 +274,10 @@ func generateDiffusionTokensWithOptions(cfg *ArchConfig, evaluator diffusionGene
 			if batch.batchSizeOverride > 0 {
 				evalBatchSize = batch.batchSizeOverride
 			}
-			if _, err := evaluator.EvaluateObjectiveGPU(batch, evalBatchSize, cfg.SeqLen); err != nil {
+			outputName := diffusionLogitsOutputName(cfg)
+			if _, err := evaluateObjectiveAndCacheOutputs(evaluator, batch, evalBatchSize, cfg.SeqLen, outputName); err != nil {
 				return nil, err
 			}
-			outputName := diffusionLogitsOutputName(cfg)
 			logits, err := evaluator.ReadOutput(outputName, []int{cfg.SeqLen, cfg.VocabSize})
 			if err != nil {
 				return nil, fmt.Errorf("read %s: %w", outputName, err)

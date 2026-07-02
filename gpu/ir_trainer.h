@@ -155,6 +155,9 @@ struct IRTrainer {
   void flush();
   float evaluate(const mlx::core::array& tokens, const mlx::core::array& targets);
   float evaluate_named(const TensorMap& inputs);
+  float evaluate_named_with_outputs(
+      const TensorMap& inputs,
+      const std::vector<std::string>& extra_output_names);
   std::vector<float> evaluate_per_token(const TensorMap& inputs);
   std::vector<int32_t> sample_categorical_output(
       const TensorMap& inputs,

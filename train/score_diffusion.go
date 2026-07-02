@@ -291,10 +291,10 @@ func scoreDiffusionTokens(cfg *ArchConfig, evaluator diffusionGenerationEvaluato
 		if batch.batchSizeOverride > 0 {
 			evalBatchSize = batch.batchSizeOverride
 		}
-		if _, err := evaluator.EvaluateObjectiveGPU(batch, evalBatchSize, cfg.SeqLen); err != nil {
+		outputName := diffusionLogitsOutputName(cfg)
+		if _, err := evaluateObjectiveAndCacheOutputs(evaluator, batch, evalBatchSize, cfg.SeqLen, outputName); err != nil {
 			return nil, err
 		}
-		outputName := diffusionLogitsOutputName(cfg)
 		logits, err := evaluator.ReadOutput(outputName, []int{positionBatch * cfg.SeqLen, cfg.VocabSize})
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", outputName, err)

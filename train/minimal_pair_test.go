@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -159,8 +160,12 @@ func TestScoreEBMRecordSequenceAndPair(t *testing.T) {
 	if eval.batch.x[energyOffset] != 1 || eval.batch.x[energyOffset+cfg.SeqLen] != 1 {
 		t.Fatalf("energy scoring rows not populated: %v", eval.batch.x)
 	}
+	if !reflect.DeepEqual(eval.requestedOutputs, []string{"head_energy_logits"}) {
+		t.Fatalf("requested outputs=%v, want head_energy_logits", eval.requestedOutputs)
+	}
 
 	eval.output = []float32{0.5, 0.0}
+	eval.requestedOutputs = nil
 	seqOut, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}}, 2)
 	if err != nil {
 		t.Fatalf("scoreEBMRecord(seq): %v", err)
@@ -195,12 +200,19 @@ func TestScoreEBMJSONLSummaryIncludesFamilies(t *testing.T) {
 }
 
 type fakeEBMEvaluator struct {
-	batch  objectiveBatch
-	output []float32
+	batch            objectiveBatch
+	output           []float32
+	requestedOutputs []string
 }
 
 func (f *fakeEBMEvaluator) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error) {
 	f.batch = batch
+	return 0, nil
+}
+
+func (f *fakeEBMEvaluator) EvaluateObjectiveGPUWithOutputs(batch objectiveBatch, batchSize, seqLen int, outputNames []string) (float32, error) {
+	f.batch = batch
+	f.requestedOutputs = append([]string(nil), outputNames...)
 	return 0, nil
 }
 

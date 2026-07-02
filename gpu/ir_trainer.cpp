@@ -3024,6 +3024,37 @@ float IRTrainer::evaluate_named(const TensorMap& inputs) {
   return loss.item<float>();
 }
 
+float IRTrainer::evaluate_named_with_outputs(
+    const TensorMap& inputs,
+    const std::vector<std::string>& extra_output_names) {
+  flush();
+  if (weights.empty()) {
+    throw std::runtime_error("IR trainer has no weights");
+  }
+  auto loss_name = evaluation_loss_name(program);
+  auto output_names = collect_cached_output_names(program, loss_name);
+  for (const auto& name : extra_output_names) {
+    if (name.empty()) {
+      throw std::runtime_error("requested output name is empty");
+    }
+    if (std::find(output_names.begin(), output_names.end(), name) == output_names.end()) {
+      output_names.push_back(name);
+    }
+  }
+  auto effective = effective_compute_weights(weights, compute_dtype);
+  last_outputs = ir_interpret_outputs(program, effective, inputs, output_names);
+  auto loss = last_outputs.at(loss_name);
+  std::vector<mx::array> eval_arrays;
+  eval_arrays.reserve(1 + last_outputs.size());
+  eval_arrays.push_back(loss);
+  for (const auto& [_, output] : last_outputs) {
+    eval_arrays.push_back(output);
+  }
+  mx::eval(eval_arrays);
+  report_gated_delta_timing_summary("eval", step_count);
+  return loss.item<float>();
+}
+
 float IRTrainer::compute_mean_square_grads_named(const TensorMap& inputs, const std::string& output_name) {
   flush();
   if (weights.empty()) {

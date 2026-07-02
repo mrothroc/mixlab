@@ -427,6 +427,36 @@ func mlxTrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) 
 	return loss, nil
 }
 
+func mlxTrainerEvaluateWithOutputs(t TrainerHandle, inputs []TensorInput, outputNames []string) (float32, error) {
+	cInputs, cleanup, err := marshalTensorInputs(inputs)
+	if err != nil {
+		return 0, err
+	}
+	defer cleanup()
+	cOutputNames := make([]*C.char, len(outputNames))
+	for i, name := range outputNames {
+		cOutputNames[i] = C.CString(name)
+	}
+	defer func() {
+		for _, s := range cOutputNames {
+			if s != nil {
+				C.free(unsafe.Pointer(s))
+			}
+		}
+	}()
+	loss := float32(C.mlx_ir_trainer_evaluate_named_with_outputs(
+		C.int64_t(t),
+		(*C.mlx_tensor_input)(unsafe.Pointer(&cInputs[0])),
+		C.int(len(cInputs)),
+		(**C.char)(unsafe.Pointer(&cOutputNames[0])),
+		C.int(len(cOutputNames)),
+	))
+	if math.IsNaN(float64(loss)) {
+		return 0, fmt.Errorf("mlx_ir_trainer_evaluate_named_with_outputs failed")
+	}
+	return loss, nil
+}
+
 func mlxEvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string, grads [][]float32) (float32, error) {
 	cInputs, cleanup, err := marshalTensorInputs(inputs)
 	if err != nil {

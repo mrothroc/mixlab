@@ -190,6 +190,21 @@ func TrainerEvaluate(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return mlxTrainerEvaluate(t, inputs)
 }
 
+func TrainerEvaluateWithOutputs(t TrainerHandle, inputs []TensorInput, outputNames []string) (float32, error) {
+	if t == 0 {
+		return 0, fmt.Errorf("invalid trainer handle; create the trainer successfully before running evaluation")
+	}
+	if len(outputNames) == 0 {
+		return TrainerEvaluate(t, inputs)
+	}
+	for i, name := range outputNames {
+		if name == "" {
+			return 0, fmt.Errorf("outputNames[%d] is empty", i)
+		}
+	}
+	return mlxTrainerEvaluateWithOutputs(t, inputs, outputNames)
+}
+
 func TrainerComputeMeanSquareGrads(t TrainerHandle, inputs []TensorInput, outputName string) (float32, error) {
 	if t == 0 {
 		return 0, fmt.Errorf("invalid trainer handle; create the trainer successfully before computing gradients")

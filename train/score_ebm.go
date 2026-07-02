@@ -261,11 +261,11 @@ func scoreEBMSequences(cfg *ArchConfig, evaluator diffusionGenerationEvaluator, 
 	if batch.batchSizeOverride > 0 {
 		evalBatchSize = batch.batchSizeOverride
 	}
-	if _, err := evaluator.EvaluateObjectiveGPU(batch, evalBatchSize, cfg.SeqLen); err != nil {
-		return nil, err
-	}
 	outputName, err := energyHeadLogitsOutputName(cfg)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := evaluateObjectiveAndCacheOutputs(evaluator, batch, evalBatchSize, cfg.SeqLen, outputName); err != nil {
 		return nil, err
 	}
 	logits, err := evaluator.ReadOutput(outputName, []int{scoreBatch, 1})

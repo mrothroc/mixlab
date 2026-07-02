@@ -359,6 +359,39 @@ float mlx_ir_trainer_evaluate_named(int64_t trainer, const mlx_tensor_input* inp
   }
 }
 
+float mlx_ir_trainer_evaluate_named_with_outputs(
+    int64_t trainer,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char** output_names,
+    int n_outputs) {
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return std::nanf("");
+    }
+    auto* t = get_ir_trainer(trainer);
+    if (!t || !inputs || n_inputs <= 0 || !output_names || n_outputs <= 0) {
+      return std::nanf("");
+    }
+    auto tensor_map = to_tensor_map(inputs, n_inputs);
+    std::vector<std::string> names;
+    names.reserve(static_cast<size_t>(n_outputs));
+    for (int i = 0; i < n_outputs; ++i) {
+      if (!output_names[i] || output_names[i][0] == '\0') {
+        return std::nanf("");
+      }
+      names.emplace_back(output_names[i]);
+    }
+    return t->evaluate_named_with_outputs(tensor_map, names);
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_evaluate_named_with_outputs", e);
+    return std::nanf("");
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_evaluate_named_with_outputs unknown exception" << std::endl;
+    return std::nanf("");
+  }
+}
+
 float mlx_ir_trainer_compute_mean_square_grads_named(
     int64_t trainer,
     const mlx_tensor_input* inputs,
