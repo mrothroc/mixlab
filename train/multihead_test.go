@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mrothroc/mixlab/arch"
+	"github.com/mrothroc/mixlab/gpu"
 )
 
 func TestPrepareMultiheadBatchExpandsRowsAndBoundaries(t *testing.T) {
@@ -258,6 +259,29 @@ func (t *rtdDualSamplerTrainer) SampleObjectiveOutputCategoricalEagerGPU(batch o
 	return append([]int(nil), t.eagerSamples...), nil
 }
 
+type compileStatsTestTrainer struct {
+	rtdSamplerOnlyTrainer
+	stats gpu.TrainerCompileStats
+}
+
+func (t *compileStatsTestTrainer) CompileStatsGPU() (gpu.TrainerCompileStats, error) {
+	return t.stats, nil
+}
+
+func TestFormatCompileStatsLabelsCounters(t *testing.T) {
+	trainer := &compileStatsTestTrainer{stats: gpu.TrainerCompileStats{
+		TrainingStepCacheHits:         24,
+		TrainingStepCacheMisses:       1,
+		CategoricalSamplerCacheHits:   23,
+		CategoricalSamplerCacheMisses: 1,
+	}}
+	got := formatCompileStats(trainer)
+	want := " compile=train_hits=24 train_misses=1 sampler_hits=23 sampler_misses=1"
+	if got != want {
+		t.Fatalf("formatCompileStats=%q, want %q", got, want)
+	}
+}
+
 func cloneObjectiveBatchForRTDTest(batch objectiveBatch) objectiveBatch {
 	return objectiveBatch{
 		x:                    append([]int(nil), batch.x...),
@@ -271,8 +295,7 @@ func cloneObjectiveBatchForRTDTest(batch objectiveBatch) objectiveBatch {
 	}
 }
 
-func TestRTDCorruptionPrefersEagerVectorizedSampler(t *testing.T) {
-	t.Setenv("MIXLAB_RTD_COMPILED_GENERATOR_SAMPLER", "")
+func TestRTDCorruptionPrefersCompiledVectorizedSampler(t *testing.T) {
 	cfg := parseTrainMultiheadConfig(t, `"training": {
 		"objective": "multihead",
 		"steps": 1,
@@ -303,17 +326,17 @@ func TestRTDCorruptionPrefersEagerVectorizedSampler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("maybeAttachRTDCorruption: %v", err)
 	}
-	if trainer.eagerCalls != 1 || trainer.calls != 0 {
-		t.Fatalf("sampler calls eager=%d compiled=%d, want eager only", trainer.eagerCalls, trainer.calls)
+	if trainer.calls != 1 || trainer.eagerCalls != 0 {
+		t.Fatalf("sampler calls eager=%d compiled=%d, want compiled only", trainer.eagerCalls, trainer.calls)
 	}
 	rtdOffset := cfg.Training.BatchTokens
-	if got.x[rtdOffset+1] != 9 || got.y[rtdOffset+1] != 0 {
-		t.Fatalf("RTD corruption came from wrong sampler x/y=%d/%d, want eager sample 9/0", got.x[rtdOffset+1], got.y[rtdOffset+1])
+	if got.x[rtdOffset+1] != 7 || got.y[rtdOffset+1] != 0 {
+		t.Fatalf("RTD corruption came from wrong sampler x/y=%d/%d, want compiled sample 7/0", got.x[rtdOffset+1], got.y[rtdOffset+1])
 	}
 }
 
-func TestRTDCorruptionCanOptIntoCompiledSampler(t *testing.T) {
-	t.Setenv("MIXLAB_RTD_COMPILED_GENERATOR_SAMPLER", "1")
+func TestRTDCorruptionCanOptIntoEagerSampler(t *testing.T) {
+	t.Setenv("MIXLAB_RTD_EAGER_GENERATOR_SAMPLER", "1")
 	cfg := parseTrainMultiheadConfig(t, `"training": {
 		"objective": "multihead",
 		"steps": 1,
@@ -344,12 +367,12 @@ func TestRTDCorruptionCanOptIntoCompiledSampler(t *testing.T) {
 	if err != nil {
 		t.Fatalf("maybeAttachRTDCorruption: %v", err)
 	}
-	if trainer.calls != 1 || trainer.eagerCalls != 0 {
-		t.Fatalf("sampler calls eager=%d compiled=%d, want compiled only", trainer.eagerCalls, trainer.calls)
+	if trainer.eagerCalls != 1 || trainer.calls != 0 {
+		t.Fatalf("sampler calls eager=%d compiled=%d, want eager only", trainer.eagerCalls, trainer.calls)
 	}
 	rtdOffset := cfg.Training.BatchTokens
-	if got.x[rtdOffset+1] != 7 || got.y[rtdOffset+1] != 0 {
-		t.Fatalf("RTD corruption came from wrong sampler x/y=%d/%d, want compiled sample 7/0", got.x[rtdOffset+1], got.y[rtdOffset+1])
+	if got.x[rtdOffset+1] != 9 || got.y[rtdOffset+1] != 0 {
+		t.Fatalf("RTD corruption came from wrong sampler x/y=%d/%d, want eager sample 9/0", got.x[rtdOffset+1], got.y[rtdOffset+1])
 	}
 }
 

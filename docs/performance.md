@@ -67,7 +67,7 @@ Add `-timing` to see where each progress interval spends time:
 Example output:
 
 ```text
-[model] [timing] data=1.2ms gpu=142.5ms val=11.3ms log=0.2ms compile=train:24/1 sampler:0/0
+[model] [timing] data=1.2ms gpu=142.5ms val=11.3ms log=0.2ms compile=train_hits=24 train_misses=1 sampler_hits=24 sampler_misses=1
 ```
 
 Fields:
@@ -78,17 +78,18 @@ Fields:
 | `gpu` | Forward, backward, and optimizer time. |
 | `val` | Validation loss time. Zero on non-validation steps. |
 | `log` | Progress formatting time. |
-| `compile` | MLX compiled-graph cache hits/misses, shown as `train:hits/misses sampler:hits/misses` when the backend exposes counters. |
+| `compile` | MLX compiled-graph cache hits and misses when the backend exposes counters. |
 
 If `data` is consistently high, the loader cannot keep up with the GPU. If
 `gpu` dominates and `data` is near zero, the training pipeline is healthy.
 
 For RTD/ELECTRA runs, Mixlab keeps replacement sampling vectorized on device
-but avoids compiling that sampler by default so it does not compete with the
-main training-step graph cache. To compare the old compiled sampler path:
+and compiles the generator sampler by default. After the first sampler miss,
+steady-state RTD timing should show sampler cache hits. To force the older
+eager sampler path for debugging:
 
 ```bash
-MIXLAB_RTD_COMPILED_GENERATOR_SAMPLER=1 ./mixlab -mode arch ...
+MIXLAB_RTD_EAGER_GENERATOR_SAMPLER=1 ./mixlab -mode arch ...
 ```
 
 To inspect MLX compiled-graph cache behavior, enable:

@@ -191,30 +191,45 @@ func attachRTDDedicatedGeneratorCorruption(
 }
 
 func sampleRTDGeneratorReplacements(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, bool, error) {
-	if !envTruthy("MIXLAB_RTD_COMPILED_GENERATOR_SAMPLER") {
-		if sampler, ok := trainer.(gpuObjectiveCategoricalEagerSampler); ok {
-			samples, err := sampler.SampleObjectiveOutputCategoricalEagerGPU(batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed)
-			if err != nil {
-				return nil, true, err
-			}
-			if err := validateRTDGeneratorSamples(samples, rows, vocab); err != nil {
-				return nil, true, err
-			}
-			return samples, true, nil
+	compiled := func() ([]int, bool, error) {
+		sampler, ok := trainer.(gpuObjectiveCategoricalSampler)
+		if !ok {
+			return nil, false, nil
 		}
+		samples, err := sampler.SampleObjectiveOutputCategoricalGPU(batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed)
+		if err != nil {
+			return nil, true, err
+		}
+		if err := validateRTDGeneratorSamples(samples, rows, vocab); err != nil {
+			return nil, true, err
+		}
+		return samples, true, nil
 	}
-	sampler, ok := trainer.(gpuObjectiveCategoricalSampler)
-	if !ok {
-		return nil, false, nil
+	eager := func() ([]int, bool, error) {
+		sampler, ok := trainer.(gpuObjectiveCategoricalEagerSampler)
+		if !ok {
+			return nil, false, nil
+		}
+		samples, err := sampler.SampleObjectiveOutputCategoricalEagerGPU(batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed)
+		if err != nil {
+			return nil, true, err
+		}
+		if err := validateRTDGeneratorSamples(samples, rows, vocab); err != nil {
+			return nil, true, err
+		}
+		return samples, true, nil
 	}
-	samples, err := sampler.SampleObjectiveOutputCategoricalGPU(batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed)
-	if err != nil {
-		return nil, true, err
+
+	if envTruthy("MIXLAB_RTD_EAGER_GENERATOR_SAMPLER") {
+		if samples, ok, err := eager(); ok || err != nil {
+			return samples, ok, err
+		}
+		return compiled()
 	}
-	if err := validateRTDGeneratorSamples(samples, rows, vocab); err != nil {
-		return nil, true, err
+	if samples, ok, err := compiled(); ok || err != nil {
+		return samples, ok, err
 	}
-	return samples, true, nil
+	return eager()
 }
 
 func validateRTDGeneratorSamples(samples []int, rows, vocab int) error {

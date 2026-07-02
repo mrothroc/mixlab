@@ -56,7 +56,6 @@ func TestRTDDedicatedGeneratorCompiledStepCacheIsStable(t *testing.T) {
 	if !mlxAvailable() || !gpu.Available() {
 		t.Skip("MLX backend not available")
 	}
-	t.Setenv("MIXLAB_RTD_COMPILED_GENERATOR_SAMPLER", "1")
 
 	cfg, err := LoadArchConfig(filepath.Join("examples", "multihead_mntp_rtd_dedicated_tiny.json"))
 	if err != nil {
@@ -119,6 +118,58 @@ func TestRTDDedicatedGeneratorCompiledStepCacheIsStable(t *testing.T) {
 	}
 	if stats.CategoricalSamplerCacheHits < 2 {
 		t.Fatalf("categorical sampler cache hits=%d, want at least 2", stats.CategoricalSamplerCacheHits)
+	}
+}
+
+func TestRTDMultiheadSeqLenScheduleFinalEvalUsesMaxProgram(t *testing.T) {
+	if !mlxAvailable() || !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "rtd_multihead_seq_schedule_final_eval",
+		"model_dim": 16,
+		"vocab_size": 32,
+		"seq_len": 8,
+		"blocks": [
+			{"type": "plain", "heads": 2},
+			{"type": "geglu"}
+		],
+		"training": {
+			"objective": "multihead",
+			"steps": 2,
+			"lr": 0.001,
+			"batch_tokens": 16,
+			"seed": 17,
+			"mlm_mask_prob": 0.5,
+			"mlm_mask_token_id": 1,
+			"seq_len_schedule": [[0,4]],
+			"rtd": {
+				"generator": "tied",
+				"generator_head": "scorer",
+				"mask_prob": 0.5,
+				"sample_temperature": 1.0
+			},
+			"heads": [
+				{"name": "scorer", "objective": "mntp", "loss_weight": 0.8, "layer_aggregation": "dwa"},
+				{"name": "detector", "objective": "rtd", "loss_weight": 1.0, "output_head": "binary"}
+			]
+		}
+	}`), "rtd_multihead_seq_schedule_final_eval")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	trainDir := filepath.Join(t.TempDir(), "data")
+	if err := os.MkdirAll(trainDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", trainDir, err)
+	}
+	writeInferenceShard(t, filepath.Join(trainDir, "train_000.bin"), rtdSmokeTokens(cfg.VocabSize, 512))
+
+	result, err := runTrain(cfg, filepath.Join(trainDir, "train_*.bin"), TrainOptions{LogEvery: 0, ValEvery: 0})
+	if err != nil {
+		t.Fatalf("runTrain: %v", err)
+	}
+	if result.LastUnmaskedLoss <= 0 || math.IsNaN(result.LastUnmaskedLoss) || math.IsInf(result.LastUnmaskedLoss, 0) {
+		t.Fatalf("LastUnmaskedLoss=%g, want finite positive", result.LastUnmaskedLoss)
 	}
 }
 
