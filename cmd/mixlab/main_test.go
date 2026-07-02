@@ -66,6 +66,15 @@ func TestTelemetryFlagsInTrainingHelpGroups(t *testing.T) {
 	}
 }
 
+func TestPreparePairsFlagsInHelpGroup(t *testing.T) {
+	groups := modeFlagGroups["prepare-pairs"]
+	for _, flagName := range []string{"pair-in", "pair-out", "vocab-size", "pair-max-len"} {
+		if !flagGroupContains(groups, flagName) {
+			t.Fatalf("prepare-pairs help groups missing %s", flagName)
+		}
+	}
+}
+
 func flagGroupContains(groups []flagGroup, name string) bool {
 	for _, group := range groups {
 		for _, got := range group.Names {

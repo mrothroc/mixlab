@@ -38,3 +38,41 @@ When `-minimal-pair-out` is set, `prepare` writes JSONL records shaped as
 uses only the input corpus text and tokenizer, applies broad stochastic
 corruptions, filters duplicates, and prints accepted/rejected counts by family.
 Use that file from `training.minimal_pair.path` with a multihead energy head.
+
+## `prepare-pairs`
+
+`prepare-pairs` validates an explicit minimal-pair JSONL file and can compile
+it to a compact binary shard for faster startup during energy-head training.
+It does not tokenize raw text; records must already contain token IDs.
+
+```bash
+./mixlab -mode prepare-pairs \
+  -config examples/multihead_mntp_energy_tiny.json \
+  -pair-in data/pairs.train.jsonl \
+  -pair-out data/pairs.train.mpair
+```
+
+You can omit `-pair-out` to run validation only. With `-config`, Mixlab uses
+the config's `vocab_size` and `seq_len` as validation limits; if `-pair-in` is
+omitted and the config has `training.minimal_pair.source: "jsonl"`, Mixlab uses
+`training.minimal_pair.path`. Without `-config`, pass `-vocab-size`; use
+`-pair-max-len` to enforce a maximum clean/corrupt sequence length.
+
+| Flag | Description |
+|------|-------------|
+| `-pair-in` | Minimal-pair JSONL input. Required unless `-config` supplies a JSONL `training.minimal_pair.path`. |
+| `-pair-out` | Optional compiled binary `.mpair` output. Omit for validation-only runs. |
+| `-config` | Optional config used to infer `vocab_size`, `seq_len`, and pair input path. |
+| `-vocab-size` | Token-id upper bound when no config is supplied. |
+| `-pair-max-len` | Maximum clean/corrupt length. `0` uses config `seq_len` when a config is supplied; otherwise no length cap. |
+
+Compiled shards are used with:
+
+```jsonc
+"training": {
+  "minimal_pair": {
+    "source": "bin",
+    "path": "data/pairs.train.mpair"
+  }
+}
+```

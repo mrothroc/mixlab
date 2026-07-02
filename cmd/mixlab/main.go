@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
+	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, prepare-pairs, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
@@ -86,6 +86,9 @@ func main() {
 	prepMinimalPairCorruptions := flag.String("minimal-pair-corruptions", "agreement,attractor,word_order", "comma-separated minimal-pair corruption families (prepare mode)")
 	prepMinimalPairMaxPairs := flag.Int("minimal-pair-max-pairs", 0, "maximum generated minimal pairs; 0 lets prepare choose from input size (prepare mode)")
 	prepMinimalPairSeed := flag.Int("minimal-pair-seed", 1234, "deterministic seed for minimal-pair generation (prepare mode)")
+	pairIn := flag.String("pair-in", "", "minimal-pair JSONL input for prepare-pairs mode")
+	pairOut := flag.String("pair-out", "", "compiled minimal-pair binary output for prepare-pairs mode; omit to validate only")
+	pairMaxLen := flag.Int("pair-max-len", 0, "maximum clean/corrupt token length for prepare-pairs; 0 uses config seq_len when -config is provided")
 
 	flag.Usage = func() {
 		printUsage(os.Stderr, requestedHelpMode(os.Args[1:]))
@@ -166,6 +169,16 @@ func main() {
 			MinimalPairCorruptions: *prepMinimalPairCorruptions,
 			MinimalPairMaxPairs:    *prepMinimalPairMaxPairs,
 			MinimalPairSeed:        *prepMinimalPairSeed,
+		}))
+		return
+	}
+	if *mode == "prepare-pairs" {
+		must(train.RunPreparePairsWithOptions(train.PreparePairsOptions{
+			ConfigPath: *configPath,
+			PairIn:     *pairIn,
+			PairOut:    *pairOut,
+			VocabSize:  *prepVocabSize,
+			MaxLen:     *pairMaxLen,
 		}))
 		return
 	}
@@ -310,7 +323,7 @@ func main() {
 			LogitTokens:     *parityLogitTokens,
 		}))
 	default:
-		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity)", *mode))
+		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, prepare-pairs, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity)", *mode))
 	}
 }
 
@@ -319,7 +332,7 @@ type flagGroup struct {
 	Names []string
 }
 
-var supportedModes = []string{"smoke", "arch", "arch_race", "prepare", "count", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "export-hf", "parity"}
+var supportedModes = []string{"smoke", "arch", "arch_race", "prepare", "prepare-pairs", "count", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "export-hf", "parity"}
 
 var modeFlagGroups = map[string][]flagGroup{
 	"arch": {
@@ -342,6 +355,11 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Tokenizer/data", []string{"vocab-size", "val-split", "tokenizer-path", "text-field"}},
 		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},
 		{"Minimal pair artifact", []string{"minimal-pair-out", "minimal-pair-corruptions", "minimal-pair-max-pairs", "minimal-pair-seed"}},
+	},
+	"prepare-pairs": {
+		{"Input", []string{"pair-in", "config"}},
+		{"Validation", []string{"vocab-size", "pair-max-len"}},
+		{"Output", []string{"pair-out"}},
 	},
 	"count": {
 		{"Required", []string{"config"}},

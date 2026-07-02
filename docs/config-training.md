@@ -65,6 +65,9 @@ rates/weight decay are documented in the full reference.
 
 Compatibility is intentionally explicit. Some features are training-only and
 are rejected by export paths until they have defined inference semantics.
+Minimal-pair JSONL can be validated or compiled to `.mpair` shards with
+`mixlab -mode prepare-pairs`; set `training.minimal_pair.source: "bin"` to use
+the compiled artifact.
 
 ## Validation And Logging
 

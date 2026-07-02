@@ -8,6 +8,7 @@ import (
 
 const (
 	MinimalPairSourceJSONL  = "jsonl"
+	MinimalPairSourceBinary = "bin"
 	MinimalPairLossLogistic = "logistic"
 	MinimalPairLossHinge    = "hinge"
 
@@ -60,9 +61,9 @@ func validateMinimalPairSpec(cfg *ArchConfig, source string) error {
 	}
 	m := cfg.Training.MinimalPair
 	switch m.Source {
-	case MinimalPairSourceJSONL:
+	case MinimalPairSourceJSONL, MinimalPairSourceBinary:
 	default:
-		return fmt.Errorf("config %q training.minimal_pair.source=%q must be \"jsonl\" in v1", source, m.Source)
+		return fmt.Errorf("config %q training.minimal_pair.source=%q must be \"jsonl\" or \"bin\"", source, m.Source)
 	}
 	if strings.TrimSpace(m.Path) == "" {
 		return fmt.Errorf("config %q training.minimal_pair.path is required", source)

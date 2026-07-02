@@ -3,6 +3,8 @@ package train
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -54,6 +56,87 @@ func TestDecodeMinimalPairJSONLValidation(t *testing.T) {
 	_, err = decodeMinimalPairJSONL(strings.NewReader(`{"id":"bad","clean":[1],"corrupt":[9]}`+"\n"), "pairs", 8)
 	if err == nil || !strings.Contains(err.Error(), "out of range") {
 		t.Fatalf("error=%v, want out of range", err)
+	}
+}
+
+func TestMinimalPairBinaryRoundTrip(t *testing.T) {
+	records := []minimalPairRecord{
+		{ID: "p0", Clean: []int{1, 2, 3}, Corrupt: []int{1, 4, 3}, Family: "agreement"},
+		{ID: "p1", Clean: []int{5, 6}, Corrupt: []int{6, 5}, Family: "word_order"},
+	}
+	var buf bytes.Buffer
+	if err := writeMinimalPairBinary(&buf, records, 32, 4); err != nil {
+		t.Fatalf("writeMinimalPairBinary: %v", err)
+	}
+	got, err := decodeMinimalPairBinary(bytes.NewReader(buf.Bytes()), "pairs.mpair", minimalPairDecodeOptions{
+		VocabSize:     32,
+		MaxLen:        4,
+		RequireFamily: true,
+	})
+	if err != nil {
+		t.Fatalf("decodeMinimalPairBinary: %v", err)
+	}
+	if len(got) != len(records) || got[1].ID != "p1" || got[1].Family != "word_order" || !intSlicesEqualTrain(got[1].Corrupt, []int{6, 5}) {
+		t.Fatalf("round-trip records=%+v", got)
+	}
+	if _, err := decodeMinimalPairBinary(bytes.NewReader(buf.Bytes()), "pairs.mpair", minimalPairDecodeOptions{VocabSize: 31}); err == nil || !strings.Contains(err.Error(), "vocab_size") {
+		t.Fatalf("vocab mismatch error=%v, want vocab_size", err)
+	}
+}
+
+func TestPreparePairsValidateAndCompile(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "pairs.jsonl")
+	out := filepath.Join(dir, "pairs.mpair")
+	if err := os.WriteFile(in, []byte(`{"id":"p0","clean":[1,2],"corrupt":[1,3],"family":"agreement"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write pair jsonl: %v", err)
+	}
+	if err := runPreparePairsWithOptions(PreparePairsOptions{
+		PairIn:    in,
+		PairOut:   out,
+		VocabSize: 32,
+		MaxLen:    4,
+	}); err != nil {
+		t.Fatalf("runPreparePairsWithOptions: %v", err)
+	}
+	records, err := loadMinimalPairs(out, arch.MinimalPairSourceBinary, minimalPairDecodeOptions{VocabSize: 32, RequireFamily: true})
+	if err != nil {
+		t.Fatalf("load compiled pair shard: %v", err)
+	}
+	if len(records) != 1 || records[0].ID != "p0" || records[0].Family != "agreement" {
+		t.Fatalf("compiled records=%+v", records)
+	}
+
+	cfg := parseTrainMinimalPairConfig(t, `"minimal_pair": {"source": "bin", "path": "`+strings.ReplaceAll(out, `\`, `\\`)+`"}`)
+	sampler, err := newMinimalPairSampler(cfg)
+	if err != nil {
+		t.Fatalf("newMinimalPairSampler(bin): %v", err)
+	}
+	if len(sampler.records) != 1 || sampler.records[0].ID != "p0" {
+		t.Fatalf("sampler records=%+v", sampler.records)
+	}
+}
+
+func TestPreparePairsRejectsLengthAndMissingFamily(t *testing.T) {
+	dir := t.TempDir()
+	in := filepath.Join(dir, "pairs.jsonl")
+	if err := os.WriteFile(in, []byte(`{"id":"p0","clean":[1,2],"corrupt":[1,3]}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write pair jsonl: %v", err)
+	}
+	err := runPreparePairsWithOptions(PreparePairsOptions{PairIn: in, VocabSize: 8, MaxLen: 4})
+	if err == nil || !strings.Contains(err.Error(), "family") {
+		t.Fatalf("missing family error=%v, want family", err)
+	}
+	if err := os.WriteFile(in, []byte(`{"id":"p0","clean":[1,2],"corrupt":[1,3],"family":"agreement"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("rewrite pair jsonl: %v", err)
+	}
+	err = runPreparePairsWithOptions(PreparePairsOptions{PairIn: in, VocabSize: 8, MaxLen: 1})
+	if err == nil || !strings.Contains(err.Error(), "exceeds max length") {
+		t.Fatalf("length error=%v, want exceeds max length", err)
+	}
+	err = runPreparePairsWithOptions(PreparePairsOptions{PairIn: in, PairOut: in, VocabSize: 8, MaxLen: 4})
+	if err == nil || !strings.Contains(err.Error(), "must be different") {
+		t.Fatalf("same path error=%v, want must be different", err)
 	}
 }
 

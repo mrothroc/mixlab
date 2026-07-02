@@ -124,6 +124,10 @@ func RunPrepare(opts PrepareOptions) error {
 	return runPrepare(opts)
 }
 
+func RunPreparePairsWithOptions(opts PreparePairsOptions) error {
+	return runPreparePairsWithOptions(opts)
+}
+
 func RunSmoke() error {
 	return runSmoke()
 }
