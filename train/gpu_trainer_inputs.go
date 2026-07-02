@@ -20,30 +20,54 @@ func (t *mlxGPUTrainer) makeRTDGeneratorInputs(batch objectiveBatch) ([]gpu.Tens
 		return nil, fmt.Errorf("program declares rtd_generator_tokens with invalid shape [%d,%d]", t.rtdGeneratorBatchSize, t.rtdGeneratorSeqLen)
 	}
 	need := t.rtdGeneratorBatchSize * t.rtdGeneratorSeqLen
+	selectedNeed := need
+	if t.rtdGeneratorPositionsInput {
+		if t.rtdGeneratorMaskSlots <= 0 {
+			return nil, fmt.Errorf("program declares rtd_generator_positions with invalid shape [%d]", t.rtdGeneratorMaskSlots)
+		}
+		selectedNeed = t.rtdGeneratorBatchSize * t.rtdGeneratorMaskSlots
+		if len(t.rtdGeneratorPosBuf) < t.rtdGeneratorMaskSlots {
+			t.rtdGeneratorPosBuf = make([]int32, t.rtdGeneratorMaskSlots)
+		}
+	}
 	if len(t.rtdGeneratorTokBuf) < need {
 		t.rtdGeneratorTokBuf = make([]int32, need)
-		t.rtdGeneratorTgtBuf = make([]int32, need)
-		t.rtdGeneratorLossBuf = make([]float32, need)
+	}
+	if len(t.rtdGeneratorTgtBuf) < selectedNeed {
+		t.rtdGeneratorTgtBuf = make([]int32, selectedNeed)
+		t.rtdGeneratorLossBuf = make([]float32, selectedNeed)
 	}
 	if len(batch.rtdGeneratorX) < need {
 		return nil, fmt.Errorf("objective batch missing rtd_generator_tokens: got=%d need=%d", len(batch.rtdGeneratorX), need)
 	}
-	if len(batch.rtdGeneratorY) < need {
-		return nil, fmt.Errorf("objective batch missing rtd_generator_targets: got=%d need=%d", len(batch.rtdGeneratorY), need)
+	if t.rtdGeneratorPositionsInput && len(batch.rtdGeneratorPositions) < t.rtdGeneratorMaskSlots {
+		return nil, fmt.Errorf("objective batch missing rtd_generator_positions: got=%d need=%d", len(batch.rtdGeneratorPositions), t.rtdGeneratorMaskSlots)
 	}
-	if len(batch.rtdGeneratorLossMask) < need {
-		return nil, fmt.Errorf("objective batch missing rtd_generator_loss_mask: got=%d need=%d", len(batch.rtdGeneratorLossMask), need)
+	if len(batch.rtdGeneratorY) < selectedNeed {
+		return nil, fmt.Errorf("objective batch missing rtd_generator_targets: got=%d need=%d", len(batch.rtdGeneratorY), selectedNeed)
+	}
+	if len(batch.rtdGeneratorLossMask) < selectedNeed {
+		return nil, fmt.Errorf("objective batch missing rtd_generator_loss_mask: got=%d need=%d", len(batch.rtdGeneratorLossMask), selectedNeed)
 	}
 	for i := 0; i < need; i++ {
 		t.rtdGeneratorTokBuf[i] = int32(batch.rtdGeneratorX[i])
+	}
+	for i := 0; i < selectedNeed; i++ {
 		t.rtdGeneratorTgtBuf[i] = int32(batch.rtdGeneratorY[i])
 	}
-	copy(t.rtdGeneratorLossBuf[:need], batch.rtdGeneratorLossMask[:need])
-	return []gpu.TensorInput{
+	copy(t.rtdGeneratorLossBuf[:selectedNeed], batch.rtdGeneratorLossMask[:selectedNeed])
+	inputs := []gpu.TensorInput{
 		{Name: "rtd_generator_tokens", DType: gpu.TensorInt32, Shape: []int{t.rtdGeneratorBatchSize, t.rtdGeneratorSeqLen}, Data: t.rtdGeneratorTokBuf[:need]},
-		{Name: "rtd_generator_targets", DType: gpu.TensorInt32, Shape: []int{need}, Data: t.rtdGeneratorTgtBuf[:need]},
-		{Name: "rtd_generator_loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.rtdGeneratorLossBuf[:need]},
-	}, nil
+	}
+	if t.rtdGeneratorPositionsInput {
+		copy(t.rtdGeneratorPosBuf[:t.rtdGeneratorMaskSlots], batch.rtdGeneratorPositions[:t.rtdGeneratorMaskSlots])
+		inputs = append(inputs, gpu.TensorInput{Name: "rtd_generator_positions", DType: gpu.TensorInt32, Shape: []int{t.rtdGeneratorMaskSlots}, Data: t.rtdGeneratorPosBuf[:t.rtdGeneratorMaskSlots]})
+	}
+	inputs = append(inputs,
+		gpu.TensorInput{Name: "rtd_generator_targets", DType: gpu.TensorInt32, Shape: []int{selectedNeed}, Data: t.rtdGeneratorTgtBuf[:selectedNeed]},
+		gpu.TensorInput{Name: "rtd_generator_loss_mask", DType: gpu.TensorFloat32, Shape: []int{selectedNeed}, Data: t.rtdGeneratorLossBuf[:selectedNeed]},
+	)
+	return inputs, nil
 }
 
 func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seqLen int) ([]gpu.TensorInput, error) {
@@ -92,6 +116,7 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		t.data2VecMaskBuf = make([]float32, need)
 	}
 	rtdGeneratorNeed := 0
+	rtdGeneratorSelectedNeed := 0
 	rtdGeneratorBatchSize := t.rtdGeneratorBatchSize
 	rtdGeneratorSeqLen := t.rtdGeneratorSeqLen
 	if t.rtdGeneratorInput {
@@ -99,10 +124,22 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 			return nil, fmt.Errorf("program declares rtd_generator_tokens with invalid shape [%d,%d]", rtdGeneratorBatchSize, rtdGeneratorSeqLen)
 		}
 		rtdGeneratorNeed = rtdGeneratorBatchSize * rtdGeneratorSeqLen
+		rtdGeneratorSelectedNeed = rtdGeneratorNeed
+		if t.rtdGeneratorPositionsInput {
+			if t.rtdGeneratorMaskSlots <= 0 {
+				return nil, fmt.Errorf("program declares rtd_generator_positions with invalid shape [%d]", t.rtdGeneratorMaskSlots)
+			}
+			rtdGeneratorSelectedNeed = rtdGeneratorBatchSize * t.rtdGeneratorMaskSlots
+			if len(t.rtdGeneratorPosBuf) < t.rtdGeneratorMaskSlots {
+				t.rtdGeneratorPosBuf = make([]int32, t.rtdGeneratorMaskSlots)
+			}
+		}
 		if len(t.rtdGeneratorTokBuf) < rtdGeneratorNeed {
 			t.rtdGeneratorTokBuf = make([]int32, rtdGeneratorNeed)
-			t.rtdGeneratorTgtBuf = make([]int32, rtdGeneratorNeed)
-			t.rtdGeneratorLossBuf = make([]float32, rtdGeneratorNeed)
+		}
+		if len(t.rtdGeneratorTgtBuf) < rtdGeneratorSelectedNeed {
+			t.rtdGeneratorTgtBuf = make([]int32, rtdGeneratorSelectedNeed)
+			t.rtdGeneratorLossBuf = make([]float32, rtdGeneratorSelectedNeed)
 		}
 	}
 	for i := 0; i < need; i++ {
@@ -224,22 +261,32 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		} else {
 			clear(t.rtdGeneratorTokBuf[:rtdGeneratorNeed])
 		}
-		if len(batch.rtdGeneratorY) >= rtdGeneratorNeed {
-			for i := 0; i < rtdGeneratorNeed; i++ {
+		if t.rtdGeneratorPositionsInput {
+			if len(batch.rtdGeneratorPositions) >= t.rtdGeneratorMaskSlots {
+				copy(t.rtdGeneratorPosBuf[:t.rtdGeneratorMaskSlots], batch.rtdGeneratorPositions[:t.rtdGeneratorMaskSlots])
+			} else {
+				clear(t.rtdGeneratorPosBuf[:t.rtdGeneratorMaskSlots])
+			}
+		}
+		if len(batch.rtdGeneratorY) >= rtdGeneratorSelectedNeed {
+			for i := 0; i < rtdGeneratorSelectedNeed; i++ {
 				t.rtdGeneratorTgtBuf[i] = int32(batch.rtdGeneratorY[i])
 			}
 		} else {
-			clear(t.rtdGeneratorTgtBuf[:rtdGeneratorNeed])
+			clear(t.rtdGeneratorTgtBuf[:rtdGeneratorSelectedNeed])
 		}
-		if len(batch.rtdGeneratorLossMask) >= rtdGeneratorNeed {
-			copy(t.rtdGeneratorLossBuf[:rtdGeneratorNeed], batch.rtdGeneratorLossMask[:rtdGeneratorNeed])
+		if len(batch.rtdGeneratorLossMask) >= rtdGeneratorSelectedNeed {
+			copy(t.rtdGeneratorLossBuf[:rtdGeneratorSelectedNeed], batch.rtdGeneratorLossMask[:rtdGeneratorSelectedNeed])
 		} else {
-			clear(t.rtdGeneratorLossBuf[:rtdGeneratorNeed])
+			clear(t.rtdGeneratorLossBuf[:rtdGeneratorSelectedNeed])
+		}
+		inputs = append(inputs, gpu.TensorInput{Name: "rtd_generator_tokens", DType: gpu.TensorInt32, Shape: []int{rtdGeneratorBatchSize, rtdGeneratorSeqLen}, Data: t.rtdGeneratorTokBuf[:rtdGeneratorNeed]})
+		if t.rtdGeneratorPositionsInput {
+			inputs = append(inputs, gpu.TensorInput{Name: "rtd_generator_positions", DType: gpu.TensorInt32, Shape: []int{t.rtdGeneratorMaskSlots}, Data: t.rtdGeneratorPosBuf[:t.rtdGeneratorMaskSlots]})
 		}
 		inputs = append(inputs,
-			gpu.TensorInput{Name: "rtd_generator_tokens", DType: gpu.TensorInt32, Shape: []int{rtdGeneratorBatchSize, rtdGeneratorSeqLen}, Data: t.rtdGeneratorTokBuf[:rtdGeneratorNeed]},
-			gpu.TensorInput{Name: "rtd_generator_targets", DType: gpu.TensorInt32, Shape: []int{rtdGeneratorNeed}, Data: t.rtdGeneratorTgtBuf[:rtdGeneratorNeed]},
-			gpu.TensorInput{Name: "rtd_generator_loss_mask", DType: gpu.TensorFloat32, Shape: []int{rtdGeneratorNeed}, Data: t.rtdGeneratorLossBuf[:rtdGeneratorNeed]},
+			gpu.TensorInput{Name: "rtd_generator_targets", DType: gpu.TensorInt32, Shape: []int{rtdGeneratorSelectedNeed}, Data: t.rtdGeneratorTgtBuf[:rtdGeneratorSelectedNeed]},
+			gpu.TensorInput{Name: "rtd_generator_loss_mask", DType: gpu.TensorFloat32, Shape: []int{rtdGeneratorSelectedNeed}, Data: t.rtdGeneratorLossBuf[:rtdGeneratorSelectedNeed]},
 		)
 	}
 	if t.firstByteMaskInput {

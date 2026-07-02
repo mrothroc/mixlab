@@ -303,14 +303,15 @@ func TestFormatCompileStatsLabelsCounters(t *testing.T) {
 
 func cloneObjectiveBatchForRTDTest(batch objectiveBatch) objectiveBatch {
 	return objectiveBatch{
-		x:                    append([]int(nil), batch.x...),
-		y:                    append([]int(nil), batch.y...),
-		lossMask:             append([]float32(nil), batch.lossMask...),
-		diffusionBlockStart:  append([]int32(nil), batch.diffusionBlockStart...),
-		diffusionBlockEnd:    append([]int32(nil), batch.diffusionBlockEnd...),
-		rtdGeneratorX:        append([]int(nil), batch.rtdGeneratorX...),
-		rtdGeneratorY:        append([]int(nil), batch.rtdGeneratorY...),
-		rtdGeneratorLossMask: append([]float32(nil), batch.rtdGeneratorLossMask...),
+		x:                     append([]int(nil), batch.x...),
+		y:                     append([]int(nil), batch.y...),
+		lossMask:              append([]float32(nil), batch.lossMask...),
+		diffusionBlockStart:   append([]int32(nil), batch.diffusionBlockStart...),
+		diffusionBlockEnd:     append([]int32(nil), batch.diffusionBlockEnd...),
+		rtdGeneratorX:         append([]int(nil), batch.rtdGeneratorX...),
+		rtdGeneratorPositions: append([]int32(nil), batch.rtdGeneratorPositions...),
+		rtdGeneratorY:         append([]int(nil), batch.rtdGeneratorY...),
+		rtdGeneratorLossMask:  append([]float32(nil), batch.rtdGeneratorLossMask...),
 	}
 }
 
@@ -432,8 +433,9 @@ func TestRTDDedicatedCorruptionUsesGeneratorOnlySampler(t *testing.T) {
 	if trainer.generatorOutput != arch.RTDGeneratorLogitsName {
 		t.Fatalf("generator output=%q, want %s", trainer.generatorOutput, arch.RTDGeneratorLogitsName)
 	}
-	if trainer.generatorRows != cfg.Training.BatchTokens || trainer.generatorVocab != cfg.VocabSize {
-		t.Fatalf("sample shape rows=%d vocab=%d, want %d/%d", trainer.generatorRows, trainer.generatorVocab, cfg.Training.BatchTokens, cfg.VocabSize)
+	wantGeneratorRows := (cfg.Training.BatchTokens / cfg.SeqLen) * arch.RTDDedicatedGeneratorMaskSlots(cfg, cfg.SeqLen)
+	if trainer.generatorRows != wantGeneratorRows || trainer.generatorVocab != cfg.VocabSize {
+		t.Fatalf("sample shape rows=%d vocab=%d, want %d/%d", trainer.generatorRows, trainer.generatorVocab, wantGeneratorRows, cfg.VocabSize)
 	}
 	if len(trainer.generatorBatch.rtdGeneratorX) != cfg.Training.BatchTokens || len(trainer.generatorBatch.x) != len(prepared.x) {
 		t.Fatalf("generator batch lengths rtd_x=%d x=%d, want rtd_x=%d x=%d",
@@ -517,7 +519,7 @@ func TestRTDDedicatedGeneratorCorruptionAndInputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareMultiheadBatch: %v", err)
 	}
-	probe, err := prepareRTDDedicatedGeneratorProbeBatch(cfg, raw, 3, cfg.Training.BatchTokens)
+	probe, err := prepareRTDDedicatedGeneratorProbeBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
 	if err != nil {
 		t.Fatalf("prepareRTDDedicatedGeneratorProbeBatch: %v", err)
 	}
@@ -527,14 +529,16 @@ func TestRTDDedicatedGeneratorCorruptionAndInputs(t *testing.T) {
 		!reflect.DeepEqual(prepared.rtdGeneratorLossMask, probe.lossMask) {
 		t.Fatalf("dedicated generator inputs not attached")
 	}
-	logits := make([]float32, cfg.Training.BatchTokens*cfg.VocabSize)
+	selectedRows := len(probe.y)
+	logits := make([]float32, selectedRows*cfg.VocabSize)
 	for i := range logits {
 		logits[i] = -100
 	}
-	for row := 0; row < cfg.Training.BatchTokens; row++ {
+	for row := 0; row < selectedRows; row++ {
 		sample := 9
 		if row == 0 {
-			sample = raw.x[0] // Same-token sample should stay labeled original.
+			samplePos := int(probe.rtdGeneratorPositions[0])
+			sample = raw.x[samplePos] // Same-token sample should stay labeled original.
 		}
 		logits[row*cfg.VocabSize+sample] = 100
 	}
@@ -542,12 +546,19 @@ func TestRTDDedicatedGeneratorCorruptionAndInputs(t *testing.T) {
 		t.Fatalf("applyRTDDedicatedGeneratorCorruption: %v", err)
 	}
 	rtdOffset := cfg.Training.BatchTokens
-	if prepared.x[rtdOffset] != 1 || prepared.y[rtdOffset] != 1 {
-		t.Fatalf("same-token replacement x/y=%d/%d, want original label", prepared.x[rtdOffset], prepared.y[rtdOffset])
+	firstPos := int(probe.rtdGeneratorPositions[0])
+	if prepared.x[rtdOffset+firstPos] != raw.x[firstPos] || prepared.y[rtdOffset+firstPos] != 1 {
+		t.Fatalf("same-token replacement x/y=%d/%d at pos %d, want original label", prepared.x[rtdOffset+firstPos], prepared.y[rtdOffset+firstPos], firstPos)
 	}
-	for pos := 1; pos < cfg.Training.BatchTokens; pos++ {
-		if prepared.x[rtdOffset+pos] != 9 || prepared.y[rtdOffset+pos] != 0 {
-			t.Fatalf("replacement pos %d x/y=%d/%d, want 9/0", pos, prepared.x[rtdOffset+pos], prepared.y[rtdOffset+pos])
+	for row := 0; row < cfg.Training.BatchTokens/cfg.SeqLen; row++ {
+		for slot, pos32 := range probe.rtdGeneratorPositions {
+			pos := row*cfg.SeqLen + int(pos32)
+			if row == 0 && slot == 0 {
+				continue
+			}
+			if prepared.x[rtdOffset+pos] != 9 || prepared.y[rtdOffset+pos] != 0 {
+				t.Fatalf("replacement pos %d x/y=%d/%d, want 9/0", pos, prepared.x[rtdOffset+pos], prepared.y[rtdOffset+pos])
+			}
 		}
 	}
 	for i := 0; i < cfg.Training.BatchTokens; i++ {
@@ -591,11 +602,14 @@ func TestRTDDedicatedCorruptionSamplesFromActiveProgramWithoutSwitcher(t *testin
 	if trainer.outputName != arch.RTDGeneratorLogitsName {
 		t.Fatalf("sample output=%q, want %s", trainer.outputName, arch.RTDGeneratorLogitsName)
 	}
+	wantGeneratorRows := (cfg.Training.BatchTokens / cfg.SeqLen) * arch.RTDDedicatedGeneratorMaskSlots(cfg, cfg.SeqLen)
 	if len(trainer.batch.rtdGeneratorX) != cfg.Training.BatchTokens ||
-		len(trainer.batch.rtdGeneratorY) != cfg.Training.BatchTokens ||
-		len(trainer.batch.rtdGeneratorLossMask) != cfg.Training.BatchTokens {
-		t.Fatalf("dedicated generator inputs lengths x=%d y=%d mask=%d, want %d",
-			len(trainer.batch.rtdGeneratorX), len(trainer.batch.rtdGeneratorY), len(trainer.batch.rtdGeneratorLossMask), cfg.Training.BatchTokens)
+		len(trainer.batch.rtdGeneratorPositions) != arch.RTDDedicatedGeneratorMaskSlots(cfg, cfg.SeqLen) ||
+		len(trainer.batch.rtdGeneratorY) != wantGeneratorRows ||
+		len(trainer.batch.rtdGeneratorLossMask) != wantGeneratorRows {
+		t.Fatalf("dedicated generator inputs lengths x=%d positions=%d y=%d mask=%d, want x=%d positions=%d compact=%d",
+			len(trainer.batch.rtdGeneratorX), len(trainer.batch.rtdGeneratorPositions), len(trainer.batch.rtdGeneratorY), len(trainer.batch.rtdGeneratorLossMask),
+			cfg.Training.BatchTokens, arch.RTDDedicatedGeneratorMaskSlots(cfg, cfg.SeqLen), wantGeneratorRows)
 	}
 	rtdOffset := cfg.Training.BatchTokens
 	if got.x[rtdOffset] != 1 || got.y[rtdOffset] != 1 {
@@ -603,6 +617,74 @@ func TestRTDDedicatedCorruptionSamplesFromActiveProgramWithoutSwitcher(t *testin
 	}
 	if got.x[rtdOffset+1] != 9 || got.y[rtdOffset+1] != 0 {
 		t.Fatalf("replacement x/y=%d/%d, want 9/0", got.x[rtdOffset+1], got.y[rtdOffset+1])
+	}
+}
+
+func TestRTDDedicatedGeneratorUsesCompactMaskedPositionRows(t *testing.T) {
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"seed": 11,
+		"mlm_mask_prob": 0.25,
+		"mlm_mask_token_id": 31,
+		"rtd": {"generator": {"type": "dedicated", "model_dim": 8, "layers": 1, "heads": 2}, "mask_prob": 0.25, "sample_temperature": 1.0},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	raw := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 9, 6, 7, 8, 9},
+	}
+	prepared, err := prepareMultiheadBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareMultiheadBatch: %v", err)
+	}
+	trainer := &rtdGeneratorOnlySamplerTrainer{
+		generatorSamples: []int{13, 14},
+	}
+	got, err := maybeAttachRTDCorruption(trainer, cfg, raw, 3, prepared, cfg.Training.BatchTokens/cfg.SeqLen, cfg.SeqLen, arch.ObjectiveMultihead)
+	if err != nil {
+		t.Fatalf("maybeAttachRTDCorruption: %v", err)
+	}
+	if trainer.generatorCalls != 1 {
+		t.Fatalf("generator sampler calls=%d, want 1", trainer.generatorCalls)
+	}
+	wantSlots := arch.RTDDedicatedGeneratorMaskSlots(cfg, cfg.SeqLen)
+	wantRows := (cfg.Training.BatchTokens / cfg.SeqLen) * wantSlots
+	if wantSlots != 1 || trainer.generatorRows != wantRows {
+		t.Fatalf("compact generator rows=%d slots=%d, want rows=%d slots=1", trainer.generatorRows, wantSlots, wantRows)
+	}
+	if len(trainer.generatorBatch.rtdGeneratorPositions) != wantSlots ||
+		len(trainer.generatorBatch.rtdGeneratorY) != wantRows ||
+		len(trainer.generatorBatch.rtdGeneratorLossMask) != wantRows {
+		t.Fatalf("compact generator tensors positions=%d y=%d mask=%d, want %d/%d/%d",
+			len(trainer.generatorBatch.rtdGeneratorPositions), len(trainer.generatorBatch.rtdGeneratorY), len(trainer.generatorBatch.rtdGeneratorLossMask),
+			wantSlots, wantRows, wantRows)
+	}
+	selectedPos := int(trainer.generatorBatch.rtdGeneratorPositions[0])
+	if selectedPos < 0 || selectedPos >= cfg.SeqLen {
+		t.Fatalf("selected position=%d outside seq_len=%d", selectedPos, cfg.SeqLen)
+	}
+	rtdOffset := cfg.Training.BatchTokens
+	for row := 0; row < cfg.Training.BatchTokens/cfg.SeqLen; row++ {
+		pos := row*cfg.SeqLen + selectedPos
+		wantSample := 13 + row
+		if got.x[rtdOffset+pos] != wantSample || got.y[rtdOffset+pos] != 0 {
+			t.Fatalf("row %d selected pos %d x/y=%d/%d, want %d/0", row, pos, got.x[rtdOffset+pos], got.y[rtdOffset+pos], wantSample)
+		}
+		for col := 0; col < cfg.SeqLen; col++ {
+			if col == selectedPos {
+				continue
+			}
+			other := row*cfg.SeqLen + col
+			if got.x[rtdOffset+other] != raw.x[other] || got.y[rtdOffset+other] != 1 {
+				t.Fatalf("row %d unselected pos %d x/y=%d/%d, want original/%d", row, other, got.x[rtdOffset+other], got.y[rtdOffset+other], 1)
+			}
+		}
 	}
 }
 

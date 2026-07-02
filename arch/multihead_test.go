@@ -170,10 +170,16 @@ func TestMultiheadRTDDedicatedGeneratorWeightShapesAndIR(t *testing.T) {
 	if prog.NumWeights != len(shapes) {
 		t.Fatalf("prog weights=%d shapes=%d", prog.NumWeights, len(shapes))
 	}
-	for _, want := range []string{"rtd_generator_tokens", "rtd_generator_targets", "rtd_generator_loss_mask"} {
+	for _, want := range []string{"rtd_generator_tokens", "rtd_generator_positions", "rtd_generator_targets", "rtd_generator_loss_mask"} {
 		if !programDeclaresInputArch(prog, want) {
 			t.Fatalf("missing input %q: %+v", want, prog.Inputs)
 		}
+	}
+	if got := archInputShape(t, prog, "rtd_generator_positions"); len(got) != 1 || got[0] != 1 {
+		t.Fatalf("rtd_generator_positions shape=%v, want [1]", got)
+	}
+	if got := archInputShape(t, prog, "rtd_generator_targets"); len(got) != 1 || got[0] != 2 {
+		t.Fatalf("rtd_generator_targets shape=%v, want compact [2]", got)
 	}
 	if countOps(prog, OpMaskedCrossEntropy) != 2 {
 		t.Fatalf("OpMaskedCrossEntropy count=%d, want scorer+generator", countOps(prog, OpMaskedCrossEntropy))
@@ -185,6 +191,9 @@ func TestMultiheadRTDDedicatedGeneratorWeightShapesAndIR(t *testing.T) {
 		if !programDeclaresOutputArch(prog, want) {
 			t.Fatalf("missing output %q: %+v", want, prog.Outputs)
 		}
+	}
+	if got := archOutputShape(t, prog, RTDGeneratorLogitsName); len(got) != 2 || got[0] != 2 || got[1] != cfg.VocabSize {
+		t.Fatalf("%s shape=%v, want compact [2 %d]", RTDGeneratorLogitsName, got, cfg.VocabSize)
 	}
 	finalNormReadsGeneratorStream := false
 	for _, op := range prog.Ops {
@@ -198,6 +207,28 @@ func TestMultiheadRTDDedicatedGeneratorWeightShapesAndIR(t *testing.T) {
 	if !finalNormReadsGeneratorStream {
 		t.Fatal("missing rtd_generator_final_norm RMSNorm op")
 	}
+}
+
+func archInputShape(t *testing.T, prog *Program, name string) []int {
+	t.Helper()
+	for _, input := range prog.Inputs {
+		if input.Name == name {
+			return input.Shape
+		}
+	}
+	t.Fatalf("missing input %q", name)
+	return nil
+}
+
+func archOutputShape(t *testing.T, prog *Program, name string) []int {
+	t.Helper()
+	for _, output := range prog.Outputs {
+		if output.Name == name {
+			return output.Shape
+		}
+	}
+	t.Fatalf("missing output %q", name)
+	return nil
 }
 
 func TestMultiheadRTDConfigWeightShapesAndIR(t *testing.T) {

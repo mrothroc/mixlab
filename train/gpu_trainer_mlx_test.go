@@ -235,6 +235,53 @@ func TestMLXGPUTrainerMakeObjectiveInputs_RTDGeneratorUsesRawBatchShape(t *testi
 	}
 }
 
+func TestMLXGPUTrainerMakeObjectiveInputs_RTDGeneratorCompactPositions(t *testing.T) {
+	trainer := &mlxGPUTrainer{
+		rtdGeneratorInput:          true,
+		rtdGeneratorPositionsInput: true,
+		rtdGeneratorBatchSize:      2,
+		rtdGeneratorSeqLen:         4,
+		rtdGeneratorMaskSlots:      2,
+		tokBuf:                     make([]int32, 16),
+		tgtBuf:                     make([]int32, 16),
+		rtdGeneratorTokBuf:         make([]int32, 8),
+		rtdGeneratorPosBuf:         make([]int32, 2),
+		rtdGeneratorTgtBuf:         make([]int32, 4),
+		rtdGeneratorLossBuf:        make([]float32, 4),
+	}
+	batch := objectiveBatch{
+		x:                     []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},
+		y:                     []int{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17},
+		rtdGeneratorX:         []int{21, 22, 23, 24, 25, 26, 27, 28},
+		rtdGeneratorPositions: []int32{1, 3},
+		rtdGeneratorY:         []int{32, 34, 36, 38},
+		rtdGeneratorLossMask:  []float32{1, 0, 1, 0},
+	}
+
+	inputs, err := trainer.makeObjectiveInputs(batch, 4, 4)
+	if err != nil {
+		t.Fatalf("makeObjectiveInputs: %v", err)
+	}
+	pos := findTensorInput(t, inputs, "rtd_generator_positions")
+	if !reflect.DeepEqual(pos.Shape, []int{2}) {
+		t.Fatalf("rtd_generator_positions shape=%v, want [2]", pos.Shape)
+	}
+	if got := pos.Data.([]int32); !reflect.DeepEqual(got, []int32{1, 3}) {
+		t.Fatalf("rtd_generator_positions data=%v", got)
+	}
+	targets := findTensorInput(t, inputs, "rtd_generator_targets")
+	if !reflect.DeepEqual(targets.Shape, []int{4}) {
+		t.Fatalf("rtd_generator_targets shape=%v, want compact [4]", targets.Shape)
+	}
+	if got := targets.Data.([]int32); !reflect.DeepEqual(got, []int32{32, 34, 36, 38}) {
+		t.Fatalf("rtd_generator_targets data=%v", got)
+	}
+	mask := findTensorInput(t, inputs, "rtd_generator_loss_mask")
+	if !reflect.DeepEqual(mask.Shape, []int{4}) {
+		t.Fatalf("rtd_generator_loss_mask shape=%v, want compact [4]", mask.Shape)
+	}
+}
+
 func TestMLXGPUTrainerMakeRTDGeneratorInputsOmitsTrunkInputs(t *testing.T) {
 	trainer := &mlxGPUTrainer{
 		rtdGeneratorInput:        true,

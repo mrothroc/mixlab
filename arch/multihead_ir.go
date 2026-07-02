@@ -284,7 +284,8 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 			lossAccum = "rtd_generator_loss_accum"
 		}
 		prog.DeclareOutput("rtd_generator_loss", TensorFloat32, []int{1})
-		prog.DeclareOutput(generatorLogits, TensorFloat32, []int{rawRows, V})
+		generatorRows := rawBatch * RTDDedicatedGeneratorMaskSlots(cfg, T)
+		prog.DeclareOutput(generatorLogits, TensorFloat32, []int{generatorRows, V})
 	}
 	if lossAccum == "" {
 		return nil, fmt.Errorf("multihead graph emitted no losses")

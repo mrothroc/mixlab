@@ -3,6 +3,7 @@ package train
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 
 	"github.com/mrothroc/mixlab/arch"
@@ -94,14 +95,60 @@ func prepareRTDGeneratorProbeBatch(cfg *ArchConfig, batch trainBatch, step, need
 	return prepareMultiheadBatch(&probeCfg, batch, step, need, seqLen)
 }
 
-func prepareRTDDedicatedGeneratorProbeBatch(cfg *ArchConfig, batch trainBatch, step, need int) (objectiveBatch, error) {
+func prepareRTDDedicatedGeneratorProbeBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int) (objectiveBatch, error) {
 	if !rtdActive(cfg) || !cfg.Training.RTD.DedicatedGeneratorEnabled() {
 		return objectiveBatch{}, fmt.Errorf("dedicated training.rtd generator is not active")
 	}
-	probeCfg := *cfg
-	probeCfg.Training.MLMMaskProb = cfg.Training.RTD.MaskProb
-	probeCfg.Training.MLMMaskProbSchedule = nil
-	return prepareMLMBatch(&probeCfg, batch, step, need)
+	if seqLen <= 0 || need <= 0 || need%seqLen != 0 {
+		return objectiveBatch{}, fmt.Errorf("invalid dedicated RTD generator batch shape need=%d seq_len=%d", need, seqLen)
+	}
+	if len(batch.x) < need {
+		return objectiveBatch{}, fmt.Errorf("RTD raw batch has %d tokens, need %d", len(batch.x), need)
+	}
+	rawBatch := need / seqLen
+	maskSlots := arch.RTDDedicatedGeneratorMaskSlots(cfg, seqLen)
+	activeSlots := maskSlots
+	if cfg.Training.RTD.MaskProb <= 0 {
+		activeSlots = 0
+	}
+	positions := make([]int32, maskSlots)
+	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0x243f6a8885a308d3)
+	if activeSlots > 0 {
+		perm := rng.Perm(seqLen)
+		selected := append([]int(nil), perm[:activeSlots]...)
+		sort.Ints(selected)
+		for i, pos := range selected {
+			positions[i] = int32(pos)
+		}
+	} else {
+		for i := range positions {
+			positions[i] = int32(i % seqLen)
+		}
+	}
+	x := append([]int(nil), batch.x[:need]...)
+	y := make([]int, rawBatch*maskSlots)
+	lossMask := make([]float32, rawBatch*maskSlots)
+	for row := 0; row < rawBatch; row++ {
+		rowStart := row * seqLen
+		for slot := 0; slot < maskSlots; slot++ {
+			outIdx := row*maskSlots + slot
+			pos := int(positions[slot])
+			global := rowStart + pos
+			y[outIdx] = batch.x[global]
+			if slot >= activeSlots {
+				continue
+			}
+			lossMask[outIdx] = 1
+			replaceSelectedRTDGeneratorToken(cfg, rng, x, global, batch.x[global])
+		}
+	}
+	return objectiveBatch{
+		x:                     x,
+		y:                     y,
+		lossMask:              lossMask,
+		unmaskedX:             append([]int(nil), batch.x[:need]...),
+		rtdGeneratorPositions: positions,
+	}, nil
 }
 
 func attachDedicatedGeneratorInputs(prepared *objectiveBatch, probe objectiveBatch) {
@@ -109,8 +156,24 @@ func attachDedicatedGeneratorInputs(prepared *objectiveBatch, probe objectiveBat
 		return
 	}
 	prepared.rtdGeneratorX = append(prepared.rtdGeneratorX[:0], probe.x...)
+	prepared.rtdGeneratorPositions = append(prepared.rtdGeneratorPositions[:0], probe.rtdGeneratorPositions...)
 	prepared.rtdGeneratorY = append(prepared.rtdGeneratorY[:0], probe.y...)
 	prepared.rtdGeneratorLossMask = append(prepared.rtdGeneratorLossMask[:0], probe.lossMask...)
+}
+
+func replaceSelectedRTDGeneratorToken(cfg *ArchConfig, rng interface {
+	Float64() float64
+	Intn(int) int
+}, x []int, pos int, original int) {
+	r := rng.Float64()
+	switch {
+	case r < cfg.Training.MLMMaskTokenProb:
+		x[pos] = cfg.Training.MLMMaskTokenID
+	case r < cfg.Training.MLMMaskTokenProb+cfg.Training.MLMRandomTokenProb:
+		x[pos] = rng.Intn(cfg.VocabSize)
+	default:
+		x[pos] = original
+	}
 }
 
 func attachRTDTiedGeneratorCorruption(
@@ -165,12 +228,13 @@ func attachRTDDedicatedGeneratorCorruption(
 		return prepared, nil
 	}
 	need := cfg.Training.BatchTokens
-	probe, err := prepareRTDDedicatedGeneratorProbeBatch(cfg, batch, step, need)
+	probe, err := prepareRTDDedicatedGeneratorProbeBatch(cfg, batch, step, need, seqLen)
 	if err != nil {
 		return objectiveBatch{}, err
 	}
 	attachDedicatedGeneratorInputs(&prepared, probe)
-	samples, sampledOnDevice, err := sampleRTDDedicatedGeneratorReplacements(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, need, cfg.VocabSize, cfg.Training.RTD.SampleTemperature, deterministicObjectiveSeed(cfg.Training.Seed, step, rtdGeneratorSalt^0xd1b54a32d192ed03))
+	sampleRows := len(probe.y)
+	samples, sampledOnDevice, err := sampleRTDDedicatedGeneratorReplacements(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, sampleRows, cfg.VocabSize, cfg.Training.RTD.SampleTemperature, deterministicObjectiveSeed(cfg.Training.Seed, step, rtdGeneratorSalt^0xd1b54a32d192ed03))
 	if err != nil {
 		return objectiveBatch{}, fmt.Errorf("sample RTD dedicated generator replacements: %w", err)
 	}
@@ -180,7 +244,7 @@ func attachRTDDedicatedGeneratorCorruption(
 		}
 		return prepared, nil
 	}
-	logits, err := evaluateRTDGeneratorLogits(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, []int{need, cfg.VocabSize})
+	logits, err := evaluateRTDGeneratorLogits(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, []int{sampleRows, cfg.VocabSize})
 	if err != nil {
 		return objectiveBatch{}, fmt.Errorf("evaluate RTD dedicated generator logits: %w", err)
 	}
@@ -441,14 +505,20 @@ func applyRTDDedicatedGeneratorCorruption(cfg *ArchConfig, batch trainBatch, ste
 	if need <= 0 || seqLen <= 0 || need%seqLen != 0 {
 		return fmt.Errorf("invalid RTD batch shape need=%d seq_len=%d", need, seqLen)
 	}
+	rawBatch := need / seqLen
+	maskSlots := len(probe.rtdGeneratorPositions)
+	selectedRows := rawBatch * maskSlots
 	if len(batch.x) < need {
 		return fmt.Errorf("RTD raw batch has %d tokens, need %d", len(batch.x), need)
 	}
-	if len(probe.lossMask) < need {
-		return fmt.Errorf("RTD dedicated generator probe loss mask has %d entries, need %d", len(probe.lossMask), need)
+	if maskSlots <= 0 {
+		return fmt.Errorf("RTD dedicated generator probe has no positions")
 	}
-	if len(logits) != need*cfg.VocabSize {
-		return fmt.Errorf("RTD dedicated generator logits length=%d, want %d", len(logits), need*cfg.VocabSize)
+	if len(probe.lossMask) < selectedRows {
+		return fmt.Errorf("RTD dedicated generator probe loss mask has %d entries, need %d", len(probe.lossMask), selectedRows)
+	}
+	if len(logits) != selectedRows*cfg.VocabSize {
+		return fmt.Errorf("RTD dedicated generator logits length=%d, want %d", len(logits), selectedRows*cfg.VocabSize)
 	}
 	rtdIdx := multiheadRTDHeadIndex(cfg)
 	if rtdIdx < 0 {
@@ -464,19 +534,28 @@ func applyRTDDedicatedGeneratorCorruption(cfg *ArchConfig, batch trainBatch, ste
 		prepared.lossMask[rtdOffset+i] = 1
 	}
 	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, rtdGeneratorSalt^0xd1b54a32d192ed03)
-	for pos := 0; pos < need; pos++ {
-		if probe.lossMask[pos] <= 0 {
-			continue
-		}
-		row := logits[pos*cfg.VocabSize : (pos+1)*cfg.VocabSize]
-		sampled, err := sampleTokenFromLogits(row, cfg.Training.RTD.SampleTemperature, rng.Float64())
-		if err != nil {
-			return fmt.Errorf("sample dedicated RTD replacement at position %d: %w", pos, err)
-		}
-		outPos := rtdOffset + pos
-		prepared.x[outPos] = sampled
-		if sampled != batch.x[pos] {
-			prepared.y[outPos] = 0
+	for row := 0; row < rawBatch; row++ {
+		rowStart := row * seqLen
+		for slot := 0; slot < maskSlots; slot++ {
+			sampleIdx := row*maskSlots + slot
+			if probe.lossMask[sampleIdx] <= 0 {
+				continue
+			}
+			pos := int(probe.rtdGeneratorPositions[slot])
+			if pos < 0 || pos >= seqLen {
+				return fmt.Errorf("RTD dedicated generator position %d outside seq_len=%d", pos, seqLen)
+			}
+			global := rowStart + pos
+			logitRow := logits[sampleIdx*cfg.VocabSize : (sampleIdx+1)*cfg.VocabSize]
+			sampled, err := sampleTokenFromLogits(logitRow, cfg.Training.RTD.SampleTemperature, rng.Float64())
+			if err != nil {
+				return fmt.Errorf("sample dedicated RTD replacement at position %d: %w", global, err)
+			}
+			outPos := rtdOffset + global
+			prepared.x[outPos] = sampled
+			if sampled != batch.x[global] {
+				prepared.y[outPos] = 0
+			}
 		}
 	}
 	return nil
@@ -490,14 +569,20 @@ func applyRTDDedicatedGeneratorSampledCorruption(cfg *ArchConfig, batch trainBat
 	if need <= 0 || seqLen <= 0 || need%seqLen != 0 {
 		return fmt.Errorf("invalid RTD batch shape need=%d seq_len=%d", need, seqLen)
 	}
+	rawBatch := need / seqLen
+	maskSlots := len(probe.rtdGeneratorPositions)
+	selectedRows := rawBatch * maskSlots
 	if len(batch.x) < need {
 		return fmt.Errorf("RTD raw batch has %d tokens, need %d", len(batch.x), need)
 	}
-	if len(probe.lossMask) < need {
-		return fmt.Errorf("RTD dedicated generator probe loss mask has %d entries, need %d", len(probe.lossMask), need)
+	if maskSlots <= 0 {
+		return fmt.Errorf("RTD dedicated generator probe has no positions")
 	}
-	if len(samples) < need {
-		return fmt.Errorf("RTD dedicated generator samples length=%d, want at least %d", len(samples), need)
+	if len(probe.lossMask) < selectedRows {
+		return fmt.Errorf("RTD dedicated generator probe loss mask has %d entries, need %d", len(probe.lossMask), selectedRows)
+	}
+	if len(samples) < selectedRows {
+		return fmt.Errorf("RTD dedicated generator samples length=%d, want at least %d", len(samples), selectedRows)
 	}
 	rtdIdx := multiheadRTDHeadIndex(cfg)
 	if rtdIdx < 0 {
@@ -512,18 +597,27 @@ func applyRTDDedicatedGeneratorSampledCorruption(cfg *ArchConfig, batch trainBat
 		prepared.y[rtdOffset+i] = 1
 		prepared.lossMask[rtdOffset+i] = 1
 	}
-	for pos := 0; pos < need; pos++ {
-		if probe.lossMask[pos] <= 0 {
-			continue
-		}
-		sampled := samples[pos]
-		if sampled < 0 || sampled >= cfg.VocabSize {
-			return fmt.Errorf("RTD dedicated generator sampled token %d at position %d outside vocab [0,%d)", sampled, pos, cfg.VocabSize)
-		}
-		outPos := rtdOffset + pos
-		prepared.x[outPos] = sampled
-		if sampled != batch.x[pos] {
-			prepared.y[outPos] = 0
+	for row := 0; row < rawBatch; row++ {
+		rowStart := row * seqLen
+		for slot := 0; slot < maskSlots; slot++ {
+			sampleIdx := row*maskSlots + slot
+			if probe.lossMask[sampleIdx] <= 0 {
+				continue
+			}
+			pos := int(probe.rtdGeneratorPositions[slot])
+			if pos < 0 || pos >= seqLen {
+				return fmt.Errorf("RTD dedicated generator position %d outside seq_len=%d", pos, seqLen)
+			}
+			global := rowStart + pos
+			sampled := samples[sampleIdx]
+			if sampled < 0 || sampled >= cfg.VocabSize {
+				return fmt.Errorf("RTD dedicated generator sampled token %d at position %d outside vocab [0,%d)", sampled, global, cfg.VocabSize)
+			}
+			outPos := rtdOffset + global
+			prepared.x[outPos] = sampled
+			if sampled != batch.x[global] {
+				prepared.y[outPos] = 0
+			}
 		}
 	}
 	return nil

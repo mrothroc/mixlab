@@ -1,6 +1,9 @@
 package arch
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 const (
 	RTDGeneratorPrefix     = "rtd_generator"
@@ -28,6 +31,24 @@ func rtdDedicatedGeneratorBlocks(spec *RTDDedicatedGenerator) []BlockSpec {
 		}
 	}
 	return blocks
+}
+
+func RTDDedicatedGeneratorMaskSlots(cfg *ArchConfig, seqLen int) int {
+	if cfg == nil || cfg.Training.RTD == nil || seqLen <= 0 {
+		return 1
+	}
+	prob := cfg.Training.RTD.MaskProb
+	if math.IsNaN(prob) || prob <= 0 {
+		return 1
+	}
+	slots := int(math.Ceil(prob * float64(seqLen)))
+	if slots < 1 {
+		return 1
+	}
+	if slots > seqLen {
+		return seqLen
+	}
+	return slots
 }
 
 func rtdDedicatedGeneratorWeightShapes(cfg *ArchConfig) ([]WeightMeta, error) {
@@ -84,9 +105,12 @@ func emitRTDDedicatedGeneratorIR(prog *Program, cfg *ArchConfig, wi, rawBatch in
 	D := spec.ModelDim
 	V := cfg.VocabSize
 	rawRows := rawBatch * T
+	maskSlots := RTDDedicatedGeneratorMaskSlots(cfg, T)
+	selectedRows := rawBatch * maskSlots
 	prog.DeclareInput("rtd_generator_tokens", TensorInt32, []int{rawBatch, T})
-	prog.DeclareInput("rtd_generator_targets", TensorInt32, []int{rawRows})
-	prog.DeclareInput("rtd_generator_loss_mask", TensorFloat32, []int{rawRows})
+	prog.DeclareInput("rtd_generator_positions", TensorInt32, []int{maskSlots})
+	prog.DeclareInput("rtd_generator_targets", TensorInt32, []int{selectedRows})
+	prog.DeclareInput("rtd_generator_loss_mask", TensorFloat32, []int{selectedRows})
 	embedIdx := wi
 	prog.Embed(weightName(wi), "rtd_generator_tokens", "rtd_generator_embed_out")
 	wi++
@@ -112,7 +136,10 @@ func emitRTDDedicatedGeneratorIR(prog *Program, cfg *ArchConfig, wi, rawBatch in
 	if err != nil {
 		return "", "", wi, err
 	}
-	_, wi, err = emitBERTMLMHeadIRTiedTo(prog, RTDGeneratorPrefix+"_mlm", "rtd_generator_final_norm", wi, weightName(embedIdx), D, V, cfg.EffectiveNormSpec().Eps, dropout)
+	prog.Reshape("rtd_generator_final_norm", []int{rawBatch, T, D}, "rtd_generator_final_norm_btd")
+	prog.GatherPositions("rtd_generator_final_norm_btd", "rtd_generator_positions", "rtd_generator_selected_bkd", rawBatch, maskSlots, D)
+	prog.Reshape("rtd_generator_selected_bkd", []int{selectedRows, D}, "rtd_generator_selected_hidden")
+	_, wi, err = emitBERTMLMHeadIRTiedTo(prog, RTDGeneratorPrefix+"_mlm", "rtd_generator_selected_hidden", wi, weightName(embedIdx), D, V, cfg.EffectiveNormSpec().Eps, dropout)
 	if err != nil {
 		return "", "", wi, err
 	}

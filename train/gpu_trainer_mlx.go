@@ -13,33 +13,35 @@ import (
 
 // mlxGPUTrainer wraps the MLX IR trainer for the training loop.
 type mlxGPUTrainer struct {
-	handle                   gpu.TrainerHandle
-	prog                     *gpu.Program
-	activeIRProg             *ir.Program
-	programCache             map[*ir.Program]*gpu.Program
-	handles                  []int64 // GPU weight array handles
-	shapes                   []WeightShape
-	baseLR                   float32
-	evalLossOutputName       string
-	vocabSize                int
-	charVocabSize            int
-	charMaxPerToken          int
-	bigramVocabSize          int
-	trigramVocabSize         int
-	declaredTargetSize       int
-	rtdGeneratorBatchSize    int
-	rtdGeneratorSeqLen       int
-	charInput                bool
-	firstByteMaskInput       bool
-	lossMaskInput            bool
-	attentionCausalInput     bool
-	segmentIDsInput          bool
-	teacherProbsInput        bool
-	data2VecInput            bool
-	rtdGeneratorInput        bool
-	diffusionBlockStartInput bool
-	diffusionBlockEndInput   bool
-	diffusionTimestepInput   bool
+	handle                     gpu.TrainerHandle
+	prog                       *gpu.Program
+	activeIRProg               *ir.Program
+	programCache               map[*ir.Program]*gpu.Program
+	handles                    []int64 // GPU weight array handles
+	shapes                     []WeightShape
+	baseLR                     float32
+	evalLossOutputName         string
+	vocabSize                  int
+	charVocabSize              int
+	charMaxPerToken            int
+	bigramVocabSize            int
+	trigramVocabSize           int
+	declaredTargetSize         int
+	rtdGeneratorBatchSize      int
+	rtdGeneratorSeqLen         int
+	rtdGeneratorMaskSlots      int
+	charInput                  bool
+	firstByteMaskInput         bool
+	lossMaskInput              bool
+	attentionCausalInput       bool
+	segmentIDsInput            bool
+	teacherProbsInput          bool
+	data2VecInput              bool
+	rtdGeneratorInput          bool
+	rtdGeneratorPositionsInput bool
+	diffusionBlockStartInput   bool
+	diffusionBlockEndInput     bool
+	diffusionTimestepInput     bool
 	// Pre-allocated input buffers to avoid per-step allocation.
 	tokBuf                 []int32
 	tgtBuf                 []int32
@@ -53,6 +55,7 @@ type mlxGPUTrainer struct {
 	data2VecTargetBuf      []float32
 	data2VecMaskBuf        []float32
 	rtdGeneratorTokBuf     []int32
+	rtdGeneratorPosBuf     []int32
 	rtdGeneratorTgtBuf     []int32
 	rtdGeneratorLossBuf    []float32
 	charBuf                []int32
@@ -184,6 +187,7 @@ func initMLXGPUTrainer(
 	declaredSeqLen := 0
 	rtdGeneratorBatchSize := 0
 	rtdGeneratorSeqLen := 0
+	rtdGeneratorMaskSlots := 0
 	charInput := false
 	firstByteMaskInput := false
 	lossMaskInput := false
@@ -192,6 +196,7 @@ func initMLXGPUTrainer(
 	teacherProbsInput := false
 	data2VecInput := false
 	rtdGeneratorInput := false
+	rtdGeneratorPositionsInput := false
 	diffusionBlockStartInput := false
 	diffusionBlockEndInput := false
 	diffusionTimestepInput := false
@@ -227,6 +232,12 @@ func initMLXGPUTrainer(
 			if len(inp.Shape) == 2 {
 				rtdGeneratorBatchSize = inp.Shape[0]
 				rtdGeneratorSeqLen = inp.Shape[1]
+			}
+		}
+		if inp.Name == "rtd_generator_positions" {
+			rtdGeneratorPositionsInput = true
+			if len(inp.Shape) == 1 {
+				rtdGeneratorMaskSlots = inp.Shape[0]
 			}
 		}
 		if inp.Name == "diffusion_block_start" {
@@ -279,54 +290,61 @@ func initMLXGPUTrainer(
 		}
 		firstByteValid = append([]int32(nil), firstByteValid...)
 	}
+	rtdGeneratorPosBufSize := rtdGeneratorMaskSlots
+	if rtdGeneratorPosBufSize < 1 {
+		rtdGeneratorPosBufSize = 1
+	}
 	trainer := &mlxGPUTrainer{
-		handle:                   trainerHandle,
-		prog:                     gpuProg,
-		activeIRProg:             irProg,
-		programCache:             map[*ir.Program]*gpu.Program{irProg: gpuProg},
-		handles:                  handles,
-		shapes:                   shapes,
-		baseLR:                   optimizerSpec.DefaultBaseLR,
-		evalLossOutputName:       preferredEvalLossOutputName(irProg),
-		vocabSize:                cfg.VocabSize,
-		charVocabSize:            cfg.CharVocabSize,
-		charMaxPerToken:          cfg.CharMaxPerToken,
-		bigramVocabSize:          cfg.BigramVocabSize,
-		trigramVocabSize:         cfg.TrigramVocabSize,
-		declaredTargetSize:       declaredTargetSize,
-		rtdGeneratorBatchSize:    rtdGeneratorBatchSize,
-		rtdGeneratorSeqLen:       rtdGeneratorSeqLen,
-		charInput:                charInput,
-		firstByteMaskInput:       firstByteMaskInput,
-		lossMaskInput:            lossMaskInput,
-		attentionCausalInput:     attentionCausalInput,
-		segmentIDsInput:          segmentIDsInput,
-		teacherProbsInput:        teacherProbsInput,
-		data2VecInput:            data2VecInput,
-		rtdGeneratorInput:        rtdGeneratorInput,
-		diffusionBlockStartInput: diffusionBlockStartInput,
-		diffusionBlockEndInput:   diffusionBlockEndInput,
-		diffusionTimestepInput:   diffusionTimestepInput,
-		tokBuf:                   make([]int32, batchElems),
-		tgtBuf:                   make([]int32, batchElems),
-		lossMaskBuf:              make([]float32, batchElems),
-		attentionCausalBuf:       make([]int32, batchElems),
-		segmentIDBuf:             make([]int32, batchElems),
-		diffusionBlockStartBuf:   make([]int32, batchElems),
-		diffusionBlockEndBuf:     make([]int32, batchElems),
-		diffusionTimestepBuf:     make([]float32, batchElems),
-		teacherProbBuf:           make([]float32, batchElems*cfg.VocabSize),
-		data2VecTargetBuf:        make([]float32, batchElems*cfg.ModelDim),
-		data2VecMaskBuf:          make([]float32, batchElems),
-		rtdGeneratorTokBuf:       make([]int32, cfg.Training.BatchTokens),
-		rtdGeneratorTgtBuf:       make([]int32, cfg.Training.BatchTokens),
-		rtdGeneratorLossBuf:      make([]float32, cfg.Training.BatchTokens),
-		charBuf:                  make([]int32, batchElems*cfg.CharMaxPerToken),
-		bigramBuf:                make([]int32, batchElems),
-		trigramBuf:               make([]int32, batchElems),
-		charFeatures:             charFeatures,
-		firstByteValid:           firstByteValid,
-		lockedOSThread:           true,
+		handle:                     trainerHandle,
+		prog:                       gpuProg,
+		activeIRProg:               irProg,
+		programCache:               map[*ir.Program]*gpu.Program{irProg: gpuProg},
+		handles:                    handles,
+		shapes:                     shapes,
+		baseLR:                     optimizerSpec.DefaultBaseLR,
+		evalLossOutputName:         preferredEvalLossOutputName(irProg),
+		vocabSize:                  cfg.VocabSize,
+		charVocabSize:              cfg.CharVocabSize,
+		charMaxPerToken:            cfg.CharMaxPerToken,
+		bigramVocabSize:            cfg.BigramVocabSize,
+		trigramVocabSize:           cfg.TrigramVocabSize,
+		declaredTargetSize:         declaredTargetSize,
+		rtdGeneratorBatchSize:      rtdGeneratorBatchSize,
+		rtdGeneratorSeqLen:         rtdGeneratorSeqLen,
+		rtdGeneratorMaskSlots:      rtdGeneratorMaskSlots,
+		charInput:                  charInput,
+		firstByteMaskInput:         firstByteMaskInput,
+		lossMaskInput:              lossMaskInput,
+		attentionCausalInput:       attentionCausalInput,
+		segmentIDsInput:            segmentIDsInput,
+		teacherProbsInput:          teacherProbsInput,
+		data2VecInput:              data2VecInput,
+		rtdGeneratorInput:          rtdGeneratorInput,
+		rtdGeneratorPositionsInput: rtdGeneratorPositionsInput,
+		diffusionBlockStartInput:   diffusionBlockStartInput,
+		diffusionBlockEndInput:     diffusionBlockEndInput,
+		diffusionTimestepInput:     diffusionTimestepInput,
+		tokBuf:                     make([]int32, batchElems),
+		tgtBuf:                     make([]int32, batchElems),
+		lossMaskBuf:                make([]float32, batchElems),
+		attentionCausalBuf:         make([]int32, batchElems),
+		segmentIDBuf:               make([]int32, batchElems),
+		diffusionBlockStartBuf:     make([]int32, batchElems),
+		diffusionBlockEndBuf:       make([]int32, batchElems),
+		diffusionTimestepBuf:       make([]float32, batchElems),
+		teacherProbBuf:             make([]float32, batchElems*cfg.VocabSize),
+		data2VecTargetBuf:          make([]float32, batchElems*cfg.ModelDim),
+		data2VecMaskBuf:            make([]float32, batchElems),
+		rtdGeneratorTokBuf:         make([]int32, cfg.Training.BatchTokens),
+		rtdGeneratorPosBuf:         make([]int32, rtdGeneratorPosBufSize),
+		rtdGeneratorTgtBuf:         make([]int32, cfg.Training.BatchTokens),
+		rtdGeneratorLossBuf:        make([]float32, cfg.Training.BatchTokens),
+		charBuf:                    make([]int32, batchElems*cfg.CharMaxPerToken),
+		bigramBuf:                  make([]int32, batchElems),
+		trigramBuf:                 make([]int32, batchElems),
+		charFeatures:               charFeatures,
+		firstByteValid:             firstByteValid,
+		lockedOSThread:             true,
 	}
 	releaseOSThread = false
 	return trainer, nil
@@ -539,13 +557,17 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.teacherProbsInput = programDeclaresInput(irProg, "teacher_probs")
 	t.data2VecInput = programDeclaresInput(irProg, "data2vec_targets")
 	t.rtdGeneratorInput = programDeclaresInput(irProg, "rtd_generator_tokens")
+	t.rtdGeneratorPositionsInput = programDeclaresInput(irProg, "rtd_generator_positions")
 	t.rtdGeneratorBatchSize = 0
 	t.rtdGeneratorSeqLen = 0
+	t.rtdGeneratorMaskSlots = 0
 	for _, inp := range irProg.Inputs {
 		if inp.Name == "rtd_generator_tokens" && len(inp.Shape) == 2 {
 			t.rtdGeneratorBatchSize = inp.Shape[0]
 			t.rtdGeneratorSeqLen = inp.Shape[1]
-			break
+		}
+		if inp.Name == "rtd_generator_positions" && len(inp.Shape) == 1 {
+			t.rtdGeneratorMaskSlots = inp.Shape[0]
 		}
 	}
 	t.diffusionBlockStartInput = programDeclaresInput(irProg, "diffusion_block_start")
