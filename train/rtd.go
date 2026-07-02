@@ -170,7 +170,7 @@ func attachRTDDedicatedGeneratorCorruption(
 		return objectiveBatch{}, err
 	}
 	attachDedicatedGeneratorInputs(&prepared, probe)
-	samples, sampledOnDevice, err := sampleRTDGeneratorReplacements(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, need, cfg.VocabSize, cfg.Training.RTD.SampleTemperature, deterministicObjectiveSeed(cfg.Training.Seed, step, rtdGeneratorSalt^0xd1b54a32d192ed03))
+	samples, sampledOnDevice, err := sampleRTDDedicatedGeneratorReplacements(trainer, prepared, batchSize, seqLen, arch.RTDGeneratorLogitsName, need, cfg.VocabSize, cfg.Training.RTD.SampleTemperature, deterministicObjectiveSeed(cfg.Training.Seed, step, rtdGeneratorSalt^0xd1b54a32d192ed03))
 	if err != nil {
 		return objectiveBatch{}, fmt.Errorf("sample RTD dedicated generator replacements: %w", err)
 	}
@@ -188,6 +188,54 @@ func attachRTDDedicatedGeneratorCorruption(
 		return objectiveBatch{}, err
 	}
 	return prepared, nil
+}
+
+func sampleRTDDedicatedGeneratorReplacements(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, bool, error) {
+	compiled := func() ([]int, bool, error) {
+		sampler, ok := trainer.(gpuRTDGeneratorCategoricalSampler)
+		if !ok {
+			return nil, false, nil
+		}
+		samples, err := sampler.SampleRTDGeneratorOutputCategoricalGPU(batch, outputName, rows, vocab, temperature, seed)
+		if err != nil {
+			return nil, true, err
+		}
+		if err := validateRTDGeneratorSamples(samples, rows, vocab); err != nil {
+			return nil, true, err
+		}
+		return samples, true, nil
+	}
+	eager := func() ([]int, bool, error) {
+		sampler, ok := trainer.(gpuRTDGeneratorCategoricalEagerSampler)
+		if !ok {
+			return nil, false, nil
+		}
+		samples, err := sampler.SampleRTDGeneratorOutputCategoricalEagerGPU(batch, outputName, rows, vocab, temperature, seed)
+		if err != nil {
+			return nil, true, err
+		}
+		if err := validateRTDGeneratorSamples(samples, rows, vocab); err != nil {
+			return nil, true, err
+		}
+		return samples, true, nil
+	}
+
+	if envTruthy("MIXLAB_RTD_EAGER_GENERATOR_SAMPLER") {
+		if samples, ok, err := eager(); ok || err != nil {
+			return samples, ok, err
+		}
+		if samples, ok, err := compiled(); ok || err != nil {
+			return samples, ok, err
+		}
+		return sampleRTDGeneratorReplacements(trainer, batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed)
+	}
+	if samples, ok, err := compiled(); ok || err != nil {
+		return samples, ok, err
+	}
+	if samples, ok, err := eager(); ok || err != nil {
+		return samples, ok, err
+	}
+	return sampleRTDGeneratorReplacements(trainer, batch, batchSize, seqLen, outputName, rows, vocab, temperature, seed)
 }
 
 func sampleRTDGeneratorReplacements(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, bool, error) {

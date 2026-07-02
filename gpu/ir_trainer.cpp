@@ -17,6 +17,7 @@
 #include <sstream>
 #include <string>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 namespace mx = mlx::core;
@@ -1430,6 +1431,23 @@ std::vector<mx::array> effective_compute_weights(
   return effective;
 }
 
+std::vector<mx::array> effective_compute_weights(
+    const std::vector<mx::array>& base_weights,
+    ComputeDType compute_dtype,
+    const std::vector<size_t>& weight_indices) {
+  if (compute_dtype == ComputeDType::Float32 || weight_indices.empty()) {
+    return base_weights;
+  }
+  auto effective = base_weights;
+  for (size_t idx : weight_indices) {
+    if (idx >= effective.size()) {
+      throw std::runtime_error("selective compute weight index out of range");
+    }
+    effective[idx] = mx::astype(effective[idx], mx::bfloat16);
+  }
+  return effective;
+}
+
 void collect_state_for_eval(
     const IRTrainer& trainer,
     std::vector<mx::array>& eval_arrays,
@@ -1680,6 +1698,88 @@ std::string categorical_sampler_signature(
       << "|vocab=" << vocab
       << "|temperature=" << std::setprecision(9) << temperature;
   return oss.str();
+}
+
+std::optional<size_t> parse_weight_input_name(const std::string& name, size_t n_weights) {
+  if (name.size() < 2 || name[0] != 'w') {
+    return std::nullopt;
+  }
+  size_t idx = 0;
+  for (size_t i = 1; i < name.size(); ++i) {
+    const char c = name[i];
+    if (c < '0' || c > '9') {
+      return std::nullopt;
+    }
+    idx = idx * 10 + static_cast<size_t>(c - '0');
+    if (idx >= n_weights) {
+      return std::nullopt;
+    }
+  }
+  return idx;
+}
+
+std::vector<uint8_t> required_ops_for_named_outputs(
+    const IRProgram& program,
+    const std::vector<std::string>& output_names) {
+  std::unordered_set<std::string> required;
+  required.reserve(output_names.size() + 16);
+  for (const auto& output_name : output_names) {
+    if (!output_name.empty()) {
+      required.emplace(output_name);
+    }
+  }
+
+  std::vector<uint8_t> needed(program.ops.size(), 0);
+  for (size_t rev = program.ops.size(); rev > 0; --rev) {
+    const size_t op_idx = rev - 1;
+    const auto& op = program.ops[op_idx];
+    bool op_needed = false;
+    for (int i = 0; i < op.n_outputs; ++i) {
+      if (!op.outputs[i].empty() && required.find(op.outputs[i]) != required.end()) {
+        op_needed = true;
+        break;
+      }
+    }
+    if (!op_needed) {
+      continue;
+    }
+    needed[op_idx] = 1;
+    for (int i = 0; i < op.n_outputs; ++i) {
+      if (!op.outputs[i].empty()) {
+        required.erase(op.outputs[i]);
+      }
+    }
+    for (int i = 0; i < op.n_inputs; ++i) {
+      if (!op.inputs[i].empty()) {
+        required.emplace(op.inputs[i]);
+      }
+    }
+  }
+  return needed;
+}
+
+std::vector<size_t> required_weight_indices_for_outputs(
+    const IRProgram& program,
+    const std::vector<std::string>& output_names,
+    size_t n_weights) {
+  const auto needed_ops = required_ops_for_named_outputs(program, output_names);
+  std::vector<uint8_t> seen(n_weights, 0);
+  std::vector<size_t> out;
+  for (size_t op_idx = 0; op_idx < program.ops.size(); ++op_idx) {
+    if (!needed_ops.empty() && !needed_ops[op_idx]) {
+      continue;
+    }
+    const auto& op = program.ops[op_idx];
+    for (int i = 0; i < op.n_inputs; ++i) {
+      auto idx = parse_weight_input_name(op.inputs[i], n_weights);
+      if (!idx.has_value() || seen[*idx]) {
+        continue;
+      }
+      seen[*idx] = 1;
+      out.push_back(*idx);
+    }
+  }
+  return out;
 }
 
 mx::array sample_categorical_logits(
@@ -3026,9 +3126,16 @@ std::vector<int32_t> IRTrainer::sample_categorical_output(
       vocab,
       temperature,
       weights.size());
+  const auto sampler_weight_indices = required_weight_indices_for_outputs(
+      program,
+      std::vector<std::string>{output_name},
+      weights.size());
 
   auto run_eager_sampler = [&]() {
-    auto effective = effective_compute_weights(weights, compute_dtype);
+    auto effective = effective_compute_weights(
+        weights,
+        compute_dtype,
+        sampler_weight_indices);
     auto logits = mx::astype(ir_interpret(program, effective, inputs, output_name, false), mx::float32);
     try {
       return sample_categorical_logits(logits, rows, vocab, temperature, key);
@@ -3065,8 +3172,9 @@ std::vector<int32_t> IRTrainer::sample_categorical_output(
               signature);
           const auto local_input_names = input_names;
           const auto local_output_name = output_name;
+          const auto local_sampler_weight_indices = sampler_weight_indices;
           compiled_categorical_sampler = mx::compile(
-              [this, local_input_names, local_output_name, rows, vocab, temperature](
+              [this, local_input_names, local_output_name, local_sampler_weight_indices, rows, vocab, temperature](
                   const std::vector<mx::array>& fn_args) {
                 const auto n_weights = weights.size();
                 const auto n_inputs = local_input_names.size();
@@ -3083,7 +3191,10 @@ std::vector<int32_t> IRTrainer::sample_categorical_output(
                 for (size_t i = 0; i < n_inputs; ++i) {
                   input_map.emplace(local_input_names[i], fn_args[n_weights + i]);
                 }
-                auto effective = effective_compute_weights(w, compute_dtype);
+                auto effective = effective_compute_weights(
+                    w,
+                    compute_dtype,
+                    local_sampler_weight_indices);
                 auto logits = mx::astype(
                     ir_interpret(program, effective, input_map, local_output_name, false),
                     mx::float32);

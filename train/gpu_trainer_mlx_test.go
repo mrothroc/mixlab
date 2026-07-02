@@ -235,6 +235,52 @@ func TestMLXGPUTrainerMakeObjectiveInputs_RTDGeneratorUsesRawBatchShape(t *testi
 	}
 }
 
+func TestMLXGPUTrainerMakeRTDGeneratorInputsOmitsTrunkInputs(t *testing.T) {
+	trainer := &mlxGPUTrainer{
+		rtdGeneratorInput:        true,
+		rtdGeneratorBatchSize:    2,
+		rtdGeneratorSeqLen:       3,
+		tokBuf:                   make([]int32, 12),
+		tgtBuf:                   make([]int32, 12),
+		lossMaskInput:            true,
+		diffusionBlockStartInput: true,
+		diffusionBlockEndInput:   true,
+		rtdGeneratorTokBuf:       make([]int32, 6),
+		rtdGeneratorTgtBuf:       make([]int32, 6),
+		rtdGeneratorLossBuf:      make([]float32, 6),
+	}
+	batch := objectiveBatch{
+		x:                    []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+		y:                    []int{2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13},
+		lossMask:             []float32{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
+		diffusionBlockStart:  []int32{0, 0, 0, 0},
+		diffusionBlockEnd:    []int32{3, 3, 3, 3},
+		rtdGeneratorX:        []int{21, 22, 23, 24, 25, 26},
+		rtdGeneratorY:        []int{31, 32, 33, 34, 35, 36},
+		rtdGeneratorLossMask: []float32{1, 0, 1, 0, 1, 0},
+	}
+
+	inputs, err := trainer.makeRTDGeneratorInputs(batch)
+	if err != nil {
+		t.Fatalf("makeRTDGeneratorInputs: %v", err)
+	}
+	if len(inputs) != 3 {
+		t.Fatalf("len(inputs)=%d, want only RTD generator tensors", len(inputs))
+	}
+	if hasTensorInput(inputs, "tokens") || hasTensorInput(inputs, "targets") ||
+		hasTensorInput(inputs, "loss_mask") || hasTensorInput(inputs, "diffusion_block_start") ||
+		hasTensorInput(inputs, "diffusion_block_end") {
+		t.Fatalf("generator-only inputs included trunk tensors: %+v", inputs)
+	}
+	toks := findTensorInput(t, inputs, "rtd_generator_tokens")
+	if !reflect.DeepEqual(toks.Shape, []int{2, 3}) {
+		t.Fatalf("rtd_generator_tokens shape=%v, want [2 3]", toks.Shape)
+	}
+	if got := toks.Data.([]int32); !reflect.DeepEqual(got, []int32{21, 22, 23, 24, 25, 26}) {
+		t.Fatalf("rtd_generator_tokens data=%v", got)
+	}
+}
+
 func TestMLXGPUTrainerMakeObjectiveInputs_RequiresDiffusionBlocks(t *testing.T) {
 	trainer := &mlxGPUTrainer{
 		tokBuf:                   make([]int32, 4),
@@ -264,6 +310,15 @@ func findTensorInput(t *testing.T, inputs []gpu.TensorInput, name string) gpu.Te
 	}
 	t.Fatalf("input %q not found in %+v", name, inputs)
 	return gpu.TensorInput{}
+}
+
+func hasTensorInput(inputs []gpu.TensorInput, name string) bool {
+	for _, input := range inputs {
+		if input.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCopyWeightDataTransposesEmbedToHead(t *testing.T) {

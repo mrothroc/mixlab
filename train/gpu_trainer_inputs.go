@@ -12,6 +12,40 @@ func (t *mlxGPUTrainer) makeInputs(xTok, yTok []int, batchSize, seqLen int) ([]g
 	return t.makeObjectiveInputs(objectiveBatch{x: xTok, y: yTok}, batchSize, seqLen)
 }
 
+func (t *mlxGPUTrainer) makeRTDGeneratorInputs(batch objectiveBatch) ([]gpu.TensorInput, error) {
+	if !t.rtdGeneratorInput {
+		return nil, fmt.Errorf("program does not declare rtd_generator inputs")
+	}
+	if t.rtdGeneratorBatchSize <= 0 || t.rtdGeneratorSeqLen <= 0 {
+		return nil, fmt.Errorf("program declares rtd_generator_tokens with invalid shape [%d,%d]", t.rtdGeneratorBatchSize, t.rtdGeneratorSeqLen)
+	}
+	need := t.rtdGeneratorBatchSize * t.rtdGeneratorSeqLen
+	if len(t.rtdGeneratorTokBuf) < need {
+		t.rtdGeneratorTokBuf = make([]int32, need)
+		t.rtdGeneratorTgtBuf = make([]int32, need)
+		t.rtdGeneratorLossBuf = make([]float32, need)
+	}
+	if len(batch.rtdGeneratorX) < need {
+		return nil, fmt.Errorf("objective batch missing rtd_generator_tokens: got=%d need=%d", len(batch.rtdGeneratorX), need)
+	}
+	if len(batch.rtdGeneratorY) < need {
+		return nil, fmt.Errorf("objective batch missing rtd_generator_targets: got=%d need=%d", len(batch.rtdGeneratorY), need)
+	}
+	if len(batch.rtdGeneratorLossMask) < need {
+		return nil, fmt.Errorf("objective batch missing rtd_generator_loss_mask: got=%d need=%d", len(batch.rtdGeneratorLossMask), need)
+	}
+	for i := 0; i < need; i++ {
+		t.rtdGeneratorTokBuf[i] = int32(batch.rtdGeneratorX[i])
+		t.rtdGeneratorTgtBuf[i] = int32(batch.rtdGeneratorY[i])
+	}
+	copy(t.rtdGeneratorLossBuf[:need], batch.rtdGeneratorLossMask[:need])
+	return []gpu.TensorInput{
+		{Name: "rtd_generator_tokens", DType: gpu.TensorInt32, Shape: []int{t.rtdGeneratorBatchSize, t.rtdGeneratorSeqLen}, Data: t.rtdGeneratorTokBuf[:need]},
+		{Name: "rtd_generator_targets", DType: gpu.TensorInt32, Shape: []int{need}, Data: t.rtdGeneratorTgtBuf[:need]},
+		{Name: "rtd_generator_loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.rtdGeneratorLossBuf[:need]},
+	}, nil
+}
+
 func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seqLen int) ([]gpu.TensorInput, error) {
 	need := batchSize * seqLen
 	if len(batch.x) < need || len(batch.y) < need {

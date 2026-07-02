@@ -259,6 +259,25 @@ func (t *rtdDualSamplerTrainer) SampleObjectiveOutputCategoricalEagerGPU(batch o
 	return append([]int(nil), t.eagerSamples...), nil
 }
 
+type rtdGeneratorOnlySamplerTrainer struct {
+	rtdSamplerOnlyTrainer
+	generatorSamples []int
+	generatorCalls   int
+	generatorBatch   objectiveBatch
+	generatorOutput  string
+	generatorRows    int
+	generatorVocab   int
+}
+
+func (t *rtdGeneratorOnlySamplerTrainer) SampleRTDGeneratorOutputCategoricalGPU(batch objectiveBatch, outputName string, rows, vocab int, _ float64, _ uint64) ([]int, error) {
+	t.generatorCalls++
+	t.generatorBatch = cloneObjectiveBatchForRTDTest(batch)
+	t.generatorOutput = outputName
+	t.generatorRows = rows
+	t.generatorVocab = vocab
+	return append([]int(nil), t.generatorSamples...), nil
+}
+
 type compileStatsTestTrainer struct {
 	rtdSamplerOnlyTrainer
 	stats gpu.TrainerCompileStats
@@ -373,6 +392,59 @@ func TestRTDCorruptionCanOptIntoEagerSampler(t *testing.T) {
 	rtdOffset := cfg.Training.BatchTokens
 	if got.x[rtdOffset+1] != 9 || got.y[rtdOffset+1] != 0 {
 		t.Fatalf("RTD corruption came from wrong sampler x/y=%d/%d, want eager sample 9/0", got.x[rtdOffset+1], got.y[rtdOffset+1])
+	}
+}
+
+func TestRTDDedicatedCorruptionUsesGeneratorOnlySampler(t *testing.T) {
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"seed": 11,
+		"mlm_mask_prob": 1.0,
+		"mlm_mask_token_id": 31,
+		"rtd": {"generator": {"type": "dedicated", "model_dim": 8, "layers": 1, "heads": 2}, "mask_prob": 1.0, "sample_temperature": 1.0},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.8},
+			{"name": "detector", "objective": "rtd", "loss_weight": 1.0}
+		]
+	}`)
+	raw := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 9, 6, 7, 8, 9},
+	}
+	prepared, err := prepareMultiheadBatch(cfg, raw, 3, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareMultiheadBatch: %v", err)
+	}
+	trainer := &rtdGeneratorOnlySamplerTrainer{
+		rtdSamplerOnlyTrainer: rtdSamplerOnlyTrainer{samples: []int{8, 8, 8, 8, 8, 8, 8, 8}},
+		generatorSamples:      []int{raw.x[0], 9, 9, 9, 9, 9, 9, 9},
+	}
+	got, err := maybeAttachRTDCorruption(trainer, cfg, raw, 3, prepared, cfg.Training.BatchTokens/cfg.SeqLen, cfg.SeqLen, arch.ObjectiveMultihead)
+	if err != nil {
+		t.Fatalf("maybeAttachRTDCorruption: %v", err)
+	}
+	if trainer.generatorCalls != 1 || trainer.calls != 0 {
+		t.Fatalf("sampler calls generator_only=%d generic=%d, want generator-only", trainer.generatorCalls, trainer.calls)
+	}
+	if trainer.generatorOutput != arch.RTDGeneratorLogitsName {
+		t.Fatalf("generator output=%q, want %s", trainer.generatorOutput, arch.RTDGeneratorLogitsName)
+	}
+	if trainer.generatorRows != cfg.Training.BatchTokens || trainer.generatorVocab != cfg.VocabSize {
+		t.Fatalf("sample shape rows=%d vocab=%d, want %d/%d", trainer.generatorRows, trainer.generatorVocab, cfg.Training.BatchTokens, cfg.VocabSize)
+	}
+	if len(trainer.generatorBatch.rtdGeneratorX) != cfg.Training.BatchTokens || len(trainer.generatorBatch.x) != len(prepared.x) {
+		t.Fatalf("generator batch lengths rtd_x=%d x=%d, want rtd_x=%d x=%d",
+			len(trainer.generatorBatch.rtdGeneratorX), len(trainer.generatorBatch.x), cfg.Training.BatchTokens, len(prepared.x))
+	}
+	rtdOffset := cfg.Training.BatchTokens
+	if got.x[rtdOffset] != 1 || got.y[rtdOffset] != 1 {
+		t.Fatalf("same-token replacement x/y=%d/%d, want original", got.x[rtdOffset], got.y[rtdOffset])
+	}
+	if got.x[rtdOffset+1] != 9 || got.y[rtdOffset+1] != 0 {
+		t.Fatalf("replacement x/y=%d/%d, want 9/0", got.x[rtdOffset+1], got.y[rtdOffset+1])
 	}
 }
 

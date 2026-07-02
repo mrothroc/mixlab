@@ -45,6 +45,14 @@ type gpuObjectiveCategoricalEagerSampler interface {
 	SampleObjectiveOutputCategoricalEagerGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error)
 }
 
+type gpuRTDGeneratorCategoricalSampler interface {
+	SampleRTDGeneratorOutputCategoricalGPU(batch objectiveBatch, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error)
+}
+
+type gpuRTDGeneratorCategoricalEagerSampler interface {
+	SampleRTDGeneratorOutputCategoricalEagerGPU(batch objectiveBatch, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error)
+}
+
 type gpuCompileStatsReader interface {
 	CompileStatsGPU() (gpu.TrainerCompileStats, error)
 }
