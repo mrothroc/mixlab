@@ -75,6 +75,21 @@ func TestPreparePairsFlagsInHelpGroup(t *testing.T) {
 	}
 }
 
+func TestMinimalPairFactoryFlagsInPrepareHelpGroup(t *testing.T) {
+	groups := modeFlagGroups["prepare"]
+	for _, flagName := range []string{
+		"minimal-pair-weights",
+		"minimal-pair-morphology",
+		"minimal-pair-report-out",
+		"minimal-pair-sample-out",
+		"minimal-pair-sample-count",
+	} {
+		if !flagGroupContains(groups, flagName) {
+			t.Fatalf("prepare help groups missing %s", flagName)
+		}
+	}
+}
+
 func flagGroupContains(groups []flagGroup, name string) bool {
 	for _, group := range groups {
 		for _, got := range group.Names {

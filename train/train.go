@@ -761,12 +761,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					name, step, steps, v, valStr, sched.At(step), phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), steadyElapsed, stepsForRate, step, steps))
 				logDuration := time.Since(logStart)
 				if opts.Timing {
-					fmt.Printf("  [%s] [timing] data=%.1fms gpu=%.1fms val=%.1fms log=%.1fms\n",
+					compileStatsStr := formatCompileStats(trainer)
+					fmt.Printf("  [%s] [timing] data=%.1fms gpu=%.1fms val=%.1fms log=%.1fms%s\n",
 						name,
 						float64(dataDuration)/float64(time.Millisecond),
 						float64(gpuDuration)/float64(time.Millisecond),
 						float64(valDuration)/float64(time.Millisecond),
-						float64(logDuration)/float64(time.Millisecond))
+						float64(logDuration)/float64(time.Millisecond),
+						compileStatsStr)
 				}
 				telemetry.state.update(telemetryUpdate{
 					Model:         name,

@@ -2206,6 +2206,53 @@ std::string inferred_output_name(const mlx_ir::IRProgram& program, const std::st
   return "";
 }
 
+std::vector<uint8_t> required_ops_for_outputs(
+    const mlx_ir::IRProgram& program,
+    const std::vector<std::string>& output_names) {
+  std::unordered_set<std::string> required;
+  required.reserve(output_names.size() + 16);
+  if (output_names.empty()) {
+    const auto keep_output = inferred_output_name(program, "");
+    if (!keep_output.empty()) {
+      required.emplace(keep_output);
+    }
+  } else {
+    for (const auto& output_name : output_names) {
+      if (!output_name.empty()) {
+        required.emplace(output_name);
+      }
+    }
+  }
+
+  std::vector<uint8_t> needed(program.ops.size(), 0);
+  for (size_t rev = program.ops.size(); rev > 0; --rev) {
+    const size_t op_idx = rev - 1;
+    const auto& op = program.ops[op_idx];
+    bool op_needed = false;
+    for (int i = 0; i < op.n_outputs; ++i) {
+      if (!op.outputs[i].empty() && required.find(op.outputs[i]) != required.end()) {
+        op_needed = true;
+        break;
+      }
+    }
+    if (!op_needed) {
+      continue;
+    }
+    needed[op_idx] = 1;
+    for (int i = 0; i < op.n_outputs; ++i) {
+      if (!op.outputs[i].empty()) {
+        required.erase(op.outputs[i]);
+      }
+    }
+    for (int i = 0; i < op.n_inputs; ++i) {
+      if (!op.inputs[i].empty()) {
+        required.emplace(op.inputs[i]);
+      }
+    }
+  }
+  return needed;
+}
+
 } // namespace
 
 namespace mlx_ir {
@@ -2359,6 +2406,7 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
     env.emplace(name, weights[i]);
     pinned.emplace(std::move(name));
   }
+  const auto needed_ops = required_ops_for_outputs(program, output_names);
 
   if (output_names.empty()) {
     const auto keep_output = inferred_output_name(program, "");
@@ -2375,7 +2423,11 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
 
   std::unordered_map<std::string, int> remaining_uses;
   remaining_uses.reserve(program.ops.size() * 2 + 8);
-  for (const auto& op : program.ops) {
+  for (size_t op_idx = 0; op_idx < program.ops.size(); ++op_idx) {
+    if (!needed_ops.empty() && !needed_ops[op_idx]) {
+      continue;
+    }
+    const auto& op = program.ops[op_idx];
     for (int i = 0; i < op.n_inputs; ++i) {
       if (!op.inputs[i].empty()) {
         remaining_uses[op.inputs[i]]++;
@@ -2417,6 +2469,9 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
 
   for (size_t op_idx = 0; op_idx < program.ops.size(); ++op_idx) {
     const auto& op = program.ops[op_idx];
+    if (!needed_ops.empty() && !needed_ops[op_idx]) {
+      continue;
+    }
     try {
       switch (op.type) {
       case OP_EMBED: {

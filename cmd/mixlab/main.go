@@ -84,8 +84,13 @@ func main() {
 	prepCharMaxPerToken := flag.Int("char-max-per-token", 16, "fixed char feature slots per token when -char-vocab-size is enabled (prepare mode)")
 	prepMinimalPairOut := flag.String("minimal-pair-out", "", "write corpus-derived minimal-pair JSONL to this path (prepare mode)")
 	prepMinimalPairCorruptions := flag.String("minimal-pair-corruptions", "agreement,attractor,word_order", "comma-separated minimal-pair corruption families (prepare mode)")
+	prepMinimalPairWeights := flag.String("minimal-pair-weights", "", "minimal-pair family weights as JSON object or family=value list (prepare mode)")
+	prepMinimalPairMorphology := flag.String("minimal-pair-morphology", "induced", "minimal-pair morphology source: induced (prepare mode)")
 	prepMinimalPairMaxPairs := flag.Int("minimal-pair-max-pairs", 0, "maximum generated minimal pairs; 0 lets prepare choose from input size (prepare mode)")
 	prepMinimalPairSeed := flag.Int("minimal-pair-seed", 1234, "deterministic seed for minimal-pair generation (prepare mode)")
+	prepMinimalPairReportOut := flag.String("minimal-pair-report-out", "", "write minimal-pair generation report JSON (prepare mode)")
+	prepMinimalPairSampleOut := flag.String("minimal-pair-sample-out", "", "write auditable minimal-pair sample JSONL (prepare mode)")
+	prepMinimalPairSampleCount := flag.Int("minimal-pair-sample-count", 20, "maximum minimal-pair audit samples to write (prepare mode)")
 	pairIn := flag.String("pair-in", "", "minimal-pair JSONL input for prepare-pairs mode")
 	pairOut := flag.String("pair-out", "", "compiled minimal-pair binary output for prepare-pairs mode; omit to validate only")
 	pairMaxLen := flag.Int("pair-max-len", 0, "maximum clean/corrupt token length for prepare-pairs; 0 uses config seq_len when -config is provided")
@@ -167,8 +172,13 @@ func main() {
 			CharMaxPerToken:        *prepCharMaxPerToken,
 			MinimalPairOut:         *prepMinimalPairOut,
 			MinimalPairCorruptions: *prepMinimalPairCorruptions,
+			MinimalPairWeights:     *prepMinimalPairWeights,
+			MinimalPairMorphology:  *prepMinimalPairMorphology,
 			MinimalPairMaxPairs:    *prepMinimalPairMaxPairs,
 			MinimalPairSeed:        *prepMinimalPairSeed,
+			MinimalPairReportOut:   *prepMinimalPairReportOut,
+			MinimalPairSampleOut:   *prepMinimalPairSampleOut,
+			MinimalPairSampleCount: *prepMinimalPairSampleCount,
 		}))
 		return
 	}
@@ -354,7 +364,7 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Output", []string{"prepare-output-dir", "output"}},
 		{"Tokenizer/data", []string{"vocab-size", "val-split", "tokenizer-path", "text-field"}},
 		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},
-		{"Minimal pair artifact", []string{"minimal-pair-out", "minimal-pair-corruptions", "minimal-pair-max-pairs", "minimal-pair-seed"}},
+		{"Minimal pair artifact", []string{"minimal-pair-out", "minimal-pair-corruptions", "minimal-pair-weights", "minimal-pair-morphology", "minimal-pair-max-pairs", "minimal-pair-seed", "minimal-pair-report-out", "minimal-pair-sample-out", "minimal-pair-sample-count"}},
 	},
 	"prepare-pairs": {
 		{"Input", []string{"pair-in", "config"}},

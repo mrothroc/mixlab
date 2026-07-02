@@ -615,6 +615,10 @@ func (t *mlxGPUTrainer) sampleObjectiveOutputCategorical(batch objectiveBatch, b
 	return out, nil
 }
 
+func (t *mlxGPUTrainer) CompileStatsGPU() (gpu.TrainerCompileStats, error) {
+	return gpu.TrainerCompileStatsSnapshot(t.handle)
+}
+
 // EvaluateObjectiveTrainingLossGPU evaluates the graph's optimizer loss output
 // directly, even when a separate dense eval_loss output is available.
 func (t *mlxGPUTrainer) EvaluateObjectiveTrainingLossGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error) {

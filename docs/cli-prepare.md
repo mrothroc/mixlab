@@ -25,8 +25,13 @@ tokenizer compatibility notes.
 | `-char-max-per-token` | Fixed char feature slots per token when char features are enabled. Default: `16`. |
 | `-minimal-pair-out` | Optional JSONL path for corpus-derived clean/corrupt minimal-pair records. |
 | `-minimal-pair-corruptions` | Comma-separated corruption families. Default: `agreement,attractor,word_order`. |
+| `-minimal-pair-weights` | Optional family weights as JSON (`{"agreement":1}`) or comma-separated `family=value` entries. Missing enabled families default to `1`. |
+| `-minimal-pair-morphology` | Morphology source for generated pairs. V1 supports `induced`, using corpus-token frequency tables plus built-in broad alternations. |
 | `-minimal-pair-max-pairs` | Maximum generated minimal pairs. `0` lets `prepare` choose from input size. |
 | `-minimal-pair-seed` | Deterministic seed for minimal-pair generation. Default: `1234`. |
+| `-minimal-pair-report-out` | Optional JSON report with accepted/rejected counts, rejection reasons, weights, attempts, and seed. |
+| `-minimal-pair-sample-out` | Optional audit JSONL containing clean/corrupt text and token IDs for a bounded sample of accepted pairs. |
+| `-minimal-pair-sample-count` | Maximum audit samples to write. Default: `20`. |
 
 When `-char-vocab-size` is enabled, `prepare` writes a reusable
 tokenizer-level `char_features.bin` next to `tokenizer.json`. Configs with
@@ -36,8 +41,13 @@ generation.
 When `-minimal-pair-out` is set, `prepare` writes JSONL records shaped as
 `{"id":"...","clean":[...],"corrupt":[...],"family":"..."}`. The generator
 uses only the input corpus text and tokenizer, applies broad stochastic
-corruptions, filters duplicates, and prints accepted/rejected counts by family.
-Use that file from `training.minimal_pair.path` with a multihead energy head.
+corruptions, applies deterministic per-family sampling weights, filters
+duplicates, and reports accepted/rejected counts by family. The available
+families are `agreement`, `attractor`, `word_order`, `npi_licensor`,
+`quantifier_scope`, and `filler_gap`. Use `-minimal-pair-report-out` for a
+machine-readable balance/rejection report and `-minimal-pair-sample-out` for
+human inspection before training. Use the generated JSONL from
+`training.minimal_pair.path` with a multihead energy head.
 
 ## `prepare-pairs`
 

@@ -67,7 +67,7 @@ Add `-timing` to see where each progress interval spends time:
 Example output:
 
 ```text
-[model] [timing] data=1.2ms gpu=142.5ms val=11.3ms log=0.2ms
+[model] [timing] data=1.2ms gpu=142.5ms val=11.3ms log=0.2ms compile=train:24/1 sampler:0/0
 ```
 
 Fields:
@@ -78,6 +78,7 @@ Fields:
 | `gpu` | Forward, backward, and optimizer time. |
 | `val` | Validation loss time. Zero on non-validation steps. |
 | `log` | Progress formatting time. |
+| `compile` | MLX compiled-graph cache hits/misses, shown as `train:hits/misses sampler:hits/misses` when the backend exposes counters. |
 
 If `data` is consistently high, the loader cannot keep up with the GPU. If
 `gpu` dominates and `data` is near zero, the training pipeline is healthy.
@@ -96,8 +97,9 @@ To inspect MLX compiled-graph cache behavior, enable:
 MIXLAB_MLX_COMPILE_LOG=1 ./mixlab -mode arch ...
 ```
 
-This prints cache hit/miss lines for the main compiled training step and the
-categorical sampler.
+`-timing` gives compact cumulative hit/miss counters at the log cadence.
+`MIXLAB_MLX_COMPILE_LOG=1` prints one line per cache event for the main
+compiled training step and the categorical sampler.
 
 ## Go profiling
 

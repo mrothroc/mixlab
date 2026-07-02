@@ -3,6 +3,7 @@ package train
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,8 @@ func TestPrepareScript(t *testing.T) {
 	inputFile := filepath.Join(tmpDir, "test_corpus.txt")
 	outputDir := filepath.Join(tmpDir, "shards")
 	pairPath := filepath.Join(outputDir, "pairs.train.jsonl")
+	pairReportPath := filepath.Join(outputDir, "pairs.report.json")
+	pairSamplePath := filepath.Join(outputDir, "pairs.samples.jsonl")
 
 	// Write a small but non-trivial corpus (repeat to get enough tokens).
 	corpus := "The quick brown fox jumps over the lazy dog. " +
@@ -64,8 +67,13 @@ func TestPrepareScript(t *testing.T) {
 		"--char-max-per-token", "8",
 		"--minimal-pair-out", pairPath,
 		"--minimal-pair-corruptions", "agreement,attractor,word_order,npi_licensor,quantifier_scope,filler_gap",
+		"--minimal-pair-weights", "agreement=1,attractor=2,word_order=1,npi_licensor=1,quantifier_scope=1,filler_gap=1",
+		"--minimal-pair-morphology", "induced",
 		"--minimal-pair-max-pairs", "12",
 		"--minimal-pair-seed", "7",
+		"--minimal-pair-report-out", pairReportPath,
+		"--minimal-pair-sample-out", pairSamplePath,
+		"--minimal-pair-sample-count", "3",
 	)
 	prepCmd.Stdout = os.Stdout
 	prepCmd.Stderr = os.Stderr
@@ -161,6 +169,27 @@ func TestPrepareScript(t *testing.T) {
 	}
 	if records[0].Family == "" {
 		t.Fatalf("minimal pair record missing family: %+v", records[0])
+	}
+	reportBlob, err := os.ReadFile(pairReportPath)
+	if err != nil {
+		t.Fatalf("minimal pair report not found: %v", err)
+	}
+	var report map[string]any
+	if err := json.Unmarshal(reportBlob, &report); err != nil {
+		t.Fatalf("decode minimal pair report: %v", err)
+	}
+	if report["written"].(float64) <= 0 {
+		t.Fatalf("minimal pair report has no written records: %v", report)
+	}
+	if _, ok := report["family_weights"].(map[string]any)["attractor"]; !ok {
+		t.Fatalf("minimal pair report missing family weights: %v", report)
+	}
+	sampleBlob, err := os.ReadFile(pairSamplePath)
+	if err != nil {
+		t.Fatalf("minimal pair sample dump not found: %v", err)
+	}
+	if !bytes.Contains(sampleBlob, []byte(`"clean_text"`)) || !bytes.Contains(sampleBlob, []byte(`"corrupt_text"`)) {
+		t.Fatalf("minimal pair sample dump missing text fields: %s", sampleBlob)
 	}
 
 	// Verify the Loader can read the shards end-to-end.

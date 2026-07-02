@@ -13,7 +13,9 @@ Usage:
 """
 
 import argparse
+from collections import Counter
 import json
+import math
 import os
 import random
 import re
@@ -273,7 +275,23 @@ AGREEMENT_FLIPS = {
 }
 
 
-def corrupt_word_order(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
+def induce_morphology(texts: list[str]) -> dict[str, object]:
+    freq: Counter[str] = Counter()
+    for text in texts:
+        for tok in split_words(text):
+            if tok.isalpha():
+                freq[tok.lower()] += 1
+    flips = dict(AGREEMENT_FLIPS)
+    for word in list(freq):
+        if word.endswith("s") and len(word) > 3:
+            stem = word[:-1]
+            if stem in freq and stem not in flips and word not in flips:
+                flips[stem] = word
+                flips[word] = stem
+    return {"word_freq": freq, "agreement_flips": flips}
+
+
+def corrupt_word_order(words: list[str], rng: random.Random, _morphology=None) -> tuple[list[str], str] | None:
     candidates = [i for i in range(len(words) - 1) if words[i].isalnum() and words[i + 1].isalnum()]
     if not candidates:
         return None
@@ -283,8 +301,11 @@ def corrupt_word_order(words: list[str], rng: random.Random) -> tuple[list[str],
     return out, "word_order"
 
 
-def corrupt_agreement(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
-    candidates = [i for i, w in enumerate(words) if w.lower() in AGREEMENT_FLIPS]
+def corrupt_agreement(words: list[str], rng: random.Random, morphology=None) -> tuple[list[str], str] | None:
+    flips = AGREEMENT_FLIPS
+    if morphology and isinstance(morphology.get("agreement_flips"), dict):
+        flips = morphology["agreement_flips"]
+    candidates = [i for i, w in enumerate(words) if w.lower() in flips]
     if not candidates:
         # Fallback: flip a simple present-tense suffix on a later alphabetic token.
         candidates = [i for i, w in enumerate(words) if i > 0 and w.isalpha() and len(w) > 3]
@@ -299,20 +320,20 @@ def corrupt_agreement(words: list[str], rng: random.Random) -> tuple[list[str], 
         return out, "agreement"
     i = rng.choice(candidates)
     out = words[:]
-    repl = AGREEMENT_FLIPS[out[i].lower()]
+    repl = flips[out[i].lower()]
     out[i] = repl.capitalize() if out[i][:1].isupper() else repl
     return out, "agreement"
 
 
-def corrupt_attractor(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
-    out = corrupt_agreement(words, rng)
+def corrupt_attractor(words: list[str], rng: random.Random, morphology=None) -> tuple[list[str], str] | None:
+    out = corrupt_agreement(words, rng, morphology)
     if out is None:
         return None
     corrupted, _ = out
     return corrupted, "attractor"
 
 
-def corrupt_npi_licensor(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
+def corrupt_npi_licensor(words: list[str], rng: random.Random, _morphology=None) -> tuple[list[str], str] | None:
     lower = [w.lower() for w in words]
     if any(w in {"any", "ever", "anyone", "anything", "anybody"} for w in lower):
         licensors = [i for i, w in enumerate(lower) if w in {"not", "n't", "never", "no"}]
@@ -326,7 +347,7 @@ def corrupt_npi_licensor(words: list[str], rng: random.Random) -> tuple[list[str
     return None
 
 
-def corrupt_quantifier_scope(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
+def corrupt_quantifier_scope(words: list[str], rng: random.Random, _morphology=None) -> tuple[list[str], str] | None:
     flips = {"all": "some", "some": "all", "every": "some", "each": "some", "no": "some", "many": "few", "few": "many"}
     candidates = [i for i, w in enumerate(words) if w.lower() in flips]
     if not candidates:
@@ -338,7 +359,7 @@ def corrupt_quantifier_scope(words: list[str], rng: random.Random) -> tuple[list
     return out, "quantifier_scope"
 
 
-def corrupt_filler_gap(words: list[str], rng: random.Random) -> tuple[list[str], str] | None:
+def corrupt_filler_gap(words: list[str], rng: random.Random, morphology=None) -> tuple[list[str], str] | None:
     lower = [w.lower() for w in words]
     wh = [i for i, w in enumerate(lower) if w in {"who", "what", "which", "where", "when"}]
     if wh and len(words) > 4:
@@ -349,7 +370,7 @@ def corrupt_filler_gap(words: list[str], rng: random.Random) -> tuple[list[str],
             out = words[:]
             out[i], out[j] = out[j], out[i]
             return out, "filler_gap"
-    return corrupt_word_order(words, rng)
+    return corrupt_word_order(words, rng, morphology)
 
 
 CORRUPTORS = {
@@ -372,13 +393,81 @@ def sentence_candidates(texts: list[str]) -> list[str]:
     return out
 
 
+def parse_minimal_pair_weights(weights: str, families: list[str]) -> dict[str, float]:
+    if not weights.strip():
+        return {family: 1.0 for family in families}
+    parsed: dict[str, float] = {}
+    if weights.strip().startswith("{"):
+        raw = json.loads(weights)
+        if not isinstance(raw, dict):
+            raise ValueError("--minimal-pair-weights JSON must be an object")
+        for key, value in raw.items():
+            parsed[str(key).strip()] = float(value)
+    else:
+        for part in weights.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "=" in part:
+                key, value = part.split("=", 1)
+            elif ":" in part:
+                key, value = part.split(":", 1)
+            else:
+                raise ValueError("--minimal-pair-weights entries must be family=value")
+            parsed[key.strip()] = float(value)
+    unknown = [key for key in parsed if key not in families]
+    if unknown:
+        raise ValueError(f"minimal-pair weights reference disabled families: {', '.join(unknown)}")
+    out = {family: parsed.get(family, 1.0) for family in families}
+    bad = [family for family, value in out.items() if value < 0 or not math.isfinite(value)]
+    if bad:
+        raise ValueError(f"minimal-pair weights must be finite and >= 0 for: {', '.join(bad)}")
+    if sum(out.values()) <= 0:
+        raise ValueError("--minimal-pair-weights must leave at least one positive family weight")
+    return out
+
+
+def weighted_family_choice(rng: random.Random, families: list[str], weights: dict[str, float]) -> str:
+    total = sum(weights[family] for family in families)
+    draw = rng.random() * total
+    acc = 0.0
+    for family in families:
+        acc += weights[family]
+        if draw <= acc:
+            return family
+    return families[-1]
+
+
+def write_minimal_pair_report(path: str, report: dict):
+    if not path:
+        return
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, sort_keys=True)
+        f.write("\n")
+
+
+def write_minimal_pair_samples(path: str, samples: list[dict]):
+    if not path:
+        return
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for sample in samples:
+            f.write(json.dumps(sample, separators=(",", ":")) + "\n")
+
+
 def write_minimal_pairs(
     tokenizer,
     texts: list[str],
     output_path: str,
     corruptions: str,
+    weights: str,
+    morphology: str,
     max_pairs: int,
     seed: int,
+    report_out: str,
+    sample_out: str,
+    sample_count: int,
 ):
     if not output_path:
         return
@@ -388,6 +477,13 @@ def write_minimal_pairs(
     unknown = [c for c in families if c not in CORRUPTORS]
     if unknown:
         raise ValueError(f"unsupported minimal-pair corruptions: {', '.join(unknown)}")
+    if sample_count < 0:
+        raise ValueError("--minimal-pair-sample-count must be >= 0")
+    morphology = morphology.strip().lower()
+    if morphology != "induced":
+        raise ValueError("--minimal-pair-morphology currently supports only 'induced'")
+    family_weights = parse_minimal_pair_weights(weights, families)
+    morphology_tables = induce_morphology(texts)
     rng = random.Random(seed)
     candidates = sentence_candidates(texts)
     rng.shuffle(candidates)
@@ -398,6 +494,14 @@ def write_minimal_pairs(
     seen: set[tuple[tuple[int, ...], tuple[int, ...]]] = set()
     counts = {family: 0 for family in families}
     rejects = {family: 0 for family in families}
+    reject_reasons: dict[str, dict[str, int]] = {family: {} for family in families}
+    samples: list[dict] = []
+
+    def reject(family: str, reason: str):
+        rejects[family] = rejects.get(family, 0) + 1
+        family_reasons = reject_reasons.setdefault(family, {})
+        family_reasons[reason] = family_reasons.get(reason, 0) + 1
+
     written = 0
     attempts = 0
     max_attempts = max_pairs * 50
@@ -406,40 +510,72 @@ def write_minimal_pairs(
             attempts += 1
             clean_text = candidates[attempts % len(candidates)]
             words = split_words(clean_text)
+            family = weighted_family_choice(rng, families, family_weights)
             if len([w for w in words if w.isalnum()]) < 3:
+                reject(family, "too_short")
                 continue
-            family = families[attempts % len(families)]
-            result = CORRUPTORS[family](words, rng)
+            result = CORRUPTORS[family](words, rng, morphology_tables)
             if result is None:
-                rejects[family] += 1
+                reject(family, "no_candidate")
                 continue
             corrupt_words, actual_family = result
             corrupt_text = join_words(corrupt_words)
             if corrupt_text == clean_text:
-                rejects[actual_family] = rejects.get(actual_family, 0) + 1
+                reject(actual_family, "unchanged")
                 continue
             clean_ids = tokenizer.encode(clean_text).ids
             corrupt_ids = tokenizer.encode(corrupt_text).ids
             if not clean_ids or not corrupt_ids:
-                rejects[actual_family] = rejects.get(actual_family, 0) + 1
+                reject(actual_family, "empty_tokens")
                 continue
             key = (tuple(clean_ids), tuple(corrupt_ids))
             if key in seen:
-                rejects[actual_family] = rejects.get(actual_family, 0) + 1
+                reject(actual_family, "duplicate")
                 continue
             seen.add(key)
+            rec_id = f"mp_{written:08d}"
             rec = {
-                "id": f"mp_{written:08d}",
+                "id": rec_id,
                 "clean": clean_ids,
                 "corrupt": corrupt_ids,
                 "family": actual_family,
             }
             f.write(json.dumps(rec, separators=(",", ":")) + "\n")
             counts[actual_family] = counts.get(actual_family, 0) + 1
+            if len(samples) < sample_count:
+                samples.append(
+                    {
+                        "id": rec_id,
+                        "family": actual_family,
+                        "clean_text": clean_text,
+                        "corrupt_text": corrupt_text,
+                        "clean": clean_ids,
+                        "corrupt": corrupt_ids,
+                    }
+                )
             written += 1
+    report = {
+        "output_path": output_path,
+        "seed": seed,
+        "morphology": morphology,
+        "max_pairs": max_pairs,
+        "attempts": attempts,
+        "written": written,
+        "family_weights": family_weights,
+        "accepted_by_family": counts,
+        "rejected_by_family": rejects,
+        "rejection_reasons": reject_reasons,
+        "sample_count": len(samples),
+    }
+    write_minimal_pair_report(report_out, report)
+    write_minimal_pair_samples(sample_out, samples)
     print(f"Saved {written} minimal pairs to {output_path}")
     print(f"Minimal-pair accepted by family: {counts}")
     print(f"Minimal-pair rejected by family: {rejects}")
+    if report_out:
+        print(f"Minimal-pair report: {report_out}")
+    if sample_out:
+        print(f"Minimal-pair audit samples: {sample_out}")
 
 
 def main():
@@ -460,8 +596,21 @@ def main():
         default="agreement,attractor,word_order",
         help="Comma-separated minimal-pair corruption families",
     )
+    parser.add_argument(
+        "--minimal-pair-weights",
+        default="",
+        help="Family weights as JSON object or comma-separated family=value entries",
+    )
+    parser.add_argument(
+        "--minimal-pair-morphology",
+        default="induced",
+        help="Morphology source for generated pairs; currently 'induced'",
+    )
     parser.add_argument("--minimal-pair-max-pairs", type=int, default=0, help="Maximum generated minimal pairs; 0 auto-selects")
     parser.add_argument("--minimal-pair-seed", type=int, default=1234, help="Deterministic minimal-pair seed")
+    parser.add_argument("--minimal-pair-report-out", default="", help="Write minimal-pair generation report JSON")
+    parser.add_argument("--minimal-pair-sample-out", default="", help="Write auditable minimal-pair sample JSONL")
+    parser.add_argument("--minimal-pair-sample-count", type=int, default=20, help="Maximum audit samples to write")
     args = parser.parse_args()
 
     tokens_per_shard = args.tokens_per_shard
@@ -486,8 +635,13 @@ def main():
         texts,
         args.minimal_pair_out,
         args.minimal_pair_corruptions,
+        args.minimal_pair_weights,
+        args.minimal_pair_morphology,
         args.minimal_pair_max_pairs,
         args.minimal_pair_seed,
+        args.minimal_pair_report_out,
+        args.minimal_pair_sample_out,
+        args.minimal_pair_sample_count,
     )
 
     # Tokenize

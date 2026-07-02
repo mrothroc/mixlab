@@ -1,6 +1,10 @@
 package train
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/mrothroc/mixlab/gpu"
+)
 
 // GPUTrainer and the objective step/eval adapter interfaces plus their small
 // dispatch helpers. The concrete implementation is the MLX backend.
@@ -41,6 +45,10 @@ type gpuObjectiveCategoricalEagerSampler interface {
 	SampleObjectiveOutputCategoricalEagerGPU(batch objectiveBatch, batchSize, seqLen int, outputName string, rows, vocab int, temperature float64, seed uint64) ([]int, error)
 }
 
+type gpuCompileStatsReader interface {
+	CompileStatsGPU() (gpu.TrainerCompileStats, error)
+}
+
 func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, lr float32) error {
 	if batch.batchSizeOverride > 0 {
 		batchSize = batch.batchSizeOverride
@@ -57,4 +65,22 @@ func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, 
 
 func evaluateTokensViaObjectiveGPU(trainer gpuObjectiveEvaluator, xTok, yTok []int, batchSize, seqLen int) (float32, error) {
 	return trainer.EvaluateObjectiveGPU(objectiveBatch{x: xTok, y: yTok}, batchSize, seqLen)
+}
+
+func formatCompileStats(trainer GPUTrainer) string {
+	reader, ok := trainer.(gpuCompileStatsReader)
+	if !ok {
+		return ""
+	}
+	stats, err := reader.CompileStatsGPU()
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		" compile=train:%d/%d sampler:%d/%d",
+		stats.TrainingStepCacheHits,
+		stats.TrainingStepCacheMisses,
+		stats.CategoricalSamplerCacheHits,
+		stats.CategoricalSamplerCacheMisses,
+	)
 }

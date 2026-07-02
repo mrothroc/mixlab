@@ -20,8 +20,13 @@ type PrepareOptions struct {
 	CharMaxPerToken        int
 	MinimalPairOut         string
 	MinimalPairCorruptions string
+	MinimalPairWeights     string
+	MinimalPairMorphology  string
 	MinimalPairMaxPairs    int
 	MinimalPairSeed        int
+	MinimalPairReportOut   string
+	MinimalPairSampleOut   string
+	MinimalPairSampleCount int
 }
 
 // runPrepare shells out to scripts/prepare.py to tokenize raw text into binary shards.
@@ -63,11 +68,26 @@ func runPrepare(opts PrepareOptions) error {
 	if opts.MinimalPairCorruptions != "" {
 		args = append(args, "--minimal-pair-corruptions", opts.MinimalPairCorruptions)
 	}
+	if opts.MinimalPairWeights != "" {
+		args = append(args, "--minimal-pair-weights", opts.MinimalPairWeights)
+	}
+	if opts.MinimalPairMorphology != "" {
+		args = append(args, "--minimal-pair-morphology", opts.MinimalPairMorphology)
+	}
 	if opts.MinimalPairMaxPairs > 0 {
 		args = append(args, "--minimal-pair-max-pairs", fmt.Sprintf("%d", opts.MinimalPairMaxPairs))
 	}
 	if opts.MinimalPairSeed != 0 {
 		args = append(args, "--minimal-pair-seed", fmt.Sprintf("%d", opts.MinimalPairSeed))
+	}
+	if opts.MinimalPairReportOut != "" {
+		args = append(args, "--minimal-pair-report-out", opts.MinimalPairReportOut)
+	}
+	if opts.MinimalPairSampleOut != "" {
+		args = append(args, "--minimal-pair-sample-out", opts.MinimalPairSampleOut)
+	}
+	if opts.MinimalPairSampleCount > 0 {
+		args = append(args, "--minimal-pair-sample-count", fmt.Sprintf("%d", opts.MinimalPairSampleCount))
 	}
 
 	fmt.Printf("Running: python3 %s\n", strings.Join(args, " "))
