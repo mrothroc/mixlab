@@ -33,6 +33,7 @@ type mlxGPUTrainer struct {
 	charInput                  bool
 	firstByteMaskInput         bool
 	lossMaskInput              bool
+	energySpanMaskInput        bool
 	attentionCausalInput       bool
 	segmentIDsInput            bool
 	teacherProbsInput          bool
@@ -46,6 +47,7 @@ type mlxGPUTrainer struct {
 	tokBuf                 []int32
 	tgtBuf                 []int32
 	lossMaskBuf            []float32
+	energySpanMaskBuf      []float32
 	attentionCausalBuf     []int32
 	segmentIDBuf           []int32
 	diffusionBlockStartBuf []int32
@@ -191,6 +193,7 @@ func initMLXGPUTrainer(
 	charInput := false
 	firstByteMaskInput := false
 	lossMaskInput := false
+	energySpanMaskInput := false
 	attentionCausalInput := false
 	segmentIDsInput := false
 	teacherProbsInput := false
@@ -214,6 +217,9 @@ func initMLXGPUTrainer(
 		}
 		if inp.Name == "loss_mask" {
 			lossMaskInput = true
+		}
+		if inp.Name == "energy_span_mask" {
+			energySpanMaskInput = true
 		}
 		if inp.Name == "attention_causal_mask" {
 			attentionCausalInput = true
@@ -315,6 +321,7 @@ func initMLXGPUTrainer(
 		charInput:                  charInput,
 		firstByteMaskInput:         firstByteMaskInput,
 		lossMaskInput:              lossMaskInput,
+		energySpanMaskInput:        energySpanMaskInput,
 		attentionCausalInput:       attentionCausalInput,
 		segmentIDsInput:            segmentIDsInput,
 		teacherProbsInput:          teacherProbsInput,
@@ -327,6 +334,7 @@ func initMLXGPUTrainer(
 		tokBuf:                     make([]int32, batchElems),
 		tgtBuf:                     make([]int32, batchElems),
 		lossMaskBuf:                make([]float32, batchElems),
+		energySpanMaskBuf:          make([]float32, batchElems),
 		attentionCausalBuf:         make([]int32, batchElems),
 		segmentIDBuf:               make([]int32, batchElems),
 		diffusionBlockStartBuf:     make([]int32, batchElems),
@@ -552,6 +560,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.charInput = programDeclaresInput(irProg, "char_ids")
 	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
 	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")
+	t.energySpanMaskInput = programDeclaresInput(irProg, "energy_span_mask")
 	t.attentionCausalInput = programDeclaresInput(irProg, "attention_causal_mask")
 	t.segmentIDsInput = programDeclaresInput(irProg, "segment_ids")
 	t.teacherProbsInput = programDeclaresInput(irProg, "teacher_probs")

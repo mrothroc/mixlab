@@ -22,6 +22,7 @@ func runPreparePairsWithOptions(opts PreparePairsOptions) error {
 	pairIn := strings.TrimSpace(opts.PairIn)
 	vocabSize := opts.VocabSize
 	maxLen := opts.MaxLen
+	energyAggregation := ""
 	if strings.TrimSpace(opts.ConfigPath) != "" {
 		cfg, err := LoadArchConfig(opts.ConfigPath)
 		if err != nil {
@@ -33,6 +34,9 @@ func runPreparePairsWithOptions(opts PreparePairsOptions) error {
 		}
 		if pairIn == "" && cfg.Training.MinimalPair != nil && cfg.Training.MinimalPair.Source == arch.MinimalPairSourceJSONL {
 			pairIn = resolveConfigRelativePath(cfg.SourcePath, cfg.Training.MinimalPair.Path)
+		}
+		if cfg.Training.MinimalPair != nil {
+			energyAggregation = cfg.Training.MinimalPair.EnergyAggregationMode()
 		}
 	}
 	if pairIn == "" {
@@ -48,9 +52,10 @@ func runPreparePairsWithOptions(opts PreparePairsOptions) error {
 		return fmt.Errorf("-pair-in and -pair-out must be different paths")
 	}
 	records, err := loadMinimalPairs(pairIn, arch.MinimalPairSourceJSONL, minimalPairDecodeOptions{
-		VocabSize:     vocabSize,
-		MaxLen:        maxLen,
-		RequireFamily: true,
+		VocabSize:         vocabSize,
+		MaxLen:            maxLen,
+		RequireFamily:     true,
+		EnergyAggregation: energyAggregation,
 	})
 	if err != nil {
 		return err

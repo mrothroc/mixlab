@@ -85,6 +85,8 @@ const (
 	OpMaskedBCEWithLogits  = 92 // OP_MASKED_BCE_WITH_LOGITS
 	OpMaskedBinaryAccuracy = 93 // OP_MASKED_BINARY_ACCURACY
 	OpEnergyPairwiseLoss   = 94 // OP_ENERGY_PAIRWISE_LOSS
+	OpEnergySpanPool       = 95 // OP_ENERGY_SPAN_POOL
+	OpEnergySpanPairwise   = 96 // OP_ENERGY_SPAN_PAIRWISE_LOSS
 
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -302,6 +304,18 @@ func (p *Program) MaskedBinaryAccuracy(logits, targets, mask, output string) {
 // be active for that pair to contribute.
 func (p *Program) EnergyPairwiseLoss(logits, rowMask string, lossKind int, margin float32, loss, accuracy, cleanMean, corruptMean string) {
 	p.AddOp(OpEnergyPairwiseLoss, []string{logits, rowMask}, []string{loss, accuracy, cleanMean, corruptMean}, []float32{margin}, []int{lossKind})
+}
+
+// EnergySpanPool mean-pools per-token scalar energies over positive mask rows.
+// The logits input may be [B*T] or [B*T,1]; mask is [B*T]. Output is [B,1].
+func (p *Program) EnergySpanPool(logits, spanMask string, seqLen int, output string) {
+	p.AddOp(OpEnergySpanPool, []string{logits, spanMask}, []string{output}, nil, []int{seqLen})
+}
+
+// EnergySpanPairwiseLoss pools per-token scalar energies by span and applies
+// clean/corrupt pairwise logistic or hinge ranking loss.
+func (p *Program) EnergySpanPairwiseLoss(logits, spanMask string, seqLen, lossKind int, margin float32, loss, accuracy, cleanMean, corruptMean string) {
+	p.AddOp(OpEnergySpanPairwise, []string{logits, spanMask}, []string{loss, accuracy, cleanMean, corruptMean}, []float32{margin}, []int{seqLen, lossKind})
 }
 
 // ZLoss emits mean(square(logsumexp(logits))) over token rows.

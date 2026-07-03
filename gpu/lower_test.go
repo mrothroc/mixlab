@@ -85,6 +85,8 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"MaskedBCEWithLogits", ir.OpMaskedBCEWithLogits, OpMaskedBCEWithLogits},
 		{"MaskedBinaryAccuracy", ir.OpMaskedBinaryAccuracy, OpMaskedBinaryAccuracy},
 		{"EnergyPairwiseLoss", ir.OpEnergyPairwiseLoss, OpEnergyPairwiseLoss},
+		{"EnergySpanPool", ir.OpEnergySpanPool, OpEnergySpanPool},
+		{"EnergySpanPairwise", ir.OpEnergySpanPairwise, OpEnergySpanPairwise},
 		{"StopGradient", ir.OpStopGradient, OpStopGradient},
 		{"FirstByteMaskedCrossEntropy", ir.OpFirstByteMaskedCE, OpFirstByteMaskedCE},
 	}

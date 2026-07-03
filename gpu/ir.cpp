@@ -322,6 +322,57 @@ EnergyPairwiseResult energy_pairwise_loss(
       mx::sum(corrupt * pair_mask) / denom};
 }
 
+struct EnergySpanPoolResult {
+  mx::array pooled;
+  mx::array row_mask;
+};
+
+EnergySpanPoolResult energy_span_pool(
+    const mx::array& logits,
+    const mx::array& span_mask,
+    int seq_len) {
+  if (seq_len <= 0) {
+    throw std::runtime_error("energy span pool seq_len must be > 0");
+  }
+  mx::array l = mx::astype(logits, mx::float32);
+  if (l.ndim() == 2 && l.shape(1) == 1) {
+    l = mx::reshape(l, {l.shape(0)});
+  }
+  if (l.ndim() != 1) {
+    throw std::runtime_error("energy span pool logits must have shape [rows*T] or [rows*T,1]");
+  }
+  if (span_mask.ndim() != 1 || span_mask.shape(0) != l.shape(0)) {
+    throw std::runtime_error("energy span pool mask must be a rank-1 vector matching logits");
+  }
+  const int n = static_cast<int>(l.shape(0));
+  if (n <= 0 || (n % seq_len) != 0) {
+    throw std::runtime_error("energy span pool logits length must be a positive multiple of seq_len");
+  }
+  const int rows = n / seq_len;
+  auto l_bt = mx::reshape(l, {rows, seq_len});
+  auto mask_bt = mx::astype(
+      mx::greater(mx::astype(span_mask, mx::float32), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  mask_bt = mx::reshape(mask_bt, {rows, seq_len});
+  auto denom = mx::sum(mask_bt, 1, true);
+  auto safe_denom = mx::maximum(denom, mx::array(1.0f, mx::float32));
+  auto pooled = mx::sum(l_bt * mask_bt, 1, true) / safe_denom;
+  auto row_mask = mx::reshape(
+      mx::astype(mx::greater(denom, mx::array(0.0f, mx::float32)), mx::float32),
+      {rows});
+  return EnergySpanPoolResult{pooled, row_mask};
+}
+
+EnergyPairwiseResult energy_span_pairwise_loss(
+    const mx::array& logits,
+    const mx::array& span_mask,
+    int seq_len,
+    int loss_kind,
+    float margin) {
+  auto pooled = energy_span_pool(logits, span_mask, seq_len);
+  return energy_pairwise_loss(pooled.pooled, pooled.row_mask, loss_kind, margin);
+}
+
 mx::array z_loss_mean(const mx::array& logits) {
   if (logits.ndim() != 2) {
     throw std::runtime_error("z_loss expects logits shape [rows, vocab]");
@@ -2862,6 +2913,36 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           throw std::runtime_error("OP_ENERGY_PAIRWISE_LOSS requires loss kind and margin params");
         }
         auto result = energy_pairwise_loss(get(op, 0), get(op, 1), op.int_params[0], op.float_params[0]);
+        set_out(op, 0, result.loss);
+        set_out(op, 1, result.accuracy);
+        set_out(op, 2, result.clean_mean);
+        set_out(op, 3, result.corrupt_mean);
+        break;
+      }
+      case OP_ENERGY_SPAN_POOL: {
+        if (op.n_outputs != 1) {
+          throw std::runtime_error("OP_ENERGY_SPAN_POOL requires one output");
+        }
+        if (op.n_int_params < 1) {
+          throw std::runtime_error("OP_ENERGY_SPAN_POOL requires seq_len param");
+        }
+        auto result = energy_span_pool(get(op, 0), get(op, 1), op.int_params[0]);
+        set_out(op, 0, result.pooled);
+        break;
+      }
+      case OP_ENERGY_SPAN_PAIRWISE_LOSS: {
+        if (op.n_outputs != 4) {
+          throw std::runtime_error("OP_ENERGY_SPAN_PAIRWISE_LOSS requires four outputs");
+        }
+        if (op.n_int_params < 2 || op.n_float_params < 1) {
+          throw std::runtime_error("OP_ENERGY_SPAN_PAIRWISE_LOSS requires seq_len, loss kind, and margin params");
+        }
+        auto result = energy_span_pairwise_loss(
+            get(op, 0),
+            get(op, 1),
+            op.int_params[0],
+            op.int_params[1],
+            op.float_params[0]);
         set_out(op, 0, result.loss);
         set_out(op, 1, result.accuracy);
         set_out(op, 2, result.clean_mean);

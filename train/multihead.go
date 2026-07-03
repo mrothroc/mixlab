@@ -32,6 +32,9 @@ func prepareMultiheadBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen
 		diffusionTimestep:   make([]float32, rawBatchSize*headCount),
 		batchSizeOverride:   rawBatchSize * headCount,
 	}
+	if cfg.Training.MinimalPair != nil && cfg.Training.MinimalPair.UsesDifferingSpanEnergy() {
+		out.energySpanMask = make([]float32, totalNeed)
+	}
 	for headIdx, head := range cfg.Training.Heads {
 		headCfg := *cfg
 		headCfg.Training.Objective = head.Objective

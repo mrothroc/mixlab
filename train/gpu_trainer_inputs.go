@@ -80,6 +80,7 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		t.tokBuf = make([]int32, need)
 		t.tgtBuf = make([]int32, need)
 		t.lossMaskBuf = make([]float32, need)
+		t.energySpanMaskBuf = make([]float32, need)
 		t.attentionCausalBuf = make([]int32, need)
 		t.segmentIDBuf = make([]int32, need)
 		t.charBuf = make([]int32, need*t.charMaxPerToken)
@@ -164,6 +165,19 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		}
 		inputs = append(inputs, gpu.TensorInput{
 			Name: "loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.lossMaskBuf[:need],
+		})
+	}
+	if t.energySpanMaskInput {
+		if len(t.energySpanMaskBuf) < need {
+			t.energySpanMaskBuf = make([]float32, need)
+		}
+		if len(batch.energySpanMask) >= need {
+			copy(t.energySpanMaskBuf[:need], batch.energySpanMask[:need])
+		} else {
+			clear(t.energySpanMaskBuf[:need])
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "energy_span_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.energySpanMaskBuf[:need],
 		})
 	}
 	if t.attentionCausalInput {

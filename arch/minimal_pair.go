@@ -11,6 +11,8 @@ const (
 	MinimalPairSourceBinary = "bin"
 	MinimalPairLossLogistic = "logistic"
 	MinimalPairLossHinge    = "hinge"
+	MinimalPairEnergyMean   = "mean"
+	MinimalPairEnergySpan   = "differing_span"
 
 	EnergyPairLossLogistic = 0
 	EnergyPairLossHinge    = 1
@@ -24,6 +26,7 @@ type MinimalPairSpec struct {
 	Loss              string  `json:"loss,omitempty"`
 	Margin            float64 `json:"margin,omitempty"`
 	PairBatchFraction float64 `json:"pair_batch_fraction,omitempty"`
+	EnergyAggregation string  `json:"energy_aggregation,omitempty"`
 }
 
 func (m *MinimalPairSpec) applyDefaults() {
@@ -44,6 +47,10 @@ func (m *MinimalPairSpec) applyDefaults() {
 	if m.PairBatchFraction == 0 {
 		m.PairBatchFraction = 1
 	}
+	m.EnergyAggregation = strings.ToLower(strings.TrimSpace(m.EnergyAggregation))
+	if m.EnergyAggregation == "" {
+		m.EnergyAggregation = MinimalPairEnergyMean
+	}
 }
 
 func (m MinimalPairSpec) LossKind() int {
@@ -53,6 +60,19 @@ func (m MinimalPairSpec) LossKind() int {
 	default:
 		return EnergyPairLossLogistic
 	}
+}
+
+func (m MinimalPairSpec) EnergyAggregationMode() string {
+	switch strings.ToLower(strings.TrimSpace(m.EnergyAggregation)) {
+	case MinimalPairEnergySpan:
+		return MinimalPairEnergySpan
+	default:
+		return MinimalPairEnergyMean
+	}
+}
+
+func (m MinimalPairSpec) UsesDifferingSpanEnergy() bool {
+	return m.EnergyAggregationMode() == MinimalPairEnergySpan
 }
 
 func validateMinimalPairSpec(cfg *ArchConfig, source string) error {
@@ -78,6 +98,11 @@ func validateMinimalPairSpec(cfg *ArchConfig, source string) error {
 	}
 	if m.PairBatchFraction <= 0 || m.PairBatchFraction > 1 || math.IsNaN(m.PairBatchFraction) || math.IsInf(m.PairBatchFraction, 0) {
 		return fmt.Errorf("config %q training.minimal_pair.pair_batch_fraction=%g must be in (0,1]", source, m.PairBatchFraction)
+	}
+	switch m.EnergyAggregation {
+	case MinimalPairEnergyMean, MinimalPairEnergySpan:
+	default:
+		return fmt.Errorf("config %q training.minimal_pair.energy_aggregation=%q must be \"mean\" or \"differing_span\"", source, m.EnergyAggregation)
 	}
 	return nil
 }

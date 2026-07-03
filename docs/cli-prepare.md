@@ -86,3 +86,7 @@ Compiled shards are used with:
   }
 }
 ```
+
+When `energy_aggregation` is `"differing_span"`, pair JSONL may include
+`clean_span` and `corrupt_span` half-open ranges. If spans are omitted, Mixlab
+derives them by token alignment while validating or loading the pair data.

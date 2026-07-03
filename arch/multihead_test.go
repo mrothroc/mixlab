@@ -334,6 +334,46 @@ func TestMultiheadEnergyConfigWeightShapesAndIR(t *testing.T) {
 	}
 }
 
+func TestMultiheadEnergyDifferingSpanIR(t *testing.T) {
+	cfg := parseMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"mlm_mask_token_id": 31,
+		"export_head": "scorer",
+		"minimal_pair": {"path": "pairs.jsonl", "energy_aggregation": "differing_span"},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.7},
+			{"name": "energy", "objective": "energy", "loss_weight": 0.3}
+		]
+	}`)
+	if cfg.Training.MinimalPair.EnergyAggregationMode() != MinimalPairEnergySpan {
+		t.Fatalf("energy aggregation=%q, want differing_span", cfg.Training.MinimalPair.EnergyAggregationMode())
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	if !programDeclaresInputArch(prog, "energy_span_mask") {
+		t.Fatalf("span energy program missing energy_span_mask input")
+	}
+	if countOps(prog, OpEnergyPairwiseLoss) != 0 {
+		t.Fatalf("OpEnergyPairwiseLoss count=%d, want 0", countOps(prog, OpEnergyPairwiseLoss))
+	}
+	if countOps(prog, OpEnergySpanPairwise) != 1 {
+		t.Fatalf("OpEnergySpanPairwise count=%d, want 1", countOps(prog, OpEnergySpanPairwise))
+	}
+	if countOps(prog, OpEnergySpanPool) != 1 {
+		t.Fatalf("OpEnergySpanPool count=%d, want 1", countOps(prog, OpEnergySpanPool))
+	}
+	for _, want := range []string{"head_energy_logits", "head_energy_token_energy"} {
+		if !programDeclaresOutputArch(prog, want) {
+			t.Fatalf("missing output %q: %+v", want, prog.Outputs)
+		}
+	}
+}
+
 func TestMultiheadEnergyValidationErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -359,6 +399,13 @@ func TestMultiheadEnergyValidationErrors(t *testing.T) {
 				"minimal_pair": {"path": "pairs.jsonl", "loss": "bad"},
 				"heads": [{"name": "s", "objective": "mntp"}, {"name": "e", "objective": "energy"}]}`,
 			want: "minimal_pair.loss",
+		},
+		{
+			name: "bad energy aggregation",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"minimal_pair": {"path": "pairs.jsonl", "energy_aggregation": "sum"},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "e", "objective": "energy"}]}`,
+			want: "energy_aggregation",
 		},
 		{
 			name: "energy export head",

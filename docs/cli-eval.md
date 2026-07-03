@@ -207,6 +207,11 @@ or pair rows:
 {"id":"pair_0","clean":[1,10,11,2],"corrupt":[1,10,19,2],"family":"agreement"}
 ```
 
+For configs with `training.minimal_pair.energy_aggregation: "differing_span"`,
+single-sequence rows may include `span:[start,end]`, and pair rows may include
+`clean_span:[start,end]` and `corrupt_span:[start,end]`. When pair spans are
+omitted, Mixlab derives the differing spans by token alignment.
+
 Pair outputs include `energy_clean`, `energy_corrupt`, `margin`, and
 `correct`; the mode appends a `__summary__` row with aggregate and per-family
 pair accuracy when pair rows were scored.
@@ -218,6 +223,7 @@ pair accuracy when pair rows were scored.
 | `-score-in` | Required. JSONL input with `tokens` rows or `clean`/`corrupt` pair rows. |
 | `-score-out` | Required. JSONL output path. |
 | `-score-batch` | Even sequence rows per energy forward. `0` uses a conservative default. |
+| `-score-emit-token-energy` | Include per-token energy arrays for differing-span energy configs. |
 
 ## `hiddenstats`
 

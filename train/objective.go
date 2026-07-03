@@ -15,6 +15,7 @@ type objectiveBatch struct {
 	y                     []int
 	batchSizeOverride     int
 	lossMask              []float32
+	energySpanMask        []float32
 	attentionCausal       []int32
 	segmentIDs            []int32
 	maskedLossMask        []float32

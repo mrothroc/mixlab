@@ -67,7 +67,9 @@ Compatibility is intentionally explicit. Some features are training-only and
 are rejected by export paths until they have defined inference semantics.
 Minimal-pair JSONL can be validated or compiled to `.mpair` shards with
 `mixlab -mode prepare-pairs`; set `training.minimal_pair.source: "bin"` to use
-the compiled artifact.
+the compiled artifact. Energy heads default to whole-sequence mean aggregation;
+set `training.minimal_pair.energy_aggregation: "differing_span"` to train and
+score on explicit or alignment-derived clean/corrupt edit spans.
 
 ## Validation And Logging
 

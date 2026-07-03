@@ -33,6 +33,9 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	prog.DeclareInput("loss_mask", TensorFloat32, []int{B * T})
 	prog.DeclareInput("diffusion_block_start", TensorInt32, []int{B})
 	prog.DeclareInput("diffusion_block_end", TensorInt32, []int{B})
+	if multiheadUsesDifferingSpanEnergy(cfg) {
+		prog.DeclareInput("energy_span_mask", TensorFloat32, []int{B * T})
+	}
 	if multiheadUsesAdaLN(cfg.Training) {
 		prog.DeclareInput("diffusion_timestep", TensorFloat32, []int{B})
 	}
@@ -165,14 +168,17 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		}
 		headMask := headPrefix + "_loss_mask"
 		prog.Slice("loss_mask", rowStart, rowStart+rawRows, 1, 0, headMask)
+		energySpanMode := head.Objective == ObjectiveEnergy && cfg.Training.MinimalPair != nil && cfg.Training.MinimalPair.UsesDifferingSpanEnergy()
 		if head.Objective == ObjectiveEnergy {
 			if cfg.Training.MinimalPair == nil {
 				return nil, fmt.Errorf("energy head %q requires training.minimal_pair", head.Name)
 			}
-			seqHidden := headPrefix + "_sequence_hidden"
-			prog.Reshape(headIn, []int{rawBatch, T, D}, headPrefix+"_hidden_btd")
-			prog.MeanAxis(headPrefix+"_hidden_btd", 1, seqHidden)
-			headIn = seqHidden
+			if !energySpanMode {
+				seqHidden := headPrefix + "_sequence_hidden"
+				prog.Reshape(headIn, []int{rawBatch, T, D}, headPrefix+"_hidden_btd")
+				prog.MeanAxis(headPrefix+"_hidden_btd", 1, seqHidden)
+				headIn = seqHidden
+			}
 		}
 		if head.FinalNorm {
 			normOut := headPrefix + "_final_norm"
@@ -196,6 +202,7 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 			prog.ScalarMul(tanh, cfg.LogitSoftcap, capped)
 			logits = capped
 		}
+		outputLogits := logits
 		targets := headPrefix + "_targets"
 		mask := headMask
 		loss := headPrefix + "_loss"
@@ -206,12 +213,24 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		lossWeight := float32(head.LossWeight)
 		switch head.Objective {
 		case ObjectiveEnergy:
-			rowMask := headPrefix + "_row_mask"
 			acc := headPrefix + "_pair_accuracy"
 			cleanMean := headPrefix + "_clean_energy_mean"
 			corruptMean := headPrefix + "_corrupt_energy_mean"
-			prog.Slice(mask, 0, rawRows, T, 0, rowMask)
-			prog.EnergyPairwiseLoss(logits, rowMask, cfg.Training.MinimalPair.LossKind(), float32(cfg.Training.MinimalPair.Margin), loss, acc, cleanMean, corruptMean)
+			if energySpanMode {
+				spanMask := headPrefix + "_span_mask"
+				prog.Slice("energy_span_mask", rowStart, rowStart+rawRows, 1, 0, spanMask)
+				prog.EnergySpanPairwiseLoss(logits, spanMask, T, cfg.Training.MinimalPair.LossKind(), float32(cfg.Training.MinimalPair.Margin), loss, acc, cleanMean, corruptMean)
+				pooled := headPrefix + "_span_pooled_logits"
+				prog.EnergySpanPool(logits, spanMask, T, pooled)
+				outputLogits = pooled
+				tokenEnergy := headPrefix + "_token_energy"
+				prog.ScalarMul(logits, 1.0, tokenEnergy)
+				prog.DeclareOutput(tokenEnergy, TensorFloat32, []int{rawRows, 1})
+			} else {
+				rowMask := headPrefix + "_row_mask"
+				prog.Slice(mask, 0, rawRows, T, 0, rowMask)
+				prog.EnergyPairwiseLoss(logits, rowMask, cfg.Training.MinimalPair.LossKind(), float32(cfg.Training.MinimalPair.Margin), loss, acc, cleanMean, corruptMean)
+			}
 			prog.DeclareOutput(acc, TensorFloat32, []int{1})
 			prog.DeclareOutput(cleanMean, TensorFloat32, []int{1})
 			prog.DeclareOutput(corruptMean, TensorFloat32, []int{1})
@@ -245,7 +264,7 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 			generatorOutputName = cfg.Training.RTD.GeneratorHead
 		}
 		if head.Name == exportHeadName || head.Name == diffusionHeadName || head.Name == generatorOutputName {
-			prog.ScalarMul(logits, 1.0, headPrefix+"_logits")
+			prog.ScalarMul(outputLogits, 1.0, headPrefix+"_logits")
 			outCols := V
 			outRows := rawRows
 			switch head.Objective {
@@ -259,10 +278,10 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		} else {
 			switch head.Objective {
 			case ObjectiveRTD:
-				prog.ScalarMul(logits, 1.0, headPrefix+"_logits")
+				prog.ScalarMul(outputLogits, 1.0, headPrefix+"_logits")
 				prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawRows, 1})
 			case ObjectiveEnergy:
-				prog.ScalarMul(logits, 1.0, headPrefix+"_logits")
+				prog.ScalarMul(outputLogits, 1.0, headPrefix+"_logits")
 				prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawBatch, 1})
 			}
 		}
@@ -305,6 +324,18 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		return nil, fmt.Errorf("multihead IR weight count mismatch: emitted=%d expected=%d", wi, nWeights)
 	}
 	return prog, nil
+}
+
+func multiheadUsesDifferingSpanEnergy(cfg *ArchConfig) bool {
+	if cfg == nil || cfg.Training.MinimalPair == nil || !cfg.Training.MinimalPair.UsesDifferingSpanEnergy() {
+		return false
+	}
+	for _, head := range cfg.Training.Heads {
+		if head.Objective == ObjectiveEnergy {
+			return true
+		}
+	}
+	return false
 }
 
 func multiheadResolvedBlocks(blocks []BlockSpec) []BlockSpec {

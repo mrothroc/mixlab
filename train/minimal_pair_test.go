@@ -2,6 +2,7 @@ package train
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -46,6 +47,32 @@ func TestMinimalPairAttachUsesFixedCleanCorruptRows(t *testing.T) {
 	}
 }
 
+func TestMinimalPairAttachDifferingSpanMask(t *testing.T) {
+	cfg := parseTrainMinimalPairConfig(t, `"minimal_pair": {"path": "pairs.jsonl", "energy_aggregation": "differing_span", "pair_batch_fraction": 0.5}`)
+	sampler := &minimalPairSampler{records: []minimalPairRecord{
+		{ID: "p0", Clean: []int{1, 2, 3}, Corrupt: []int{1, 9, 3}, Family: "agreement"},
+	}}
+	raw := trainBatch{
+		x: []int{5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
+		y: []int{6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21},
+	}
+	prepared, err := prepareObjectiveBatch(cfg, raw, 0, arch.ObjectiveMultihead)
+	if err != nil {
+		t.Fatalf("prepareObjectiveBatch: %v", err)
+	}
+	got, err := maybeAttachMinimalPairs(sampler, cfg, 0, prepared, cfg.Training.BatchTokens/cfg.SeqLen, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("maybeAttachMinimalPairs: %v", err)
+	}
+	energyOffset := cfg.Training.BatchTokens
+	if !reflect.DeepEqual(got.energySpanMask[energyOffset:energyOffset+8], []float32{0, 1, 0, 0, 0, 1, 0, 0}) {
+		t.Fatalf("active energy span mask=%v", got.energySpanMask[energyOffset:energyOffset+8])
+	}
+	if !reflect.DeepEqual(got.energySpanMask[energyOffset+8:energyOffset+16], []float32{0, 0, 0, 0, 0, 0, 0, 0}) {
+		t.Fatalf("inactive energy span mask=%v", got.energySpanMask[energyOffset+8:energyOffset+16])
+	}
+}
+
 func TestDecodeMinimalPairJSONLValidation(t *testing.T) {
 	records, err := decodeMinimalPairJSONL(strings.NewReader(`{"id":"p0","clean":[1,2],"corrupt":[1,3],"family":"agreement"}`+"\n"), "pairs", 8)
 	if err != nil {
@@ -60,10 +87,47 @@ func TestDecodeMinimalPairJSONLValidation(t *testing.T) {
 	}
 }
 
+func TestMinimalPairDifferingSpanDerivationAndValidation(t *testing.T) {
+	tests := []struct {
+		name        string
+		clean       []int
+		corrupt     []int
+		cleanSpan   []int
+		corruptSpan []int
+	}{
+		{"substitution", []int{1, 2, 3}, []int{1, 9, 3}, []int{1, 2}, []int{1, 2}},
+		{"insertion", []int{1, 2, 3}, []int{1, 2, 9, 3}, []int{2, 3}, []int{2, 3}},
+		{"deletion", []int{1, 2, 9, 3}, []int{1, 2, 3}, []int{2, 3}, []int{2, 3}},
+		{"multi-token", []int{1, 2, 3, 4}, []int{1, 8, 9, 4}, []int{1, 3}, []int{1, 3}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := minimalPairRecord{ID: tt.name, Clean: tt.clean, Corrupt: tt.corrupt}
+			if err := ensureMinimalPairRecordSpans(&rec); err != nil {
+				t.Fatalf("ensureMinimalPairRecordSpans: %v", err)
+			}
+			if !reflect.DeepEqual(rec.CleanSpan, tt.cleanSpan) || !reflect.DeepEqual(rec.CorruptSpan, tt.corruptSpan) {
+				t.Fatalf("spans=%v/%v want %v/%v", rec.CleanSpan, rec.CorruptSpan, tt.cleanSpan, tt.corruptSpan)
+			}
+		})
+	}
+	rec := minimalPairRecord{ID: "same", Clean: []int{1, 2}, Corrupt: []int{1, 2}}
+	if err := ensureMinimalPairRecordSpans(&rec); err == nil || !strings.Contains(err.Error(), "identical") {
+		t.Fatalf("identical pair error=%v", err)
+	}
+	_, err := decodeMinimalPairJSONLWithOptions(strings.NewReader(`{"id":"bad","clean":[1],"corrupt":[2],"clean_span":[1,1]}`+"\n"), "pairs", minimalPairDecodeOptions{
+		VocabSize:         8,
+		EnergyAggregation: arch.MinimalPairEnergySpan,
+	})
+	if err == nil || !strings.Contains(err.Error(), "clean_span") {
+		t.Fatalf("invalid span error=%v", err)
+	}
+}
+
 func TestMinimalPairBinaryRoundTrip(t *testing.T) {
 	records := []minimalPairRecord{
-		{ID: "p0", Clean: []int{1, 2, 3}, Corrupt: []int{1, 4, 3}, Family: "agreement"},
-		{ID: "p1", Clean: []int{5, 6}, Corrupt: []int{6, 5}, Family: "word_order"},
+		{ID: "p0", Clean: []int{1, 2, 3}, Corrupt: []int{1, 4, 3}, CleanSpan: []int{1, 2}, CorruptSpan: []int{1, 2}, Family: "agreement"},
+		{ID: "p1", Clean: []int{5, 6}, Corrupt: []int{6, 5}, CleanSpan: []int{0, 2}, CorruptSpan: []int{0, 2}, Family: "word_order"},
 	}
 	var buf bytes.Buffer
 	if err := writeMinimalPairBinary(&buf, records, 32, 4); err != nil {
@@ -80,8 +144,32 @@ func TestMinimalPairBinaryRoundTrip(t *testing.T) {
 	if len(got) != len(records) || got[1].ID != "p1" || got[1].Family != "word_order" || !intSlicesEqualTrain(got[1].Corrupt, []int{6, 5}) {
 		t.Fatalf("round-trip records=%+v", got)
 	}
+	if !reflect.DeepEqual(got[0].CleanSpan, []int{1, 2}) || !reflect.DeepEqual(got[0].CorruptSpan, []int{1, 2}) {
+		t.Fatalf("round-trip spans=%+v", got[0])
+	}
 	if _, err := decodeMinimalPairBinary(bytes.NewReader(buf.Bytes()), "pairs.mpair", minimalPairDecodeOptions{VocabSize: 31}); err == nil || !strings.Contains(err.Error(), "vocab_size") {
 		t.Fatalf("vocab mismatch error=%v, want vocab_size", err)
+	}
+}
+
+func TestMinimalPairBinaryV1DerivesSpans(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeMinimalPairBinaryV1ForTest(&buf, []minimalPairRecord{
+		{ID: "p0", Clean: []int{1, 2, 3}, Corrupt: []int{1, 9, 3}, Family: "agreement"},
+	}, 32, 4); err != nil {
+		t.Fatalf("write v1 fixture: %v", err)
+	}
+	got, err := decodeMinimalPairBinary(bytes.NewReader(buf.Bytes()), "pairs-v1.mpair", minimalPairDecodeOptions{
+		VocabSize:         32,
+		MaxLen:            4,
+		RequireFamily:     true,
+		EnergyAggregation: arch.MinimalPairEnergySpan,
+	})
+	if err != nil {
+		t.Fatalf("decode v1 binary: %v", err)
+	}
+	if !reflect.DeepEqual(got[0].CleanSpan, []int{1, 2}) || !reflect.DeepEqual(got[0].CorruptSpan, []int{1, 2}) {
+		t.Fatalf("derived spans from v1=%+v", got[0])
 	}
 }
 
@@ -146,7 +234,7 @@ func TestScoreEBMRecordSequenceAndPair(t *testing.T) {
 	eval := &fakeEBMEvaluator{output: []float32{0.25, 1.25}}
 	pairOut, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{
 		ID: "pair", Clean: []int{1, 2}, Corrupt: []int{1, 3}, Family: "agreement",
-	}, 2)
+	}, 2, false)
 	if err != nil {
 		t.Fatalf("scoreEBMRecord(pair): %v", err)
 	}
@@ -166,7 +254,7 @@ func TestScoreEBMRecordSequenceAndPair(t *testing.T) {
 
 	eval.output = []float32{0.5, 0.0}
 	eval.requestedOutputs = nil
-	seqOut, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}}, 2)
+	seqOut, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}}, 2, false)
 	if err != nil {
 		t.Fatalf("scoreEBMRecord(seq): %v", err)
 	}
@@ -175,11 +263,54 @@ func TestScoreEBMRecordSequenceAndPair(t *testing.T) {
 	}
 }
 
+func TestScoreEBMDifferingSpanAndTokenEnergy(t *testing.T) {
+	cfg := parseTrainMinimalPairConfig(t, `"minimal_pair": {"path": "pairs.jsonl", "energy_aggregation": "differing_span"}`)
+	eval := &fakeEBMEvaluator{outputs: map[string][]float32{
+		"head_energy_logits":       {0.25, 1.25},
+		"head_energy_token_energy": {10, 11, 12, 13, 20, 21, 22, 23},
+	}}
+	out, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{
+		ID: "pair", Clean: []int{1, 2, 3}, Corrupt: []int{1, 9, 3}, Family: "agreement",
+	}, 2, true)
+	if err != nil {
+		t.Fatalf("scoreEBMRecord(pair): %v", err)
+	}
+	if !reflect.DeepEqual(eval.requestedOutputs, []string{"head_energy_logits", "head_energy_token_energy"}) {
+		t.Fatalf("requested outputs=%v", eval.requestedOutputs)
+	}
+	energyOffset := 2 * cfg.SeqLen
+	if !reflect.DeepEqual(eval.batch.energySpanMask[energyOffset:energyOffset+8], []float32{0, 1, 0, 0, 0, 1, 0, 0}) {
+		t.Fatalf("score energy span mask=%v", eval.batch.energySpanMask[energyOffset:energyOffset+8])
+	}
+	if out.EnergyClean == nil || *out.EnergyClean != 0.25 || out.EnergyCorrupt == nil || *out.EnergyCorrupt != 1.25 {
+		t.Fatalf("energies=%+v", out)
+	}
+	if !reflect.DeepEqual(out.CleanTokenEnergy, []float64{10, 11, 12}) || !reflect.DeepEqual(out.CorruptTokenEnergy, []float64{20, 21, 22}) {
+		t.Fatalf("token energies clean=%v corrupt=%v", out.CleanTokenEnergy, out.CorruptTokenEnergy)
+	}
+
+	eval.outputs = map[string][]float32{
+		"head_energy_logits":       {0.5, 0},
+		"head_energy_token_energy": {30, 31, 32, 33, 0, 0, 0, 0},
+	}
+	eval.requestedOutputs = nil
+	seqOut, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}, Span: []int{2, 3}}, 2, true)
+	if err != nil {
+		t.Fatalf("scoreEBMRecord(seq): %v", err)
+	}
+	if !reflect.DeepEqual(eval.batch.energySpanMask[energyOffset:energyOffset+4], []float32{0, 0, 1, 0}) {
+		t.Fatalf("sequence span mask=%v", eval.batch.energySpanMask[energyOffset:energyOffset+4])
+	}
+	if seqOut.Energy == nil || *seqOut.Energy != 0.5 || !reflect.DeepEqual(seqOut.TokenEnergy, []float64{30, 31, 32}) {
+		t.Fatalf("sequence output=%+v", seqOut)
+	}
+}
+
 func TestScoreEBMJSONLSummaryIncludesFamilies(t *testing.T) {
 	cfg := parseTrainMinimalPairConfig(t, `"minimal_pair": {"path": "pairs.jsonl"}`)
 	eval := &fakeEBMEvaluator{output: []float32{0.1, 0.9}}
 	var out bytes.Buffer
-	err := scoreEBMJSONL(strings.NewReader(`{"id":"p0","clean":[1],"corrupt":[2],"family":"agreement"}`+"\n"), &out, cfg, eval, 2)
+	err := scoreEBMJSONL(strings.NewReader(`{"id":"p0","clean":[1],"corrupt":[2],"family":"agreement"}`+"\n"), &out, cfg, eval, 2, false)
 	if err != nil {
 		t.Fatalf("scoreEBMJSONL: %v", err)
 	}
@@ -202,6 +333,7 @@ func TestScoreEBMJSONLSummaryIncludesFamilies(t *testing.T) {
 type fakeEBMEvaluator struct {
 	batch            objectiveBatch
 	output           []float32
+	outputs          map[string][]float32
 	requestedOutputs []string
 }
 
@@ -217,6 +349,11 @@ func (f *fakeEBMEvaluator) EvaluateObjectiveGPUWithOutputs(batch objectiveBatch,
 }
 
 func (f *fakeEBMEvaluator) ReadOutput(name string, shape []int) ([]float32, error) {
+	if f.outputs != nil {
+		if out, ok := f.outputs[name]; ok {
+			return append([]float32(nil), out...), nil
+		}
+	}
 	return append([]float32(nil), f.output...), nil
 }
 
@@ -259,4 +396,45 @@ func intSlicesEqualTrain(a, b []int) bool {
 		}
 	}
 	return true
+}
+
+func writeMinimalPairBinaryV1ForTest(w *bytes.Buffer, records []minimalPairRecord, vocabSize, maxLen int) error {
+	header := []uint32{
+		minimalPairBinaryMagic,
+		minimalPairBinaryVersion1,
+		uint32(vocabSize),
+		uint32(maxLen),
+		uint32(len(records)),
+		0,
+	}
+	for _, v := range header {
+		if err := binary.Write(w, binary.LittleEndian, v); err != nil {
+			return err
+		}
+	}
+	for _, rec := range records {
+		fields := []uint32{uint32(len(rec.Clean)), uint32(len(rec.Corrupt)), uint32(len(rec.ID)), uint32(len(rec.Family))}
+		for _, v := range fields {
+			if err := binary.Write(w, binary.LittleEndian, v); err != nil {
+				return err
+			}
+		}
+		for _, tok := range rec.Clean {
+			if err := binary.Write(w, binary.LittleEndian, uint32(tok)); err != nil {
+				return err
+			}
+		}
+		for _, tok := range rec.Corrupt {
+			if err := binary.Write(w, binary.LittleEndian, uint32(tok)); err != nil {
+				return err
+			}
+		}
+		if _, err := w.WriteString(rec.ID); err != nil {
+			return err
+		}
+		if _, err := w.WriteString(rec.Family); err != nil {
+			return err
+		}
+	}
+	return nil
 }

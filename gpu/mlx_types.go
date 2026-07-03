@@ -86,6 +86,8 @@ const (
 	OpMaskedBCEWithLogits  = 92
 	OpMaskedBinaryAccuracy = 93
 	OpEnergyPairwiseLoss   = 94
+	OpEnergySpanPool       = 95
+	OpEnergySpanPairwise   = 96
 )
 
 const (

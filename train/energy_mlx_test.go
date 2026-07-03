@@ -75,9 +75,9 @@ func TestScoreEBMReadsEnergyHeadOutputMLX(t *testing.T) {
 	if !ok {
 		t.Fatalf("trainer does not implement diffusionGenerationEvaluator")
 	}
-	energies, err := scoreEBMSequences(cfg, evaluator, [][]int{{1, 2, 3}, {1, 3, 2}}, scoreBatch)
+	energies, _, err := scoreEBMSequencesDetailed(cfg, evaluator, [][]int{{1, 2, 3}, {1, 3, 2}}, nil, scoreBatch, false)
 	if err != nil {
-		t.Fatalf("scoreEBMSequences: %v", err)
+		t.Fatalf("scoreEBMSequencesDetailed: %v", err)
 	}
 	if len(energies) != 2 {
 		t.Fatalf("energies len=%d, want 2", len(energies))

@@ -89,6 +89,8 @@ var irToGPUOp = map[int]int{
 	ir.OpMaskedBCEWithLogits:  OpMaskedBCEWithLogits,
 	ir.OpMaskedBinaryAccuracy: OpMaskedBinaryAccuracy,
 	ir.OpEnergyPairwiseLoss:   OpEnergyPairwiseLoss,
+	ir.OpEnergySpanPool:       OpEnergySpanPool,
+	ir.OpEnergySpanPairwise:   OpEnergySpanPairwise,
 }
 
 // irToGPUDType maps ir tensor dtype codes to gpu dtype codes.
