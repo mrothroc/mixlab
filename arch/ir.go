@@ -87,6 +87,8 @@ const (
 	OpEnergyPairwiseLoss   = 94 // OP_ENERGY_PAIRWISE_LOSS
 	OpEnergySpanPool       = 95 // OP_ENERGY_SPAN_POOL
 	OpEnergySpanPairwise   = 96 // OP_ENERGY_SPAN_PAIRWISE_LOSS
+	OpSpanPLLPool          = 97 // OP_SPAN_PLL_POOL
+	OpSpanPLLPairwise      = 98 // OP_SPAN_PLL_PAIRWISE_LOSS
 
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -316,6 +318,18 @@ func (p *Program) EnergySpanPool(logits, spanMask string, seqLen int, output str
 // clean/corrupt pairwise logistic or hinge ranking loss.
 func (p *Program) EnergySpanPairwiseLoss(logits, spanMask string, seqLen, lossKind int, margin float32, loss, accuracy, cleanMean, corruptMean string) {
 	p.AddOp(OpEnergySpanPairwise, []string{logits, spanMask}, []string{loss, accuracy, cleanMean, corruptMean}, []float32{margin}, []int{seqLen, lossKind})
+}
+
+// SpanPLLPool sums log_softmax(logits)[target] over positive span-mask
+// positions for each row. Higher pooled scores are better.
+func (p *Program) SpanPLLPool(logits, targets, spanMask string, seqLen int, output string) {
+	p.AddOp(OpSpanPLLPool, []string{logits, targets, spanMask}, []string{output}, nil, []int{seqLen})
+}
+
+// SpanPLLPairwiseLoss pools span PLL scores and applies clean/corrupt pairwise
+// logistic or hinge ranking loss where higher clean scores are preferred.
+func (p *Program) SpanPLLPairwiseLoss(logits, targets, spanMask string, seqLen, lossKind int, margin float32, loss, accuracy, cleanMean, corruptMean string) {
+	p.AddOp(OpSpanPLLPairwise, []string{logits, targets, spanMask}, []string{loss, accuracy, cleanMean, corruptMean}, []float32{margin}, []int{seqLen, lossKind})
 }
 
 // ZLoss emits mean(square(logsumexp(logits))) over token rows.

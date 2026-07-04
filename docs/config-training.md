@@ -57,7 +57,7 @@ rates/weight decay are documented in the full reference.
 | `distillation` | In-training fixed-teacher ensemble distillation for causal LM. |
 | `data2vec` | EMA self-distillation for masked objective paths. |
 | `rtd` | ELECTRA-style replaced-token detection auxiliary for multihead training. |
-| `minimal_pair` | Clean/corrupt pair data for native multihead energy ranking. |
+| `minimal_pair` | Clean/corrupt pair data for native energy ranking or MLM/MNTP span-PLL scorer regularization. |
 | `mtp` | Parameter-free multi-token prediction auxiliary loss. |
 | `first_byte_mask` | First-byte masked loss path. |
 | `attention_segment_mask` | Block-diagonal segment attention for packed training sequences. |
@@ -67,9 +67,10 @@ Compatibility is intentionally explicit. Some features are training-only and
 are rejected by export paths until they have defined inference semantics.
 Minimal-pair JSONL can be validated or compiled to `.mpair` shards with
 `mixlab -mode prepare-pairs`; set `training.minimal_pair.source: "bin"` to use
-the compiled artifact. Energy heads default to whole-sequence mean aggregation;
-set `training.minimal_pair.energy_aggregation: "differing_span"` to train and
-score on explicit or alignment-derived clean/corrupt edit spans.
+the compiled artifact. The default `score_source: "energy_scalar"` trains a
+native energy head. Set `score_source: "mlm_span_pll"` with
+`energy_aggregation: "differing_span"` to add an exportable MLM/MNTP scorer
+regularizer that ranks clean/corrupt pairs by masked-span pseudo-log-likelihood.
 
 ## Validation And Logging
 

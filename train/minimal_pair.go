@@ -45,6 +45,10 @@ func minimalPairActive(cfg *ArchConfig) bool {
 	return cfg != nil && cfg.Training.MultiheadEnabled() && cfg.Training.MinimalPair != nil
 }
 
+func minimalPairUsesMLMSpanPLL(cfg *ArchConfig) bool {
+	return minimalPairActive(cfg) && cfg.Training.MinimalPair.UsesMLMSpanPLL()
+}
+
 func newMinimalPairSampler(cfg *ArchConfig) (*minimalPairSampler, error) {
 	if !minimalPairActive(cfg) {
 		return nil, nil
@@ -554,15 +558,19 @@ func maybeAttachMinimalPairs(sampler *minimalPairSampler, cfg *ArchConfig, step 
 		return objectiveBatch{}, fmt.Errorf("invalid minimal-pair batch shape rows=%d seq_len=%d", rawBatchSize, seqLen)
 	}
 	if rawBatchSize%2 != 0 {
-		return objectiveBatch{}, fmt.Errorf("minimal-pair energy training requires an even number of sequence rows per batch, got %d", rawBatchSize)
+		return objectiveBatch{}, fmt.Errorf("minimal-pair training requires an even number of sequence rows per batch, got %d", rawBatchSize)
 	}
 	need := rawBatchSize * seqLen
-	if len(batch.x) < need*len(cfg.Training.Heads) || len(batch.y) < need*len(cfg.Training.Heads) || len(batch.lossMask) < need*len(cfg.Training.Heads) {
-		return objectiveBatch{}, fmt.Errorf("minimal-pair objective batch too small for heads=%d need=%d", len(cfg.Training.Heads), need)
+	totalNeed := need * len(cfg.Training.Heads)
+	if minimalPairUsesMLMSpanPLL(cfg) {
+		totalNeed += need
+	}
+	if len(batch.x) < totalNeed || len(batch.y) < totalNeed || len(batch.lossMask) < totalNeed {
+		return objectiveBatch{}, fmt.Errorf("minimal-pair objective batch too small for heads=%d total_need=%d", len(cfg.Training.Heads), totalNeed)
 	}
 	spanMode := cfg.Training.MinimalPair.UsesDifferingSpanEnergy()
-	if spanMode && len(batch.energySpanMask) < need*len(cfg.Training.Heads) {
-		batch.energySpanMask = make([]float32, need*len(cfg.Training.Heads))
+	if spanMode && len(batch.energySpanMask) < totalNeed {
+		batch.energySpanMask = make([]float32, totalNeed)
 	}
 	totalPairs := rawBatchSize / 2
 	activePairs := int(math.Ceil(float64(totalPairs) * cfg.Training.MinimalPair.PairBatchFraction))
@@ -573,6 +581,9 @@ func maybeAttachMinimalPairs(sampler *minimalPairSampler, cfg *ArchConfig, step 
 		activePairs = totalPairs
 	}
 	pad := minimalPairPadTokenID(cfg)
+	if minimalPairUsesMLMSpanPLL(cfg) {
+		return attachMinimalPairMLMSpanPLL(sampler, cfg, step, batch, rawBatchSize, seqLen, need, totalPairs, activePairs, pad)
+	}
 	for headIdx, head := range cfg.Training.Heads {
 		if head.Objective != arch.ObjectiveEnergy {
 			continue
@@ -622,6 +633,50 @@ func maybeAttachMinimalPairs(sampler *minimalPairSampler, cfg *ArchConfig, step 
 	return batch, nil
 }
 
+func attachMinimalPairMLMSpanPLL(sampler *minimalPairSampler, cfg *ArchConfig, step int, batch objectiveBatch, rawBatchSize, seqLen, need, totalPairs, activePairs, pad int) (objectiveBatch, error) {
+	pairOffset := len(cfg.Training.Heads) * need
+	pairRowsOffset := len(cfg.Training.Heads) * rawBatchSize
+	if len(batch.energySpanMask) < pairOffset+need {
+		batch.energySpanMask = make([]float32, pairOffset+need)
+	}
+	clear(batch.lossMask[pairOffset : pairOffset+need])
+	clear(batch.energySpanMask[pairOffset : pairOffset+need])
+	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0xeb100d5eed00a11)
+	for pairIdx := 0; pairIdx < totalPairs; pairIdx++ {
+		rec := sampler.records[0]
+		active := pairIdx < activePairs
+		if active {
+			rec = sampler.records[rng.Intn(len(sampler.records))]
+			if err := ensureMinimalPairRecordSpans(&rec); err != nil {
+				return objectiveBatch{}, fmt.Errorf("minimal-pair record %q: %w", rec.ID, err)
+			}
+		}
+		cleanRow := pairOffset + (2*pairIdx)*seqLen
+		corruptRow := cleanRow + seqLen
+		fillMinimalPairRow(batch.x[cleanRow:cleanRow+seqLen], batch.y[cleanRow:cleanRow+seqLen], rec.Clean, pad)
+		fillMinimalPairRow(batch.x[corruptRow:corruptRow+seqLen], batch.y[corruptRow:corruptRow+seqLen], rec.Corrupt, pad)
+		if len(batch.unmaskedX) >= pairOffset+need {
+			fillMinimalPairTokens(batch.unmaskedX[cleanRow:cleanRow+seqLen], rec.Clean, pad)
+			fillMinimalPairTokens(batch.unmaskedX[corruptRow:corruptRow+seqLen], rec.Corrupt, pad)
+		}
+		if active {
+			fillMinimalPairSpanMask(batch.energySpanMask[cleanRow:cleanRow+seqLen], rec.CleanSpan)
+			fillMinimalPairSpanMask(batch.energySpanMask[corruptRow:corruptRow+seqLen], rec.CorruptSpan)
+			copy(batch.lossMask[cleanRow:cleanRow+seqLen], batch.energySpanMask[cleanRow:cleanRow+seqLen])
+			copy(batch.lossMask[corruptRow:corruptRow+seqLen], batch.energySpanMask[corruptRow:corruptRow+seqLen])
+			maskMinimalPairSpanTokens(batch.x[cleanRow:cleanRow+seqLen], rec.CleanSpan, cfg.Training.MLMMaskTokenID)
+			maskMinimalPairSpanTokens(batch.x[corruptRow:corruptRow+seqLen], rec.CorruptSpan, cfg.Training.MLMMaskTokenID)
+		}
+	}
+	if len(batch.diffusionBlockStart) >= pairRowsOffset+rawBatchSize && len(batch.diffusionBlockEnd) >= pairRowsOffset+rawBatchSize {
+		for row := 0; row < rawBatchSize; row++ {
+			batch.diffusionBlockStart[pairRowsOffset+row] = 0
+			batch.diffusionBlockEnd[pairRowsOffset+row] = int32(seqLen)
+		}
+	}
+	return batch, nil
+}
+
 func fillMinimalPairSpanMask(dst []float32, span []int) {
 	clear(dst)
 	start, end, ok, err := parseMinimalPairSpan("span", span, len(dst))
@@ -634,16 +689,29 @@ func fillMinimalPairSpanMask(dst []float32, span []int) {
 }
 
 func fillMinimalPairRow(dstX, dstY []int, tokens []int, pad int) {
-	for i := range dstX {
-		dstX[i] = pad
-		dstY[i] = pad
+	fillMinimalPairTokens(dstX, tokens, pad)
+	fillMinimalPairTokens(dstY, tokens, pad)
+}
+
+func fillMinimalPairTokens(dst []int, tokens []int, pad int) {
+	for i := range dst {
+		dst[i] = pad
 	}
 	n := len(tokens)
-	if n > len(dstX) {
-		n = len(dstX)
+	if n > len(dst) {
+		n = len(dst)
 	}
-	copy(dstX[:n], tokens[:n])
-	copy(dstY[:n], tokens[:n])
+	copy(dst[:n], tokens[:n])
+}
+
+func maskMinimalPairSpanTokens(dst []int, span []int, maskID int) {
+	start, end, ok, err := parseMinimalPairSpan("span", span, len(dst))
+	if err != nil || !ok {
+		return
+	}
+	for i := start; i < end; i++ {
+		dst[i] = maskID
+	}
 }
 
 func minimalPairPadTokenID(cfg *ArchConfig) int {

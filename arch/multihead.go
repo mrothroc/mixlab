@@ -210,17 +210,46 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		return fmt.Errorf("config %q multihead objective=\"rtd\" requires training.rtd", source)
 	}
 	if t.MinimalPair != nil {
-		if energyHeads == 0 {
-			return fmt.Errorf("config %q training.minimal_pair requires a multihead objective=\"energy\" head", source)
-		}
 		if err := validateMinimalPairSpec(cfg, source); err != nil {
 			return err
+		}
+		switch t.MinimalPair.ScoreSourceMode() {
+		case MinimalPairScoreEnergy:
+			if energyHeads == 0 {
+				return fmt.Errorf("config %q training.minimal_pair score_source=\"energy_scalar\" requires a multihead objective=\"energy\" head", source)
+			}
+		case MinimalPairScoreMLMPLL:
+			if energyHeads > 0 {
+				return fmt.Errorf("config %q training.minimal_pair score_source=\"mlm_span_pll\" cannot be combined with objective=\"energy\" heads in v1", source)
+			}
+			if t.MinimalPair.EnergyAggregationMode() != MinimalPairEnergySpan {
+				return fmt.Errorf("config %q training.minimal_pair score_source=\"mlm_span_pll\" requires energy_aggregation=\"differing_span\"", source)
+			}
+			scoreHead := strings.TrimSpace(t.MinimalPair.ScoreHead)
+			if scoreHead == "" {
+				scoreHead = strings.TrimSpace(t.ExportHead)
+				if scoreHead == "" {
+					scoreHead = defaultMultiheadExportHeadName(t.Heads)
+				}
+				t.MinimalPair.ScoreHead = scoreHead
+			}
+			idx, ok := seen[scoreHead]
+			if !ok {
+				return fmt.Errorf("config %q training.minimal_pair.score_head=%q does not match any training.heads[].name", source, scoreHead)
+			}
+			h := &t.Heads[idx]
+			if h.Objective != ObjectiveMLM && h.Objective != ObjectiveMNTP {
+				return fmt.Errorf("config %q training.minimal_pair.score_head=%q must select an mlm or mntp head", source, scoreHead)
+			}
+			if h.OutputHead != MultiheadOutputBERTMLM && h.OutputHead != MultiheadOutputLinear {
+				return fmt.Errorf("config %q training.minimal_pair.score_head=%q must emit vocab logits", source, scoreHead)
+			}
 		}
 	} else if energyHeads > 0 {
 		return fmt.Errorf("config %q multihead objective=\"energy\" requires training.minimal_pair", source)
 	}
-	if energyHeads > 0 && (t.BatchTokens <= 0 || cfg.SeqLen <= 0 || (t.BatchTokens/cfg.SeqLen)%2 != 0) {
-		return fmt.Errorf("config %q multihead objective=\"energy\" requires an even number of sequence rows per batch", source)
+	if t.MinimalPair != nil && (t.BatchTokens <= 0 || cfg.SeqLen <= 0 || (t.BatchTokens/cfg.SeqLen)%2 != 0) {
+		return fmt.Errorf("config %q training.minimal_pair requires an even number of sequence rows per batch", source)
 	}
 	if totalWeight <= 0 {
 		return fmt.Errorf("config %q training.objective=\"multihead\" requires positive total head loss_weight", source)
@@ -294,6 +323,15 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		}
 	}
 	return nil
+}
+
+func defaultMultiheadExportHeadName(heads []MultiheadHeadSpec) string {
+	for _, h := range heads {
+		if h.Objective != ObjectiveBlockDiffusion && h.Objective != ObjectiveRTD && h.Objective != ObjectiveEnergy {
+			return h.Name
+		}
+	}
+	return ""
 }
 
 func validateRTDDedicatedGenerator(cfg *ArchConfig, source string) error {

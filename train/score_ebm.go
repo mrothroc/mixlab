@@ -15,6 +15,11 @@ import (
 
 const scoreEBMDefaultBatch = 64
 
+const (
+	scoreEBMModeEnergy     = "energy"
+	scoreEBMModeMLMSpanPLL = "mlm_span_pll"
+)
+
 type ScoreEBMOptions struct {
 	ConfigPath      string
 	SafetensorsLoad string
@@ -39,10 +44,13 @@ type scoreEBMOutputRecord struct {
 	ID                 string    `json:"id"`
 	NTokens            int       `json:"n_tokens,omitempty"`
 	Energy             *float64  `json:"energy,omitempty"`
+	Score              *float64  `json:"score,omitempty"`
 	TokenEnergy        []float64 `json:"token_energy,omitempty"`
 	Family             string    `json:"family,omitempty"`
 	EnergyClean        *float64  `json:"energy_clean,omitempty"`
 	EnergyCorrupt      *float64  `json:"energy_corrupt,omitempty"`
+	ScoreClean         *float64  `json:"score_clean,omitempty"`
+	ScoreCorrupt       *float64  `json:"score_corrupt,omitempty"`
 	CleanTokenEnergy   []float64 `json:"clean_token_energy,omitempty"`
 	CorruptTokenEnergy []float64 `json:"corrupt_token_energy,omitempty"`
 	Margin             *float64  `json:"margin,omitempty"`
@@ -79,6 +87,13 @@ func runScoreEBMWithOptions(opts ScoreEBMOptions) error {
 	}
 	if err := validateScoreEBMConfig(cfg); err != nil {
 		return err
+	}
+	scoreMode, err := scoreEBMMode(cfg)
+	if err != nil {
+		return err
+	}
+	if opts.EmitTokenEnergy && scoreMode != scoreEBMModeEnergy {
+		return fmt.Errorf("-score-emit-token-energy is only supported for native energy score-ebm configs")
 	}
 	if opts.EmitTokenEnergy && !scoreEBMUsesDifferingSpan(cfg) {
 		return fmt.Errorf("-score-emit-token-energy requires training.minimal_pair.energy_aggregation=%q", arch.MinimalPairEnergySpan)
@@ -139,7 +154,7 @@ func runScoreEBMWithOptions(opts ScoreEBMOptions) error {
 		return fmt.Errorf("close score output %q: %w", opts.ScoreOut, err)
 	}
 	closeOut = false
-	fmt.Printf("wrote EBM energy scores to %s\n", opts.ScoreOut)
+	fmt.Printf("wrote EBM scores to %s\n", opts.ScoreOut)
 	return nil
 }
 
@@ -158,10 +173,26 @@ func validateScoreEBMConfig(cfg *ArchConfig) error {
 		return fmt.Errorf("nil config")
 	}
 	if !cfg.Training.MultiheadEnabled() {
-		return fmt.Errorf("score-ebm requires training.objective=%q with an objective=%q head", arch.ObjectiveMultihead, arch.ObjectiveEnergy)
+		return fmt.Errorf("score-ebm requires training.objective=%q with an energy or mlm_span_pll minimal-pair scorer", arch.ObjectiveMultihead)
 	}
-	_, err := energyHeadLogitsOutputName(cfg)
+	_, err := scoreEBMMode(cfg)
 	return err
+}
+
+func scoreEBMMode(cfg *ArchConfig) (string, error) {
+	if cfg == nil {
+		return "", fmt.Errorf("nil config")
+	}
+	if cfg.Training.MinimalPair != nil && cfg.Training.MinimalPair.UsesMLMSpanPLL() {
+		if _, err := mlmSpanPLLScoreOutputName(cfg); err != nil {
+			return "", err
+		}
+		return scoreEBMModeMLMSpanPLL, nil
+	}
+	if _, err := energyHeadLogitsOutputName(cfg); err != nil {
+		return "", err
+	}
+	return scoreEBMModeEnergy, nil
 }
 
 func energyHeadLogitsOutputName(cfg *ArchConfig) (string, error) {
@@ -186,6 +217,26 @@ func energyHeadTokenOutputName(cfg *ArchConfig) string {
 		}
 	}
 	return ""
+}
+
+func mlmSpanPLLScoreOutputName(cfg *ArchConfig) (string, error) {
+	if cfg == nil || cfg.Training.MinimalPair == nil || !cfg.Training.MinimalPair.UsesMLMSpanPLL() {
+		return "", fmt.Errorf("score-ebm requires training.minimal_pair.score_source=%q or a native energy head", arch.MinimalPairScoreMLMPLL)
+	}
+	headName := strings.TrimSpace(cfg.Training.MinimalPair.ScoreHead)
+	if headName == "" {
+		headName = strings.TrimSpace(cfg.Training.ExportHead)
+	}
+	for _, head := range cfg.Training.Heads {
+		if head.Name != headName {
+			continue
+		}
+		if head.Objective != arch.ObjectiveMLM && head.Objective != arch.ObjectiveMNTP {
+			return "", fmt.Errorf("score-ebm training.minimal_pair.score_head=%q must select an mlm or mntp head", headName)
+		}
+		return "head_" + head.Name + "_minimal_pair_scores", nil
+	}
+	return "", fmt.Errorf("score-ebm training.minimal_pair.score_head=%q does not match any training head", headName)
 }
 
 func scoreEBMUsesDifferingSpan(cfg *ArchConfig) bool {
@@ -270,6 +321,13 @@ func scoreEBMRecord(cfg *ArchConfig, evaluator diffusionGenerationEvaluator, rec
 		return scoreEBMOutputRecord{}, fmt.Errorf("id must be non-empty")
 	}
 	spanMode := scoreEBMUsesDifferingSpan(cfg)
+	mode, err := scoreEBMMode(cfg)
+	if err != nil {
+		return scoreEBMOutputRecord{}, err
+	}
+	if emitTokenEnergy && mode != scoreEBMModeEnergy {
+		return scoreEBMOutputRecord{}, fmt.Errorf("-score-emit-token-energy is only supported for native energy score-ebm configs")
+	}
 	if emitTokenEnergy && !spanMode {
 		return scoreEBMOutputRecord{}, fmt.Errorf("-score-emit-token-energy requires training.minimal_pair.energy_aggregation=%q", arch.MinimalPairEnergySpan)
 	}
@@ -291,7 +349,12 @@ func scoreEBMRecord(cfg *ArchConfig, evaluator diffusionGenerationEvaluator, rec
 			return scoreEBMOutputRecord{}, err
 		}
 		v := float64(energy[0])
-		out := scoreEBMOutputRecord{ID: rec.ID, NTokens: len(rec.Tokens), Energy: &v}
+		out := scoreEBMOutputRecord{ID: rec.ID, NTokens: len(rec.Tokens)}
+		if mode == scoreEBMModeEnergy {
+			out.Energy = &v
+		} else {
+			out.Score = &v
+		}
 		if emitTokenEnergy {
 			out.TokenEnergy = float32SliceToFloat64(tokenEnergy[0][:len(rec.Tokens)])
 		}
@@ -313,15 +376,24 @@ func scoreEBMRecord(cfg *ArchConfig, evaluator diffusionGenerationEvaluator, rec
 	}
 	clean := float64(energies[0])
 	corrupt := float64(energies[1])
-	margin := corrupt - clean
-	correct := clean < corrupt
 	out := scoreEBMOutputRecord{
-		ID:            rec.ID,
-		Family:        rec.Family,
-		EnergyClean:   &clean,
-		EnergyCorrupt: &corrupt,
-		Margin:        &margin,
-		Correct:       &correct,
+		ID:     rec.ID,
+		Family: rec.Family,
+	}
+	if mode == scoreEBMModeEnergy {
+		margin := corrupt - clean
+		correct := clean < corrupt
+		out.EnergyClean = &clean
+		out.EnergyCorrupt = &corrupt
+		out.Margin = &margin
+		out.Correct = &correct
+	} else {
+		margin := clean - corrupt
+		correct := clean > corrupt
+		out.ScoreClean = &clean
+		out.ScoreCorrupt = &corrupt
+		out.Margin = &margin
+		out.Correct = &correct
 	}
 	if emitTokenEnergy {
 		out.CleanTokenEnergy = float32SliceToFloat64(tokenEnergy[0][:len(rec.Clean)])
@@ -341,6 +413,13 @@ func scoreEBMSequencesDetailed(cfg *ArchConfig, evaluator diffusionGenerationEva
 		return nil, nil, fmt.Errorf("sequence count %d exceeds score batch %d", len(sequences), scoreBatch)
 	}
 	spanMode := scoreEBMUsesDifferingSpan(cfg)
+	mode, err := scoreEBMMode(cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	if emitTokenEnergy && mode != scoreEBMModeEnergy {
+		return nil, nil, fmt.Errorf("token energy output is only supported for native energy score-ebm configs")
+	}
 	if emitTokenEnergy && !spanMode {
 		return nil, nil, fmt.Errorf("token energy output requires training.minimal_pair.energy_aggregation=%q", arch.MinimalPairEnergySpan)
 	}
@@ -365,13 +444,21 @@ func scoreEBMSequencesDetailed(cfg *ArchConfig, evaluator diffusionGenerationEva
 	if batch.batchSizeOverride > 0 {
 		evalBatchSize = batch.batchSizeOverride
 	}
-	outputName, err := energyHeadLogitsOutputName(cfg)
-	if err != nil {
-		return nil, nil, err
+	outputName := ""
+	if mode == scoreEBMModeEnergy {
+		outputName, err = energyHeadLogitsOutputName(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else {
+		outputName, err = mlmSpanPLLScoreOutputName(cfg)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	outputs := []string{outputName}
 	tokenOutputName := energyHeadTokenOutputName(cfg)
-	if emitTokenEnergy {
+	if emitTokenEnergy && mode == scoreEBMModeEnergy {
 		outputs = append(outputs, tokenOutputName)
 	}
 	if _, err := evaluateObjectiveAndCacheOutputs(evaluator, batch, evalBatchSize, cfg.SeqLen, outputs...); err != nil {
@@ -382,10 +469,10 @@ func scoreEBMSequencesDetailed(cfg *ArchConfig, evaluator diffusionGenerationEva
 		return nil, nil, fmt.Errorf("read %s: %w", outputName, err)
 	}
 	if len(logits) != scoreBatch {
-		return nil, nil, fmt.Errorf("EBM energy output length mismatch: got=%d want=%d", len(logits), scoreBatch)
+		return nil, nil, fmt.Errorf("EBM score output length mismatch: got=%d want=%d", len(logits), scoreBatch)
 	}
 	var tokenEnergy [][]float32
-	if emitTokenEnergy {
+	if emitTokenEnergy && mode == scoreEBMModeEnergy {
 		rawTokenEnergy, err := evaluator.ReadOutput(tokenOutputName, []int{scoreBatch * cfg.SeqLen, 1})
 		if err != nil {
 			return nil, nil, fmt.Errorf("read %s: %w", tokenOutputName, err)
@@ -414,7 +501,11 @@ func ebmScoringBatch(cfg *ArchConfig, sequences [][]int, spans [][]int, rawBatch
 	}
 	headCount := len(cfg.Training.Heads)
 	need := rawBatchSize * cfg.SeqLen
-	totalNeed := need * headCount
+	totalRows := rawBatchSize * headCount
+	if minimalPairUsesMLMSpanPLL(cfg) {
+		totalRows += rawBatchSize
+	}
+	totalNeed := totalRows * cfg.SeqLen
 	x := make([]int, totalNeed)
 	y := make([]int, totalNeed)
 	lossMask := make([]float32, totalNeed)
@@ -423,10 +514,14 @@ func ebmScoringBatch(cfg *ArchConfig, sequences [][]int, spans [][]int, rawBatch
 	if spanMode {
 		energySpanMask = make([]float32, totalNeed)
 	}
-	starts := make([]int32, rawBatchSize*headCount)
-	ends := make([]int32, rawBatchSize*headCount)
-	timestep := make([]float32, rawBatchSize*headCount)
+	starts := make([]int32, totalRows)
+	ends := make([]int32, totalRows)
+	timestep := make([]float32, totalRows)
 	pad := minimalPairPadTokenID(cfg)
+	mode, err := scoreEBMMode(cfg)
+	if err != nil {
+		return objectiveBatch{}, err
+	}
 	for headIdx, head := range cfg.Training.Heads {
 		tokenOffset := headIdx * need
 		rowOffset := headIdx * rawBatchSize
@@ -454,6 +549,29 @@ func ebmScoringBatch(cfg *ArchConfig, sequences [][]int, spans [][]int, rawBatch
 			default:
 				ends[rowOffset+row] = int32(cfg.SeqLen)
 			}
+		}
+	}
+	if mode == scoreEBMModeMLMSpanPLL {
+		pairOffset := headCount * need
+		pairRowOffset := headCount * rawBatchSize
+		for row := 0; row < rawBatchSize; row++ {
+			seq := sequences[0]
+			span := []int{0, len(seq)}
+			if row < len(sequences) {
+				seq = sequences[row]
+				if row < len(spans) && len(spans[row]) > 0 {
+					span = spans[row]
+				}
+			}
+			rowStart := pairOffset + row*cfg.SeqLen
+			fillMinimalPairRow(x[rowStart:rowStart+cfg.SeqLen], y[rowStart:rowStart+cfg.SeqLen], seq, pad)
+			if row < len(sequences) {
+				fillMinimalPairSpanMask(energySpanMask[rowStart:rowStart+cfg.SeqLen], span)
+				copy(lossMask[rowStart:rowStart+cfg.SeqLen], energySpanMask[rowStart:rowStart+cfg.SeqLen])
+				maskMinimalPairSpanTokens(x[rowStart:rowStart+cfg.SeqLen], span, cfg.Training.MLMMaskTokenID)
+			}
+			starts[pairRowOffset+row] = 0
+			ends[pairRowOffset+row] = int32(cfg.SeqLen)
 		}
 	}
 	return objectiveBatch{

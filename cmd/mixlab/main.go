@@ -50,7 +50,7 @@ func main() {
 	scoreSkipFirst := flag.Int("score-skip-first", 0, "globally skip the first N tokens when scoring JSONL token sequences")
 	scorePositionBatch := flag.Int("score-position-batch", 0, "masked positions per diffusion scoring forward; <=0 auto-selects a memory-bounded value")
 	scoreBatch := flag.Int("score-batch", 0, "sequence rows per ELECTRA detector scoring forward; <=0 uses a conservative default")
-	scoreEmitTokenEnergy := flag.Bool("score-emit-token-energy", false, "include per-token energy values in score-ebm output when using differing-span energy aggregation")
+	scoreEmitTokenEnergy := flag.Bool("score-emit-token-energy", false, "include per-token energy values in score-ebm output for differing-span native energy configs")
 	prompt := flag.String("prompt", "", "prompt for generate mode, e.g. token_ids:0,1,2")
 	logprobsOut := flag.String("logprobs-out", "", "write per-token eval NLLs to a binary file (eval mode)")
 	ranksOut := flag.String("ranks-out", "", "write per-token target ranks to a binary file (eval mode); can be combined with -logprobs-out for a single eval pass")

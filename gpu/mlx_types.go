@@ -88,6 +88,8 @@ const (
 	OpEnergyPairwiseLoss   = 94
 	OpEnergySpanPool       = 95
 	OpEnergySpanPairwise   = 96
+	OpSpanPLLPool          = 97
+	OpSpanPLLPairwise      = 98
 )
 
 const (

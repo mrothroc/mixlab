@@ -21,16 +21,20 @@ func prepareMultiheadBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen
 	if headCount == 0 {
 		return objectiveBatch{}, fmt.Errorf("multihead objective has no heads")
 	}
-	totalNeed := need * headCount
+	totalRows := rawBatchSize * headCount
+	if minimalPairUsesMLMSpanPLL(cfg) {
+		totalRows += rawBatchSize
+	}
+	totalNeed := totalRows * seqLen
 	out := objectiveBatch{
 		x:                   make([]int, totalNeed),
 		y:                   make([]int, totalNeed),
 		lossMask:            make([]float32, totalNeed),
 		unmaskedX:           make([]int, totalNeed),
-		diffusionBlockStart: make([]int32, rawBatchSize*headCount),
-		diffusionBlockEnd:   make([]int32, rawBatchSize*headCount),
-		diffusionTimestep:   make([]float32, rawBatchSize*headCount),
-		batchSizeOverride:   rawBatchSize * headCount,
+		diffusionBlockStart: make([]int32, totalRows),
+		diffusionBlockEnd:   make([]int32, totalRows),
+		diffusionTimestep:   make([]float32, totalRows),
+		batchSizeOverride:   totalRows,
 	}
 	if cfg.Training.MinimalPair != nil && cfg.Training.MinimalPair.UsesDifferingSpanEnergy() {
 		out.energySpanMask = make([]float32, totalNeed)

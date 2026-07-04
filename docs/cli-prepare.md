@@ -47,12 +47,13 @@ families are `agreement`, `attractor`, `word_order`, `npi_licensor`,
 `quantifier_scope`, and `filler_gap`. Use `-minimal-pair-report-out` for a
 machine-readable balance/rejection report and `-minimal-pair-sample-out` for
 human inspection before training. Use the generated JSONL from
-`training.minimal_pair.path` with a multihead energy head.
+`training.minimal_pair.path` with a native energy head or scorer span-PLL
+minimal-pair regularizer.
 
 ## `prepare-pairs`
 
 `prepare-pairs` validates an explicit minimal-pair JSONL file and can compile
-it to a compact binary shard for faster startup during energy-head training.
+it to a compact binary shard for faster startup during minimal-pair training.
 It does not tokenize raw text; records must already contain token IDs.
 
 ```bash

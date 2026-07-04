@@ -57,6 +57,52 @@ func TestExportHFMultiheadExportsScorerOnly(t *testing.T) {
 	}
 }
 
+func TestExportHFMultiheadAllowsMinimalPairMLMSpanPLL(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+		"name": "hf_multihead_pll_ranking",
+		"model_dim": 16,
+		"vocab_size": 32,
+		"seq_len": 4,
+		"tie_embeddings": true,
+		"blocks": [{"type": "plain", "heads": 2}],
+		"training": {
+			"objective": "multihead",
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"mlm_mask_token_id": 31,
+			"export_head": "scorer",
+			"minimal_pair": {
+				"path": "pairs.jsonl",
+				"energy_aggregation": "differing_span",
+				"score_source": "mlm_span_pll",
+				"score_head": "scorer"
+			},
+			"heads": [
+				{"name": "scorer", "objective": "mntp", "loss_weight": 0.7},
+				{"name": "aux", "objective": "causal", "loss_weight": 0.3}
+			]
+		}
+	}`)
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{ConfigPath: cfgPath, SafetensorsLoad: weightsPath, OutputDir: outDir, TokenizerSource: tokenizerDir}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+	var hfCfg hfConfigJSON
+	readJSONFileForTest(t, filepath.Join(outDir, "config.json"), &hfCfg)
+	if _, ok := hfCfg.AutoMap["AutoModelForMaskedLM"]; !ok {
+		t.Fatalf("AutoModelForMaskedLM missing from auto_map: %+v", hfCfg.AutoMap)
+	}
+	var mapping []hfWeightMapping
+	readJSONFileForTest(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+	for _, entry := range mapping {
+		if strings.Contains(entry.Mixlab, "minimal_pair") || strings.Contains(entry.HF, "minimal_pair") {
+			t.Fatalf("minimal-pair training-only mapping exported: %+v", entry)
+		}
+	}
+}
+
 func TestExportHFMultiheadExportsHeadLevelDWA(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, `{

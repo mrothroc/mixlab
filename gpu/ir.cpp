@@ -373,6 +373,106 @@ EnergyPairwiseResult energy_span_pairwise_loss(
   return energy_pairwise_loss(pooled.pooled, pooled.row_mask, loss_kind, margin);
 }
 
+struct SpanPLLPoolResult {
+  mx::array pooled;
+  mx::array row_mask;
+};
+
+SpanPLLPoolResult span_pll_pool(
+    const mx::array& logits,
+    const mx::array& targets,
+    const mx::array& span_mask,
+    int seq_len) {
+  if (seq_len <= 0) {
+    throw std::runtime_error("span PLL pool seq_len must be > 0");
+  }
+  if (logits.ndim() != 2) {
+    throw std::runtime_error("span PLL pool logits must have shape [rows*T, vocab]");
+  }
+  if (targets.ndim() != 1 || targets.shape(0) != logits.shape(0)) {
+    throw std::runtime_error("span PLL pool targets must be a rank-1 vector matching logits rows");
+  }
+  if (span_mask.ndim() != 1 || span_mask.shape(0) != logits.shape(0)) {
+    throw std::runtime_error("span PLL pool mask must be a rank-1 vector matching logits rows");
+  }
+  const int n = static_cast<int>(logits.shape(0));
+  if (n <= 0 || (n % seq_len) != 0) {
+    throw std::runtime_error("span PLL pool logits length must be a positive multiple of seq_len");
+  }
+  const int rows = n / seq_len;
+  auto logits_f32 = mx::astype(logits, mx::float32);
+  auto row_max = mx::max(logits_f32, 1, true);
+  auto shifted = logits_f32 - row_max;
+  auto log_norm = mx::log(mx::sum(mx::exp(shifted), 1, true));
+  auto log_probs = shifted - log_norm;
+  auto idx = mx::reshape(mx::astype(targets, mx::int32), {targets.shape(0), 1});
+  auto chosen = mx::reshape(mx::take_along_axis(log_probs, idx, 1), {n});
+  auto mask_bt = mx::astype(
+      mx::greater(mx::astype(span_mask, mx::float32), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  mask_bt = mx::reshape(mask_bt, {rows, seq_len});
+  auto chosen_bt = mx::reshape(chosen, {rows, seq_len});
+  auto denom = mx::sum(mask_bt, 1, true);
+  auto pooled = mx::sum(chosen_bt * mask_bt, 1, true);
+  auto row_mask = mx::reshape(
+      mx::astype(mx::greater(denom, mx::array(0.0f, mx::float32)), mx::float32),
+      {rows});
+  return SpanPLLPoolResult{pooled, row_mask};
+}
+
+EnergyPairwiseResult span_pll_pairwise_loss(
+    const mx::array& logits,
+    const mx::array& targets,
+    const mx::array& span_mask,
+    int seq_len,
+    int loss_kind,
+    float margin) {
+  auto pooled = span_pll_pool(logits, targets, span_mask, seq_len);
+  mx::array scores = mx::astype(pooled.pooled, mx::float32);
+  if (scores.ndim() == 2 && scores.shape(1) == 1) {
+    scores = mx::reshape(scores, {scores.shape(0)});
+  }
+  if (scores.ndim() != 1) {
+    throw std::runtime_error("span PLL pairwise scores must have shape [rows] or [rows,1]");
+  }
+  const int rows = static_cast<int>(scores.shape(0));
+  if (rows <= 0 || (rows % 2) != 0) {
+    throw std::runtime_error("span PLL pairwise rows must be a positive even number");
+  }
+  if (!(margin > 0.0f) || !std::isfinite(margin)) {
+    throw std::runtime_error("span PLL pairwise margin must be finite and > 0");
+  }
+  auto clean = mx::slice(scores, {0}, {rows}, {2});
+  auto corrupt = mx::slice(scores, {1}, {rows}, {2});
+  auto clean_mask = mx::astype(
+      mx::greater(mx::slice(pooled.row_mask, {0}, {rows}, {2}), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto corrupt_mask = mx::astype(
+      mx::greater(mx::slice(pooled.row_mask, {1}, {rows}, {2}), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto pair_mask = clean_mask * corrupt_mask;
+  auto denom = mx::maximum(mx::sum(pair_mask), mx::array(1.0f, mx::float32));
+  auto diff = corrupt - clean;
+  mx::array per_pair = mx::array(0.0f, mx::float32);
+  if (loss_kind == 0) {
+    per_pair =
+        mx::maximum(diff, mx::array(0.0f, mx::float32)) +
+        mx::log(mx::array(1.0f, mx::float32) + mx::exp(-mx::abs(diff)));
+  } else if (loss_kind == 1) {
+    per_pair = mx::maximum(
+        mx::array(margin, mx::float32) + diff,
+        mx::array(0.0f, mx::float32));
+  } else {
+    throw std::runtime_error("span PLL pairwise loss kind must be 0 (logistic) or 1 (hinge)");
+  }
+  auto correct = mx::astype(mx::greater(clean, corrupt), mx::float32);
+  return EnergyPairwiseResult{
+      mx::sum(per_pair * pair_mask) / denom,
+      mx::sum(correct * pair_mask) / denom,
+      mx::sum(clean * pair_mask) / denom,
+      mx::sum(corrupt * pair_mask) / denom};
+}
+
 mx::array z_loss_mean(const mx::array& logits) {
   if (logits.ndim() != 2) {
     throw std::runtime_error("z_loss expects logits shape [rows, vocab]");
@@ -2940,6 +3040,41 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         auto result = energy_span_pairwise_loss(
             get(op, 0),
             get(op, 1),
+            op.int_params[0],
+            op.int_params[1],
+            op.float_params[0]);
+        set_out(op, 0, result.loss);
+        set_out(op, 1, result.accuracy);
+        set_out(op, 2, result.clean_mean);
+        set_out(op, 3, result.corrupt_mean);
+        break;
+      }
+      case OP_SPAN_PLL_POOL: {
+        if (op.n_outputs != 1) {
+          throw std::runtime_error("OP_SPAN_PLL_POOL requires one output");
+        }
+        if (op.n_int_params < 1) {
+          throw std::runtime_error("OP_SPAN_PLL_POOL requires seq_len param");
+        }
+        auto result = span_pll_pool(
+            get(op, 0),
+            mx::astype(get(op, 1), mx::int32),
+            get(op, 2),
+            op.int_params[0]);
+        set_out(op, 0, result.pooled);
+        break;
+      }
+      case OP_SPAN_PLL_PAIRWISE_LOSS: {
+        if (op.n_outputs != 4) {
+          throw std::runtime_error("OP_SPAN_PLL_PAIRWISE_LOSS requires four outputs");
+        }
+        if (op.n_int_params < 2 || op.n_float_params < 1) {
+          throw std::runtime_error("OP_SPAN_PLL_PAIRWISE_LOSS requires seq_len, loss kind, and margin params");
+        }
+        auto result = span_pll_pairwise_loss(
+            get(op, 0),
+            mx::astype(get(op, 1), mx::int32),
+            get(op, 2),
             op.int_params[0],
             op.int_params[1],
             op.float_params[0]);

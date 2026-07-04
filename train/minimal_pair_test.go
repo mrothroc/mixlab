@@ -73,6 +73,55 @@ func TestMinimalPairAttachDifferingSpanMask(t *testing.T) {
 	}
 }
 
+func TestMinimalPairAttachMLMSpanPLLAppendedRows(t *testing.T) {
+	cfg := parseTrainMinimalPairPLLConfig(t)
+	sampler := &minimalPairSampler{records: []minimalPairRecord{
+		{ID: "p0", Clean: []int{1, 2, 3}, Corrupt: []int{1, 9, 3}, CleanSpan: []int{1, 2}, CorruptSpan: []int{1, 2}, Family: "agreement"},
+	}}
+	raw := trainBatch{
+		x: []int{5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
+		y: []int{6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21},
+	}
+	prepared, err := prepareObjectiveBatch(cfg, raw, 0, arch.ObjectiveMultihead)
+	if err != nil {
+		t.Fatalf("prepareObjectiveBatch: %v", err)
+	}
+	if got, want := len(prepared.x), 48; got != want {
+		t.Fatalf("prepared len=%d, want %d", got, want)
+	}
+	if !reflect.DeepEqual(prepared.x[:16], raw.x) {
+		t.Fatalf("normal scorer rows changed before pair attach: %v", prepared.x[:16])
+	}
+	got, err := maybeAttachMinimalPairs(sampler, cfg, 0, prepared, cfg.Training.BatchTokens/cfg.SeqLen, cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("maybeAttachMinimalPairs: %v", err)
+	}
+	if !reflect.DeepEqual(got.x[:16], raw.x) {
+		t.Fatalf("normal scorer rows changed after pair attach: %v", got.x[:16])
+	}
+	pairOffset := len(cfg.Training.Heads) * cfg.Training.BatchTokens
+	if got := got.x[pairOffset : pairOffset+8]; !intSlicesEqualTrain(got, []int{1, 31, 3, 31, 1, 31, 3, 31}) {
+		t.Fatalf("active PLL pair x=%v", got)
+	}
+	if got := got.y[pairOffset : pairOffset+8]; !intSlicesEqualTrain(got, []int{1, 2, 3, 31, 1, 9, 3, 31}) {
+		t.Fatalf("active PLL pair y=%v", got)
+	}
+	wantMask := []float32{0, 1, 0, 0, 0, 1, 0, 0}
+	if !reflect.DeepEqual(got.energySpanMask[pairOffset:pairOffset+8], wantMask) {
+		t.Fatalf("PLL span mask=%v want %v", got.energySpanMask[pairOffset:pairOffset+8], wantMask)
+	}
+	if !reflect.DeepEqual(got.lossMask[pairOffset:pairOffset+8], wantMask) {
+		t.Fatalf("PLL loss mask=%v want %v", got.lossMask[pairOffset:pairOffset+8], wantMask)
+	}
+	if !reflect.DeepEqual(got.energySpanMask[pairOffset+8:pairOffset+16], []float32{0, 0, 0, 0, 0, 0, 0, 0}) {
+		t.Fatalf("inactive PLL span mask=%v", got.energySpanMask[pairOffset+8:pairOffset+16])
+	}
+	rowOffset := len(cfg.Training.Heads) * (cfg.Training.BatchTokens / cfg.SeqLen)
+	if got.diffusionBlockStart[rowOffset] != 0 || got.diffusionBlockEnd[rowOffset] != int32(cfg.SeqLen) {
+		t.Fatalf("PLL boundaries=%d/%d, want 0/%d", got.diffusionBlockStart[rowOffset], got.diffusionBlockEnd[rowOffset], cfg.SeqLen)
+	}
+}
+
 func TestDecodeMinimalPairJSONLValidation(t *testing.T) {
 	records, err := decodeMinimalPairJSONL(strings.NewReader(`{"id":"p0","clean":[1,2],"corrupt":[1,3],"family":"agreement"}`+"\n"), "pairs", 8)
 	if err != nil {
@@ -306,6 +355,51 @@ func TestScoreEBMDifferingSpanAndTokenEnergy(t *testing.T) {
 	}
 }
 
+func TestScoreEBMMLMSpanPLL(t *testing.T) {
+	cfg := parseTrainMinimalPairPLLConfig(t)
+	eval := &fakeEBMEvaluator{outputs: map[string][]float32{
+		"head_scorer_minimal_pair_scores": {2.5, 1.0},
+	}}
+	out, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{
+		ID: "pair", Clean: []int{1, 2, 3}, Corrupt: []int{1, 9, 3}, Family: "agreement",
+	}, 2, false)
+	if err != nil {
+		t.Fatalf("scoreEBMRecord(pair): %v", err)
+	}
+	if !reflect.DeepEqual(eval.requestedOutputs, []string{"head_scorer_minimal_pair_scores"}) {
+		t.Fatalf("requested outputs=%v", eval.requestedOutputs)
+	}
+	pairOffset := len(cfg.Training.Heads) * 2 * cfg.SeqLen
+	if !reflect.DeepEqual(eval.batch.x[pairOffset:pairOffset+8], []int{1, 31, 3, 31, 1, 31, 3, 31}) {
+		t.Fatalf("PLL scoring rows=%v", eval.batch.x[pairOffset:pairOffset+8])
+	}
+	if !reflect.DeepEqual(eval.batch.y[pairOffset:pairOffset+8], []int{1, 2, 3, 31, 1, 9, 3, 31}) {
+		t.Fatalf("PLL scoring targets=%v", eval.batch.y[pairOffset:pairOffset+8])
+	}
+	if !reflect.DeepEqual(eval.batch.energySpanMask[pairOffset:pairOffset+8], []float32{0, 1, 0, 0, 0, 1, 0, 0}) {
+		t.Fatalf("PLL scoring span mask=%v", eval.batch.energySpanMask[pairOffset:pairOffset+8])
+	}
+	if out.ScoreClean == nil || *out.ScoreClean != 2.5 || out.ScoreCorrupt == nil || *out.ScoreCorrupt != 1.0 {
+		t.Fatalf("scores=%+v", out)
+	}
+	if out.Margin == nil || *out.Margin != 1.5 || out.Correct == nil || !*out.Correct {
+		t.Fatalf("margin/correct=%+v", out)
+	}
+
+	eval.outputs = map[string][]float32{"head_scorer_minimal_pair_scores": {3.0, 0}}
+	eval.requestedOutputs = nil
+	seqOut, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}, Span: []int{1, 3}}, 2, false)
+	if err != nil {
+		t.Fatalf("scoreEBMRecord(seq): %v", err)
+	}
+	if seqOut.Score == nil || *seqOut.Score != 3.0 || seqOut.Energy != nil {
+		t.Fatalf("seq PLL output=%+v", seqOut)
+	}
+	if _, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{ID: "seq2", Tokens: []int{1, 2, 3}}, 2, true); err == nil || !strings.Contains(err.Error(), "native energy") {
+		t.Fatalf("token energy error=%v, want native energy rejection", err)
+	}
+}
+
 func TestScoreEBMJSONLSummaryIncludesFamilies(t *testing.T) {
 	cfg := parseTrainMinimalPairConfig(t, `"minimal_pair": {"path": "pairs.jsonl"}`)
 	eval := &fakeEBMEvaluator{output: []float32{0.1, 0.9}}
@@ -380,6 +474,41 @@ func parseTrainMinimalPairConfig(t *testing.T, minimalPair string) *ArchConfig {
 		}
 	}`
 	cfg, err := ParseArchConfig([]byte(body), "minimal_pair_test")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	return cfg
+}
+
+func parseTrainMinimalPairPLLConfig(t *testing.T) *ArchConfig {
+	t.Helper()
+	body := `{
+		"name": "minimal_pair_pll_test",
+		"model_dim": 16,
+		"vocab_size": 32,
+		"seq_len": 4,
+		"blocks": [{"type": "plain", "heads": 2}],
+		"training": {
+			"objective": "multihead",
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 16,
+			"mlm_mask_token_id": 31,
+			"mlm_mask_prob": 0,
+			"export_head": "scorer",
+			"minimal_pair": {
+				"path": "pairs.jsonl",
+				"energy_aggregation": "differing_span",
+				"score_source": "mlm_span_pll",
+				"pair_batch_fraction": 0.5
+			},
+			"heads": [
+				{"name": "scorer", "objective": "mntp", "loss_weight": 0.7},
+				{"name": "aux", "objective": "causal", "loss_weight": 0.3}
+			]
+		}
+	}`
+	cfg, err := ParseArchConfig([]byte(body), "minimal_pair_pll_test")
 	if err != nil {
 		t.Fatalf("ParseArchConfig: %v", err)
 	}

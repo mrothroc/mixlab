@@ -184,8 +184,9 @@ normalized language-model likelihood.
 
 ## `score-ebm`
 
-Score already-tokenized sequences or clean/corrupt pairs with a native
-multihead energy head. Lower energy is better.
+Score already-tokenized sequences or clean/corrupt pairs with either a native
+multihead energy head or an MLM/MNTP scorer span-PLL minimal-pair configuration.
+Energy mode is lower-is-better; scorer span-PLL mode is higher-is-better.
 
 ```bash
 ./mixlab -mode score-ebm \
@@ -212,18 +213,20 @@ single-sequence rows may include `span:[start,end]`, and pair rows may include
 `clean_span:[start,end]` and `corrupt_span:[start,end]`. When pair spans are
 omitted, Mixlab derives the differing spans by token alignment.
 
-Pair outputs include `energy_clean`, `energy_corrupt`, `margin`, and
-`correct`; the mode appends a `__summary__` row with aggregate and per-family
-pair accuracy when pair rows were scored.
+Pair outputs include `energy_clean`/`energy_corrupt` for native energy configs
+or `score_clean`/`score_corrupt` for `score_source: "mlm_span_pll"` configs.
+`margin` is positive when the clean side wins in either mode. The mode appends a
+`__summary__` row with aggregate and per-family pair accuracy when pair rows
+were scored.
 
 | Flag | Description |
 |------|-------------|
-| `-config` | Required. Must be a multihead config with an `objective: "energy"` head. |
+| `-config` | Required. Must be a multihead config with either an `objective: "energy"` head or `training.minimal_pair.score_source: "mlm_span_pll"`. |
 | `-safetensors-load` | Required. Checkpoint to score with. |
 | `-score-in` | Required. JSONL input with `tokens` rows or `clean`/`corrupt` pair rows. |
 | `-score-out` | Required. JSONL output path. |
 | `-score-batch` | Even sequence rows per energy forward. `0` uses a conservative default. |
-| `-score-emit-token-energy` | Include per-token energy arrays for differing-span energy configs. |
+| `-score-emit-token-energy` | Include per-token energy arrays for differing-span native energy configs. Not supported for scorer span-PLL mode. |
 
 ## `hiddenstats`
 

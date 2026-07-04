@@ -1,6 +1,7 @@
 package arch
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -374,6 +375,83 @@ func TestMultiheadEnergyDifferingSpanIR(t *testing.T) {
 	}
 }
 
+func TestMultiheadMinimalPairMLMSpanPLLIR(t *testing.T) {
+	cfg := parseMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"mlm_mask_token_id": 31,
+		"export_head": "scorer",
+		"minimal_pair": {
+			"path": "pairs.jsonl",
+			"energy_aggregation": "differing_span",
+			"score_source": "mlm_span_pll",
+			"loss_weight": 0.25
+		},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.7},
+			{"name": "aux", "objective": "causal", "loss_weight": 0.3}
+		]
+	}`)
+	if cfg.Training.MinimalPair.ScoreHead != "scorer" {
+		t.Fatalf("score_head=%q, want scorer", cfg.Training.MinimalPair.ScoreHead)
+	}
+	if cfg.Training.MinimalPair.ScoreSourceMode() != MinimalPairScoreMLMPLL {
+		t.Fatalf("score_source=%q, want mlm_span_pll", cfg.Training.MinimalPair.ScoreSourceMode())
+	}
+	base := parseMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"mlm_mask_token_id": 31,
+		"export_head": "scorer",
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.7},
+			{"name": "aux", "objective": "causal", "loss_weight": 0.3}
+		]
+	}`)
+	cfgShapes, err := collectMultiheadWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("collect cfg shapes: %v", err)
+	}
+	baseShapes, err := collectMultiheadWeightShapesFromConfig(base)
+	if err != nil {
+		t.Fatalf("collect base shapes: %v", err)
+	}
+	if len(cfgShapes) != len(baseShapes) {
+		t.Fatalf("weight count changed: cfg=%d base=%d", len(cfgShapes), len(baseShapes))
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	if got, want := prog.Inputs[0].Shape, []int{6, 4}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokens input shape=%v, want %v", got, want)
+	}
+	if !programDeclaresInputArch(prog, "energy_span_mask") {
+		t.Fatalf("span PLL program missing span mask input")
+	}
+	if countOps(prog, OpSpanPLLPairwise) != 1 {
+		t.Fatalf("OpSpanPLLPairwise count=%d, want 1", countOps(prog, OpSpanPLLPairwise))
+	}
+	if countOps(prog, OpSpanPLLPool) != 1 {
+		t.Fatalf("OpSpanPLLPool count=%d, want 1", countOps(prog, OpSpanPLLPool))
+	}
+	for _, want := range []string{
+		"head_scorer_minimal_pair_loss",
+		"head_scorer_minimal_pair_accuracy",
+		"head_scorer_minimal_pair_clean_score_mean",
+		"head_scorer_minimal_pair_corrupt_score_mean",
+		"head_scorer_minimal_pair_scores",
+	} {
+		if !programDeclaresOutputArch(prog, want) {
+			t.Fatalf("missing output %q: %+v", want, prog.Outputs)
+		}
+	}
+}
+
 func TestMultiheadEnergyValidationErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -391,7 +469,49 @@ func TestMultiheadEnergyValidationErrors(t *testing.T) {
 			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
 				"minimal_pair": {"path": "pairs.jsonl"},
 				"heads": [{"name": "s", "objective": "mntp"}, {"name": "d", "objective": "block_diffusion"}]}`,
-			want: "requires a multihead objective=\"energy\" head",
+			want: "score_source=\"energy_scalar\" requires",
+		},
+		{
+			name: "bad score source",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"minimal_pair": {"path": "pairs.jsonl", "score_source": "bad"},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "e", "objective": "energy"}]}`,
+			want: "score_source",
+		},
+		{
+			name: "pll requires differing span",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"minimal_pair": {"path": "pairs.jsonl", "score_source": "mlm_span_pll"},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "c", "objective": "causal"}]}`,
+			want: "requires energy_aggregation=\"differing_span\"",
+		},
+		{
+			name: "pll bad score head",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"minimal_pair": {"path": "pairs.jsonl", "energy_aggregation": "differing_span", "score_source": "mlm_span_pll", "score_head": "missing"},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "c", "objective": "causal"}]}`,
+			want: "score_head",
+		},
+		{
+			name: "pll score head must be masked",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"minimal_pair": {"path": "pairs.jsonl", "energy_aggregation": "differing_span", "score_source": "mlm_span_pll", "score_head": "c"},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "c", "objective": "causal"}]}`,
+			want: "must select an mlm or mntp head",
+		},
+		{
+			name: "pll rejects energy head",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"minimal_pair": {"path": "pairs.jsonl", "energy_aggregation": "differing_span", "score_source": "mlm_span_pll"},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "e", "objective": "energy"}]}`,
+			want: "cannot be combined with objective=\"energy\"",
+		},
+		{
+			name: "pll bad loss weight",
+			body: `"training": {"objective": "multihead", "steps": 1, "lr": 0.001, "batch_tokens": 8, "mlm_mask_token_id": 31,
+				"minimal_pair": {"path": "pairs.jsonl", "energy_aggregation": "differing_span", "score_source": "mlm_span_pll", "loss_weight": -1},
+				"heads": [{"name": "s", "objective": "mntp"}, {"name": "c", "objective": "causal"}]}`,
+			want: "loss_weight",
 		},
 		{
 			name: "bad loss",

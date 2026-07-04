@@ -17,11 +17,17 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	if headCount <= 0 {
 		return nil, fmt.Errorf("multihead objective has no heads")
 	}
-	B := rawBatch * headCount
+	normalBatchRows := rawBatch * headCount
+	extraPairRows := 0
+	if multiheadUsesMLMSpanPLL(cfg) {
+		extraPairRows = rawBatch
+	}
+	B := normalBatchRows + extraPairRows
 	T := cfg.SeqLen
 	D := cfg.ModelDim
 	V := cfg.VocabSize
 	rawRows := rawBatch * T
+	pairRowsStart := normalBatchRows * T
 	nWeightsMeta, err := collectMultiheadWeightShapesFromConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -33,7 +39,7 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	prog.DeclareInput("loss_mask", TensorFloat32, []int{B * T})
 	prog.DeclareInput("diffusion_block_start", TensorInt32, []int{B})
 	prog.DeclareInput("diffusion_block_end", TensorInt32, []int{B})
-	if multiheadUsesDifferingSpanEnergy(cfg) {
+	if multiheadUsesMinimalPairSpanMask(cfg) {
 		prog.DeclareInput("energy_span_mask", TensorFloat32, []int{B * T})
 	}
 	if multiheadUsesAdaLN(cfg.Training) {
@@ -147,12 +153,18 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 
 	exportHeadName := cfg.Training.ExportHead
 	diffusionHeadName := cfg.Training.DiffusionHead
+	minimalPairPLL := multiheadUsesMLMSpanPLL(cfg)
+	minimalPairScoreHead := ""
+	if minimalPairPLL {
+		minimalPairScoreHead = cfg.Training.MinimalPair.ScoreHead
+	}
 	lossAccum := ""
 	norm := cfg.EffectiveNormSpec()
 	for headIdx, head := range cfg.Training.Heads {
 		rowStart := headIdx * rawRows
 		headPrefix := "head_" + head.Name
 		headIn := headPrefix + "_hidden"
+		dwaWeightIndex := wi
 		if head.LayerAggregation == LayerAggregationDWA {
 			if captureAgg == nil {
 				return nil, fmt.Errorf("head %q requested DWA without captured trunk states", head.Name)
@@ -169,6 +181,7 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		headMask := headPrefix + "_loss_mask"
 		prog.Slice("loss_mask", rowStart, rowStart+rawRows, 1, 0, headMask)
 		energySpanMode := head.Objective == ObjectiveEnergy && cfg.Training.MinimalPair != nil && cfg.Training.MinimalPair.UsesDifferingSpanEnergy()
+		headParamStart := wi
 		if head.Objective == ObjectiveEnergy {
 			if cfg.Training.MinimalPair == nil {
 				return nil, fmt.Errorf("energy head %q requires training.minimal_pair", head.Name)
@@ -285,6 +298,17 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 				prog.DeclareOutput(headPrefix+"_logits", TensorFloat32, []int{rawBatch, 1})
 			}
 		}
+		if minimalPairPLL && head.Name == minimalPairScoreHead {
+			pairLoss, err := emitMultiheadMinimalPairPLLIR(prog, cfg, head, captureAgg, dwaWeightIndex, headParamStart, pairRowsStart, rawRows, T, norm, hiddenDropout)
+			if err != nil {
+				return nil, err
+			}
+			weightedPLL := headPrefix + "_minimal_pair_loss_weighted"
+			prog.ScalarMul(pairLoss, float32(cfg.Training.MinimalPair.LossWeight), weightedPLL)
+			next := headPrefix + "_minimal_pair_loss_accum"
+			prog.Add(lossAccum, weightedPLL, next)
+			lossAccum = next
+		}
 	}
 	prog.Slice("x", 0, rawRows, 1, 0, "x_hidden_flat")
 	prog.Reshape("x_hidden_flat", []int{rawBatch, T, D}, "x_hidden")
@@ -326,6 +350,10 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	return prog, nil
 }
 
+func multiheadUsesMinimalPairSpanMask(cfg *ArchConfig) bool {
+	return multiheadUsesDifferingSpanEnergy(cfg) || multiheadUsesMLMSpanPLL(cfg)
+}
+
 func multiheadUsesDifferingSpanEnergy(cfg *ArchConfig) bool {
 	if cfg == nil || cfg.Training.MinimalPair == nil || !cfg.Training.MinimalPair.UsesDifferingSpanEnergy() {
 		return false
@@ -336,6 +364,67 @@ func multiheadUsesDifferingSpanEnergy(cfg *ArchConfig) bool {
 		}
 	}
 	return false
+}
+
+func multiheadUsesMLMSpanPLL(cfg *ArchConfig) bool {
+	return cfg != nil && cfg.Training.MinimalPair != nil && cfg.Training.MinimalPair.UsesMLMSpanPLL()
+}
+
+func emitMultiheadMinimalPairPLLIR(prog *Program, cfg *ArchConfig, head MultiheadHeadSpec, captureAgg *layerAggregationBuildState, dwaWeightIndex, headParamStart, rowStart, rows, seqLen int, norm NormSpec, dropout float32) (string, error) {
+	prefix := "head_" + head.Name + "_minimal_pair"
+	headIn := prefix + "_hidden"
+	if head.LayerAggregation == LayerAggregationDWA {
+		if captureAgg == nil {
+			return "", fmt.Errorf("head %q requested DWA without captured trunk states", head.Name)
+		}
+		var err error
+		headIn, err = emitLayerAggregationFromHistory(prog, captureAgg.history, dwaWeightIndex, rowStart, rows, prefix+"_dwa")
+		if err != nil {
+			return "", err
+		}
+	} else {
+		prog.Slice("x", rowStart, rowStart+rows, 1, 0, headIn)
+	}
+	pairWI := headParamStart
+	var err error
+	if head.FinalNorm {
+		normOut := prefix + "_final_norm"
+		pairWI, err = emitNamedNormIR(prog, headIn, pairWI, normOut, norm)
+		if err != nil {
+			return "", err
+		}
+		headIn = normOut
+	}
+	logits, _, err := emitMultiheadHeadLogitsIR(prog, prefix, head, headIn, pairWI, norm.Eps, dropout)
+	if err != nil {
+		return "", err
+	}
+	if cfg.LogitSoftcap > 0 {
+		scaled := prefix + "_logits_softcap_scaled"
+		tanh := prefix + "_logits_softcap_tanh"
+		capped := prefix + "_logits_softcapped"
+		prog.ScalarMul(logits, 1.0/cfg.LogitSoftcap, scaled)
+		prog.Tanh(scaled, tanh)
+		prog.ScalarMul(tanh, cfg.LogitSoftcap, capped)
+		logits = capped
+	}
+	targets := prefix + "_targets"
+	spanMask := prefix + "_span_mask"
+	loss := prefix + "_loss"
+	acc := prefix + "_accuracy"
+	cleanMean := prefix + "_clean_score_mean"
+	corruptMean := prefix + "_corrupt_score_mean"
+	scores := prefix + "_scores"
+	prog.Slice("targets", rowStart, rowStart+rows, 1, 0, targets)
+	prog.Slice("energy_span_mask", rowStart, rowStart+rows, 1, 0, spanMask)
+	prog.SpanPLLPairwiseLoss(logits, targets, spanMask, seqLen, cfg.Training.MinimalPair.LossKind(), float32(cfg.Training.MinimalPair.Margin), loss, acc, cleanMean, corruptMean)
+	prog.SpanPLLPool(logits, targets, spanMask, seqLen, scores)
+	prog.DeclareOutput(loss, TensorFloat32, []int{1})
+	prog.DeclareOutput(acc, TensorFloat32, []int{1})
+	prog.DeclareOutput(cleanMean, TensorFloat32, []int{1})
+	prog.DeclareOutput(corruptMean, TensorFloat32, []int{1})
+	prog.DeclareOutput(scores, TensorFloat32, []int{rows / seqLen, 1})
+	return loss, nil
 }
 
 func multiheadResolvedBlocks(blocks []BlockSpec) []BlockSpec {
