@@ -582,7 +582,7 @@ func ebmScoringBatch(cfg *ArchConfig, sequences [][]int, spans [][]int, rawBatch
 		diffusionBlockStart: starts,
 		diffusionBlockEnd:   ends,
 		diffusionTimestep:   timestep,
-		batchSizeOverride:   rawBatchSize * headCount,
+		batchSizeOverride:   totalRows,
 	}, nil
 }
 

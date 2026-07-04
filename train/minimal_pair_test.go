@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -300,6 +301,9 @@ func TestScoreEBMRecordSequenceAndPair(t *testing.T) {
 	if !reflect.DeepEqual(eval.requestedOutputs, []string{"head_energy_logits"}) {
 		t.Fatalf("requested outputs=%v, want head_energy_logits", eval.requestedOutputs)
 	}
+	if eval.batchSize != 4 || len(eval.batch.x) != eval.batchSize*cfg.SeqLen {
+		t.Fatalf("energy eval batchSize=%d len(x)=%d, want full row count 4", eval.batchSize, len(eval.batch.x))
+	}
 
 	eval.output = []float32{0.5, 0.0}
 	eval.requestedOutputs = nil
@@ -369,6 +373,9 @@ func TestScoreEBMMLMSpanPLL(t *testing.T) {
 	if !reflect.DeepEqual(eval.requestedOutputs, []string{"head_scorer_minimal_pair_scores"}) {
 		t.Fatalf("requested outputs=%v", eval.requestedOutputs)
 	}
+	if eval.batchSize != 6 || len(eval.batch.x) != eval.batchSize*cfg.SeqLen {
+		t.Fatalf("PLL eval batchSize=%d len(x)=%d, want normal plus appended pair rows", eval.batchSize, len(eval.batch.x))
+	}
 	pairOffset := len(cfg.Training.Heads) * 2 * cfg.SeqLen
 	if !reflect.DeepEqual(eval.batch.x[pairOffset:pairOffset+8], []int{1, 31, 3, 31, 1, 31, 3, 31}) {
 		t.Fatalf("PLL scoring rows=%v", eval.batch.x[pairOffset:pairOffset+8])
@@ -426,6 +433,8 @@ func TestScoreEBMJSONLSummaryIncludesFamilies(t *testing.T) {
 
 type fakeEBMEvaluator struct {
 	batch            objectiveBatch
+	batchSize        int
+	seqLen           int
 	output           []float32
 	outputs          map[string][]float32
 	requestedOutputs []string
@@ -433,11 +442,21 @@ type fakeEBMEvaluator struct {
 
 func (f *fakeEBMEvaluator) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error) {
 	f.batch = batch
+	f.batchSize = batchSize
+	f.seqLen = seqLen
+	if len(batch.x) != batchSize*seqLen {
+		return 0, fmt.Errorf("batch x length=%d does not match batchSize=%d seqLen=%d", len(batch.x), batchSize, seqLen)
+	}
 	return 0, nil
 }
 
 func (f *fakeEBMEvaluator) EvaluateObjectiveGPUWithOutputs(batch objectiveBatch, batchSize, seqLen int, outputNames []string) (float32, error) {
 	f.batch = batch
+	f.batchSize = batchSize
+	f.seqLen = seqLen
+	if len(batch.x) != batchSize*seqLen {
+		return 0, fmt.Errorf("batch x length=%d does not match batchSize=%d seqLen=%d", len(batch.x), batchSize, seqLen)
+	}
 	f.requestedOutputs = append([]string(nil), outputNames...)
 	return 0, nil
 }
