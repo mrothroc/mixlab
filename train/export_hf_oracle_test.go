@@ -132,6 +132,19 @@ func runHFCPUMaskedForward(t *testing.T, cfg *ArchConfig, weights map[string][]f
 }
 
 func runHFCPUHidden(t *testing.T, cfg *ArchConfig, weights map[string][]float64, tokens [][]int) [][][]float64 {
+	return runHFCPUHiddenWithDWAScope(t, cfg, weights, tokens, "")
+}
+
+func runHFCPUMaskedForwardWithDWAScope(t *testing.T, cfg *ArchConfig, weights map[string][]float64, tokens [][]int, scope string) [][][]float64 {
+	t.Helper()
+	x := runHFCPUHiddenWithDWAScope(t, cfg, weights, tokens, scope)
+	if cfg.EffectiveMLMHead() == "bert" {
+		return bertMLMHeadCPU(cfg, x, weights["mlm_head_dense.weight"], weights["mlm_head_dense.bias"], weights["embed_tokens.weight"], weights["mlm_head_output_bias"])
+	}
+	return matmul3DCPU(x, weights["lm_head_weight"], cfg.ModelDim, cfg.VocabSize)
+}
+
+func runHFCPUHiddenWithDWAScope(t *testing.T, cfg *ArchConfig, weights map[string][]float64, tokens [][]int, scope string) [][][]float64 {
 	t.Helper()
 	x := embedCPU(weights["embed_tokens.weight"], cfg.VocabSize, cfg.ModelDim, tokens)
 	if cfg.CharVocabSize > 0 {
@@ -151,7 +164,7 @@ func runHFCPUHidden(t *testing.T, cfg *ArchConfig, weights map[string][]float64,
 			sharedRelativeEmbeddings = layerNorm2DCPU(sharedRelativeEmbeddings, weights["relative_layer_norm.weight"], weights["relative_layer_norm.bias"], rows, cfg.ModelDim, float64(cfg.EffectiveNormSpec().Eps))
 		}
 	}
-	dwa := newHFDWACPUState(t, cfg, weights, x)
+	dwa := newHFDWACPUStateWithScope(t, cfg, weights, x, scope)
 	normPlacement := cfg.EffectiveNormPlacement()
 	for i, block := range cfg.Blocks {
 		prefix := fmt.Sprintf("blocks.%d.", i)
@@ -279,7 +292,11 @@ func runHFCPUHidden(t *testing.T, cfg *ArchConfig, weights map[string][]float64,
 		}
 	}
 	if dwa != nil {
-		dwa.finish(t)
+		if strings.ToLower(strings.TrimSpace(scope)) == "head" {
+			x = dwa.finishHead(t)
+		} else {
+			dwa.finish(t)
+		}
 	}
 	return rmsNormCPU(x, weights["final_norm.weight"])
 }
@@ -377,9 +394,10 @@ func embedCPU(table []float64, vocab, dim int, tokens [][]int) [][][]float64 {
 }
 
 type dwaCPUState struct {
-	alphas  [][]float64
-	history [][][][]float64
-	step    int
+	alphas      [][]float64
+	history     [][][][]float64
+	step        int
+	captureOnly bool
 }
 
 func newNativeDWACPUState(t *testing.T, cfg *ArchConfig, w [][]float64, static [][][]float64) *dwaCPUState {
@@ -406,7 +424,7 @@ func newNativeDWACPUState(t *testing.T, cfg *ArchConfig, w [][]float64, static [
 	return newDWACPUState(alphas, static)
 }
 
-func newHFDWACPUState(t *testing.T, cfg *ArchConfig, weights map[string][]float64, static [][][]float64) *dwaCPUState {
+func newHFDWACPUStateWithScope(t *testing.T, cfg *ArchConfig, weights map[string][]float64, static [][][]float64, scope string) *dwaCPUState {
 	t.Helper()
 	if cfg.EffectiveLayerAggregation() != "dwa" {
 		return nil
@@ -424,7 +442,9 @@ func newHFDWACPUState(t *testing.T, cfg *ArchConfig, weights map[string][]float6
 		}
 		alphas[i] = alpha
 	}
-	return newDWACPUState(alphas, static)
+	state := newDWACPUState(alphas, static)
+	state.captureOnly = strings.ToLower(strings.TrimSpace(scope)) == "head"
+	return state
 }
 
 func newDWACPUState(alphas [][]float64, static [][][]float64) *dwaCPUState {
@@ -447,6 +467,10 @@ func (s *dwaCPUState) apply(t *testing.T, x [][][]float64) [][][]float64 {
 	if len(alpha) != len(s.history) {
 		t.Fatalf("DWA alpha %d len=%d want %d", s.step, len(alpha), len(s.history))
 	}
+	if s.captureOnly {
+		s.step++
+		return x
+	}
 	out := make3D(len(x), len(x[0]), len(x[0][0]))
 	for h, state := range s.history {
 		for b := range state {
@@ -466,6 +490,34 @@ func (s *dwaCPUState) finish(t *testing.T) {
 	if s != nil && s.step != len(s.alphas) {
 		t.Fatalf("DWA consumed %d alpha vectors, want %d", s.step, len(s.alphas))
 	}
+}
+
+func (s *dwaCPUState) finishHead(t *testing.T) [][][]float64 {
+	t.Helper()
+	if s == nil {
+		t.Fatal("nil DWA state")
+	}
+	if s.step != len(s.alphas) {
+		t.Fatalf("head-scoped DWA captured %d residual points, want %d", s.step, len(s.alphas))
+	}
+	if len(s.alphas) == 0 {
+		t.Fatal("head-scoped DWA requires at least one alpha vector")
+	}
+	alpha := s.alphas[len(s.alphas)-1]
+	if len(alpha) != len(s.history) {
+		t.Fatalf("head-scoped DWA alpha len=%d want %d", len(alpha), len(s.history))
+	}
+	out := make3D(len(s.history[0]), len(s.history[0][0]), len(s.history[0][0][0]))
+	for h, state := range s.history {
+		for b := range state {
+			for i := range state[b] {
+				for d := range state[b][i] {
+					out[b][i][d] += alpha[h] * state[b][i][d]
+				}
+			}
+		}
+	}
+	return out
 }
 
 func clone3D(x [][][]float64) [][][]float64 {

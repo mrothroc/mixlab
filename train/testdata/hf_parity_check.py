@@ -90,6 +90,22 @@ def main() -> int:
     seq_len = int(native["seq_len"])
     vocab = int(native["vocab"])
     native_logits = torch.tensor(native["logits"], dtype=torch.float64).view(batch, seq_len, vocab)
+    native_masked_logits = None
+    masked_path = os.path.join(args.dir, "parity_native_masked_logits.json")
+    if os.path.exists(masked_path):
+        with open(masked_path) as f:
+            native_masked = json.load(f)
+        masked_batch = int(native_masked["batch"])
+        masked_seq_len = int(native_masked["seq_len"])
+        masked_vocab = int(native_masked["vocab"])
+        if (masked_batch, masked_seq_len, masked_vocab) != (batch, seq_len, vocab):
+            print(
+                "native masked logits shape metadata "
+                f"({masked_batch}, {masked_seq_len}, {masked_vocab}) != ({batch}, {seq_len}, {vocab})",
+                file=sys.stderr,
+            )
+            return 2
+        native_masked_logits = torch.tensor(native_masked["logits"], dtype=torch.float64).view(batch, seq_len, vocab)
 
     input_ids = torch.tensor(tokens, dtype=torch.long)
     if tuple(input_ids.shape) != (batch, seq_len):
@@ -162,6 +178,15 @@ def main() -> int:
         if tok.mask_token is None or tok.mask_token_id is None:
             print("FAIL: tokenizer.mask_token is None for a masked-LM export", file=sys.stderr)
             return 2
+        if native_masked_logits is not None:
+            masked_status = compare_logits(
+                args, input_ids, native_masked_logits, masked_out.logits.to(torch.float64), batch, seq_len, vocab
+            )
+            if masked_status != 0:
+                return masked_status
+    elif native_masked_logits is not None:
+        print("native masked logits were provided, but export has no AutoModelForMaskedLM", file=sys.stderr)
+        return 2
 
     return compare_logits(args, input_ids, native_logits, hf_logits, batch, seq_len, vocab)
 
