@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/gpu"
 )
 
@@ -75,7 +76,7 @@ func TestScoreEBMReadsEnergyHeadOutputMLX(t *testing.T) {
 	if !ok {
 		t.Fatalf("trainer does not implement diffusionGenerationEvaluator")
 	}
-	energies, _, err := scoreEBMSequencesDetailed(cfg, evaluator, [][]int{{1, 2, 3}, {1, 3, 2}}, nil, scoreBatch, false)
+	energies, _, err := scoreEBMSequencesDetailedWithOptions(cfg, evaluator, [][]int{{1, 2, 3}, {1, 3, 2}}, nil, scoreEBMRuntimeOptions{scoreBatch: scoreBatch, pllAggregation: scoreEBMPLLAggregationConfig})
 	if err != nil {
 		t.Fatalf("scoreEBMSequencesDetailed: %v", err)
 	}
@@ -87,6 +88,77 @@ func TestScoreEBMReadsEnergyHeadOutputMLX(t *testing.T) {
 			t.Fatalf("energy[%d]=%g, want finite", i, energy)
 		}
 	}
+}
+
+func TestScoreEBMFullSeqPLLMLXSmokeAndChunkParity(t *testing.T) {
+	if !mlxAvailable() || !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+	singleCfg := parseSinglePLLConfig(t, arch.ObjectiveMLM)
+	chunked := newScoreEBMFullSeqMLXEvaluator(t, singleCfg, scoreEBMModeSinglePLL, 2)
+	defer chunked.CloseTrainer()
+	chunkedEval, ok := chunked.(diffusionGenerationEvaluator)
+	if !ok {
+		t.Fatalf("trainer type=%T does not implement diffusionGenerationEvaluator", chunked)
+	}
+	single := newScoreEBMFullSeqMLXEvaluator(t, singleCfg, scoreEBMModeSinglePLL, 1)
+	defer single.CloseTrainer()
+	singleEval, ok := single.(diffusionGenerationEvaluator)
+	if !ok {
+		t.Fatalf("trainer type=%T does not implement diffusionGenerationEvaluator", single)
+	}
+	tokens := []int{1, 2, 31, 4}
+	skip := map[int]bool{1: true}
+	got, err := scoreEBMFullSeqPLLSequence(singleCfg, chunkedEval, tokens, 2, skip)
+	if err != nil {
+		t.Fatalf("chunked full-seq PLL: %v", err)
+	}
+	want, err := scoreEBMFullSeqPLLSequence(singleCfg, singleEval, tokens, 1, skip)
+	if err != nil {
+		t.Fatalf("single-position full-seq PLL: %v", err)
+	}
+	if math.IsNaN(got) || math.IsInf(got, 0) {
+		t.Fatalf("chunked score=%g, want finite", got)
+	}
+	if math.Abs(got-want) > 1e-5 {
+		t.Fatalf("chunked score=%g single=%g diff=%g", got, want, math.Abs(got-want))
+	}
+
+	multiCfg := parseTrainMinimalPairPLLConfig(t)
+	multi := newScoreEBMFullSeqMLXEvaluator(t, multiCfg, scoreEBMModeMLMSpanPLL, 2)
+	defer multi.CloseTrainer()
+	multiEval, ok := multi.(diffusionGenerationEvaluator)
+	if !ok {
+		t.Fatalf("trainer type=%T does not implement diffusionGenerationEvaluator", multi)
+	}
+	out, err := scoreEBMRecordWithOptions(multiCfg, multiEval, scoreEBMInputRecord{
+		ID: "pair", Clean: []int{1, 2, 31, 4}, Corrupt: []int{1, 5, 31, 4}, Family: "word_order",
+	}, scoreEBMRuntimeOptions{
+		scorePositionBatch: 2,
+		pllAggregation:     scoreEBMPLLAggregationFullSeq,
+		pllSkipTokenIDs:    skip,
+	})
+	if err != nil {
+		t.Fatalf("multihead scoreEBMRecordWithOptions full_seq: %v", err)
+	}
+	if out.ScoreClean == nil || out.ScoreCorrupt == nil || math.IsNaN(*out.ScoreClean) || math.IsNaN(*out.ScoreCorrupt) || math.IsInf(*out.ScoreClean, 0) || math.IsInf(*out.ScoreCorrupt, 0) {
+		t.Fatalf("multihead full-seq scores=%+v, want finite", out)
+	}
+}
+
+func newScoreEBMFullSeqMLXEvaluator(t *testing.T, cfg *ArchConfig, scoreMode string, positionBatch int) GPUTrainer {
+	t.Helper()
+	local := *cfg
+	local.Training.BatchTokens = local.SeqLen * positionBatch
+	prog, err := buildScoreEBMIRProgram(&local, scoreMode, scoreEBMPLLAggregationFullSeq)
+	if err != nil {
+		t.Fatalf("buildScoreEBMIRProgram: %v", err)
+	}
+	trainer, err := initGPUTrainer(prog, &local, nil, nil)
+	if err != nil {
+		t.Fatalf("initGPUTrainer: %v", err)
+	}
+	return trainer
 }
 
 func writeMinimalPairFixture(t *testing.T, path string, vocabSize, seqLen, pairs int) {

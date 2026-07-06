@@ -282,9 +282,9 @@ func TestPreparePairsRejectsLengthAndMissingFamily(t *testing.T) {
 func TestScoreEBMRecordSequenceAndPair(t *testing.T) {
 	cfg := parseTrainMinimalPairConfig(t, `"minimal_pair": {"path": "pairs.jsonl"}`)
 	eval := &fakeEBMEvaluator{output: []float32{0.25, 1.25}}
-	pairOut, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{
+	pairOut, err := scoreEBMRecordWithOptions(cfg, eval, scoreEBMInputRecord{
 		ID: "pair", Clean: []int{1, 2}, Corrupt: []int{1, 3}, Family: "agreement",
-	}, 2, false)
+	}, scoreEBMRuntimeOptions{scoreBatch: 2, pllAggregation: scoreEBMPLLAggregationConfig})
 	if err != nil {
 		t.Fatalf("scoreEBMRecord(pair): %v", err)
 	}
@@ -307,7 +307,7 @@ func TestScoreEBMRecordSequenceAndPair(t *testing.T) {
 
 	eval.output = []float32{0.5, 0.0}
 	eval.requestedOutputs = nil
-	seqOut, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}}, 2, false)
+	seqOut, err := scoreEBMRecordWithOptions(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}}, scoreEBMRuntimeOptions{scoreBatch: 2, pllAggregation: scoreEBMPLLAggregationConfig})
 	if err != nil {
 		t.Fatalf("scoreEBMRecord(seq): %v", err)
 	}
@@ -322,9 +322,9 @@ func TestScoreEBMDifferingSpanAndTokenEnergy(t *testing.T) {
 		"head_energy_logits":       {0.25, 1.25},
 		"head_energy_token_energy": {10, 11, 12, 13, 20, 21, 22, 23},
 	}}
-	out, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{
+	out, err := scoreEBMRecordWithOptions(cfg, eval, scoreEBMInputRecord{
 		ID: "pair", Clean: []int{1, 2, 3}, Corrupt: []int{1, 9, 3}, Family: "agreement",
-	}, 2, true)
+	}, scoreEBMRuntimeOptions{scoreBatch: 2, pllAggregation: scoreEBMPLLAggregationConfig, emitTokenEnergy: true})
 	if err != nil {
 		t.Fatalf("scoreEBMRecord(pair): %v", err)
 	}
@@ -347,7 +347,7 @@ func TestScoreEBMDifferingSpanAndTokenEnergy(t *testing.T) {
 		"head_energy_token_energy": {30, 31, 32, 33, 0, 0, 0, 0},
 	}
 	eval.requestedOutputs = nil
-	seqOut, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}, Span: []int{2, 3}}, 2, true)
+	seqOut, err := scoreEBMRecordWithOptions(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}, Span: []int{2, 3}}, scoreEBMRuntimeOptions{scoreBatch: 2, pllAggregation: scoreEBMPLLAggregationConfig, emitTokenEnergy: true})
 	if err != nil {
 		t.Fatalf("scoreEBMRecord(seq): %v", err)
 	}
@@ -364,9 +364,9 @@ func TestScoreEBMMLMSpanPLL(t *testing.T) {
 	eval := &fakeEBMEvaluator{outputs: map[string][]float32{
 		"head_scorer_minimal_pair_scores": {2.5, 1.0},
 	}}
-	out, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{
+	out, err := scoreEBMRecordWithOptions(cfg, eval, scoreEBMInputRecord{
 		ID: "pair", Clean: []int{1, 2, 3}, Corrupt: []int{1, 9, 3}, Family: "agreement",
-	}, 2, false)
+	}, scoreEBMRuntimeOptions{scoreBatch: 2, pllAggregation: scoreEBMPLLAggregationConfig})
 	if err != nil {
 		t.Fatalf("scoreEBMRecord(pair): %v", err)
 	}
@@ -395,15 +395,119 @@ func TestScoreEBMMLMSpanPLL(t *testing.T) {
 
 	eval.outputs = map[string][]float32{"head_scorer_minimal_pair_scores": {3.0, 0}}
 	eval.requestedOutputs = nil
-	seqOut, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}, Span: []int{1, 3}}, 2, false)
+	seqOut, err := scoreEBMRecordWithOptions(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 3}, Span: []int{1, 3}}, scoreEBMRuntimeOptions{scoreBatch: 2, pllAggregation: scoreEBMPLLAggregationConfig})
 	if err != nil {
 		t.Fatalf("scoreEBMRecord(seq): %v", err)
 	}
 	if seqOut.Score == nil || *seqOut.Score != 3.0 || seqOut.Energy != nil {
 		t.Fatalf("seq PLL output=%+v", seqOut)
 	}
-	if _, err := scoreEBMRecord(cfg, eval, scoreEBMInputRecord{ID: "seq2", Tokens: []int{1, 2, 3}}, 2, true); err == nil || !strings.Contains(err.Error(), "native energy") {
+	if _, err := scoreEBMRecordWithOptions(cfg, eval, scoreEBMInputRecord{ID: "seq2", Tokens: []int{1, 2, 3}}, scoreEBMRuntimeOptions{scoreBatch: 2, pllAggregation: scoreEBMPLLAggregationConfig, emitTokenEnergy: true}); err == nil || !strings.Contains(err.Error(), "native energy") {
 		t.Fatalf("token energy error=%v, want native energy rejection", err)
+	}
+}
+
+func TestScoreEBMFullSeqPLLMultihead(t *testing.T) {
+	cfg := parseTrainMinimalPairPLLConfig(t)
+	opts := scoreEBMRuntimeOptions{
+		scorePositionBatch: 2,
+		pllAggregation:     scoreEBMPLLAggregationFullSeq,
+		pllSkipTokenIDs:    map[int]bool{1: true},
+	}
+	eval := &fakeEBMEvaluator{logitsForBatch: scoreEBMPLLTestLogits(cfg.SeqLen, cfg.VocabSize)}
+	rec := scoreEBMInputRecord{
+		ID: "pair", Clean: []int{1, 2, 31, 4}, Corrupt: []int{1, 5, 31, 4},
+		CleanSpan: []int{1, 2}, CorruptSpan: []int{1, 2}, Family: "agreement",
+	}
+	out, err := scoreEBMRecordWithOptions(cfg, eval, rec, opts)
+	if err != nil {
+		t.Fatalf("scoreEBMRecordWithOptions(full_seq pair): %v", err)
+	}
+	if !reflect.DeepEqual(eval.requestedOutputs, []string{"head_scorer_logits"}) || eval.calls != 2 {
+		t.Fatalf("requested outputs=%v", eval.requestedOutputs)
+	}
+	if !reflect.DeepEqual(eval.batchSizes, []int{6, 6}) {
+		t.Fatalf("eval batch sizes=%v, want [6 6]", eval.batchSizes)
+	}
+	if len(eval.batches) != 2 {
+		t.Fatalf("eval batches=%d, want 2", len(eval.batches))
+	}
+	first := eval.batches[0]
+	if first.batchSizeOverride != 6 || len(first.x) != 6*cfg.SeqLen {
+		t.Fatalf("first batch override=%d len=%d, want six rows", first.batchSizeOverride, len(first.x))
+	}
+	if !reflect.DeepEqual(first.x[:8], []int{1, 31, 31, 4, 1, 2, 31, 31}) {
+		t.Fatalf("full-seq score-head rows=%v", first.x[:8])
+	}
+	if !reflect.DeepEqual(first.lossMask[:8], []float32{0, 1, 0, 0, 0, 0, 0, 1}) {
+		t.Fatalf("full-seq loss mask=%v", first.lossMask[:8])
+	}
+	if !reflect.DeepEqual(eval.readShapes, [][]int{{2 * cfg.SeqLen, cfg.VocabSize}, {2 * cfg.SeqLen, cfg.VocabSize}}) {
+		t.Fatalf("read shapes=%v", eval.readShapes)
+	}
+	skip := map[int]bool{1: true, 31: true}
+	wantClean := scoreEBMPLLTestOracle(t, cfg.SeqLen, cfg.VocabSize, rec.Clean, skip)
+	wantCorrupt := scoreEBMPLLTestOracle(t, cfg.SeqLen, cfg.VocabSize, rec.Corrupt, skip)
+	if out.ScoreClean == nil || out.ScoreCorrupt == nil {
+		t.Fatalf("missing scores: %+v", out)
+	}
+	requireFloat64SliceNear(t, []float64{*out.ScoreClean, *out.ScoreCorrupt}, []float64{float64(float32(wantClean)), float64(float32(wantCorrupt))}, 1e-6)
+	if out.Margin == nil || out.Correct == nil || *out.Margin != *out.ScoreClean-*out.ScoreCorrupt || *out.Correct != (*out.ScoreClean > *out.ScoreCorrupt) {
+		t.Fatalf("margin/correct=%+v", out)
+	}
+}
+
+func TestScoreEBMFullSeqPLLSingleObjective(t *testing.T) {
+	cfg := parseSinglePLLConfig(t, arch.ObjectiveMLM)
+	if err := validateScoreEBMConfig(cfg); err != nil {
+		t.Fatalf("validate single MLM score-ebm: %v", err)
+	}
+	if got, err := effectiveScoreEBMPLLAggregation(cfg, ""); err != nil || got != scoreEBMPLLAggregationFullSeq {
+		t.Fatalf("single config aggregation=%q err=%v, want full_seq", got, err)
+	}
+	opts := scoreEBMRuntimeOptions{
+		scorePositionBatch: 2,
+		pllAggregation:     scoreEBMPLLAggregationConfig,
+		pllSkipTokenIDs:    map[int]bool{1: true},
+	}
+	eval := &fakeEBMEvaluator{logitsForBatch: scoreEBMPLLTestLogits(cfg.SeqLen, cfg.VocabSize)}
+	out, err := scoreEBMRecordWithOptions(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 31, 4}, Span: []int{1, 2}}, opts)
+	if err != nil {
+		t.Fatalf("scoreEBMRecordWithOptions(single full_seq): %v", err)
+	}
+	if !reflect.DeepEqual(eval.requestedOutputs, []string{"logits"}) {
+		t.Fatalf("requested outputs=%v", eval.requestedOutputs)
+	}
+	if eval.batchSize != 2 || len(eval.batch.x) != 2*cfg.SeqLen {
+		t.Fatalf("single eval batch size=%d len=%d", eval.batchSize, len(eval.batch.x))
+	}
+	if !reflect.DeepEqual(eval.batch.x, []int{1, 31, 31, 4, 1, 2, 31, 31}) {
+		t.Fatalf("single full-seq rows=%v", eval.batch.x)
+	}
+	if out.Score == nil {
+		t.Fatalf("missing sequence score: %+v", out)
+	}
+	want := scoreEBMPLLTestOracle(t, cfg.SeqLen, cfg.VocabSize, []int{1, 2, 31, 4}, map[int]bool{1: true, 31: true})
+	requireFloat64SliceNear(t, []float64{*out.Score}, []float64{float64(float32(want))}, 1e-6)
+}
+
+func TestScoreEBMFullSeqPLLValidation(t *testing.T) {
+	energyCfg := parseTrainMinimalPairConfig(t, `"minimal_pair": {"path": "pairs.jsonl"}`)
+	if _, err := effectiveScoreEBMPLLAggregation(energyCfg, scoreEBMPLLAggregationFullSeq); err == nil || !strings.Contains(err.Error(), "native energy") {
+		t.Fatalf("energy full_seq error=%v, want native energy rejection", err)
+	}
+	singleCfg := parseSinglePLLConfig(t, arch.ObjectiveMNTP)
+	if _, err := effectiveScoreEBMPLLAggregation(singleCfg, scoreEBMPLLAggregationDifferingSpan); err == nil || !strings.Contains(err.Error(), "mlm_span_pll") {
+		t.Fatalf("single differing_span error=%v, want mlm_span_pll rejection", err)
+	}
+	if _, err := effectiveScoreEBMPLLAggregation(singleCfg, "bad"); err == nil || !strings.Contains(err.Error(), "score-pll-aggregation") {
+		t.Fatalf("invalid aggregation error=%v", err)
+	}
+	if got, err := parseScoreEBMSkipTokenIDs("1, 2", 8); err != nil || !got[1] || !got[2] || len(got) != 2 {
+		t.Fatalf("parse skip ids=%v err=%v", got, err)
+	}
+	if _, err := parseScoreEBMSkipTokenIDs("8", 8); err == nil || !strings.Contains(err.Error(), "out of range") {
+		t.Fatalf("bad skip id error=%v", err)
 	}
 }
 
@@ -433,17 +537,25 @@ func TestScoreEBMJSONLSummaryIncludesFamilies(t *testing.T) {
 
 type fakeEBMEvaluator struct {
 	batch            objectiveBatch
+	batches          []objectiveBatch
 	batchSize        int
+	batchSizes       []int
 	seqLen           int
 	output           []float32
 	outputs          map[string][]float32
+	logitsForBatch   func(objectiveBatch, int) []float32
+	calls            int
+	readShapes       [][]int
 	requestedOutputs []string
 }
 
 func (f *fakeEBMEvaluator) EvaluateObjectiveGPU(batch objectiveBatch, batchSize, seqLen int) (float32, error) {
 	f.batch = batch
+	f.batches = append(f.batches, batch)
 	f.batchSize = batchSize
+	f.batchSizes = append(f.batchSizes, batchSize)
 	f.seqLen = seqLen
+	f.calls++
 	if len(batch.x) != batchSize*seqLen {
 		return 0, fmt.Errorf("batch x length=%d does not match batchSize=%d seqLen=%d", len(batch.x), batchSize, seqLen)
 	}
@@ -452,8 +564,11 @@ func (f *fakeEBMEvaluator) EvaluateObjectiveGPU(batch objectiveBatch, batchSize,
 
 func (f *fakeEBMEvaluator) EvaluateObjectiveGPUWithOutputs(batch objectiveBatch, batchSize, seqLen int, outputNames []string) (float32, error) {
 	f.batch = batch
+	f.batches = append(f.batches, batch)
 	f.batchSize = batchSize
+	f.batchSizes = append(f.batchSizes, batchSize)
 	f.seqLen = seqLen
+	f.calls++
 	if len(batch.x) != batchSize*seqLen {
 		return 0, fmt.Errorf("batch x length=%d does not match batchSize=%d seqLen=%d", len(batch.x), batchSize, seqLen)
 	}
@@ -462,10 +577,18 @@ func (f *fakeEBMEvaluator) EvaluateObjectiveGPUWithOutputs(batch objectiveBatch,
 }
 
 func (f *fakeEBMEvaluator) ReadOutput(name string, shape []int) ([]float32, error) {
+	f.readShapes = append(f.readShapes, append([]int(nil), shape...))
 	if f.outputs != nil {
 		if out, ok := f.outputs[name]; ok {
 			return append([]float32(nil), out...), nil
 		}
+	}
+	if f.logitsForBatch != nil {
+		batch := f.batch
+		if len(shape) >= 1 && shape[0] >= 0 && shape[0] < len(batch.x) {
+			batch.x = batch.x[:shape[0]]
+		}
+		return f.logitsForBatch(batch, f.calls), nil
 	}
 	return append([]float32(nil), f.output...), nil
 }
@@ -532,6 +655,63 @@ func parseTrainMinimalPairPLLConfig(t *testing.T) *ArchConfig {
 		t.Fatalf("ParseArchConfig: %v", err)
 	}
 	return cfg
+}
+
+func parseSinglePLLConfig(t *testing.T, objective string) *ArchConfig {
+	t.Helper()
+	body := `{
+		"name": "single_pll_test",
+		"model_dim": 16,
+		"vocab_size": 32,
+		"seq_len": 4,
+		"blocks": [{"type": "plain", "heads": 2, "attention_mask": "bidirectional"}],
+		"training": {
+			"objective": "` + objective + `",
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"mlm_mask_token_id": 31
+		}
+	}`
+	cfg, err := ParseArchConfig([]byte(body), "single_pll_test")
+	if err != nil {
+		t.Fatalf("ParseArchConfig single PLL: %v", err)
+	}
+	return cfg
+}
+
+func scoreEBMPLLTestLogits(seqLen, vocab int) func(objectiveBatch, int) []float32 {
+	return func(batch objectiveBatch, _ int) []float32 {
+		rows := len(batch.x) / seqLen
+		logits := make([]float32, rows*seqLen*vocab)
+		for row := 0; row < rows; row++ {
+			for pos := 0; pos < seqLen; pos++ {
+				base := (row*seqLen + pos) * vocab
+				for token := 0; token < vocab; token++ {
+					logits[base+token] = float32(pos)*0.1 + float32(token)*0.003
+				}
+			}
+		}
+		return logits
+	}
+}
+
+func scoreEBMPLLTestOracle(t *testing.T, seqLen, vocab int, tokens []int, skip map[int]bool) float64 {
+	t.Helper()
+	logitsFn := scoreEBMPLLTestLogits(seqLen, vocab)
+	positions := scoreEBMFullSeqPLLPositions(tokens, skip)
+	var total float64
+	for _, pos := range positions {
+		batch := objectiveBatch{x: make([]int, seqLen)}
+		logits := logitsFn(batch, 0)
+		start := pos * vocab
+		lp, err := targetLogProbFromLogits(logits[start:start+vocab], tokens[pos])
+		if err != nil {
+			t.Fatalf("targetLogProbFromLogits: %v", err)
+		}
+		total += lp
+	}
+	return total
 }
 
 func intSlicesEqualTrain(a, b []int) bool {

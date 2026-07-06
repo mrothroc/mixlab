@@ -185,8 +185,9 @@ normalized language-model likelihood.
 ## `score-ebm`
 
 Score already-tokenized sequences or clean/corrupt pairs with either a native
-multihead energy head or an MLM/MNTP scorer span-PLL minimal-pair configuration.
-Energy mode is lower-is-better; scorer span-PLL mode is higher-is-better.
+multihead energy head, an MLM/MNTP scorer span-PLL minimal-pair configuration,
+or native full-sequence masked PLL for MLM/MNTP scorer configs. Energy mode is
+lower-is-better; scorer PLL modes are higher-is-better.
 
 ```bash
 ./mixlab -mode score-ebm \
@@ -219,13 +220,25 @@ or `score_clean`/`score_corrupt` for `score_source: "mlm_span_pll"` configs.
 `__summary__` row with aggregate and per-family pair accuracy when pair rows
 were scored.
 
+Use `-score-pll-aggregation full_seq` to compute full-sequence masked PLL for
+MLM/MNTP scorer configs. This masks each scored token position in turn, sums
+`log softmax(logits)[gold_token]`, and ignores `span`/`clean_span`/
+`corrupt_span`. `training.mlm_mask_token_id` is always skipped. Pass tokenizer
+special IDs such as `<unk>`, BOS, EOS, and PAD through
+`-score-pll-skip-token-ids` when they should be excluded from the PLL sum.
+Full-sequence PLL also works with ordinary single-objective `mlm` or `mntp`
+configs, which is useful for native scoring of trunks that are not HF-exportable.
+
 | Flag | Description |
 |------|-------------|
-| `-config` | Required. Must be a multihead config with either an `objective: "energy"` head or `training.minimal_pair.score_source: "mlm_span_pll"`. |
+| `-config` | Required. Must be a multihead config with either an `objective: "energy"` head or `training.minimal_pair.score_source: "mlm_span_pll"`, or a single-objective `mlm`/`mntp` config for full-sequence PLL. |
 | `-safetensors-load` | Required. Checkpoint to score with. |
 | `-score-in` | Required. JSONL input with `tokens` rows or `clean`/`corrupt` pair rows. |
 | `-score-out` | Required. JSONL output path. |
 | `-score-batch` | Even sequence rows per energy forward. `0` uses a conservative default. |
+| `-score-position-batch` | Masked positions per full-sequence PLL forward. `0` auto-selects a memory-bounded value. |
+| `-score-pll-aggregation` | `config`, `differing_span`, or `full_seq`. `config` preserves current behavior: native energy uses energy scoring, multihead `mlm_span_pll` uses differing-span PLL, and single-objective `mlm`/`mntp` uses full-sequence PLL. |
+| `-score-pll-skip-token-ids` | Comma-separated token IDs to skip in full-sequence PLL, in addition to the mask token. |
 | `-score-emit-token-energy` | Include per-token energy arrays for differing-span native energy configs. Not supported for scorer span-PLL mode. |
 
 ## `hiddenstats`

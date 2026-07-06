@@ -276,7 +276,7 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		if cfg.Training.RTD != nil {
 			generatorOutputName = cfg.Training.RTD.GeneratorHead
 		}
-		if head.Name == exportHeadName || head.Name == diffusionHeadName || head.Name == generatorOutputName {
+		if head.Name == exportHeadName || head.Name == diffusionHeadName || head.Name == generatorOutputName || (minimalPairPLL && head.Name == minimalPairScoreHead) {
 			prog.ScalarMul(outputLogits, 1.0, headPrefix+"_logits")
 			outCols := V
 			outRows := rawRows

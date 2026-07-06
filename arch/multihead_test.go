@@ -450,6 +450,31 @@ func TestMultiheadMinimalPairMLMSpanPLLIR(t *testing.T) {
 			t.Fatalf("missing output %q: %+v", want, prog.Outputs)
 		}
 	}
+	nonExportScore := parseMultiheadConfig(t, `"training": {
+		"objective": "multihead",
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"mlm_mask_token_id": 31,
+		"export_head": "aux",
+		"minimal_pair": {
+			"path": "pairs.jsonl",
+			"energy_aggregation": "differing_span",
+			"score_source": "mlm_span_pll",
+			"score_head": "scorer"
+		},
+		"heads": [
+			{"name": "scorer", "objective": "mntp", "loss_weight": 0.7},
+			{"name": "aux", "objective": "causal", "loss_weight": 0.3}
+		]
+	}`)
+	nonExportProg, err := BuildTrainingIRProgramFromConfig(nonExportScore, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig non-export score head: %v", err)
+	}
+	if !programDeclaresOutputArch(nonExportProg, "head_scorer_logits") {
+		t.Fatalf("non-export score head missing logits output: %+v", nonExportProg.Outputs)
+	}
 }
 
 func TestMultiheadEnergyValidationErrors(t *testing.T) {
