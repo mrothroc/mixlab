@@ -491,6 +491,37 @@ func TestScoreEBMFullSeqPLLSingleObjective(t *testing.T) {
 	requireFloat64SliceNear(t, []float64{*out.Score}, []float64{float64(float32(want))}, 1e-6)
 }
 
+func TestScoreEBMSingleFullSeqPLLSharedDebertaSuppressesDenseEvalLoss(t *testing.T) {
+	cfg := parseSinglePLLSharedDebertaConfig(t)
+	scoreCfg := *cfg
+	scoreCfg.Training.BatchTokens = scoreCfg.SeqLen
+	prog, err := buildScoreEBMIRProgram(&scoreCfg, scoreEBMModeSinglePLL, scoreEBMPLLAggregationFullSeq)
+	if err != nil {
+		t.Fatalf("buildScoreEBMIRProgram: %v", err)
+	}
+	if got := trainPreferredEvalLossOutputName(prog); got != "loss" {
+		t.Fatalf("preferred eval loss=%q, want loss", got)
+	}
+	if trainProgramDeclaresOutput(prog, "eval_loss") {
+		t.Fatal("single full-seq PLL scoring program should not declare dense eval_loss")
+	}
+	if trainProgramProducesOutput(prog, "eval_loss") {
+		t.Fatal("single full-seq PLL scoring program should not produce dense eval_loss")
+	}
+	if !trainProgramDeclaresOutput(prog, "logits") {
+		t.Fatal("single full-seq PLL scoring program missing logits output")
+	}
+	if got := trainCountOps(prog, arch.OpDebertaRelativeBias); got != 1 {
+		t.Fatalf("DeBERTa relative-bias ops=%d, want 1", got)
+	}
+	if got := trainCountOps(prog, arch.OpMaskedCrossEntropy); got != 1 {
+		t.Fatalf("masked CE ops=%d, want 1", got)
+	}
+	if got := trainCountOps(prog, arch.OpCrossEntropy); got != 1 {
+		t.Fatalf("dense CE op should remain prunable with renamed output; got %d", got)
+	}
+}
+
 func TestScoreEBMFullSeqPLLValidation(t *testing.T) {
 	energyCfg := parseTrainMinimalPairConfig(t, `"minimal_pair": {"path": "pairs.jsonl"}`)
 	if _, err := effectiveScoreEBMPLLAggregation(energyCfg, scoreEBMPLLAggregationFullSeq); err == nil || !strings.Contains(err.Error(), "native energy") {
@@ -680,6 +711,42 @@ func parseSinglePLLConfig(t *testing.T, objective string) *ArchConfig {
 	return cfg
 }
 
+func parseSinglePLLSharedDebertaConfig(t *testing.T) *ArchConfig {
+	t.Helper()
+	body := `{
+		"name": "single_pll_shared_deberta_test",
+		"model_dim": 16,
+		"vocab_size": 32,
+		"seq_len": 4,
+		"tie_embeddings": true,
+		"blocks": [{
+			"type": "plain",
+			"heads": 2,
+			"attention_mask": "bidirectional",
+			"relative_attention": "deberta_p2c_c2p",
+			"relative_attention_window": 3,
+			"relative_attention_parameterization": "shared_qk_reuse",
+			"ffn_activation": "geglu",
+			"attn_bias": true,
+			"attn_value_gate": true
+		}],
+		"training": {
+			"objective": "mntp",
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"mlm_mask_token_id": 31,
+			"mlm_head": "bert",
+			"z_loss": 0.1
+		}
+	}`
+	cfg, err := ParseArchConfig([]byte(body), "single_pll_shared_deberta_test")
+	if err != nil {
+		t.Fatalf("ParseArchConfig single PLL shared DeBERTa: %v", err)
+	}
+	return cfg
+}
+
 func scoreEBMPLLTestLogits(seqLen, vocab int) func(objectiveBatch, int) []float32 {
 	return func(batch objectiveBatch, _ int) []float32 {
 		rows := len(batch.x) / seqLen
@@ -712,6 +779,52 @@ func scoreEBMPLLTestOracle(t *testing.T, seqLen, vocab int, tokens []int, skip m
 		total += lp
 	}
 	return total
+}
+
+func trainProgramDeclaresOutput(prog *arch.Program, name string) bool {
+	if prog == nil {
+		return false
+	}
+	for _, out := range prog.Outputs {
+		if out.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func trainProgramProducesOutput(prog *arch.Program, name string) bool {
+	if prog == nil {
+		return false
+	}
+	for _, op := range prog.Ops {
+		for _, out := range op.Outputs {
+			if out == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func trainPreferredEvalLossOutputName(prog *arch.Program) string {
+	if trainProgramDeclaresOutput(prog, "eval_loss") {
+		return "eval_loss"
+	}
+	return "loss"
+}
+
+func trainCountOps(prog *arch.Program, code int) int {
+	if prog == nil {
+		return 0
+	}
+	n := 0
+	for _, op := range prog.Ops {
+		if op.Code == code {
+			n++
+		}
+	}
+	return n
 }
 
 func intSlicesEqualTrain(a, b []int) bool {

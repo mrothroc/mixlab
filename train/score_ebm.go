@@ -393,10 +393,43 @@ func buildScoreEBMIRProgram(cfg *ArchConfig, scoreMode, pllAggregation string) (
 		Objective:              objective,
 		ExampleFramingInactive: true,
 	}
+	var (
+		prog *arch.Program
+		err  error
+	)
 	if len(cfg.RecurrencePhases) > 0 && scoreMode == scoreEBMModeSinglePLL {
-		return arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, len(cfg.RecurrencePhases)-1, state)
+		prog, err = arch.BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg, len(cfg.RecurrencePhases)-1, state)
+	} else {
+		prog, err = BuildTrainingIRProgramFromConfig(cfg, state)
 	}
-	return BuildTrainingIRProgramFromConfig(cfg, state)
+	if err != nil {
+		return nil, err
+	}
+	if scoreMode == scoreEBMModeSinglePLL {
+		suppressDenseEvalLossForScoreEBMFullSeqPLL(prog)
+	}
+	return prog, nil
+}
+
+func suppressDenseEvalLossForScoreEBMFullSeqPLL(prog *arch.Program) {
+	if prog == nil {
+		return
+	}
+	const unusedEvalLoss = "score_ebm_full_seq_unused_eval_loss"
+	for i := range prog.Ops {
+		for j, out := range prog.Ops[i].Outputs {
+			if out == "eval_loss" {
+				prog.Ops[i].Outputs[j] = unusedEvalLoss
+			}
+		}
+	}
+	outputs := prog.Outputs[:0]
+	for _, out := range prog.Outputs {
+		if out.Name != "eval_loss" {
+			outputs = append(outputs, out)
+		}
+	}
+	prog.Outputs = outputs
 }
 
 func scoreEBMUsesDifferingSpan(cfg *ArchConfig) bool {
