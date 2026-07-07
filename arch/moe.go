@@ -144,7 +144,7 @@ func moeWeightShapesWithOptions(spec BlockSpec, D int, mlpMult float64, blockSca
 		}
 	}
 	if blockScales {
-		metas = append(metas, WeightMeta{Name: "moe_scale", Shape: []int{D}, InitOne: true})
+		metas = append(metas, residualScaleWeightMeta(spec, "moe_scale", D))
 	}
 	return metas, nil
 }

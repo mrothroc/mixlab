@@ -51,9 +51,9 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 | `norm_affine` | boolean | No | `true` | Whether LayerNorm uses learned scale/bias. `false` is supported for `norm_type: "layernorm"`; RMSNorm remains affine-only. |
 | `norm_placement` | string | No | `"pre"` | Supported values are `"pre"`, `"post"`, and `"sandwich"`. `"post"` normalizes each sublayer delta before residual add; `"sandwich"` uses both pre-input and post-delta norms. V1 supports non-default placement on sequential `plain`, `swiglu`, `geglu`, and `mlp` blocks. |
 | `ffn_internal_norm` | boolean | No | `false` | Adds an internal norm to supported FFN paths before the down projection: after the activation/product in `swiglu`/`geglu`, after activation in `mlp`, and after the `plain` FFN tail activation. |
-| `block_scales` | boolean | No | `false` | Adds learned per-channel scales to `plain` attention and MLP residual branches, plus the MLP branch in `swiglu`, `geglu`, and `moe`. |
+| `block_scales` | boolean | No | `false` | Adds learned per-channel scales to supported residual branches. `plain`, `swiglu`, `geglu`, and `moe` use them by default when enabled; recurrent branches can use them when `residual_scale_init` is set. |
 | `resid_mix` | boolean | No | `false` | Adds learned mixing of the current state and original input on `plain` blocks. |
-| `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu/geglu/moe)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Cannot be combined with `unet`. |
+| `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu/geglu/moe)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Use block-level `parallel_group` for heterogeneous groups of 2+ branches. Cannot be combined with `unet`. |
 | `unet` | boolean | No | `false` | Splits the `blocks` list into encoder/decoder halves with learned skip connections. |
 | `mtp` | object | No | Disabled | Enables parameter-free multi-token prediction during training. See [MTP section](#multi-token-prediction-mtp). |
 | `backout` | object | No | Disabled | Enables final-latent residual subtraction before the final model norm. See [Backout section](#backout). |
@@ -283,8 +283,10 @@ The `plain` block's relative-attention operator matches the DeBERTa/GPT-BERT C2P
 - `xsa` — eXplicit Subspace Attention: after computing `y = softmax(QK^T)V`, projects `y` orthogonal to `V` at each position. Forces attention to contribute information that V doesn't already provide. Zero additional parameters. Compatible with GQA.
 - `attention_mask` — `"causal"`, `"bidirectional"`, or `"none"`. Omit to resolve from `training.objective`: causal objectives use `"causal"` and current masked objective graphs use `"bidirectional"`. For `training.objective: "hybrid"`, Mixlab ignores block-level `attention_mask` during training and chooses the mask from the concrete per-batch objective: causal batches use `"causal"` and MLM/MNTP batches use `"bidirectional"`. For `training.objective: "block_diffusion"`, `plain` attention uses a prefix-plus-block mask (committed prefix attends causally, the active block attends bidirectionally within itself and over the prefix) and `window_size` is rejected rather than approximating that rule. `"bidirectional"` and `"none"` both use dense softmax with no triangular mask.
 - `window_size` — sliding causal attention width. `0` means full causal attention. Valid only when the resolved `attention_mask` is `"causal"`.
-- `kv_source` — reuse K/V projections from an earlier block (1-indexed). Saves 2 weight matrices per shared block. Source must be an earlier `plain` block with matching `heads` and `kv_heads`. Not supported with `parallel_residual`.
-- `parallel_residual` — when `true`, fuses this block with the immediately following `swiglu` block into a parallel residual pair. See [`parallel_residual`](#parallel_residual) for the full description.
+- `kv_source` — reuse K/V projections from an earlier block (1-indexed). Saves 2 weight matrices per shared block. Source must be an earlier `plain` block with matching `heads` and `kv_heads`. Not supported with `parallel_residual` or `parallel_group`.
+- `parallel_residual` — when `true`, fuses this block with the immediately following FFN block into a legacy parallel residual pair. See [`parallel_residual`](#parallel_residual).
+- `parallel_group` — when set on the first block, runs that many contiguous blocks as a shared-input parallel group. V1 supports `plain`, `gated_deltanet`, and `hgrn2` token mixers plus an optional final `swiglu`, `geglu`, or `moe` FFN branch.
+- `residual_scale_init` — explicit init for this block's residual scale tensor(s), such as `0.0` for a zero-gated branch. Requires top-level `block_scales: true`.
 
 Example:
 
@@ -1289,6 +1291,7 @@ Effect:
 
 - `plain` gains `attn_scale` and `mlp_scale`.
 - `swiglu` gains `mlp_scale`.
+- `residual_scale_init` can override a block's scale initialization. In parallel groups, setting a recurrent branch to `0.0` starts that branch as an additive no-op while keeping it trainable.
 
 ### `resid_mix`
 
@@ -1357,6 +1360,27 @@ Effect:
 - `kv_source` is not supported on a paired `plain` block.
 - Cannot be combined with `unet`.
 - **Weight sharing:** when using `recurrence` (or `weight_group`) to share weights between blocks, paired and unpaired FFN blocks cannot share weights with each other — they have different shapes (paired blocks lack their own norm scale). Use distinct group names for paired vs. unpaired roles.
+
+**Explicit heterogeneous groups.** Set `parallel_group` on the first block to run two or more contiguous branches from the same pre-norm input. This is useful for attention plus recurrent/SSM side branches:
+
+```json
+{
+  "block_scales": true,
+  "blocks": [
+    {"type": "plain", "heads": 8, "attention_mask": "bidirectional", "parallel_group": 3},
+    {"type": "hgrn2", "heads": 8, "residual_scale_init": 0.0},
+    {"type": "geglu"}
+  ]
+}
+```
+
+V1 group rules:
+
+- `parallel_group` must be set only on the first block and must be at least `2`.
+- Supported token-mixer branches are `plain`, `gated_deltanet`, and `hgrn2`; at least two token mixers are required.
+- A single optional FFN branch (`swiglu`, `geglu`, or `moe`) may appear only as the final group member.
+- All followers share the first block's pre-norm and omit their own leading norm weight.
+- `plain.kv_source`, top-level `parallel_residual: true`, U-Net, data2vec, and DWA are rejected with explicit errors in v1.
 
 ### `tie_embeddings`
 

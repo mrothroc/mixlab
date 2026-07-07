@@ -161,7 +161,11 @@ func validateTrainingData2Vec(cfg *ArchConfig, source string) error {
 	if cfg.UNet {
 		return fmt.Errorf("config %q cannot combine training.data2vec with unet in v1", source)
 	}
-	if cfg.ParallelResidual {
+	plan, err := newParallelResidualPlan(cfg.Blocks, cfg.ParallelResidual)
+	if err != nil {
+		return err
+	}
+	if cfg.ParallelResidual || plan.any {
 		return fmt.Errorf("config %q cannot combine training.data2vec with parallel_residual in v1", source)
 	}
 	return nil

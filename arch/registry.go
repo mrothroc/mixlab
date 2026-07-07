@@ -160,23 +160,32 @@ func init() {
 		},
 	})
 	RegisterBlock("gated_deltanet", blockRegistration{
-		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, _ EmitOptions) (int, error) {
-			return emitGatedDeltaNetIR(prog, spec, stream, wi, D, T, B, idx)
+		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
+			return emitGatedDeltaNetIRWithScales(prog, spec, stream, wi, T, B, idx, opts.BlockScales)
 		},
 		WeightCount:  gatedDeltaNetWeightCount,
 		WeightShapes: gatedDeltaNetWeightShapes,
-		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, _ EmitOptions) ([]WeightMeta, error) {
-			return gatedDeltaNetWeightShapes(spec, D, T, B, V)
+		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
+			return gatedDeltaNetWeightShapesWithOptions(spec, D, opts.BlockScales)
 		},
 	})
 	RegisterBlock("hgrn2", blockRegistration{
-		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, _ EmitOptions) (int, error) {
-			return emitHGRN2IR(prog, spec, stream, wi, D, T, B, idx)
+		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
+			prefix := tmpName(stream+"_hgrn2", idx)
+			xNorm := prefix + "_x_norm"
+			prog.RMSNorm(stream, weightName(wi), xNorm, 1e-5)
+			wi++
+			out, nextWI, err := emitHGRN2DeltaIR(prog, spec, xNorm, wi, D, T, B, prefix, opts.BlockScales)
+			if err != nil {
+				return wi, err
+			}
+			prog.Add(stream, out, stream)
+			return nextWI, nil
 		},
 		WeightCount:  hgrn2WeightCount,
 		WeightShapes: hgrn2WeightShapes,
-		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, _ EmitOptions) ([]WeightMeta, error) {
-			return hgrn2WeightShapes(spec, D, T, B, V)
+		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
+			return hgrn2WeightShapesWithOptions(spec, D, opts.BlockScales)
 		},
 	})
 	RegisterBlock("mlstm", blockRegistration{

@@ -52,6 +52,9 @@ func validateLayerAggregation(cfg *ArchConfig, source string) error {
 		return fmt.Errorf("config %q layer_aggregation=\"dwa\" is not supported with recurrence or custom execution order in v1", source)
 	}
 	for i, block := range cfg.Blocks {
+		if block.ParallelGroup > 0 {
+			return fmt.Errorf("config %q layer_aggregation=\"dwa\" is not supported with blocks[%d].parallel_group", source, i)
+		}
 		if block.ParallelResidual != nil && *block.ParallelResidual {
 			return fmt.Errorf("config %q layer_aggregation=\"dwa\" is not supported with blocks[%d].parallel_residual", source, i)
 		}
@@ -90,8 +93,19 @@ func layerAggregationWeightShapes(blocks []BlockSpec, mode string) ([]WeightMeta
 }
 
 func dwaSublayerCount(blocks []BlockSpec) (int, error) {
+	plan, err := newParallelResidualPlan(blocks, false)
+	if err != nil {
+		return 0, err
+	}
 	total := 0
-	for i, block := range blocks {
+	for i := 0; i < len(blocks); {
+		if plan.startsAt(i) {
+			groupLen := plan.groupLenAt(i)
+			total += groupLen
+			i += groupLen
+			continue
+		}
+		block := blocks[i]
 		switch blockTypeKey(block) {
 		case "plain":
 			total += 2
@@ -100,6 +114,7 @@ func dwaSublayerCount(blocks []BlockSpec) (int, error) {
 		default:
 			return 0, fmt.Errorf("layer_aggregation=\"dwa\" does not support blocks[%d].type=%q", i, block.Type)
 		}
+		i++
 	}
 	return total, nil
 }

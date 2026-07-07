@@ -72,6 +72,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [data2vec_hybrid_tiny.json](data2vec_hybrid_tiny.json) | EMA representation distillation | Hybrid masked training with data2vec auxiliary loss |
 | [swa_ema_tiny.json](swa_ema_tiny.json) | SWA/EMA averaging | Final and averaged checkpoint artifacts |
 | [deberta_relative_tiny.json](deberta_relative_tiny.json) | Relative attention transformer | DeBERTa P2C/C2P relative position bias |
+| [parallel_hybrid_branches_tiny.json](parallel_hybrid_branches_tiny.json) | Parallel attention + HGRN2 | Heterogeneous parallel group with a zero-initialized recurrent branch |
 | [lamb_plain_tiny.json](lamb_plain_tiny.json) | LAMB optimizer | Whole-model LAMB optimizer on a tiny transformer |
 | [moe_tiny.json](moe_tiny.json) | Sparse MoE transformer | Top-k routed SwiGLU feed-forward experts |
 | [mamba_2L.json](mamba_2L.json) | Mamba SSM | Gated recurrence, no attention |
@@ -97,6 +98,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **EMA representation distillation**: Use `data2vec_hybrid_tiny.json` for experimental online data2vec-style hidden-state targets on masked objective steps. The current implementation prioritizes correctness and uses CPU EMA weight refreshes.
 - **Averaged checkpoints**: Use `swa_ema_tiny.json` to keep both live final and SWA/EMA averaged weights.
 - **Relative attention**: Use `deberta_relative_tiny.json` for DeBERTa-style P2C/C2P position bias. Add `relative_attention_parameterization: "shared_qk_reuse"` when you want GPT-BERT-style shared relative embeddings instead of per-block position projection weights.
+- **Parallel hybrid branches**: Use `parallel_hybrid_branches_tiny.json` when you want bidirectional attention and a recurrent side branch to read the same input and add their outputs together. The recurrent branch starts zero-gated with `residual_scale_init: 0.0`.
 - **GPT-2-compatible baseline**: Use `gpt2_strict_small_2026.json` when you need a strict GPT-2-style architecture and native `GPT2LMHeadModel` export instead of Mixlab custom-code export.
 - **Character/byte features**: Use `char_features_plain.json` with data prepared using `-char-vocab-size 257`.
 - **Packed document boundaries**: Use `packed_segment_mask_tiny.json` when your packed shards already contain a boundary token and you want block-diagonal attention inside each packed sequence.

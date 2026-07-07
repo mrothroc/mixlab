@@ -484,11 +484,54 @@ func TestScoreEBMFullSeqPLLSingleObjective(t *testing.T) {
 	if !reflect.DeepEqual(eval.batch.x, []int{1, 31, 31, 4, 1, 2, 31, 31}) {
 		t.Fatalf("single full-seq rows=%v", eval.batch.x)
 	}
+	if !reflect.DeepEqual(eval.batch.diffusionBlockStart, []int32{0, 0}) ||
+		!reflect.DeepEqual(eval.batch.diffusionBlockEnd, []int32{int32(cfg.SeqLen), int32(cfg.SeqLen)}) {
+		t.Fatalf("single full-seq boundaries=%v/%v, want full-sequence rows", eval.batch.diffusionBlockStart, eval.batch.diffusionBlockEnd)
+	}
 	if out.Score == nil {
 		t.Fatalf("missing sequence score: %+v", out)
 	}
 	want := scoreEBMPLLTestOracle(t, cfg.SeqLen, cfg.VocabSize, []int{1, 2, 31, 4}, map[int]bool{1: true, 31: true})
 	requireFloat64SliceNear(t, []float64{*out.Score}, []float64{float64(float32(want))}, 1e-6)
+}
+
+func TestScoreEBMFullSeqPLLSingleParallelGroupBuilds(t *testing.T) {
+	body := `{
+		"name": "single_pll_parallel_group",
+		"model_dim": 16,
+		"vocab_size": 32,
+		"seq_len": 4,
+		"block_scales": true,
+		"blocks": [
+			{"type": "plain", "heads": 2, "attention_mask": "bidirectional", "parallel_group": 3},
+			{"type": "hgrn2", "heads": 2, "residual_scale_init": 0.0},
+			{"type": "geglu"}
+		],
+		"training": {
+			"objective": "mntp",
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"mlm_mask_token_id": 31
+		}
+	}`
+	cfg, err := ParseArchConfig([]byte(body), "single_pll_parallel_group")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if err := validateScoreEBMConfig(cfg); err != nil {
+		t.Fatalf("validateScoreEBMConfig: %v", err)
+	}
+	prog, err := buildScoreEBMIRProgram(cfg, scoreEBMModeSinglePLL, scoreEBMPLLAggregationFullSeq)
+	if err != nil {
+		t.Fatalf("buildScoreEBMIRProgram: %v", err)
+	}
+	if got := countProgramOps(prog, arch.OpHGRN2Scan); got != 1 {
+		t.Fatalf("HGRN2Scan ops=%d want 1", got)
+	}
+	if !trainProgramDeclaresOutput(prog, "logits") {
+		t.Fatal("single full-seq PLL scoring program missing logits output")
+	}
 }
 
 func TestScoreEBMSingleFullSeqPLLSharedDebertaSuppressesDenseEvalLoss(t *testing.T) {
@@ -508,17 +551,45 @@ func TestScoreEBMSingleFullSeqPLLSharedDebertaSuppressesDenseEvalLoss(t *testing
 	if trainProgramProducesOutput(prog, "eval_loss") {
 		t.Fatal("single full-seq PLL scoring program should not produce dense eval_loss")
 	}
+	for _, name := range []string{"diffusion_block_start", "diffusion_block_end"} {
+		if !trainProgramDeclaresInput(prog, name) {
+			t.Fatalf("single full-seq PLL scoring program missing input %q", name)
+		}
+	}
 	if !trainProgramDeclaresOutput(prog, "logits") {
 		t.Fatal("single full-seq PLL scoring program missing logits output")
 	}
 	if got := trainCountOps(prog, arch.OpDebertaRelativeBias); got != 1 {
 		t.Fatalf("DeBERTa relative-bias ops=%d, want 1", got)
 	}
+	if got := trainCountOps(prog, arch.OpBlockDiffusionMask); got != 1 {
+		t.Fatalf("block-diffusion mask ops=%d, want 1", got)
+	}
 	if got := trainCountOps(prog, arch.OpMaskedCrossEntropy); got != 1 {
 		t.Fatalf("masked CE ops=%d, want 1", got)
 	}
 	if got := trainCountOps(prog, arch.OpCrossEntropy); got != 1 {
 		t.Fatalf("dense CE op should remain prunable with renamed output; got %d", got)
+	}
+}
+
+func TestScoreEBMSingleFullSeqPLLExplicitCausalKeepsCausalGraph(t *testing.T) {
+	cfg := parseSinglePLLConfig(t, arch.ObjectiveMNTP)
+	cfg.Blocks[0].AttentionMask = arch.AttentionMaskCausal
+	scoreCfg := *cfg
+	scoreCfg.Training.BatchTokens = scoreCfg.SeqLen
+	prog, err := buildScoreEBMIRProgram(&scoreCfg, scoreEBMModeSinglePLL, scoreEBMPLLAggregationFullSeq)
+	if err != nil {
+		t.Fatalf("buildScoreEBMIRProgram: %v", err)
+	}
+	if trainProgramDeclaresInput(prog, "diffusion_block_start") || trainProgramDeclaresInput(prog, "diffusion_block_end") {
+		t.Fatal("explicit causal single full-seq PLL graph should not declare block-diffusion boundaries")
+	}
+	if got := trainCountOps(prog, arch.OpBlockDiffusionMask); got != 0 {
+		t.Fatalf("block-diffusion mask ops=%d, want 0", got)
+	}
+	if got := trainCountOps(prog, arch.OpCausalMask); got != 1 {
+		t.Fatalf("causal mask ops=%d, want 1", got)
 	}
 }
 
@@ -781,6 +852,18 @@ func scoreEBMPLLTestOracle(t *testing.T, seqLen, vocab int, tokens []int, skip m
 	return total
 }
 
+func trainProgramDeclaresInput(prog *arch.Program, name string) bool {
+	if prog == nil {
+		return false
+	}
+	for _, in := range prog.Inputs {
+		if in.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 func trainProgramDeclaresOutput(prog *arch.Program, name string) bool {
 	if prog == nil {
 		return false
@@ -791,6 +874,19 @@ func trainProgramDeclaresOutput(prog *arch.Program, name string) bool {
 		}
 	}
 	return false
+}
+
+func countProgramOps(prog *arch.Program, code int) int {
+	if prog == nil {
+		return 0
+	}
+	count := 0
+	for _, op := range prog.Ops {
+		if op.Code == code {
+			count++
+		}
+	}
+	return count
 }
 
 func trainProgramProducesOutput(prog *arch.Program, name string) bool {

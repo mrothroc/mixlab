@@ -10,7 +10,7 @@ schemas.
 |------|---------|
 | `recurrence` | Share weights across block positions. |
 | `recurrence_phases` | Change the block execution schedule over training phases. |
-| `parallel_residual` | Run supported mixer+FFN pairs in parallel. |
+| `parallel_residual` / `parallel_group` | Run supported mixer+FFN pairs or heterogeneous attention+recurrent groups in parallel. |
 | `unet` | Encoder/decoder split with learned skip connections. |
 | `layer_aggregation: "dwa"` | Dense weighted aggregation over prior sublayer outputs. |
 | `backout` | Final latent residual subtraction before final norm. |

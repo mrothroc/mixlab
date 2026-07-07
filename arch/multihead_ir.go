@@ -122,29 +122,48 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	}
 	kvCache := make(map[int]BlockKVOutputs, len(blocks))
 	opIdx := 0
-	for i, spec := range blocks {
-		if needsResidMix(spec, cfg.ResidMix) {
-			wi = applyResidMixIR(prog, "x", "x0", wi, D, opIdx)
+	parallelPlan, err := newParallelResidualPlan(blocks, false)
+	if err != nil {
+		return nil, err
+	}
+	if parallelPlan.any {
+		if adaLN != nil {
+			return nil, fmt.Errorf("multihead parallel_group does not support diffusion AdaLN in v1")
 		}
-		wi, err = EmitBlock(prog, spec, "x", wi, D, T, B, V, opIdx, EmitOptions{
-			MLPMult:             cfg.EffectiveMLPMult(),
-			BlockScales:         cfg.BlockScales,
-			Dropout:             hiddenDropout,
-			AttnDropout:         attnDropout,
-			Norm:                cfg.EffectiveNormSpec(),
-			NormPlacement:       cfg.EffectiveNormPlacement(),
-			FFNInternalNorm:     cfg.FFNInternalNorm,
-			PositionalEmbedding: positionalEmbedding,
-			BlockIndex:          i,
-			KVCache:             kvCache,
-			sharedRelative:      sharedRel,
-			layerAgg:            captureAgg,
-			adaLN:               adaLN,
-		})
+		refs := identityWeightRefs(blocks)
+		weightStarts := make([]int, len(blocks))
+		for i := range weightStarts {
+			weightStarts[i] = -1
+		}
+		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, cfg.EffectiveMLPMult(), cfg.BlockScales, cfg.ResidMix, false, hiddenDropout, attnDropout, nil, cfg.EffectiveNormSpec(), cfg.EffectiveNormPlacement(), cfg.FFNInternalNorm, positionalEmbedding, sharedRel, captureAgg, false)
 		if err != nil {
 			return nil, err
 		}
-		opIdx++
+	} else {
+		for i, spec := range blocks {
+			if needsResidMix(spec, cfg.ResidMix) {
+				wi = applyResidMixIR(prog, "x", "x0", wi, D, opIdx)
+			}
+			wi, err = EmitBlock(prog, spec, "x", wi, D, T, B, V, opIdx, EmitOptions{
+				MLPMult:             cfg.EffectiveMLPMult(),
+				BlockScales:         cfg.BlockScales,
+				Dropout:             hiddenDropout,
+				AttnDropout:         attnDropout,
+				Norm:                cfg.EffectiveNormSpec(),
+				NormPlacement:       cfg.EffectiveNormPlacement(),
+				FFNInternalNorm:     cfg.FFNInternalNorm,
+				PositionalEmbedding: positionalEmbedding,
+				BlockIndex:          i,
+				KVCache:             kvCache,
+				sharedRelative:      sharedRel,
+				layerAgg:            captureAgg,
+				adaLN:               adaLN,
+			})
+			if err != nil {
+				return nil, err
+			}
+			opIdx++
+		}
 	}
 	if wi != blockWeightStart+len(blockShapes) {
 		return nil, fmt.Errorf("multihead trunk weight count mismatch: emitted=%d expected=%d", wi-blockWeightStart, len(blockShapes))

@@ -381,6 +381,9 @@ func buildScoreEBMIRProgram(cfg *ArchConfig, scoreMode, pllAggregation string) (
 	objective := arch.ObjectiveMultihead
 	if scoreMode == scoreEBMModeSinglePLL {
 		objective = cfg.Training.EffectiveObjective()
+		if scoreEBMSinglePLLCanUseFullBlockMask(cfg) {
+			objective = arch.ObjectiveBlockDiffusion
+		}
 	}
 	state := TrainingProgramState{
 		RecurrenceActive:       true,
@@ -409,6 +412,26 @@ func buildScoreEBMIRProgram(cfg *ArchConfig, scoreMode, pllAggregation string) (
 		suppressDenseEvalLossForScoreEBMFullSeqPLL(prog)
 	}
 	return prog, nil
+}
+
+func scoreEBMSinglePLLCanUseFullBlockMask(cfg *ArchConfig) bool {
+	if cfg == nil {
+		return false
+	}
+	hasPlain := false
+	for _, block := range cfg.Blocks {
+		if !strings.EqualFold(strings.TrimSpace(block.Type), "plain") {
+			continue
+		}
+		hasPlain = true
+		mask := strings.ToLower(strings.TrimSpace(block.AttentionMask))
+		switch mask {
+		case "", arch.AttentionMaskBidirectional, arch.AttentionMaskNone, arch.AttentionMaskBlockDiffusion:
+		default:
+			return false
+		}
+	}
+	return hasPlain
 }
 
 func suppressDenseEvalLossForScoreEBMFullSeqPLL(prog *arch.Program) {

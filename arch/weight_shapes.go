@@ -47,6 +47,24 @@ func defaultMamba3CanonicalRank(inner int) int {
 	return r
 }
 
+func residualScaleWeightMeta(spec BlockSpec, name string, dim int) WeightMeta {
+	meta := WeightMeta{Name: name, Shape: []int{dim}, InitOne: true}
+	if spec.ResidualScaleInit == nil {
+		return meta
+	}
+	meta.InitOne = false
+	if *spec.ResidualScaleInit == 0 {
+		meta.InitZero = true
+		return meta
+	}
+	meta.InitValue = float32(*spec.ResidualScaleInit)
+	return meta
+}
+
+func residualScaleRequested(spec BlockSpec, blockScales bool) bool {
+	return blockScales && spec.ResidualScaleInit != nil
+}
+
 // blockWeightShapes returns the WeightMeta for a single block given model
 // dimensions. This is the single source of truth for weight names, shapes, and
 // initialization hints. The emitXxxIR functions consume weights in the same
@@ -173,7 +191,7 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			metas = append(metas, normWeights("post_attn_norm", D, norm)...)
 		}
 		if blockScales {
-			metas = append(metas, WeightMeta{Name: "attn_scale", Shape: []int{D}, InitOne: true})
+			metas = append(metas, residualScaleWeightMeta(spec, "attn_scale", D))
 		}
 		if placement == NormPlacementSandwich || spec.FFNPreNorm {
 			metas = append(metas, normWeights("ffn_norm", D, norm)...)
@@ -196,7 +214,7 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			metas = append(metas, normWeights("post_ffn_norm", D, norm)...)
 		}
 		if blockScales {
-			metas = append(metas, WeightMeta{Name: "mlp_scale", Shape: []int{D}, InitOne: true})
+			metas = append(metas, residualScaleWeightMeta(spec, "mlp_scale", D))
 		}
 		if residMix {
 			metas = append([]WeightMeta{{Name: "resid_mix", Shape: []int{2, D}}}, metas...)
@@ -221,7 +239,7 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			metas = append(metas, normWeights("post_ffn_norm", D, norm)...)
 		}
 		if blockScales {
-			metas = append(metas, WeightMeta{Name: "mlp_scale", Shape: []int{D}, InitOne: true})
+			metas = append(metas, residualScaleWeightMeta(spec, "mlp_scale", D))
 		}
 		return metas, nil
 
@@ -443,11 +461,57 @@ func parallelBlockWeightShapes(spec BlockSpec, pairedSecond bool, D, T, B, V int
 	if err != nil {
 		return nil, err
 	}
-	if pairedSecond && isParallelResidualFFNSecond(spec) {
-		if len(metas) == 0 || (metas[0].Name != "ffn_norm_scale" && metas[0].Name != "moe_norm_scale") {
+	if pairedSecond {
+		metas, err = stripParallelFollowerWeights(spec, metas, residMix)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return metas, nil
+}
+
+func stripParallelFollowerWeights(spec BlockSpec, metas []WeightMeta, residMix bool) ([]WeightMeta, error) {
+	if len(metas) == 0 {
+		return nil, fmt.Errorf("parallel_residual follower block has empty weight layout")
+	}
+	if needsResidMix(spec, residMix) {
+		if metas[0].Name != "resid_mix" {
+			return nil, fmt.Errorf("parallel_residual plain follower has unexpected resid_mix layout")
+		}
+		metas = metas[1:]
+	}
+	if len(metas) == 0 {
+		return nil, fmt.Errorf("parallel_residual follower block has empty weight layout after resid_mix")
+	}
+	switch blockTypeKey(spec) {
+	case "plain":
+		if metas[0].Name != "norm" && metas[0].Name != "norm_scale" {
+			return nil, fmt.Errorf("parallel_residual plain follower has unexpected norm layout")
+		}
+		metas = metas[1:]
+		if len(metas) > 0 && metas[0].Name == "norm_bias" {
+			metas = metas[1:]
+		}
+	case "gated_deltanet", "hgrn2":
+		if metas[0].Name != "norm_scale" {
+			return nil, fmt.Errorf("parallel_residual recurrent follower has unexpected norm layout")
+		}
+		metas = metas[1:]
+	case "swiglu", "geglu":
+		if metas[0].Name != "ffn_norm_scale" && metas[0].Name != "ffn_norm" {
 			return nil, fmt.Errorf("parallel_residual FFN block has unexpected weight layout")
 		}
 		metas = metas[1:]
+		if len(metas) > 0 && metas[0].Name == "ffn_norm_bias" {
+			metas = metas[1:]
+		}
+	case "moe":
+		if metas[0].Name != "moe_norm_scale" {
+			return nil, fmt.Errorf("parallel_residual FFN block has unexpected weight layout")
+		}
+		metas = metas[1:]
+	default:
+		return nil, fmt.Errorf("parallel_residual follower block type %q is unsupported", spec.Type)
 	}
 	return metas, nil
 }

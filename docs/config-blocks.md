@@ -44,11 +44,29 @@ normally paired with FFN/channel mixers such as `swiglu`, `geglu`, `mlp`, or
 | Position handling | `rope_dims`, `rope_convention`, `relative_attention`, `relative_attention_window`, `relative_attention_parameterization` |
 | Projection extras | `attn_bias`, `attn_value_gate`, `qk_norm`, `qk_gain`, `xsa`, `sparse_attn_gate` |
 | FFN tail | `ffn_activation`, `ffn_pre_norm`, `ffn_bias` |
-| Composition | `kv_source`, `skip_attention`, `parallel_residual`, `weight_group` |
+| Composition | `kv_source`, `skip_attention`, `parallel_residual`, `parallel_group`, `residual_scale_init`, `weight_group` |
 
 For strict GPT-2-compatible blocks, use learned absolute positions, affine
 LayerNorm, tied embeddings, `attn_bias: true`, `ffn_pre_norm: true`,
 `ffn_bias: true`, and `ffn_activation: "gelu_new"` or `"gelu"`.
+
+## Parallel Hybrid Branches
+
+Use `parallel_group` on the first block when attention and recurrent/SSM
+branches should read the same pre-norm input and contribute additively:
+
+```json
+[
+  {"type": "plain", "heads": 8, "attention_mask": "bidirectional", "parallel_group": 3},
+  {"type": "hgrn2", "heads": 8, "residual_scale_init": 0.0},
+  {"type": "geglu"}
+]
+```
+
+`residual_scale_init: 0.0` requires `block_scales: true` and starts that
+branch as an additive no-op. V1 supports `plain`, `gated_deltanet`, and
+`hgrn2` token-mixer branches plus an optional final `swiglu`, `geglu`, or
+`moe` FFN branch.
 
 ## Custom Blocks
 

@@ -1,0 +1,28 @@
+{
+  "name": "parallel_hybrid_branches_tiny",
+  "model_dim": 64,
+  "vocab_size": 512,
+  "seq_len": 32,
+  "tie_embeddings": true,
+  "block_scales": true,
+  "mlp_mult": 2.0,
+
+  "blocks": [
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional", "parallel_group": 3},
+    {"type": "hgrn2", "heads": 4, "residual_scale_init": 0.0},
+    {"type": "geglu"},
+
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional", "parallel_group": 3},
+    {"type": "hgrn2", "heads": 4, "residual_scale_init": 0.0},
+    {"type": "geglu"}
+  ],
+
+  "training": {
+    "objective": "mntp",
+    "steps": 200,
+    "lr": 0.001,
+    "batch_tokens": 256,
+    "mlm_mask_token_id": 1,
+    "seed": 42
+  }
+}

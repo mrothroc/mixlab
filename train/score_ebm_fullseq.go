@@ -145,8 +145,20 @@ func fullSeqPLLSingleScoringBatch(cfg *ArchConfig, tokens []int, positions []int
 	y := make([]int, need)
 	lossMask := make([]float32, need)
 	unmasked := make([]int, need)
+	starts := make([]int32, batchSize)
+	ends := make([]int32, batchSize)
+	for i := range ends {
+		ends[i] = int32(cfg.SeqLen)
+	}
 	fillMaskedPLLRows(cfg, x, y, unmasked, lossMask, tokens, positions, batchSize, cfg.Training.MLMMaskTokenID)
-	return objectiveBatch{x: x, y: y, lossMask: lossMask, unmaskedX: unmasked}, nil
+	return objectiveBatch{
+		x:                   x,
+		y:                   y,
+		lossMask:            lossMask,
+		unmaskedX:           unmasked,
+		diffusionBlockStart: starts,
+		diffusionBlockEnd:   ends,
+	}, nil
 }
 
 func fullSeqPLLMultiheadScoringBatch(cfg *ArchConfig, tokens []int, positions []int, rawBatchSize int) (objectiveBatch, error) {

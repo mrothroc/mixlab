@@ -309,6 +309,13 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 	if !t.mlmMaskTokenIDSet || t.MLMMaskTokenID < 0 || t.MLMMaskTokenID >= cfg.VocabSize {
 		return fmt.Errorf("config %q training.mlm_mask_token_id is required and must be in [0,%d) for multihead masked/diffusion heads", source, cfg.VocabSize)
 	}
+	parallelPlan, err := newParallelResidualPlan(cfg.Blocks, false)
+	if err != nil {
+		return err
+	}
+	if parallelPlan.any && usesAdaLN {
+		return fmt.Errorf("config %q training.objective=\"multihead\" parallel_group does not support diffusion AdaLN in v1", source)
+	}
 	for i, block := range cfg.Blocks {
 		if block.WindowSize > 0 {
 			return fmt.Errorf("config %q blocks[%d].window_size cannot be combined with training.objective=\"multihead\" in v1", source, i)
@@ -318,6 +325,10 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 		}
 		switch blockTypeKey(block) {
 		case "plain", "swiglu", "geglu", "mlp", "moe":
+		case "gated_deltanet", "hgrn2":
+			if parallelPlan.memberStartAt(i) < 0 {
+				return fmt.Errorf("config %q blocks[%d].type=%q cannot be combined with training.objective=\"multihead\" outside a parallel_group in v1", source, i, block.Type)
+			}
 		default:
 			return fmt.Errorf("config %q blocks[%d].type=%q cannot be combined with training.objective=\"multihead\" in v1; supported blocks are plain self-attention plus position-wise FFN/MoE blocks", source, i, block.Type)
 		}

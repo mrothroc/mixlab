@@ -146,6 +146,41 @@ func TestScoreEBMFullSeqPLLMLXSmokeAndChunkParity(t *testing.T) {
 	}
 }
 
+func TestScoreEBMFullSeqPLLSingleSharedDebertaMLXForward(t *testing.T) {
+	if !mlxAvailable() || !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+	cfg := parseSinglePLLSharedDebertaConfig(t)
+	chunked := newScoreEBMFullSeqMLXEvaluator(t, cfg, scoreEBMModeSinglePLL, 2)
+	defer chunked.CloseTrainer()
+	chunkedEval, ok := chunked.(diffusionGenerationEvaluator)
+	if !ok {
+		t.Fatalf("trainer type=%T does not implement diffusionGenerationEvaluator", chunked)
+	}
+	single := newScoreEBMFullSeqMLXEvaluator(t, cfg, scoreEBMModeSinglePLL, 1)
+	defer single.CloseTrainer()
+	singleEval, ok := single.(diffusionGenerationEvaluator)
+	if !ok {
+		t.Fatalf("trainer type=%T does not implement diffusionGenerationEvaluator", single)
+	}
+	tokens := []int{1, 2, 5, 4}
+	skip := map[int]bool{1: true, cfg.Training.MLMMaskTokenID: true}
+	got, err := scoreEBMFullSeqPLLSequence(cfg, chunkedEval, tokens, 2, skip)
+	if err != nil {
+		t.Fatalf("shared-DeBERTa chunked full-seq PLL forward: %v", err)
+	}
+	want, err := scoreEBMFullSeqPLLSequence(cfg, singleEval, tokens, 1, skip)
+	if err != nil {
+		t.Fatalf("shared-DeBERTa single-position full-seq PLL forward: %v", err)
+	}
+	if math.IsNaN(got) || math.IsInf(got, 0) {
+		t.Fatalf("shared-DeBERTa full-seq score=%g, want finite", got)
+	}
+	if math.Abs(got-want) > 1e-5 {
+		t.Fatalf("shared-DeBERTa chunked score=%g single=%g diff=%g", got, want, math.Abs(got-want))
+	}
+}
+
 func newScoreEBMFullSeqMLXEvaluator(t *testing.T, cfg *ArchConfig, scoreMode string, positionBatch int) GPUTrainer {
 	t.Helper()
 	local := *cfg

@@ -15,38 +15,48 @@ func effectiveHGRN2DState(spec BlockSpec, D int) (int, error) {
 	return D / spec.Heads, nil
 }
 
-func hgrn2WeightCount(_ BlockSpec, _, _ bool) (int, error) {
-	return 6, nil
+func hgrn2WeightCount(spec BlockSpec, blockScales, _ bool) (int, error) {
+	total := 6
+	if residualScaleRequested(spec, blockScales) {
+		total++
+	}
+	return total, nil
 }
 
 func hgrn2WeightShapes(spec BlockSpec, D, _, _, _ int) ([]WeightMeta, error) {
+	return hgrn2WeightShapesWithOptions(spec, D, false)
+}
+
+func hgrn2WeightShapesWithOptions(spec BlockSpec, D int, blockScales bool) ([]WeightMeta, error) {
 	ds, err := effectiveHGRN2DState(spec, D)
 	if err != nil {
 		return nil, err
 	}
 	headDim := D / spec.Heads
 	stateDim := spec.Heads * ds
-	return []WeightMeta{
+	metas := []WeightMeta{
 		{Name: "norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
 		{Name: "w_v", Shape: []int{D, D}, InitMode: "torch_linear_uniform"},
 		{Name: "w_q", Shape: []int{D, stateDim}, InitMode: "torch_linear_uniform"},
 		{Name: "w_f", Shape: []int{D, stateDim}, InitMode: "torch_linear_uniform"},
 		{Name: "o_norm_scale", Shape: []int{headDim}, IsNormScale: true, InitOne: true},
 		{Name: "wo", Shape: []int{D, D}, InitMode: "torch_linear_uniform"},
-	}, nil
+	}
+	if residualScaleRequested(spec, blockScales) {
+		metas = append(metas, residualScaleWeightMeta(spec, "hgrn2_scale", D))
+	}
+	return metas, nil
 }
 
-func emitHGRN2IR(prog *Program, spec BlockSpec, x string, wi, D, T, B, idx int) (int, error) {
+func emitHGRN2DeltaIR(prog *Program, spec BlockSpec, xNorm string, wi, D, T, B int, prefix string, blockScales bool) (string, int, error) {
 	heads := spec.Heads
 	ds, err := effectiveHGRN2DState(spec, D)
 	if err != nil {
-		return wi, err
+		return "", wi, err
 	}
 	headDim := D / heads
 	stateDim := heads * ds
 
-	prefix := tmpName(x+"_hgrn2", idx)
-	xNorm := prefix + "_x_norm"
 	vRaw := prefix + "_v_raw"
 	vAct := prefix + "_v_act"
 	v4 := prefix + "_v4"
@@ -63,9 +73,7 @@ func emitHGRN2IR(prog *Program, spec BlockSpec, x string, wi, D, T, B, idx int) 
 	yNorm := prefix + "_y_norm"
 	yMerged := prefix + "_y_merged"
 	out := prefix + "_out"
-
-	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
-	wi++
+	outScaled := prefix + "_out_scaled"
 
 	prog.MatMul(xNorm, weightName(wi), vRaw)
 	wi++
@@ -91,8 +99,12 @@ func emitHGRN2IR(prog *Program, spec BlockSpec, x string, wi, D, T, B, idx int) 
 	prog.Reshape(yNorm, []int{B * T, D}, yMerged)
 	prog.MatMul(yMerged, weightName(wi), out)
 	wi++
-	prog.Add(x, out, x)
-	return wi, nil
+	if residualScaleRequested(spec, blockScales) {
+		prog.Mul(out, weightName(wi), outScaled)
+		wi++
+		out = outScaled
+	}
+	return out, wi, nil
 }
 
 func mlstmWeightCount(_ BlockSpec, _, _ bool) (int, error) {

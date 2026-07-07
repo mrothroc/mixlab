@@ -31,14 +31,26 @@ func effectiveKVShare(spec BlockSpec) bool {
 	return *spec.KVShare
 }
 
-func gatedDeltaNetWeightCount(spec BlockSpec, _, _ bool) (int, error) {
-	if effectiveKVShare(spec) {
-		return 13, nil
+func gatedDeltaNetWeightCount(spec BlockSpec, blockScales, _ bool) (int, error) {
+	return gatedDeltaNetWeightCountWithScales(spec, blockScales), nil
+}
+
+func gatedDeltaNetWeightCountWithScales(spec BlockSpec, blockScales bool) int {
+	total := 13
+	if !effectiveKVShare(spec) {
+		total = 14
 	}
-	return 14, nil
+	if residualScaleRequested(spec, blockScales) {
+		total++
+	}
+	return total
 }
 
 func gatedDeltaNetWeightShapes(spec BlockSpec, D, _, _, _ int) ([]WeightMeta, error) {
+	return gatedDeltaNetWeightShapesWithOptions(spec, D, false)
+}
+
+func gatedDeltaNetWeightShapesWithOptions(spec BlockSpec, D int, blockScales bool) ([]WeightMeta, error) {
 	if spec.Heads <= 0 {
 		return nil, fmt.Errorf("gated_deltanet requires heads > 0")
 	}
@@ -83,10 +95,13 @@ func gatedDeltaNetWeightShapes(spec BlockSpec, D, _, _, _ int) ([]WeightMeta, er
 		WeightMeta{Name: "w_out_gate", Shape: []int{D, valDim}, InitMode: "torch_linear_uniform"},
 		WeightMeta{Name: "wo", Shape: []int{valDim, D}, InitMode: "torch_linear_uniform"},
 	)
+	if residualScaleRequested(spec, blockScales) {
+		metas = append(metas, residualScaleWeightMeta(spec, "gated_deltanet_scale", D))
+	}
 	return metas, nil
 }
 
-func emitGatedDeltaNetIR(prog *Program, spec BlockSpec, x string, wi, _, T, B, idx int) (int, error) {
+func emitGatedDeltaNetIRWithScales(prog *Program, spec BlockSpec, x string, wi, T, B, idx int, blockScales bool) (int, error) {
 	prefix := tmpName(x+"_gated_deltanet", idx)
 	xNorm := prefix + "_x_norm"
 	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
@@ -96,18 +111,28 @@ func emitGatedDeltaNetIR(prog *Program, spec BlockSpec, x string, wi, _, T, B, i
 	if err != nil {
 		return wi, err
 	}
+	if residualScaleRequested(spec, blockScales) {
+		scaled := prefix + "_scaled"
+		prog.Mul(out, weightName(wi), scaled)
+		wi++
+		out = scaled
+	}
 	prog.Add(x, out, x)
 	return wi, nil
 }
 
-func emitGatedDeltaNetParallelStateIR(prog *Program, spec BlockSpec, x, xNorm string, wi, T, B int, prefix string) (string, int, error) {
+func emitGatedDeltaNetParallelDeltaIR(prog *Program, spec BlockSpec, xNorm string, wi, T, B int, prefix string, blockScales bool) (string, int, error) {
 	out, wi, err := emitGatedDeltaNetDeltaIR(prog, spec, xNorm, wi, T, B, prefix)
 	if err != nil {
 		return "", wi, err
 	}
-	state := prefix + "_state"
-	prog.Add(x, out, state)
-	return state, wi, nil
+	if residualScaleRequested(spec, blockScales) {
+		scaled := prefix + "_scaled"
+		prog.Mul(out, weightName(wi), scaled)
+		wi++
+		out = scaled
+	}
+	return out, wi, nil
 }
 
 func emitGatedDeltaNetDeltaIR(prog *Program, spec BlockSpec, xNorm string, wi, T, B int, prefix string) (string, int, error) {

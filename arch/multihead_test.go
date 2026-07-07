@@ -39,6 +39,87 @@ func TestMultiheadConfigDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestMultiheadParallelGroupBuildsNativeMaskedScorer(t *testing.T) {
+	cfg := parseMultiheadConfig(t, `"block_scales": true,
+		"blocks": [
+			{"type": "plain", "heads": 2, "parallel_group": 3},
+			{"type": "hgrn2", "heads": 2, "residual_scale_init": 0.0},
+			{"type": "geglu"}
+		],
+		"training": {
+			"objective": "multihead",
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"mlm_mask_token_id": 31,
+			"export_head": "scorer",
+			"heads": [
+				{"name": "scorer", "objective": "mntp", "loss_weight": 1.0},
+				{"name": "aux", "objective": "mlm", "loss_weight": 0.1}
+			]
+		}`)
+	shapes, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesFromConfig: %v", err)
+	}
+	if countWeightNames(shapes, "hgrn2_scale") != 1 {
+		t.Fatalf("hgrn2_scale count=%d want 1", countWeightNames(shapes, "hgrn2_scale"))
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	if prog.NumWeights != len(shapes) {
+		t.Fatalf("prog weights=%d shapes=%d", prog.NumWeights, len(shapes))
+	}
+	if got := countOps(prog, OpHGRN2Scan); got != 1 {
+		t.Fatalf("HGRN2Scan ops=%d want 1", got)
+	}
+	if !programDeclaresOutputArch(prog, "head_scorer_logits") {
+		t.Fatal("missing scorer logits output")
+	}
+}
+
+func TestMultiheadParallelGroupBuildsHeadScopedDWA(t *testing.T) {
+	cfg := parseMultiheadConfig(t, `"block_scales": true,
+		"blocks": [
+			{"type": "plain", "heads": 2, "parallel_group": 3},
+			{"type": "hgrn2", "heads": 2, "residual_scale_init": 0.0},
+			{"type": "geglu"}
+		],
+		"training": {
+			"objective": "multihead",
+			"steps": 1,
+			"lr": 0.001,
+			"batch_tokens": 8,
+			"mlm_mask_token_id": 31,
+			"export_head": "scorer",
+			"heads": [
+				{"name": "scorer", "objective": "mntp", "loss_weight": 1.0, "layer_aggregation": "dwa"},
+				{"name": "aux", "objective": "mlm", "loss_weight": 0.1}
+			]
+		}`)
+	shapes, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("CollectWeightShapesFromConfig: %v", err)
+	}
+	if countWeightNames(shapes, "head_scorer_dwa_alpha") != 1 {
+		t.Fatalf("head_scorer_dwa_alpha count=%d want 1", countWeightNames(shapes, "head_scorer_dwa_alpha"))
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	for _, name := range []string{"dwa_static_embeddings", "dwa_state_0", "dwa_state_1", "dwa_state_2"} {
+		if !programHasOutputTensor(prog, name) {
+			t.Fatalf("missing DWA capture tensor %q", name)
+		}
+	}
+	if !programDeclaresOutputArch(prog, "head_scorer_logits") {
+		t.Fatal("missing scorer logits output")
+	}
+}
+
 func TestMultiheadValidationErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -732,4 +813,15 @@ func countWeightNames(shapes []WeightMeta, name string) int {
 		}
 	}
 	return count
+}
+
+func programHasOutputTensor(prog *Program, name string) bool {
+	for _, op := range prog.Ops {
+		for _, out := range op.Outputs {
+			if out == name {
+				return true
+			}
+		}
+	}
+	return false
 }

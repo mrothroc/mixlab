@@ -94,10 +94,12 @@ type BlockSpec struct {
 	Name                              string       `json:"name,omitempty"` // custom block name (required for type=custom)
 	WeightGroup                       string       `json:"weight_group,omitempty"`
 	ParallelResidual                  *bool        `json:"parallel_residual,omitempty"` // enable/disable parallel residual for this block pair start
-	NumExperts                        int          `json:"num_experts,omitempty"`       // moe: number of routed FFN experts.
-	TopK                              int          `json:"top_k,omitempty"`             // moe: number of experts selected per token; defaults to min(2,num_experts).
-	ExpertBlock                       *BlockSpec   `json:"expert_block,omitempty"`      // moe: FFN expert block spec (swiglu/geglu/mlp).
-	Router                            string       `json:"router,omitempty"`            // moe: router type; v1 supports "linear".
+	ParallelGroup                     int          `json:"parallel_group,omitempty"`    // explicit heterogeneous parallel group length when set on the first block.
+	ResidualScaleInit                 *float64     `json:"residual_scale_init,omitempty"`
+	NumExperts                        int          `json:"num_experts,omitempty"`  // moe: number of routed FFN experts.
+	TopK                              int          `json:"top_k,omitempty"`        // moe: number of experts selected per token; defaults to min(2,num_experts).
+	ExpertBlock                       *BlockSpec   `json:"expert_block,omitempty"` // moe: FFN expert block spec (swiglu/geglu/mlp).
+	Router                            string       `json:"router,omitempty"`       // moe: router type; v1 supports "linear".
 	LoadBalanceLossWeight             float64      `json:"load_balance_loss_weight,omitempty"`
 	Heads                             int          `json:"heads"`
 	KVHeads                           int          `json:"kv_heads,omitempty"`

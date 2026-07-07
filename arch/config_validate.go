@@ -2,6 +2,7 @@ package arch
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -20,6 +21,29 @@ func validateParallelResidual(cfg *ArchConfig, source string) error {
 	if err := validateParallelResidualRefs(plan, refs); err != nil {
 		return fmt.Errorf("config %q %w", source, err)
 	}
+	if err := validateResidualScaleInits(cfg, source); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateResidualScaleInits(cfg *ArchConfig, source string) error {
+	for i, block := range cfg.Blocks {
+		if block.ResidualScaleInit == nil {
+			continue
+		}
+		if math.IsNaN(*block.ResidualScaleInit) || math.IsInf(*block.ResidualScaleInit, 0) {
+			return fmt.Errorf("config %q blocks[%d].residual_scale_init=%g must be finite", source, i, *block.ResidualScaleInit)
+		}
+		if !cfg.BlockScales {
+			return fmt.Errorf("config %q blocks[%d].residual_scale_init requires block_scales=true", source, i)
+		}
+		switch blockTypeKey(block) {
+		case "plain", "swiglu", "geglu", "moe", "gated_deltanet", "hgrn2":
+		default:
+			return fmt.Errorf("config %q blocks[%d].residual_scale_init is not supported for type=%q", source, i, block.Type)
+		}
+	}
 	return nil
 }
 
@@ -27,7 +51,8 @@ func validateNormPolicy(cfg *ArchConfig, source string) error {
 	if isDefaultNormConfig(cfg) {
 		return nil
 	}
-	if cfg.ParallelResidual {
+	plan, planErr := newParallelResidualPlan(cfg.Blocks, cfg.ParallelResidual)
+	if cfg.ParallelResidual || (planErr == nil && plan.any) {
 		return fmt.Errorf("config %q non-default norm settings are not supported with parallel_residual in this release", source)
 	}
 	if cfg.UNet {

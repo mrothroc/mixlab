@@ -70,6 +70,32 @@ func TestParseArchConfig_BlockScopedParallelResidualValid(t *testing.T) {
 	}
 }
 
+func TestParseArchConfig_ParallelGroupValid(t *testing.T) {
+	data := []byte(`{
+		"name": "parallel_group",
+		"model_dim": 64,
+		"vocab_size": 256,
+		"seq_len": 32,
+		"block_scales": true,
+		"blocks": [
+			{"type": "plain", "heads": 4, "attention_mask": "bidirectional", "parallel_group": 3},
+			{"type": "hgrn2", "heads": 4, "residual_scale_init": 0.0},
+			{"type": "geglu"}
+		],
+		"training": {"objective": "mntp", "batch_tokens": 32, "mlm_mask_token_id": 1}
+	}`)
+	got, err := ParseArchConfig(data, "parallel_group")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if got.Blocks[0].ParallelGroup != 3 {
+		t.Fatalf("parallel_group=%d want 3", got.Blocks[0].ParallelGroup)
+	}
+	if got.Blocks[1].ResidualScaleInit == nil || *got.Blocks[1].ResidualScaleInit != 0 {
+		t.Fatalf("residual_scale_init=%v want explicit zero", got.Blocks[1].ResidualScaleInit)
+	}
+}
+
 func TestParseArchConfig_ParallelResidualValidation(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -119,6 +145,62 @@ func TestParseArchConfig_ParallelResidualValidation(t *testing.T) {
 				t.Fatalf("marshal: %v", err)
 			}
 			_, err = ParseArchConfig(data, "parallel")
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tc.wantErrSub) {
+				t.Fatalf("error %q does not contain %q", err, tc.wantErrSub)
+			}
+		})
+	}
+}
+
+func TestParseArchConfig_ParallelGroupValidation(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantErrSub string
+	}{
+		{
+			name:       "too short",
+			body:       `"blocks": [{"type":"plain","heads":4,"parallel_group":1}]`,
+			wantErrSub: "parallel_group",
+		},
+		{
+			name:       "extends past blocks",
+			body:       `"blocks": [{"type":"plain","heads":4,"parallel_group":3},{"type":"hgrn2","heads":4}]`,
+			wantErrSub: "extends past",
+		},
+		{
+			name:       "nonfinal ffn",
+			body:       `"blocks": [{"type":"plain","heads":4,"parallel_group":3},{"type":"geglu"},{"type":"hgrn2","heads":4}]`,
+			wantErrSub: "must be the final group member",
+		},
+		{
+			name:       "unsupported mixer",
+			body:       `"blocks": [{"type":"plain","heads":4,"parallel_group":2},{"type":"mlstm","heads":4,"d_k":8,"d_v":8}]`,
+			wantErrSub: "unsupported",
+		},
+		{
+			name:       "kv source",
+			body:       `"blocks": [{"type":"plain","heads":4,"parallel_group":2},{"type":"plain","heads":4,"kv_source":1}]`,
+			wantErrSub: "kv_source",
+		},
+		{
+			name:       "top level parallel residual conflict",
+			body:       `"parallel_residual": true, "blocks": [{"type":"plain","heads":4,"parallel_group":2},{"type":"hgrn2","heads":4}]`,
+			wantErrSub: "parallel_group cannot be combined",
+		},
+		{
+			name:       "scale init requires block scales",
+			body:       `"blocks": [{"type":"plain","heads":4,"parallel_group":2},{"type":"hgrn2","heads":4,"residual_scale_init":0.0}]`,
+			wantErrSub: "requires block_scales",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `{"name":"bad","model_dim":64,"vocab_size":256,"seq_len":32,` + tc.body + `,"training":{"objective":"mntp","batch_tokens":32,"mlm_mask_token_id":1}}`
+			_, err := ParseArchConfig([]byte(raw), tc.name)
 			if err == nil {
 				t.Fatal("expected error")
 			}
