@@ -60,6 +60,9 @@ func prepareMultiheadBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen
 		fillHeadDiffusionBoundaries(out.diffusionBlockStart[rowOffset:rowOffset+rawBatchSize], out.diffusionBlockEnd[rowOffset:rowOffset+rawBatchSize], prepared, head.Objective, seqLen)
 		fillHeadDiffusionTimestep(out.diffusionTimestep[rowOffset:rowOffset+rawBatchSize], prepared, head.Objective, seqLen)
 	}
+	if err := maybeApplyWordStructuralMultihead(cfg, &out, step, rawBatchSize, seqLen); err != nil {
+		return objectiveBatch{}, err
+	}
 	return out, nil
 }
 

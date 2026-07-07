@@ -58,6 +58,7 @@ rates/weight decay are documented in the full reference.
 | `data2vec` | EMA self-distillation for masked objective paths. |
 | `rtd` | ELECTRA-style replaced-token detection auxiliary for multihead training. |
 | `minimal_pair` | Clean/corrupt pair data for native energy ranking or MLM/MNTP span-PLL scorer regularization. |
+| `word_structural_objective` | StructBERT-style local shuffle reconstruction for MLM/MNTP vocab heads. |
 | `mtp` | Parameter-free multi-token prediction auxiliary loss. |
 | `first_byte_mask` | First-byte masked loss path. |
 | `attention_segment_mask` | Block-diagonal segment attention for packed training sequences. |
@@ -71,6 +72,11 @@ the compiled artifact. The default `score_source: "energy_scalar"` trains a
 native energy head. Set `score_source: "mlm_span_pll"` with
 `energy_aggregation: "differing_span"` to add an exportable MLM/MNTP scorer
 regularizer that ranks clean/corrupt pairs by masked-span pseudo-log-likelihood.
+
+`word_structural_objective` is training-only and does not add weights or change
+HF export/scoring. Omit it or set `enabled:false` for exact disabled parity.
+`loss_weight:0` keeps the input shuffle active and only removes the auxiliary
+loss contribution, which is useful as a corruption-only ablation.
 
 ## Validation And Logging
 

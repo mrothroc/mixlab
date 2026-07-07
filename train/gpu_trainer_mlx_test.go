@@ -125,6 +125,40 @@ func TestBlockDiffusionMLXInputsMaterializeBoundaries(t *testing.T) {
 	}
 }
 
+func TestWordStructuralMLXInputsMaterializeTargetsAndMask(t *testing.T) {
+	trainer := &mlxGPUTrainer{
+		wordStructInput:       true,
+		tokBuf:                make([]int32, 4),
+		tgtBuf:                make([]int32, 4),
+		wordStructTargetBuf:   make([]int32, 4),
+		wordStructLossMaskBuf: make([]float32, 4),
+	}
+	batch := objectiveBatch{
+		x:                  []int{10, 11, 12, 13},
+		y:                  []int{1, 2, 3, 4},
+		wordStructTargets:  []int{10, 11, 12, 13},
+		wordStructLossMask: []float32{0, 1, 1, 0},
+	}
+	inputs, err := trainer.makeObjectiveInputs(batch, 1, 4)
+	if err != nil {
+		t.Fatalf("makeObjectiveInputs: %v", err)
+	}
+	targetInput := findTensorInput(t, inputs, "word_struct_targets")
+	maskInput := findTensorInput(t, inputs, "word_struct_loss_mask")
+	if !reflect.DeepEqual(targetInput.Shape, []int{4}) {
+		t.Fatalf("word_struct_targets shape=%v, want [4]", targetInput.Shape)
+	}
+	if !reflect.DeepEqual(maskInput.Shape, []int{4}) {
+		t.Fatalf("word_struct_loss_mask shape=%v, want [4]", maskInput.Shape)
+	}
+	if got, want := targetInput.Data.([]int32), []int32{10, 11, 12, 13}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("word_struct_targets=%v, want %v", got, want)
+	}
+	if got, want := maskInput.Data.([]float32), []float32{0, 1, 1, 0}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("word_struct_loss_mask=%v, want %v", got, want)
+	}
+}
+
 func tensorInputByName(t *testing.T, inputs []gpu.TensorInput, name string) gpu.TensorInput {
 	t.Helper()
 	for _, input := range inputs {

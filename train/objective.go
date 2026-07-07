@@ -15,6 +15,8 @@ type objectiveBatch struct {
 	y                     []int
 	batchSizeOverride     int
 	lossMask              []float32
+	wordStructTargets     []int
+	wordStructLossMask    []float32
 	energySpanMask        []float32
 	attentionCausal       []int32
 	segmentIDs            []int32
@@ -99,6 +101,9 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 		prepared = objectiveBatch{x: batch.x, y: batch.y, unmaskedX: batch.x[:need]}
 	}
 	if err != nil {
+		return objectiveBatch{}, err
+	}
+	if err := maybeApplyWordStructuralObjective(cfg, &prepared, step, canonicalObjective(objective), need, seqLen); err != nil {
 		return objectiveBatch{}, err
 	}
 	if cfg.Training.ExampleFramingEnabled() && canonicalObjective(objective) == arch.ObjectiveCausal {

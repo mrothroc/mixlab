@@ -37,6 +37,10 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
 	prog.DeclareInput("loss_mask", TensorFloat32, []int{B * T})
+	if multiheadUsesWordStructural(cfg) {
+		prog.DeclareInput("word_struct_targets", TensorInt32, []int{B * T})
+		prog.DeclareInput("word_struct_loss_mask", TensorFloat32, []int{B * T})
+	}
 	prog.DeclareInput("diffusion_block_start", TensorInt32, []int{B})
 	prog.DeclareInput("diffusion_block_end", TensorInt32, []int{B})
 	if multiheadUsesMinimalPairSpanMask(cfg) {
@@ -177,6 +181,7 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	if minimalPairPLL {
 		minimalPairScoreHead = cfg.Training.MinimalPair.ScoreHead
 	}
+	wordStructuralEnabled := multiheadUsesWordStructural(cfg)
 	lossAccum := ""
 	norm := cfg.EffectiveNormSpec()
 	for headIdx, head := range cfg.Training.Heads {
@@ -328,6 +333,19 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 			prog.Add(lossAccum, weightedPLL, next)
 			lossAccum = next
 		}
+		if wordStructuralEnabled && cfg.Training.WordStructuralHeadSelected(head.Name) {
+			wordTargets := headPrefix + "_word_struct_targets"
+			wordMask := headPrefix + "_word_struct_loss_mask"
+			wordLoss := headPrefix + "_word_struct_loss"
+			prog.Slice("word_struct_targets", rowStart, rowStart+rawRows, 1, 0, wordTargets)
+			prog.Slice("word_struct_loss_mask", rowStart, rowStart+rawRows, 1, 0, wordMask)
+			prog.MaskedCrossEntropy(logits, wordTargets, wordMask, wordLoss)
+			prog.ScalarMul(wordLoss, float32(cfg.Training.WordStructuralObjective.LossWeight), wordLoss+"_weighted")
+			next := headPrefix + "_word_struct_loss_accum"
+			prog.Add(lossAccum, wordLoss+"_weighted", next)
+			lossAccum = next
+			prog.DeclareOutput(wordLoss, TensorFloat32, []int{1})
+		}
 	}
 	prog.Slice("x", 0, rawRows, 1, 0, "x_hidden_flat")
 	prog.Reshape("x_hidden_flat", []int{rawBatch, T, D}, "x_hidden")
@@ -387,6 +405,10 @@ func multiheadUsesDifferingSpanEnergy(cfg *ArchConfig) bool {
 
 func multiheadUsesMLMSpanPLL(cfg *ArchConfig) bool {
 	return cfg != nil && cfg.Training.MinimalPair != nil && cfg.Training.MinimalPair.UsesMLMSpanPLL()
+}
+
+func multiheadUsesWordStructural(cfg *ArchConfig) bool {
+	return cfg != nil && cfg.Training.MultiheadEnabled() && cfg.Training.WordStructuralActive() && len(cfg.Training.WordStructuralSelectedHeads()) > 0
 }
 
 func emitMultiheadMinimalPairPLLIR(prog *Program, cfg *ArchConfig, head MultiheadHeadSpec, captureAgg *layerAggregationBuildState, dwaWeightIndex, headParamStart, rowStart, rows, seqLen int, norm NormSpec, dropout float32) (string, error) {

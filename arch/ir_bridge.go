@@ -187,6 +187,10 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	}
 	segmentAttentionMask := cfg.Training.AttentionSegmentMaskEnabled() && !state.SegmentMaskInactive
 	framedCausalLoss := cfg.Training.ExampleFramingEnabled() && !state.ExampleFramingInactive
+	wordStructural := cfg.Training.WordStructuralObjective
+	if state.HiddenCaptureTopK > 0 {
+		wordStructural = nil
+	}
 
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		cfg.ModelDim,
@@ -234,6 +238,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		cfg.EffectiveNormSpec(),
 		cfg.EffectiveNormPlacement(),
 		cfg.FFNInternalNorm,
+		wordStructural,
 	)
 }
 

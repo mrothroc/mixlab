@@ -103,6 +103,12 @@ func emitMaskedLanguageModelLossIR(prog *Program, logits, targets, lossMask stri
 	prog.MaskedCrossEntropyPerToken(logits, targets, lossMask, "per_token_nll")
 }
 
+func emitWordStructuralLossIR(prog *Program, logits, targets, lossMask string, weight float64, output string) {
+	prog.MaskedCrossEntropy(logits, targets, lossMask, output)
+	prog.ScalarMul(output, float32(weight), output+"_weighted")
+	prog.Add("loss", output+"_weighted", "loss")
+}
+
 func emitDistillationLanguageModelLossIR(prog *Program, logits, targets, teacherProbs string, ceWeight, klWeight float64) error {
 	if ceWeight < 0 || klWeight < 0 || ceWeight+klWeight <= 0 {
 		return fmt.Errorf("distillation loss weights must be non-negative and sum to > 0")

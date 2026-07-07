@@ -253,6 +253,9 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 			return err
 		}
 	}
+	if err := validateWordStructuralObjective(cfg, source); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -283,6 +283,9 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 	} else if t.Heads[idx].Objective != ObjectiveBlockDiffusion {
 		return fmt.Errorf("config %q training.diffusion_head=%q must select a block_diffusion head", source, t.DiffusionHead)
 	}
+	if err := validateWordStructuralObjective(cfg, source); err != nil {
+		return err
+	}
 	if t.RTD != nil {
 		if t.RTD.Generator == "tied" {
 			if strings.TrimSpace(t.RTD.GeneratorHead) == "" {

@@ -33,6 +33,7 @@ type mlxGPUTrainer struct {
 	charInput                  bool
 	firstByteMaskInput         bool
 	lossMaskInput              bool
+	wordStructInput            bool
 	energySpanMaskInput        bool
 	attentionCausalInput       bool
 	segmentIDsInput            bool
@@ -47,6 +48,8 @@ type mlxGPUTrainer struct {
 	tokBuf                 []int32
 	tgtBuf                 []int32
 	lossMaskBuf            []float32
+	wordStructTargetBuf    []int32
+	wordStructLossMaskBuf  []float32
 	energySpanMaskBuf      []float32
 	attentionCausalBuf     []int32
 	segmentIDBuf           []int32
@@ -193,6 +196,7 @@ func initMLXGPUTrainer(
 	charInput := false
 	firstByteMaskInput := false
 	lossMaskInput := false
+	wordStructInput := false
 	energySpanMaskInput := false
 	attentionCausalInput := false
 	segmentIDsInput := false
@@ -217,6 +221,9 @@ func initMLXGPUTrainer(
 		}
 		if inp.Name == "loss_mask" {
 			lossMaskInput = true
+		}
+		if inp.Name == "word_struct_targets" {
+			wordStructInput = true
 		}
 		if inp.Name == "energy_span_mask" {
 			energySpanMaskInput = true
@@ -321,6 +328,7 @@ func initMLXGPUTrainer(
 		charInput:                  charInput,
 		firstByteMaskInput:         firstByteMaskInput,
 		lossMaskInput:              lossMaskInput,
+		wordStructInput:            wordStructInput,
 		energySpanMaskInput:        energySpanMaskInput,
 		attentionCausalInput:       attentionCausalInput,
 		segmentIDsInput:            segmentIDsInput,
@@ -334,6 +342,8 @@ func initMLXGPUTrainer(
 		tokBuf:                     make([]int32, batchElems),
 		tgtBuf:                     make([]int32, batchElems),
 		lossMaskBuf:                make([]float32, batchElems),
+		wordStructTargetBuf:        make([]int32, batchElems),
+		wordStructLossMaskBuf:      make([]float32, batchElems),
 		energySpanMaskBuf:          make([]float32, batchElems),
 		attentionCausalBuf:         make([]int32, batchElems),
 		segmentIDBuf:               make([]int32, batchElems),
@@ -560,6 +570,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.charInput = programDeclaresInput(irProg, "char_ids")
 	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
 	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")
+	t.wordStructInput = programDeclaresInput(irProg, "word_struct_targets")
 	t.energySpanMaskInput = programDeclaresInput(irProg, "energy_span_mask")
 	t.attentionCausalInput = programDeclaresInput(irProg, "attention_causal_mask")
 	t.segmentIDsInput = programDeclaresInput(irProg, "segment_ids")

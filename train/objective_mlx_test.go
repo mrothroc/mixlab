@@ -4,6 +4,7 @@ package train
 
 import (
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/mrothroc/mixlab/arch"
@@ -90,6 +91,77 @@ func TestMLMObjectiveLearnsMaskedTokenAboveChance(t *testing.T) {
 	}
 	if final >= chance {
 		t.Fatalf("final loss = %g, want below chance %g", final, chance)
+	}
+}
+
+func TestWordStructuralMLXSmoke(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "word_structural_mlx_smoke",
+		"model_dim": 16,
+		"vocab_size": 20,
+		"seq_len": 6,
+		"blocks": [
+			{"type": "plain", "heads": 2, "attention_mask": "bidirectional"},
+			{"type": "swiglu"}
+		],
+		"training": {
+			"steps": 1,
+			"lr": 0.01,
+			"seed": 23,
+			"batch_tokens": 6,
+			"weight_decay": 0.0,
+			"objective": "mlm",
+			"mlm_mask_prob": 0.0,
+			"mlm_mask_token_id": 19,
+			"word_structural_objective": {
+				"fraction": 0.5,
+				"span": 3,
+				"loss_weight": 1.0,
+				"skip_token_ids": [19]
+			}
+		}
+	}`), "word_structural_mlx_smoke")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{Objective: arch.ObjectiveMLM})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+	}
+	trainerIface, err := initGPUTrainer(prog, cfg, nil, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), "MLX backend unavailable") {
+			t.Skip(err.Error())
+		}
+		t.Fatalf("initGPUTrainer: %v", err)
+	}
+	trainer, ok := trainerIface.(*mlxGPUTrainer)
+	if !ok {
+		t.Fatalf("trainer type=%T, want *mlxGPUTrainer", trainerIface)
+	}
+	defer trainer.CloseTrainer()
+
+	raw := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6},
+		y: []int{2, 3, 4, 5, 6, 7},
+	}
+	prepared, err := prepareObjectiveBatch(cfg, raw, 0, arch.ObjectiveMLM)
+	if err != nil {
+		t.Fatalf("prepareObjectiveBatch: %v", err)
+	}
+	if _, err := trainer.EvaluateObjectiveGPUWithOutputs(prepared, 1, cfg.SeqLen, []string{"word_struct_loss"}); err != nil {
+		t.Fatalf("EvaluateObjectiveGPUWithOutputs: %v", err)
+	}
+	wordLoss, err := trainer.ReadOutput("word_struct_loss", []int{1})
+	if err != nil {
+		t.Fatalf("ReadOutput(word_struct_loss): %v", err)
+	}
+	if len(wordLoss) != 1 || wordLoss[0] <= 0 || math.IsNaN(float64(wordLoss[0])) || math.IsInf(float64(wordLoss[0]), 0) {
+		t.Fatalf("word_struct_loss=%v, want positive finite scalar", wordLoss)
 	}
 }
 
