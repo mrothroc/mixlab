@@ -179,6 +179,9 @@ type DistillationSpec struct {
 	LossWeightKL       float64  `json:"loss_weight_kl,omitempty"`
 	LossWeightCE       float64  `json:"loss_weight_ce,omitempty"`
 	EnsembleStrategy   string   `json:"ensemble_strategy,omitempty"`
+	Temperature        float64  `json:"temperature,omitempty"`
+
+	temperatureSet bool `json:"-"`
 }
 
 // Data2VecSpec configures optional online EMA representation distillation.

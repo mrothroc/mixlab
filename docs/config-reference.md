@@ -908,7 +908,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `attention_segment_mask` | string | No | Disabled | Optional packed-sequence block-diagonal attention masking. Omit, `""`, or `"none"` disables it; `"boundary_token"` derives per-row segment IDs from `attention_segment_boundary_token_id` and applies segment masking to `plain` self-attention during training. |
 | `attention_segment_boundary_token_id` | integer | Required for `attention_segment_mask: "boundary_token"` | None | Boundary token id already present in packed training shards. The boundary token starts a new segment and belongs to that new segment. Must be in `[0, vocab_size)`. |
 | `example_framing` | object | No | Disabled | Optional raw-stream example framing. When set, the loader slices each shard into `content_len` chunks, wraps every row as `[bos_id] + content + [eos_id]`, and masks the final row position from causal loss. Requires `seq_len = content_len + 2`. |
-| `distillation` | object | No | Disabled | Optional internal-teacher distillation block for causal LM training. |
+| `distillation` | object | No | Disabled | Optional fixed-teacher ensemble distillation block for causal, MLM, MNTP, or compatible hybrid masked training. |
 | `data2vec` | object | No | Disabled | Optional online EMA representation-distillation auxiliary loss for masked objectives. |
 | `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
 | `warmup_steps` | integer | No | Legacy default | Absolute warmup length for the standard cosine schedule. Must be `>= 0`; values above `steps` are clamped. Mutually exclusive with `warmup_ratio`. When both warmup fields are omitted, Mixlab keeps the historical `min(100, steps)` warmup. |
@@ -1064,16 +1064,17 @@ For diffusion experiments, compare against causal and MLM baselines that keep th
 
 ### Training distillation
 
-`training.distillation` enables same-corpus internal teacher distillation during causal LM training. For each student batch, Mixlab evaluates all teacher checkpoints without gradients, ensembles their token distributions, and trains the student with:
+`training.distillation` enables same-corpus internal teacher distillation during causal, MLM, MNTP, or compatible hybrid masked training. For each distilled student batch, Mixlab evaluates all teacher checkpoints without gradients on the same corrupted inputs, ensembles their token distributions, and trains the student with:
 
 `loss_weight_ce * hard_target_cross_entropy + loss_weight_kl * KL(P_teacher || P_student)`
 
-Validation, per-token NLL export, checkpoints, SWA, and full evaluation remain student-only and continue to use standard hard-target next-token scoring.
+For masked objectives, hard-target CE and teacher KL are both averaged only over the masked loss rows. MNTP uses the existing no-leakage alignment: the visible mask is at the next-token input position while logits and KL are read from the predicting row. Hybrid batch-granularity causal steps skip teacher evaluation; hybrid example-granularity batches keep primary CE over the existing hybrid loss mask but apply KL only to masked rows. Validation, per-token NLL export, checkpoints, SWA, scoring, and full evaluation remain student-only.
 
 ```json
 {
   "training": {
-    "objective": "causal",
+    "objective": "mntp",
+    "mlm_mask_token_id": 1,
     "distillation": {
       "teacher_checkpoints": [
         "runs/teacher_a.safetensors",
@@ -1085,7 +1086,8 @@ Validation, per-token NLL export, checkpoints, SWA, and full evaluation remain s
       ],
       "loss_weight_ce": 0.5,
       "loss_weight_kl": 0.5,
-      "ensemble_strategy": "mean_logits"
+      "ensemble_strategy": "mean_logits",
+      "temperature": 1.0
     }
   }
 }
@@ -1093,13 +1095,14 @@ Validation, per-token NLL export, checkpoints, SWA, and full evaluation remain s
 
 | Field | Type | Required | Default | Notes |
 |------|------|----------|---------|-------|
-| `teacher_checkpoints` | string array | Yes | None | Mixlab safetensors files using the existing `w{index}_{name}` tensor naming. Must match `teacher_configs` length. |
-| `teacher_configs` | string array | Yes | None | Teacher architecture configs. Teacher `vocab_size` and `seq_len` must match the student; runtime `batch_tokens` is forced to the student batch size. |
+| `teacher_checkpoints` | string array | Yes when `loss_weight_kl > 0` | None | Mixlab safetensors files using the existing `w{index}_{name}` tensor naming. Must match `teacher_configs` length. |
+| `teacher_configs` | string array | Yes when `loss_weight_kl > 0` | None | Teacher architecture configs. Teacher `vocab_size` and `seq_len` must match the student; masked distillation also requires matching `mlm_mask_token_id`, and matching tokenizer hashes when tokenizer artifacts are discoverable. Runtime `batch_tokens` is forced to the student batch size. |
 | `loss_weight_ce` | number | Yes | None | Weight for the normal hard-target cross-entropy term. Must be finite and `>= 0`. |
-| `loss_weight_kl` | number | Yes | None | Weight for teacher-target KL. Must be finite and `>= 0`; the CE and KL weights must sum to `> 0`. |
+| `loss_weight_kl` | number | Yes | None | Weight for teacher-target KL. Must be finite and `>= 0`; the CE and KL weights must sum to `> 0`. `loss_weight_kl: 0` is treated as disabled distillation and requires `loss_weight_ce: 1`. |
 | `ensemble_strategy` | string | No | `"mean_logits"` | `"mean_logits"` averages raw teacher logits before softmax. `"mean_logprobs"` averages teacher log-probabilities geometrically, then renormalizes. |
+| `temperature` | number | No | `1.0` | Distillation temperature. Teacher probabilities are computed from temperature-scaled logits and KL is scaled by `temperature^2`. |
 
-V1 supports distillation only with `objective: "causal"`. It rejects masked objectives, `hybrid`, top-level `mtp`, and `training.first_byte_mask` because those combinations need explicit loss semantics.
+V1 supports active distillation with `objective: "causal"`, `"mlm"`, `"mntp"`, and `"hybrid"` when the hybrid secondary objective is `"mlm"` or `"mntp"` and masked steps can run. It rejects multihead, block diffusion, data2vec, top-level `mtp`, first-byte masked loss, example framing, segment attention masking, and sequence-length schedules.
 
 ### Data2Vec EMA representation distillation
 

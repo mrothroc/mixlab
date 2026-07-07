@@ -25,7 +25,7 @@ and training-only objectives. Unsupported combinations should fail explicitly.
 | Masked objectives | MLM, MNTP, hybrid, and block diffusion behavior. |
 | `attention_segment_mask` | Boundary-token-derived segment IDs for packed-sequence block-diagonal attention. |
 | `data2vec` | EMA teacher representation targets for masked training rows. |
-| `distillation` | Fixed-teacher ensemble KL target for causal training. |
+| `distillation` | Fixed-teacher ensemble KL target for causal and masked vocab training. |
 | `mtp` | Multi-token prediction auxiliary loss. |
 
 ## Export Compatibility

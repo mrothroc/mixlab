@@ -90,6 +90,7 @@ const (
 	OpEnergySpanPairwise   = 96
 	OpSpanPLLPool          = 97
 	OpSpanPLLPairwise      = 98
+	OpMaskedDistillationKL = 99
 )
 
 const (

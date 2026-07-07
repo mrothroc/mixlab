@@ -125,6 +125,35 @@ func TestBlockDiffusionMLXInputsMaterializeBoundaries(t *testing.T) {
 	}
 }
 
+func TestDistillLossMaskMLXInputUsesMaskedLossMask(t *testing.T) {
+	trainer := &mlxGPUTrainer{
+		lossMaskInput:        true,
+		distillLossMaskInput: true,
+		tokBuf:               make([]int32, 8),
+		tgtBuf:               make([]int32, 8),
+		lossMaskBuf:          make([]float32, 8),
+		distillLossMaskBuf:   make([]float32, 8),
+	}
+	batch := objectiveBatch{
+		x:              []int{10, 11, 12, 13, 20, 21, 22, 23},
+		y:              []int{10, 11, 12, 13, 20, 21, 22, 23},
+		lossMask:       []float32{1, 1, 1, 1, 0, 1, 0, 1},
+		maskedLossMask: []float32{0, 0, 1, 0, 0, 0, 0, 1},
+	}
+	inputs, err := trainer.makeObjectiveInputs(batch, 2, 4)
+	if err != nil {
+		t.Fatalf("makeObjectiveInputs(distill mask): %v", err)
+	}
+	lossMask := tensorInputByName(t, inputs, "loss_mask")
+	if !reflect.DeepEqual(lossMask.Data, batch.lossMask) {
+		t.Fatalf("loss_mask data=%v, want %v", lossMask.Data, batch.lossMask)
+	}
+	distillMask := tensorInputByName(t, inputs, "distill_loss_mask")
+	if !reflect.DeepEqual(distillMask.Data, batch.maskedLossMask) {
+		t.Fatalf("distill_loss_mask data=%v, want %v", distillMask.Data, batch.maskedLossMask)
+	}
+}
+
 func TestWordStructuralMLXInputsMaterializeTargetsAndMask(t *testing.T) {
 	trainer := &mlxGPUTrainer{
 		wordStructInput:       true,

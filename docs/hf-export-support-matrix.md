@@ -42,6 +42,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `custom` blocks | Unsupported | Arbitrary JSON custom op graphs cannot be safely converted into one static generated template. |
 | `kv_source` | Gated | KV sharing export needs dedicated HF parity coverage before support is enabled. |
 | `parallel_residual`, `block_scales`, `resid_mix`, `unet`, `backout`, recurrence weight sharing | Gated | These structural features alter weight layout or multi-stream graph semantics beyond the current exporter. |
-| MTP, first-byte masked loss, distillation, eval-time TTT | Training/eval-only | Rejected because they do not change the exported causal forward logits in a representable HF way or require separate runtime policy. |
+| `training.distillation` | Supported as stripped training-only state | Fixed teachers are used only during training; export omits the distillation spec and writes the student/base inference model normally. |
+| MTP, first-byte masked loss, eval-time TTT | Training/eval-only | Rejected because they do not change the exported causal forward logits in a representable HF way or require separate runtime policy. |
 
 Unsupported and gated features fail before an incomplete directory is written. This is intentional: export should either produce parity-tested logits or return a field-specific error.

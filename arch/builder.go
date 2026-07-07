@@ -697,7 +697,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	prog := NewProgram(nWeights)
 	maskedObjective := isMaskedTrainingObjective(objective)
 	maskedLoss := maskedObjective || (framedCausalLoss && objective == ObjectiveCausal)
-	distillationEnabled := distillation != nil
+	distillationEnabled := distillation != nil && distillation.EffectiveKLActive()
 	wordStructuralEnabled := wordStructural != nil && wordStructural.Enabled && (objective == ObjectiveMLM || objective == ObjectiveMNTP || objective == ObjectiveHybridExample)
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
@@ -716,6 +716,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	if distillationEnabled {
 		prog.DeclareInput("teacher_probs", TensorFloat32, []int{B * T, V})
+		if objective == ObjectiveHybridExample {
+			prog.DeclareInput("distill_loss_mask", TensorFloat32, []int{B * T})
+		}
 	}
 	data2VecEnabled := data2vec != nil && data2vec.LossWeight > 0
 	if data2VecEnabled {
@@ -906,10 +909,18 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 
 	switch {
+	case maskedLoss && distillationEnabled:
+		klLossMask := "loss_mask"
+		if objective == ObjectiveHybridExample {
+			klLossMask = "distill_loss_mask"
+		}
+		if err := emitMaskedDistillationLanguageModelLossIR(prog, logitsState, "targets", "loss_mask", klLossMask, "teacher_probs", distillation.LossWeightCE, distillation.LossWeightKL, distillation.EffectiveTemperature()); err != nil {
+			return nil, err
+		}
 	case maskedLoss:
 		emitMaskedLanguageModelLossIR(prog, logitsState, "targets", "loss_mask")
 	case distillationEnabled:
-		if err := emitDistillationLanguageModelLossIR(prog, logitsState, "targets", "teacher_probs", distillation.LossWeightCE, distillation.LossWeightKL); err != nil {
+		if err := emitDistillationLanguageModelLossIR(prog, logitsState, "targets", "teacher_probs", B*T, distillation.LossWeightCE, distillation.LossWeightKL, distillation.EffectiveTemperature()); err != nil {
 			return nil, err
 		}
 	default:

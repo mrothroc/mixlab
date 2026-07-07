@@ -46,9 +46,6 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 	if cfg.Training.FirstByteMask {
 		return unsupportedHFExport("training.first_byte_mask", "first-byte masked loss is training-only")
 	}
-	if cfg.Training.Distillation != nil {
-		return unsupportedHFExport("training.distillation", "teacher distillation is training-only")
-	}
 	if cfg.Eval != nil && cfg.EffectiveEvalSpec().LegalChunkSGDEnabled() {
 		return unsupportedHFExport("eval.ttt_mode", "eval-time TTT is not represented in the exported HF model")
 	}

@@ -305,9 +305,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 	if distiller != nil {
 		defer distiller.Close()
-		fmt.Printf("  [%s] distillation: teachers=%d strategy=%s ce=%.3g kl=%.3g\n",
+		fmt.Printf("  [%s] distillation: teachers=%d strategy=%s objective=%s ce=%.3g kl=%.3g temperature=%.3g\n",
 			name, len(distiller.teachers), distiller.strategy,
-			cfg.Training.Distillation.LossWeightCE, cfg.Training.Distillation.LossWeightKL)
+			distiller.objective, cfg.Training.Distillation.LossWeightCE, cfg.Training.Distillation.LossWeightKL,
+			cfg.Training.Distillation.EffectiveTemperature())
 	}
 
 	// Initialize GPU trainer
@@ -571,6 +572,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		canSubmitNextBeforeCollect := func(step int) bool {
 			if !stepLookaheadEnabled ||
 				data2vec != nil ||
+				distiller != nil ||
 				rtdActive(cfg) ||
 				step >= steps-1 ||
 				shouldLogTrainingStep(step, steps, logEvery) ||

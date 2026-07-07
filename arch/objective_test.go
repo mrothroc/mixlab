@@ -173,8 +173,8 @@ func TestTrainingAttentionSegmentMaskValidation(t *testing.T) {
 				"distillation": {
 					"teacher_checkpoints": ["teacher.safetensors"],
 					"teacher_configs": ["teacher.json"],
-					"loss_weight_ce": 1,
-					"loss_weight_kl": 0,
+					"loss_weight_ce": 0.5,
+					"loss_weight_kl": 0.5,
 					"ensemble_strategy": "mean_logits"
 				}
 			}`,
@@ -419,7 +419,7 @@ func TestTrainingRecipeKnobValidationErrors(t *testing.T) {
 		{name: "early stop metric", body: `"training": {"batch_tokens": 8, "early_stop": {"metric": "train", "patience": 2}}`, wantErr: "early_stop.metric"},
 		{name: "early stop patience", body: `"training": {"batch_tokens": 8, "early_stop": {"patience": -1}}`, wantErr: "early_stop.patience"},
 		{name: "early stop val gt", body: `"training": {"batch_tokens": 8, "early_stop": {"val_gt": -1}}`, wantErr: "early_stop.val_gt"},
-		{name: "seq schedule rejects distillation", body: `"training": {"batch_tokens": 8, "seq_len_schedule": [[0,2]], "distillation": {"teacher_checkpoints":["a"], "teacher_configs":["b"], "loss_weight_ce":1, "loss_weight_kl":0, "ensemble_strategy":"mean_logits"}}`, wantErr: "seq_len_schedule"},
+		{name: "seq schedule rejects distillation", body: `"training": {"batch_tokens": 8, "seq_len_schedule": [[0,2]], "distillation": {"teacher_checkpoints":["a"], "teacher_configs":["b"], "loss_weight_ce":0.5, "loss_weight_kl":0.5, "ensemble_strategy":"mean_logits"}}`, wantErr: "seq_len_schedule"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

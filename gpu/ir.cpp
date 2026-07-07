@@ -178,6 +178,37 @@ mx::array distillation_kl_mean(
   return mx::mean(row_kl);
 }
 
+mx::array masked_distillation_kl_mean(
+    const mx::array& student_logits,
+    const mx::array& teacher_probs,
+    const mx::array& loss_mask,
+    float temperature) {
+  if (student_logits.ndim() != 2 || teacher_probs.ndim() != 2 ||
+      student_logits.shape(0) != teacher_probs.shape(0) ||
+      student_logits.shape(1) != teacher_probs.shape(1)) {
+    throw std::runtime_error("teacher_probs must match student logits shape [rows, vocab]");
+  }
+  if (loss_mask.ndim() != 1 || loss_mask.shape(0) != student_logits.shape(0)) {
+    throw std::runtime_error("loss_mask must be a rank-1 vector matching logits rows");
+  }
+  if (!(temperature > 0.0f) || !std::isfinite(temperature)) {
+    throw std::runtime_error("distillation temperature must be finite and > 0");
+  }
+  auto logits_f32 = mx::astype(student_logits, mx::float32) / mx::array(temperature, mx::float32);
+  auto row_max = mx::max(logits_f32, 1, true);
+  auto shifted = logits_f32 - row_max;
+  auto log_norm = mx::log(mx::sum(mx::exp(shifted), 1, true));
+  auto student_log_probs = shifted - log_norm;
+  auto p = mx::astype(teacher_probs, mx::float32);
+  auto safe_p = mx::maximum(p, mx::array(1e-20f, mx::float32));
+  auto row_kl = mx::sum(p * (mx::log(safe_p) - student_log_probs), 1);
+  auto mask = mx::astype(
+      mx::greater(mx::astype(loss_mask, mx::float32), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto denom = mx::maximum(mx::sum(mask), mx::array(1.0f, mx::float32));
+  return mx::sum(row_kl * mask) / denom;
+}
+
 mx::array masked_smooth_l1_mean(
     const mx::array& pred,
     const mx::array& target,
@@ -2982,6 +3013,13 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
       }
       case OP_DISTILLATION_KL: {
         set_out(op, 0, distillation_kl_mean(get(op, 0), get(op, 1)));
+        break;
+      }
+      case OP_MASKED_DISTILLATION_KL: {
+        if (op.n_float_params < 1) {
+          throw std::runtime_error("OP_MASKED_DISTILLATION_KL requires temperature float param");
+        }
+        set_out(op, 0, masked_distillation_kl_mean(get(op, 0), get(op, 1), get(op, 2), op.float_params[0]));
         break;
       }
       case OP_MASKED_SMOOTH_L1: {

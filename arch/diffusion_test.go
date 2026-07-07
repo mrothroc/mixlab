@@ -215,8 +215,8 @@ func TestBlockDiffusionConfigValidation(t *testing.T) {
 				"distillation": {
 					"teacher_checkpoints": ["teacher.safetensors"],
 					"teacher_configs": ["teacher.json"],
-					"loss_weight_ce": 1,
-					"loss_weight_kl": 0
+					"loss_weight_ce": 0.5,
+					"loss_weight_kl": 0.5
 				}
 			}`,
 			want: "training.distillation",

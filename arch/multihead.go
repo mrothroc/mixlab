@@ -57,7 +57,7 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 	if t.FirstByteMask {
 		return fmt.Errorf("config %q training.objective=\"multihead\" cannot be combined with training.first_byte_mask in v1", source)
 	}
-	if t.Distillation != nil {
+	if t.DistillationKLEffectiveActive() {
 		return fmt.Errorf("config %q training.objective=\"multihead\" cannot be combined with training.distillation in v1", source)
 	}
 	if t.Data2VecActive() {

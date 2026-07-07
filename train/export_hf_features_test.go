@@ -73,6 +73,58 @@ func TestExportHFData2VecStripsTrainingOnlyPredictor(t *testing.T) {
 	}
 }
 
+func TestExportHFDistillationStripsTrainingOnlyConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+		"name": "hf_distilled_student",
+		"model_dim": 4,
+		"vocab_size": 7,
+		"seq_len": 3,
+		"mlp_mult": 1.0,
+		"tie_embeddings": true,
+		"blocks": [
+			{"type": "plain", "heads": 2},
+			{"type": "swiglu"}
+		],
+		"training": {
+			"steps": 1,
+			"batch_tokens": 3,
+			"seed": 789,
+			"objective": "causal",
+			"distillation": {
+				"teacher_checkpoints": ["runs/teacher.safetensors"],
+				"teacher_configs": ["configs/teacher.json"],
+				"loss_weight_ce": 0.5,
+				"loss_weight_kl": 0.5,
+				"temperature": 2.0
+			}
+		}
+	}`)
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+
+	var cfg map[string]any
+	readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+	if _, ok := cfg["training"]; ok {
+		t.Fatalf("exported config unexpectedly contains training config: %#v", cfg["training"])
+	}
+
+	var mapping []hfWeightMapping
+	readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+	for _, entry := range mapping {
+		if strings.Contains(entry.Mixlab, "distill") || strings.Contains(entry.HF, "distill") {
+			t.Fatalf("exported distillation training-only weight mapping: %#v", entry)
+		}
+	}
+}
+
 func TestHFConfigWritesHalfRotationRoPEConvention(t *testing.T) {
 	cfg, err := ParseArchConfig([]byte(`{
 		"name": "hf_rope_convention",

@@ -66,6 +66,45 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	}, nil, false)
 }
 
+// BuildDistillationTeacherIRProgramFromConfig constructs a dropout-free logits
+// program for fixed-teacher distillation. Unlike normal eval IR, masked
+// objectives keep their masked attention/head semantics so teacher logits match
+// the student objective being distilled.
+func BuildDistillationTeacherIRProgramFromConfig(cfg *ArchConfig, objective string) (*Program, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("nil config")
+	}
+	objective = normalizeTrainingObjective(objective)
+	if objective == ObjectiveCausal {
+		return BuildEvalIRProgramFromConfig(cfg)
+	}
+	if objective != ObjectiveMLM && objective != ObjectiveMNTP && objective != ObjectiveHybridExample {
+		return nil, fmt.Errorf("distillation teacher objective %q is not supported", objective)
+	}
+	buildCfg := cfg
+	if objective == ObjectiveHybridExample {
+		copied := *cfg
+		copied.Training.Objective = ObjectiveHybrid
+		copied.Training.HybridMixGranularity = HybridMixGranularityExample
+		if strings.TrimSpace(copied.Training.HybridSecondaryObjective) == "" {
+			copied.Training.HybridSecondaryObjective = ObjectiveMNTP
+		}
+		buildCfg = &copied
+	}
+	return buildIRProgramFromConfigWithState(buildCfg, TrainingProgramState{
+		RecurrenceActive:       true,
+		HeadUntied:             cfg.MTPUntieEnabled(),
+		MTPAuxInactive:         true,
+		DistillationInactive:   true,
+		Data2VecInactive:       true,
+		ZLossInactive:          true,
+		DropoutInactive:        true,
+		Objective:              objective,
+		SegmentMaskInactive:    true,
+		ExampleFramingInactive: true,
+	}, nil, false)
+}
+
 // TrainingProgramState selects training-time graph schedules that can switch
 // without changing the weight layout.
 type TrainingProgramState struct {
@@ -161,8 +200,12 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	if state.MTPAuxInactive {
 		activeMTP = nil
 	}
+	objective := normalizeTrainingObjective(state.Objective)
+	if objective == ObjectiveCausal && strings.TrimSpace(state.Objective) == "" {
+		objective = cfg.Training.DefaultConcreteObjective()
+	}
 	distillation := cfg.Training.Distillation
-	if state.DistillationInactive {
+	if state.DistillationInactive || !cfg.Training.DistillationActiveForConcreteObjective(objective) {
 		distillation = nil
 	}
 	var data2vec *Data2VecSpec
@@ -172,10 +215,6 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	zLoss := cfg.Training.ZLoss
 	if state.ZLossInactive {
 		zLoss = 0
-	}
-	objective := normalizeTrainingObjective(state.Objective)
-	if objective == ObjectiveCausal && strings.TrimSpace(state.Objective) == "" {
-		objective = cfg.Training.DefaultConcreteObjective()
 	}
 	hiddenDropout := cfg.EffectiveHiddenDropout()
 	attnDropout := cfg.EffectiveAttnDropout()

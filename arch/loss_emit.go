@@ -2,6 +2,7 @@ package arch
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -109,13 +110,21 @@ func emitWordStructuralLossIR(prog *Program, logits, targets, lossMask string, w
 	prog.Add("loss", output+"_weighted", "loss")
 }
 
-func emitDistillationLanguageModelLossIR(prog *Program, logits, targets, teacherProbs string, ceWeight, klWeight float64) error {
+func emitDistillationLanguageModelLossIR(prog *Program, logits, targets, teacherProbs string, rows int, ceWeight, klWeight, temperature float64) error {
 	if ceWeight < 0 || klWeight < 0 || ceWeight+klWeight <= 0 {
 		return fmt.Errorf("distillation loss weights must be non-negative and sum to > 0")
 	}
+	if temperature <= 0 || math.IsNaN(temperature) || math.IsInf(temperature, 0) {
+		return fmt.Errorf("distillation temperature must be finite and > 0")
+	}
 	prog.CrossEntropy(logits, targets, "eval_loss")
 	prog.CrossEntropyPerToken(logits, targets, "per_token_nll")
-	prog.DistillationKL(logits, teacherProbs, "distill_kl_loss")
+	if temperature == 1 {
+		prog.DistillationKL(logits, teacherProbs, "distill_kl_loss")
+	} else {
+		prog.Full([]int{rows}, 1.0, "distill_all_rows_mask")
+		prog.MaskedDistillationKL(logits, teacherProbs, "distill_all_rows_mask", float32(temperature), "distill_kl_loss")
+	}
 
 	accum := ""
 	if ceWeight != 0 {
@@ -123,7 +132,37 @@ func emitDistillationLanguageModelLossIR(prog *Program, logits, targets, teacher
 		accum = "distill_ce_weighted"
 	}
 	if klWeight != 0 {
-		prog.ScalarMul("distill_kl_loss", float32(klWeight), "distill_kl_weighted")
+		prog.ScalarMul("distill_kl_loss", float32(klWeight*temperature*temperature), "distill_kl_weighted")
+		if accum == "" {
+			accum = "distill_kl_weighted"
+		} else {
+			prog.Add(accum, "distill_kl_weighted", "distill_loss_sum")
+			accum = "distill_loss_sum"
+		}
+	}
+	prog.ScalarMul(accum, 1.0, "loss")
+	return nil
+}
+
+func emitMaskedDistillationLanguageModelLossIR(prog *Program, logits, targets, ceLossMask, klLossMask, teacherProbs string, ceWeight, klWeight, temperature float64) error {
+	if ceWeight < 0 || klWeight < 0 || ceWeight+klWeight <= 0 {
+		return fmt.Errorf("distillation loss weights must be non-negative and sum to > 0")
+	}
+	if temperature <= 0 || math.IsNaN(temperature) || math.IsInf(temperature, 0) {
+		return fmt.Errorf("distillation temperature must be finite and > 0")
+	}
+	prog.CrossEntropy(logits, targets, "eval_loss")
+	prog.MaskedCrossEntropy(logits, targets, ceLossMask, "distill_ce_loss")
+	prog.MaskedCrossEntropyPerToken(logits, targets, ceLossMask, "per_token_nll")
+	prog.MaskedDistillationKL(logits, teacherProbs, klLossMask, float32(temperature), "distill_kl_loss")
+
+	accum := ""
+	if ceWeight != 0 {
+		prog.ScalarMul("distill_ce_loss", float32(ceWeight), "distill_ce_weighted")
+		accum = "distill_ce_weighted"
+	}
+	if klWeight != 0 {
+		prog.ScalarMul("distill_kl_loss", float32(klWeight*temperature*temperature), "distill_kl_weighted")
 		if accum == "" {
 			accum = "distill_kl_weighted"
 		} else {

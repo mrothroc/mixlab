@@ -100,10 +100,74 @@ func TestDistillationTinyTrainingSmoke(t *testing.T) {
 	}
 }
 
+func TestMaskedDistillationTinyMNTPTrainingSmoke(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	fixture := writeTinyMaskedDistillationTeacherFixture(t)
+	trainDir := filepath.Join(fixture.dir, "data")
+	if err := os.MkdirAll(trainDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%s): %v", trainDir, err)
+	}
+	writeInferenceShard(t, filepath.Join(trainDir, "train_000.bin"), []uint16{
+		1, 2, 3, 4, 5, 6, 7, 8,
+		2, 3, 4, 5, 6, 7, 8, 9,
+		3, 4, 5, 6, 7, 8, 9, 10,
+	})
+	trainPattern := filepath.Join(trainDir, "train_*.bin")
+
+	distilled := fixture.maskedStudentConfig()
+	distilled.Training.Distillation = &DistillationSpec{
+		TeacherCheckpoints: []string{fixture.teacherWeightsPath},
+		TeacherConfigs:     []string{fixture.teacherConfigPath},
+		LossWeightKL:       0.5,
+		LossWeightCE:       0.5,
+		EnsembleStrategy:   "mean_logprobs",
+		Temperature:        2.0,
+	}
+	result, err := runTrain(distilled, trainPattern, TrainOptions{LogEvery: 0, ValEvery: 0})
+	if err != nil {
+		t.Fatalf("distilled mntp runTrain: %v", err)
+	}
+	if math.IsNaN(result.LastLoss) || math.IsInf(result.LastLoss, 0) {
+		t.Fatalf("distilled mntp loss is non-finite: %g", result.LastLoss)
+	}
+}
+
 type tinyDistillationFixture struct {
 	dir                string
 	teacherConfigPath  string
 	teacherWeightsPath string
+}
+
+func (f tinyDistillationFixture) maskedStudentConfig() *ArchConfig {
+	cfg, err := ParseArchConfig([]byte(`{
+		"name": "masked_distill_student",
+		"model_dim": 8,
+		"vocab_size": 16,
+		"seq_len": 4,
+		"tie_embeddings": true,
+		"mlm_head": "bert",
+		"blocks": [
+			{"type": "plain", "heads": 2, "attention_mask": "bidirectional"}
+		],
+		"training": {
+			"steps": 2,
+			"lr": 0.01,
+			"seed": 7,
+			"batch_tokens": 8,
+			"objective": "mntp",
+			"mlm_mask_token_id": 9,
+			"mlm_mask_prob": 1.0,
+			"optimizer": "adamw",
+			"weight_decay": 0.0,
+			"grad_clip": 1.0
+		}
+	}`), "masked_distill_student")
+	if err != nil {
+		panic(err)
+	}
+	return cfg
 }
 
 func (f tinyDistillationFixture) studentConfig() *ArchConfig {
@@ -167,6 +231,54 @@ func writeTinyDistillationTeacherFixture(t *testing.T) tinyDistillationFixture {
 	teacherWeightsPath := filepath.Join(dir, "teacher.safetensors")
 	if err := exportSafetensors(teacherWeightsPath, cfg, shapes, weights); err != nil {
 		t.Fatalf("exportSafetensors teacher: %v", err)
+	}
+	return tinyDistillationFixture{
+		dir:                dir,
+		teacherConfigPath:  teacherConfigPath,
+		teacherWeightsPath: teacherWeightsPath,
+	}
+}
+
+func writeTinyMaskedDistillationTeacherFixture(t *testing.T) tinyDistillationFixture {
+	t.Helper()
+	dir := t.TempDir()
+	teacherConfig := `{
+		"name": "masked_distill_teacher",
+		"model_dim": 8,
+		"vocab_size": 16,
+		"seq_len": 4,
+		"tie_embeddings": true,
+		"mlm_head": "bert",
+		"blocks": [
+			{"type": "plain", "heads": 2, "attention_mask": "bidirectional"}
+		],
+		"training": {
+			"steps": 2,
+			"lr": 0.01,
+			"seed": 11,
+			"batch_tokens": 8,
+			"objective": "mntp",
+			"mlm_mask_token_id": 9,
+			"optimizer": "adamw",
+			"weight_decay": 0.0
+		}
+	}`
+	teacherConfigPath := filepath.Join(dir, "teacher.json")
+	if err := os.WriteFile(teacherConfigPath, []byte(teacherConfig), 0o644); err != nil {
+		t.Fatalf("WriteFile masked teacher config: %v", err)
+	}
+	cfg, err := ParseArchConfig([]byte(teacherConfig), teacherConfigPath)
+	if err != nil {
+		t.Fatalf("ParseArchConfig masked teacher: %v", err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes masked teacher: %v", err)
+	}
+	weights := initWeightData(shapes, cfg.Training.Seed, cfg.Training.WeightInit, cfg.Training.WeightInitStd)
+	teacherWeightsPath := filepath.Join(dir, "teacher.safetensors")
+	if err := exportSafetensors(teacherWeightsPath, cfg, shapes, weights); err != nil {
+		t.Fatalf("exportSafetensors masked teacher: %v", err)
 	}
 	return tinyDistillationFixture{
 		dir:                dir,

@@ -89,6 +89,7 @@ const (
 	OpEnergySpanPairwise   = 96 // OP_ENERGY_SPAN_PAIRWISE_LOSS
 	OpSpanPLLPool          = 97 // OP_SPAN_PLL_POOL
 	OpSpanPLLPairwise      = 98 // OP_SPAN_PLL_PAIRWISE_LOSS
+	OpMaskedDistillationKL = 99 // OP_MASKED_DISTILLATION_KL
 
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -283,6 +284,12 @@ func (p *Program) MaskedCrossEntropyPerToken(logits, targets, lossMask, output s
 // probabilities and student logits.
 func (p *Program) DistillationKL(logits, teacherProbs, output string) {
 	p.AddOp(OpDistillationKL, []string{logits, teacherProbs}, []string{output}, nil, nil)
+}
+
+// MaskedDistillationKL emits mean KL(P_teacher || P_student) over rows where
+// lossMask > 0. Student logits are divided by temperature before softmax.
+func (p *Program) MaskedDistillationKL(logits, teacherProbs, lossMask string, temperature float32, output string) {
+	p.AddOp(OpMaskedDistillationKL, []string{logits, teacherProbs, lossMask}, []string{output}, []float32{temperature}, nil)
 }
 
 // MaskedSmoothL1 emits mean Huber/SmoothL1 loss over rows where mask > 0.

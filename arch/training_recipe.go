@@ -155,7 +155,7 @@ func validateTrainingRecipeKnobs(cfg *ArchConfig, source string) error {
 		return err
 	}
 	if len(cfg.Training.SeqLenSchedule) > 0 {
-		if cfg.Training.Distillation != nil {
+		if cfg.Training.DistillationKLEffectiveActive() {
 			return fmt.Errorf("config %q has training.seq_len_schedule but distillation teacher runtimes use fixed seq_len in v1", source)
 		}
 		if cfg.Training.Data2VecActive() {

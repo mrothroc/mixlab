@@ -143,7 +143,7 @@ func validateTrainingData2Vec(cfg *ArchConfig, source string) error {
 	default:
 		return fmt.Errorf("config %q has training.data2vec enabled but objective=%q is not a masked objective", source, cfg.Training.Objective)
 	}
-	if cfg.Training.Distillation != nil {
+	if cfg.Training.DistillationKLEffectiveActive() {
 		return fmt.Errorf("config %q cannot combine training.data2vec with training.distillation in v1", source)
 	}
 	if cfg.MTP != nil && cfg.MTP.EffectiveN() > 1 {

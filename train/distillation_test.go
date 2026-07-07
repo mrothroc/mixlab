@@ -2,6 +2,8 @@ package train
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/mrothroc/mixlab/arch"
@@ -49,21 +51,109 @@ func TestDistillationEnsembleStrategiesMatchOracle(t *testing.T) {
 		},
 	}
 	for _, strategy := range []string{arch.DistillationMeanLogits, arch.DistillationMeanLogProbs} {
-		t.Run(strategy, func(t *testing.T) {
-			got := make([]float32, len(teachers[0]))
-			for _, logits := range teachers {
-				accumulateTeacherLogits(got, logits, strategy, vocab)
-			}
-			finalizeTeacherProbs(got, len(teachers), vocab)
-			want := distillationEnsembleOracle(teachers, strategy, vocab)
-			if diff := maxAbsDiffTrain(got, want); diff > 1e-6 {
-				t.Fatalf("%s max diff=%g\ngot=%v\nwant=%v", strategy, diff, got, want)
-			}
-		})
+		for _, temperature := range []float64{1.0, 2.0} {
+			t.Run(strategy, func(t *testing.T) {
+				got := make([]float32, len(teachers[0]))
+				for _, logits := range teachers {
+					accumulateTeacherLogits(got, logits, strategy, vocab, temperature)
+				}
+				finalizeTeacherProbs(got, len(teachers), vocab, strategy, temperature)
+				want := distillationEnsembleOracle(teachers, strategy, vocab, temperature)
+				if diff := maxAbsDiffTrain(got, want); diff > 1e-6 {
+					t.Fatalf("%s T=%g max diff=%g\ngot=%v\nwant=%v", strategy, temperature, diff, got, want)
+				}
+			})
+		}
 	}
 }
 
-func distillationEnsembleOracle(teachers [][]float32, strategy string, vocab int) []float32 {
+func TestDistillationKLZeroDoesNotInstantiateTeachers(t *testing.T) {
+	cfg := &ArchConfig{
+		VocabSize: 16,
+		SeqLen:    4,
+		Training: TrainingSpec{
+			BatchTokens: 8,
+			Distillation: &DistillationSpec{
+				LossWeightKL: 0,
+				LossWeightCE: 1,
+			},
+		},
+	}
+	ensemble, err := newDistillationEnsemble(cfg)
+	if err != nil {
+		t.Fatalf("newDistillationEnsemble: %v", err)
+	}
+	if ensemble != nil {
+		t.Fatalf("newDistillationEnsemble returned %+v, want nil", ensemble)
+	}
+}
+
+func TestAttachDistillationSkipsHybridCausalAndZeroMaskedRows(t *testing.T) {
+	ensemble := &distillationEnsemble{
+		objective: arch.ObjectiveMNTP,
+	}
+	causalBatch := objectiveBatch{
+		x: []int{1, 2, 3, 4},
+		y: []int{2, 3, 4, 5},
+	}
+	got, err := attachDistillationTeacherProbs(ensemble, causalBatch, 1, 4)
+	if err != nil {
+		t.Fatalf("attachDistillationTeacherProbs causal skip: %v", err)
+	}
+	if got.teacherProbs != nil {
+		t.Fatal("hybrid causal skip attached teacher_probs")
+	}
+
+	zeroMaskedBatch := objectiveBatch{
+		x:        []int{1, 2, 3, 4},
+		y:        []int{2, 3, 4, 5},
+		lossMask: []float32{0, 0, 0, 0},
+	}
+	got, err = attachDistillationTeacherProbs(ensemble, zeroMaskedBatch, 1, 4)
+	if err != nil {
+		t.Fatalf("attachDistillationTeacherProbs zero-mask skip: %v", err)
+	}
+	if got.teacherProbs != nil {
+		t.Fatal("zero masked rows attached teacher_probs")
+	}
+}
+
+func TestDistillationTokenizerHashMismatch(t *testing.T) {
+	dir := t.TempDir()
+	studentDir := filepath.Join(dir, "student")
+	teacherDir := filepath.Join(dir, "teacher")
+	if err := os.MkdirAll(studentDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll student: %v", err)
+	}
+	if err := os.MkdirAll(teacherDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll teacher: %v", err)
+	}
+	studentCfg := filepath.Join(studentDir, "config.json")
+	teacherCfg := filepath.Join(teacherDir, "config.json")
+	if err := os.WriteFile(studentCfg, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("WriteFile student config: %v", err)
+	}
+	if err := os.WriteFile(teacherCfg, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("WriteFile teacher config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(studentDir, "tokenizer.json"), []byte(`{"model":{"vocab":{"a":0}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile student tokenizer: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(teacherDir, "tokenizer.json"), []byte(`{"model":{"vocab":{"b":0}}}`), 0o644); err != nil {
+		t.Fatalf("WriteFile teacher tokenizer: %v", err)
+	}
+	if err := validateDistillationTokenizerMatch(studentCfg, "", teacherCfg, ""); err == nil {
+		t.Fatal("expected tokenizer mismatch error")
+	}
+	if err := os.WriteFile(filepath.Join(teacherDir, "tokenizer.json"), []byte(`{"model":{"vocab":{"a":0}}}`), 0o644); err != nil {
+		t.Fatalf("Rewrite teacher tokenizer: %v", err)
+	}
+	if err := validateDistillationTokenizerMatch(studentCfg, "", teacherCfg, ""); err != nil {
+		t.Fatalf("matching tokenizer hashes rejected: %v", err)
+	}
+}
+
+func distillationEnsembleOracle(teachers [][]float32, strategy string, vocab int, temperature float64) []float32 {
 	out := make([]float32, len(teachers[0]))
 	rows := len(out) / vocab
 	for row := 0; row < rows; row++ {
@@ -73,7 +163,7 @@ func distillationEnsembleOracle(teachers [][]float32, strategy string, vocab int
 			for col := 0; col < vocab; col++ {
 				var logProbSum float64
 				for _, logits := range teachers {
-					logProbSum += logSoftmaxAt(logits[start:start+vocab], col)
+					logProbSum += logSoftmaxAt(logits[start:start+vocab], col, temperature)
 				}
 				out[start+col] = float32(logProbSum / float64(len(teachers)))
 			}
@@ -85,7 +175,7 @@ func distillationEnsembleOracle(teachers [][]float32, strategy string, vocab int
 				for _, logits := range teachers {
 					sum += float64(logits[start+col])
 				}
-				avg[col] = float32(sum / float64(len(teachers)))
+				avg[col] = float32(sum / float64(len(teachers)) / temperature)
 			}
 			softmaxFloat32(avg)
 			copy(out[start:start+vocab], avg)
@@ -94,18 +184,18 @@ func distillationEnsembleOracle(teachers [][]float32, strategy string, vocab int
 	return out
 }
 
-func logSoftmaxAt(row []float32, col int) float64 {
-	maxVal := float64(row[0])
+func logSoftmaxAt(row []float32, col int, temperature float64) float64 {
+	maxVal := float64(row[0]) / temperature
 	for _, v := range row[1:] {
-		if float64(v) > maxVal {
-			maxVal = float64(v)
+		if scaled := float64(v) / temperature; scaled > maxVal {
+			maxVal = scaled
 		}
 	}
 	var sum float64
 	for _, v := range row {
-		sum += math.Exp(float64(v) - maxVal)
+		sum += math.Exp(float64(v)/temperature - maxVal)
 	}
-	return float64(row[col]) - maxVal - math.Log(sum)
+	return float64(row[col])/temperature - maxVal - math.Log(sum)
 }
 
 func softmaxFloat32(row []float32) {

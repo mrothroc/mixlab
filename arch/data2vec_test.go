@@ -69,7 +69,7 @@ func TestTrainingData2VecValidationRejectsInvalidCombinations(t *testing.T) {
 			body: `"training": {"steps": 1, "lr": 0.001, "batch_tokens": 8,
 				"objective": "mntp", "mlm_mask_token_id": 7,
 				"data2vec": {"top_k_layers": 1},
-				"distillation": {"teacher_checkpoints": ["a"], "teacher_configs": ["b"], "loss_weight_ce": 1}}`,
+				"distillation": {"teacher_checkpoints": ["a"], "teacher_configs": ["b"], "loss_weight_ce": 0.5, "loss_weight_kl": 0.5}}`,
 			want: "training.distillation",
 		},
 		{

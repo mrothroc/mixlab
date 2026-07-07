@@ -1,0 +1,36 @@
+{
+  "name": "distillation_mntp_tiny",
+  "model_dim": 64,
+  "vocab_size": 256,
+  "seq_len": 32,
+  "tie_embeddings": true,
+  "mlm_head": "bert",
+  "blocks": [
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional"},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional"},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "steps": 200,
+    "lr": 0.0003,
+    "seed": 42,
+    "batch_tokens": 1024,
+    "objective": "mntp",
+    "mlm_mask_token_id": 1,
+    "distillation": {
+      "teacher_checkpoints": [
+        "runs/masked_teacher_a.safetensors",
+        "runs/masked_teacher_b.safetensors"
+      ],
+      "teacher_configs": [
+        "configs/masked_teacher_a.json",
+        "configs/masked_teacher_b.json"
+      ],
+      "loss_weight_ce": 0.5,
+      "loss_weight_kl": 0.5,
+      "ensemble_strategy": "mean_logprobs",
+      "temperature": 1.0
+    }
+  }
+}

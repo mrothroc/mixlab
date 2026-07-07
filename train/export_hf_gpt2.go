@@ -119,7 +119,7 @@ func validateHFGPT2ExportConfig(cfg *ArchConfig) error {
 	if cfg.MTP != nil || cfg.Backout != nil || len(cfg.Recurrence) > 0 || len(cfg.RecurrencePhases) > 0 {
 		return unsupportedHFExport("training_graph", "native GPT-2 export requires a plain sequential graph")
 	}
-	if cfg.Training.FirstByteMask || cfg.Training.Distillation != nil || cfg.Training.Data2VecActive() || cfg.Training.UsesBlockDiffusionObjective() {
+	if cfg.Training.FirstByteMask || cfg.Training.Data2VecActive() || cfg.Training.UsesBlockDiffusionObjective() {
 		return unsupportedHFExport("training", "native GPT-2 export does not include training-only objectives or losses")
 	}
 	if cfg.EffectiveLayerAggregation() != "none" {

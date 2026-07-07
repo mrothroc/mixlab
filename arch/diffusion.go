@@ -145,7 +145,7 @@ func validateBlockDiffusionObjective(cfg *ArchConfig, source string) error {
 	if d.TimestepConditioning == DiffusionTimestepConditioningAdaLN && d.TimestepConditionDim <= 0 {
 		return fmt.Errorf("config %q has invalid training.diffusion.timestep_conditioning_dim=%d (must be > 0 for adaln)", source, d.TimestepConditionDim)
 	}
-	if t.Distillation != nil {
+	if t.DistillationKLEffectiveActive() {
 		return fmt.Errorf("config %q block_diffusion objective paths cannot be combined with training.distillation in v1", source)
 	}
 	if t.Data2VecActive() {

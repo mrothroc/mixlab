@@ -278,7 +278,7 @@ func validateTrainingAttentionSegmentMask(cfg *ArchConfig, source string) error 
 	if cfg.Training.UsesBlockDiffusionObjective() {
 		return fmt.Errorf("config %q training.attention_segment_mask cannot be combined with block_diffusion objective paths in v1", source)
 	}
-	if cfg.Training.Distillation != nil {
+	if cfg.Training.DistillationKLEffectiveActive() {
 		return fmt.Errorf("config %q training.attention_segment_mask cannot be combined with training.distillation in v1; teacher programs do not consume segment_ids", source)
 	}
 	hasPlain := false
@@ -336,7 +336,7 @@ func validateTrainingExampleFraming(cfg *ArchConfig, source string) error {
 	if t.FirstByteMask {
 		return fmt.Errorf("config %q training.example_framing cannot be combined with training.first_byte_mask in v1", source)
 	}
-	if t.Distillation != nil {
+	if t.DistillationKLEffectiveActive() {
 		return fmt.Errorf("config %q training.example_framing cannot be combined with training.distillation in v1", source)
 	}
 	if t.Data2Vec != nil {
