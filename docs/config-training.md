@@ -50,6 +50,31 @@ or native energy/ranking head over the same trunk.
 Optimizer-group overrides such as embedding, matrix, scalar, and head learning
 rates/weight decay are documented in the full reference.
 
+### Choosing an optimizer for architecture comparison
+
+Muon only orthogonalizes 2D weight matrices; biases, norms, gains, embeddings, and
+the output head stay on AdamW (hence the separate `matrix_lr` vs
+`embed_lr`/`head_lr`/`scalar_lr` groups). Its benefit is therefore uneven across
+architecture families, which matters when the optimizer is a variable in an
+experiment rather than a fixed choice:
+
+- **Within one family** (transformer vs transformer): prefer Muon, tuned once on a
+  reference config and applied identically. It usually gives the best loss per unit
+  of compute, so architecture differences surface sooner and the result transfers
+  to how a real pretraining run would be optimized.
+- **Across dissimilar families** (attention vs SSM/hybrid blocks such as
+  `mamba3-canonical`, `gated_deltanet`, `hgrn2`, or a `parallel_group`): hold the
+  optimizer fixed and use **AdamW as the neutral baseline**. Much of an SSM/recurrent
+  block's parameters are gates and small projections that Muon treats differently, so
+  Muon can favor one family for optimizer-interaction reasons rather than intrinsic
+  architecture quality. Re-run the top one or two candidates under Muon afterward to
+  confirm the ranking holds and to get the better absolute number.
+
+Whichever you choose, apply the same optimizer and tuning protocol to every
+candidate. An untuned optimizer — Muon especially, since its learning-rate scale
+differs from AdamW's — will change rankings faster than the architecture differences
+you are trying to measure.
+
 ## Auxiliary Training Features
 
 | Field | Purpose |
