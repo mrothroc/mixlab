@@ -70,6 +70,7 @@ typedef struct {
     float beta2;
     float eps;
     float weight_decay;
+    float lamb_trust_ratio_cap;
     int cautious_weight_decay;
     int cautious_weight_decay_activation_step;
     int backend_steps;

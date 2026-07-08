@@ -38,6 +38,7 @@ func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	_, t.lambBeta1Set = fields["lamb_beta1"]
 	_, t.lambBeta2Set = fields["lamb_beta2"]
 	_, t.lambEpsSet = fields["lamb_eps"]
+	_, t.lambTrustRatioCapSet = fields["lamb_trust_ratio_cap"]
 	_, t.swaDecaySet = fields["swa_decay"]
 	_, t.swaIntervalSet = fields["swa_interval"]
 	return nil
@@ -67,6 +68,9 @@ func (t TrainingSpec) MarshalJSON() ([]byte, error) {
 	}
 	if !t.headWeightDecaySet && t.HeadWeightDecay == 0 {
 		delete(fields, "head_weight_decay")
+	}
+	if !t.lambTrustRatioCapSet && t.LAMBTrustRatioCap == 0 {
+		delete(fields, "lamb_trust_ratio_cap")
 	}
 	return json.Marshal(fields)
 }

@@ -501,10 +501,13 @@ mx::array weight_decay_update_term(
   return group.weight_decay * decay_term;
 }
 
-mx::array lamb_trust_ratio(const mx::array& w, const mx::array& update) {
+mx::array lamb_trust_ratio(const mx::array& w, const mx::array& update, float cap) {
   auto w_norm = mx::sqrt(mx::sum(mx::square(mx::astype(w, mx::float32))));
   auto update_norm = mx::sqrt(mx::sum(mx::square(mx::astype(update, mx::float32))));
   auto raw_ratio = w_norm / update_norm;
+  if (std::isfinite(cap) && cap > 0.0f) {
+    raw_ratio = mx::minimum(raw_ratio, mx::array(cap, mx::float32));
+  }
   auto positive_norms = mx::logical_and(
       mx::greater(w_norm, mx::array(0.0f, mx::float32)),
       mx::greater(update_norm, mx::array(0.0f, mx::float32)));
@@ -1326,7 +1329,7 @@ void apply_optimizer_update(
       auto vhat = state.adam_v / b2t;
       auto update = mhat / (mx::sqrt(vhat) + group.eps);
       update = update + weight_decay_update_term(w, grad, group, decay, step_count);
-      auto trust_ratio = lamb_trust_ratio(w, update);
+      auto trust_ratio = lamb_trust_ratio(w, update, group.lamb_trust_ratio_cap);
       w = w - effective_lr * trust_ratio * update;
       break;
     }
@@ -2041,7 +2044,7 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
       auto vhat = adam_v[i] / b2t;
       auto update = mhat / (mx::sqrt(vhat) + group.eps);
       update = update + weight_decay_update_term(w, grad, group, spec.decay, step_count);
-      auto trust_ratio = lamb_trust_ratio(w, update);
+      auto trust_ratio = lamb_trust_ratio(w, update, group.lamb_trust_ratio_cap);
       w = w - effective_lr * trust_ratio * update;
       break;
     }

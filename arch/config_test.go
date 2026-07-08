@@ -368,8 +368,8 @@ func TestOptimizerFieldParsing(t *testing.T) {
 	if cfg6.Training.Optimizer != "lamb" {
 		t.Errorf("lamb optimizer = %q, want lamb", cfg6.Training.Optimizer)
 	}
-	if cfg6.Training.LAMBBeta1 != 0 || cfg6.Training.LAMBBeta2 != 0.999 || cfg6.Training.LAMBEps != 1e-6 {
-		t.Errorf("lamb hyperparams = beta1=%g beta2=%g eps=%g", cfg6.Training.LAMBBeta1, cfg6.Training.LAMBBeta2, cfg6.Training.LAMBEps)
+	if cfg6.Training.LAMBBeta1 != 0 || cfg6.Training.LAMBBeta2 != 0.999 || cfg6.Training.LAMBEps != 1e-6 || cfg6.Training.LAMBTrustRatioCap != 10 {
+		t.Errorf("lamb hyperparams = beta1=%g beta2=%g eps=%g trust_cap=%g", cfg6.Training.LAMBBeta1, cfg6.Training.LAMBBeta2, cfg6.Training.LAMBEps, cfg6.Training.LAMBTrustRatioCap)
 	}
 	roundTripLAMB, err := json.Marshal(cfg6)
 	if err != nil {
@@ -379,6 +379,24 @@ func TestOptimizerFieldParsing(t *testing.T) {
 		!strings.Contains(string(roundTripLAMB), `"lamb_beta2":0.999`) ||
 		!strings.Contains(string(roundTripLAMB), `"lamb_eps":0.000001`) {
 		t.Fatalf("round-trip JSON missing LAMB fields: %s", roundTripLAMB)
+	}
+	cfg7, err := ParseArchConfig([]byte(`{
+		"model_dim": 128, "vocab_size": 1024,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 10, "lr": 1e-3, "batch_tokens": 128, "seed": 1, "optimizer": "lamb", "lamb_trust_ratio_cap": 0.0}
+	}`), "lamb_uncapped")
+	if err != nil {
+		t.Fatalf("parse lamb uncapped: %v", err)
+	}
+	if cfg7.Training.LAMBTrustRatioCap != 0 {
+		t.Errorf("explicit lamb_trust_ratio_cap = %g, want 0", cfg7.Training.LAMBTrustRatioCap)
+	}
+	roundTripLAMBUncapped, err := json.Marshal(cfg7)
+	if err != nil {
+		t.Fatalf("marshal lamb uncapped: %v", err)
+	}
+	if !strings.Contains(string(roundTripLAMBUncapped), `"lamb_trust_ratio_cap":0`) {
+		t.Fatalf("round-trip JSON missing explicit uncapped LAMB trust-ratio cap: %s", roundTripLAMBUncapped)
 	}
 
 	_, err = ParseArchConfig([]byte(`{
@@ -402,6 +420,7 @@ func TestLAMBValidation(t *testing.T) {
 		{"bad_beta2_negative", `"optimizer": "lamb", "lamb_beta2": -0.1`, "lamb_beta2"},
 		{"bad_beta2_one", `"optimizer": "lamb", "lamb_beta2": 1.0`, "lamb_beta2"},
 		{"bad_eps_zero", `"optimizer": "lamb", "lamb_eps": 0.0`, "lamb_eps"},
+		{"bad_trust_ratio_cap_negative", `"optimizer": "lamb", "lamb_trust_ratio_cap": -1.0`, "lamb_trust_ratio_cap"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

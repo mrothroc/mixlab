@@ -547,6 +547,7 @@ func TestBuildTrainerOptimizerSpec_LAMBWholeModel(t *testing.T) {
 	cfg.Training.LAMBBeta1 = 0.87
 	cfg.Training.LAMBBeta2 = 0.997
 	cfg.Training.LAMBEps = 1e-5
+	cfg.Training.LAMBTrustRatioCap = 7.5
 	cfg.Training.ApplyDefaults()
 	shapes, err := computeWeightShapes(cfg)
 	if err != nil {
@@ -566,7 +567,7 @@ func TestBuildTrainerOptimizerSpec_LAMBWholeModel(t *testing.T) {
 		if group.Kind != gpu.OptimizerLAMB {
 			t.Fatalf("weight %q group kind=%d want LAMB", shape.Name, group.Kind)
 		}
-		if group.Beta1 != 0.87 || group.Beta2 != 0.997 || group.Epsilon != 1e-5 {
+		if group.Beta1 != 0.87 || group.Beta2 != 0.997 || group.Epsilon != 1e-5 || group.LAMBTrustRatioCap != 7.5 {
 			t.Fatalf("weight %q LAMB hyperparams=%+v", shape.Name, group)
 		}
 		switch {

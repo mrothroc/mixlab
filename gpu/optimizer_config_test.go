@@ -202,10 +202,10 @@ func TestBuildTrainerOptimizerSpec_LAMB(t *testing.T) {
 			{Name: "norm", Shape: []int{4}, IsNormScale: true},
 			{Name: "wq", Shape: []int{4, 4}},
 		},
-		Embed:  OptimizerSettings{Name: "lamb", LR: 1, Beta1: 0.11, Beta2: 0.91, Epsilon: 1e-6, WeightDecay: 0.01},
-		Head:   OptimizerSettings{Name: "lamb", LR: 2, Beta1: 0.12, Beta2: 0.92, Epsilon: 2e-6, WeightDecay: 0.02},
-		Scalar: OptimizerSettings{Name: "lamb", LR: 3, Beta1: 0.13, Beta2: 0.93, Epsilon: 3e-6, WeightDecay: 0.03},
-		Matrix: OptimizerSettings{Name: "lamb", LR: 4, Beta1: 0.14, Beta2: 0.94, Epsilon: 4e-6, WeightDecay: 0.04},
+		Embed:  OptimizerSettings{Name: "lamb", LR: 1, Beta1: 0.11, Beta2: 0.91, Epsilon: 1e-6, WeightDecay: 0.01, LAMBTrustRatioCap: 8},
+		Head:   OptimizerSettings{Name: "lamb", LR: 2, Beta1: 0.12, Beta2: 0.92, Epsilon: 2e-6, WeightDecay: 0.02, LAMBTrustRatioCap: 9},
+		Scalar: OptimizerSettings{Name: "lamb", LR: 3, Beta1: 0.13, Beta2: 0.93, Epsilon: 3e-6, WeightDecay: 0.03, LAMBTrustRatioCap: 10},
+		Matrix: OptimizerSettings{Name: "lamb", LR: 4, Beta1: 0.14, Beta2: 0.94, Epsilon: 4e-6, WeightDecay: 0.04, LAMBTrustRatioCap: 11},
 	})
 	if err != nil {
 		t.Fatalf("BuildTrainerOptimizerSpec error = %v", err)
@@ -218,7 +218,7 @@ func TestBuildTrainerOptimizerSpec_LAMB(t *testing.T) {
 			t.Fatalf("group %d Kind=%d, want LAMB (%d)", i, group.Kind, OptimizerLAMB)
 		}
 	}
-	if spec.Groups[0].Beta1 != 0.11 || spec.Groups[1].Beta2 != 0.92 || spec.Groups[2].Epsilon != 3e-6 || spec.Groups[3].WeightDecay != 0.04 {
+	if spec.Groups[0].Beta1 != 0.11 || spec.Groups[1].Beta2 != 0.92 || spec.Groups[2].Epsilon != 3e-6 || spec.Groups[3].WeightDecay != 0.04 || spec.Groups[3].LAMBTrustRatioCap != 11 {
 		t.Fatalf("LAMB groups did not preserve settings: %+v", spec.Groups)
 	}
 	if spec.Weights[2].Decay {

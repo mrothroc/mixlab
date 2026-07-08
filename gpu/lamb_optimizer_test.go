@@ -24,6 +24,7 @@ func TestLAMBOptimizerMatchesCPUOracle(t *testing.T) {
 		decay1      bool
 		weightDecay float64
 		maxGradNorm float32
+		trustCap    float32
 		steps       int
 	}{
 		{
@@ -49,11 +50,23 @@ func TestLAMBOptimizerMatchesCPUOracle(t *testing.T) {
 			maxGradNorm: 0.75,
 			steps:       2,
 		},
+		{
+			name:        "trust_ratio_cap",
+			w0:          []float32{100, -100, 50, -50},
+			w1:          []float32{0.5, -0.25, 0.125, -0.75},
+			driver0:     []float32{0, 0, 0, 0},
+			driver1:     []float32{0, 0, 0, 0},
+			decay0:      true,
+			decay1:      false,
+			weightDecay: 1e-6,
+			trustCap:    10,
+			steps:       1,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			trainer, handles := newLAMBOracleTrainer(t, tt.w0, tt.w1, tt.decay0, tt.decay1, float32(tt.weightDecay), tt.maxGradNorm)
+			trainer, handles := newLAMBOracleTrainer(t, tt.w0, tt.w1, tt.decay0, tt.decay1, float32(tt.weightDecay), tt.maxGradNorm, tt.trustCap)
 			defer TrainerDestroy(trainer)
 			for _, h := range handles {
 				defer FreeHandle(h)
@@ -75,8 +88,8 @@ func TestLAMBOptimizerMatchesCPUOracle(t *testing.T) {
 				g0 := append([]float64(nil), grad0...)
 				g1 := append([]float64(nil), grad1...)
 				clipOracleGrads(tt.maxGradNorm, g0, g1)
-				lambOracleStep(&state0, g0, step, 0.05, 0.9, 0.999, 1e-6, tt.weightDecay, tt.decay0)
-				lambOracleStep(&state1, g1, step, 0.05, 0.9, 0.999, 1e-6, tt.weightDecay, tt.decay1)
+				lambOracleStep(&state0, g0, step, 0.05, 0.9, 0.999, 1e-6, tt.weightDecay, tt.decay0, float64(tt.trustCap))
+				lambOracleStep(&state1, g1, step, 0.05, 0.9, 0.999, 1e-6, tt.weightDecay, tt.decay1, float64(tt.trustCap))
 			}
 
 			got0 := readTrainerWeight(t, trainer, 0)
@@ -87,7 +100,7 @@ func TestLAMBOptimizerMatchesCPUOracle(t *testing.T) {
 	}
 }
 
-func newLAMBOracleTrainer(t *testing.T, w0, w1 []float32, decay0, decay1 bool, weightDecay, maxGradNorm float32) (TrainerHandle, []int64) {
+func newLAMBOracleTrainer(t *testing.T, w0, w1 []float32, decay0, decay1 bool, weightDecay, maxGradNorm, trustCap float32) (TrainerHandle, []int64) {
 	t.Helper()
 	prog := ir.NewProgram(2)
 	prog.DeclareInput("driver0", ir.TensorFloat32, []int{2, 2})
@@ -118,12 +131,13 @@ func newLAMBOracleTrainer(t *testing.T, w0, w1 []float32, decay0, decay1 bool, w
 	}
 	trainer, err := CreateTrainer(gpuProg, []int64{h0, h1}, TrainerOptimizerSpec{
 		Groups: []OptimizerGroup{{
-			Kind:        OptimizerLAMB,
-			LR:          0.05,
-			Beta1:       0.9,
-			Beta2:       0.999,
-			Epsilon:     1e-6,
-			WeightDecay: weightDecay,
+			Kind:              OptimizerLAMB,
+			LR:                0.05,
+			Beta1:             0.9,
+			Beta2:             0.999,
+			Epsilon:           1e-6,
+			WeightDecay:       weightDecay,
+			LAMBTrustRatioCap: trustCap,
 		}},
 		Weights: []WeightOptimizer{
 			{GroupIndex: 0, Decay: decay0},
@@ -146,7 +160,7 @@ type lambOracleState struct {
 	v []float64
 }
 
-func lambOracleStep(state *lambOracleState, grad []float64, step int, lr, beta1, beta2, eps, weightDecay float64, decay bool) {
+func lambOracleStep(state *lambOracleState, grad []float64, step int, lr, beta1, beta2, eps, weightDecay float64, decay bool, trustCap float64) {
 	update := make([]float64, len(state.w))
 	b1t := 1 - math.Pow(beta1, float64(step))
 	b2t := 1 - math.Pow(beta2, float64(step))
@@ -166,6 +180,9 @@ func lambOracleStep(state *lambOracleState, grad []float64, step int, lr, beta1,
 	if wNorm > 0 && updateNorm > 0 {
 		ratio := wNorm / updateNorm
 		if !math.IsNaN(ratio) && !math.IsInf(ratio, 0) {
+			if trustCap > 0 && ratio > trustCap {
+				ratio = trustCap
+			}
 			trustRatio = ratio
 		}
 	}

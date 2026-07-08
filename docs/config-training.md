@@ -50,6 +50,11 @@ or native energy/ranking head over the same trunk.
 Optimizer-group overrides such as embedding, matrix, scalar, and head learning
 rates/weight decay are documented in the full reference.
 
+LAMB caps its per-tensor trust ratio at `lamb_trust_ratio_cap` (`10.0` by
+default) to avoid post-warmup amplification when an update norm becomes very
+small. Set `lamb_trust_ratio_cap: 0` only when intentionally testing uncapped
+LAMB behavior.
+
 ### Choosing an optimizer for architecture comparison
 
 Muon only orthogonalizes 2D weight matrices; biases, norms, gains, embeddings, and

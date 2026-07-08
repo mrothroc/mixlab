@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -302,6 +303,7 @@ type TrainingSpec struct {
 	LAMBBeta1                         float32                      `json:"lamb_beta1,omitempty"`
 	LAMBBeta2                         float32                      `json:"lamb_beta2,omitempty"`
 	LAMBEps                           float32                      `json:"lamb_eps,omitempty"`
+	LAMBTrustRatioCap                 float32                      `json:"lamb_trust_ratio_cap"`
 	Seed                              int64                        `json:"seed"`
 	BatchTokens                       int                          `json:"batch_tokens"`
 	ShuffleChunkTokens                int                          `json:"shuffle_chunk_tokens,omitempty"`
@@ -352,6 +354,7 @@ type TrainingSpec struct {
 	lambBeta1Set                       bool
 	lambBeta2Set                       bool
 	lambEpsSet                         bool
+	lambTrustRatioCapSet               bool
 	swaDecaySet                        bool
 	swaIntervalSet                     bool
 }
@@ -416,6 +419,7 @@ func DefaultTrainingSpec() TrainingSpec {
 		LAMBBeta1:         0.9,
 		LAMBBeta2:         0.999,
 		LAMBEps:           1e-6,
+		LAMBTrustRatioCap: 10,
 		Seed:              42,
 		BatchTokens:       1024,
 		TTTMode:           "full",
@@ -504,6 +508,9 @@ func (t *TrainingSpec) ApplyDefaults() {
 	}
 	if !t.lambEpsSet && t.LAMBEps == 0 {
 		t.LAMBEps = d.LAMBEps
+	}
+	if !t.lambTrustRatioCapSet && t.LAMBTrustRatioCap == 0 {
+		t.LAMBTrustRatioCap = d.LAMBTrustRatioCap
 	}
 	if t.EmbedLR == 0 {
 		t.EmbedLR = float32(t.LR)
@@ -831,6 +838,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Training.LAMBEps <= 0 {
 		return nil, fmt.Errorf("config %q has invalid training.lamb_eps=%g (must be > 0)", source, cfg.Training.LAMBEps)
+	}
+	if cfg.Training.LAMBTrustRatioCap < 0 || math.IsNaN(float64(cfg.Training.LAMBTrustRatioCap)) || math.IsInf(float64(cfg.Training.LAMBTrustRatioCap), 0) {
+		return nil, fmt.Errorf("config %q has invalid training.lamb_trust_ratio_cap=%g (must be finite and >= 0; 0 disables capping)", source, cfg.Training.LAMBTrustRatioCap)
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Training.NewtonSchulzVariant)) {
 	case "", "fixed":

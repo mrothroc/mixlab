@@ -184,6 +184,7 @@ type OptimizerGroup struct {
 	Beta2                             float32
 	Epsilon                           float32
 	WeightDecay                       float32
+	LAMBTrustRatioCap                 float32
 	CautiousWeightDecay               bool
 	CautiousWeightDecayActivationStep int
 	BackendSteps                      int

@@ -307,6 +307,7 @@ func mlxCreateTrainer(programHandle int64, weightHandles []int64, spec TrainerOp
 			beta2:                                 C.float(group.Beta2),
 			eps:                                   C.float(group.Epsilon),
 			weight_decay:                          C.float(group.WeightDecay),
+			lamb_trust_ratio_cap:                  C.float(group.LAMBTrustRatioCap),
 			cautious_weight_decay:                 C.int(0),
 			cautious_weight_decay_activation_step: C.int(group.CautiousWeightDecayActivationStep),
 			backend_steps:                         C.int(group.BackendSteps),

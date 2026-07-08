@@ -950,6 +950,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `lamb_beta1` | number | No | `0.9` | LAMB beta1. Used only when `optimizer: "lamb"`; must be in `[0,1)`. |
 | `lamb_beta2` | number | No | `0.999` | LAMB beta2. Used only when `optimizer: "lamb"`; must be in `[0,1)`. |
 | `lamb_eps` | number | No | `1e-6` | LAMB epsilon. Used only when `optimizer: "lamb"`; must be `> 0`. |
+| `lamb_trust_ratio_cap` | number | No | `10.0` | Upper bound for the LAMB trust ratio `||w|| / ||update||`. `0` disables capping for experiments; values must be finite and `>= 0`. |
 | `seed` | integer | No | `42` | RNG seed. `0` is treated as omitted and replaced with `42`. |
 | `batch_tokens` | integer | No | `1024` | Tokens per optimization step. Must be divisible by `seq_len`. |
 | `seq_len_schedule` | array | No | Disabled | Stepwise training sequence-length schedule as `[[step, seq_len], ...]`. The top-level `seq_len` remains the maximum/eval/inference length. Scheduled lengths must start at step `0`, be strictly increasing by step, stay in `[1, seq_len]`, and divide `batch_tokens`. V1 rejects this with distillation or active data2vec. |

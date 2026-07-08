@@ -18,6 +18,7 @@ type OptimizerSettings struct {
 	Beta2                             float32
 	Epsilon                           float32
 	WeightDecay                       float32
+	LAMBTrustRatioCap                 float32
 	CautiousWeightDecay               bool
 	CautiousWeightDecayActivationStep int
 	BackendSteps                      int
@@ -133,6 +134,7 @@ func optimizerGroup(settings OptimizerSettings) (OptimizerGroup, error) {
 		Beta2:                             settings.Beta2,
 		Epsilon:                           settings.Epsilon,
 		WeightDecay:                       settings.WeightDecay,
+		LAMBTrustRatioCap:                 settings.LAMBTrustRatioCap,
 		CautiousWeightDecay:               settings.CautiousWeightDecay,
 		CautiousWeightDecayActivationStep: settings.CautiousWeightDecayActivationStep,
 		BackendSteps:                      settings.BackendSteps,

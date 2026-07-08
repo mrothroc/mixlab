@@ -60,6 +60,9 @@ func TestTrainingDefaults(t *testing.T) {
 	if got.Training.LAMBEps != d.LAMBEps {
 		t.Errorf("default lamb_eps = %g, want %g", got.Training.LAMBEps, d.LAMBEps)
 	}
+	if got.Training.LAMBTrustRatioCap != d.LAMBTrustRatioCap {
+		t.Errorf("default lamb_trust_ratio_cap = %g, want %g", got.Training.LAMBTrustRatioCap, d.LAMBTrustRatioCap)
+	}
 	if got.Training.EmbedWeightDecay != d.WeightDecay {
 		t.Errorf("default embed_weight_decay = %g, want %g", got.Training.EmbedWeightDecay, d.WeightDecay)
 	}
