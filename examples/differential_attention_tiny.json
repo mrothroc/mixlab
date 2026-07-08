@@ -1,0 +1,26 @@
+{
+  "name": "differential_attention_tiny",
+
+  // Experimental DIFF Transformer-style attention. This uses 2 differential
+  // heads to match the projection scale of a 4-head ordinary baseline.
+  "model_dim": 128,
+  "vocab_size": 1024,
+  "seq_len": 128,
+  "mlp_mult": 1.0,
+
+  "blocks": [
+    {"type": "plain", "heads": 2, "differential_attention": true},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 2, "differential_attention": true},
+    {"type": "swiglu"}
+  ],
+
+  "training": {
+    "steps": 200,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 1024
+  }
+}

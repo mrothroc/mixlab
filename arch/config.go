@@ -112,6 +112,8 @@ type BlockSpec struct {
 	RelativeAttentionEmbeddingNorm    string       `json:"relative_attention_embedding_norm,omitempty"`   // plain shared_qk_reuse: "", "none", or "layernorm" for affine shared relative embedding LayerNorm.
 	QKGain                            float64      `json:"qk_gain,omitempty"`                             // per-head learnable QK scaling; 0 disables
 	QKNorm                            bool         `json:"qk_norm,omitempty"`                             // plain: learned RMSNorm on Q/K heads before attention scores.
+	DifferentialAttention             bool         `json:"differential_attention,omitempty"`              // plain: DIFF Transformer two-softmax differential attention.
+	DifferentialLambdaInit            *float64     `json:"differential_lambda_init,omitempty"`            // plain differential attention: optional lambda_init override.
 	AttnBias                          bool         `json:"attn_bias,omitempty"`                           // plain: add learned biases to Q/K/V/O projections.
 	AttnValueGate                     bool         `json:"attn_value_gate,omitempty"`                     // plain: widen V projection to value+GELU gate and gate the attention output before WO.
 	AttnPostNorm                      string       `json:"attn_post_norm,omitempty"`                      // plain: "", "inherit", "none", "after_outproj", or "before_outproj".
@@ -755,6 +757,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 	if err := validateSharedRelativeAttention(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateDifferentialAttention(cfg, source); err != nil {
 		return nil, err
 	}
 	if err := validateParallelResidual(cfg, source); err != nil {

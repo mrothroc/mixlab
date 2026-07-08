@@ -1,6 +1,10 @@
 package train
 
-import "strings"
+import (
+	"strings"
+
+	ir "github.com/mrothroc/mixlab/arch"
+)
 
 type hfConfigOptions struct {
 	LayerAggregationScope string
@@ -66,7 +70,7 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 			"source":            "mixlab",
 			"weight_map":        "weight_map.json",
 			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.ffn_activation=gelu", "plain.ffn_activation=gelu_new", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.ffn_pre_norm", "plain.ffn_bias", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "positional_embedding=learned_absolute", "positional_embedding=none", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe"},
+			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.differential_attention", "plain.ffn_activation=gelu", "plain.ffn_activation=gelu_new", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.ffn_pre_norm", "plain.ffn_bias", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "positional_embedding=learned_absolute", "positional_embedding=none", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe"},
 			"unsupported_fails": true,
 		},
 	}
@@ -111,7 +115,7 @@ func hfExportLayerAggregation(cfg *ArchConfig) string {
 
 func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 	blocks := make([]map[string]any, 0, len(cfg.Blocks))
-	for _, block := range cfg.Blocks {
+	for blockIdx, block := range cfg.Blocks {
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
 		case "plain":
 			entry := map[string]any{
@@ -132,6 +136,10 @@ func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 			}
 			if block.QKNorm {
 				entry["qk_norm"] = true
+			}
+			if block.DifferentialAttention {
+				entry["differential_attention"] = true
+				entry["differential_lambda_init"] = ir.EffectiveDifferentialLambdaInit(block, blockIdx)
 			}
 			if block.AttnBias {
 				entry["attn_bias"] = true

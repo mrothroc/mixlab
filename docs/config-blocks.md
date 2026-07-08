@@ -40,7 +40,7 @@ normally paired with FFN/channel mixers such as `swiglu`, `geglu`, `mlp`, or
 
 | Cluster | Fields |
 |------|--------|
-| Attention shape | `heads`, `kv_heads`, `attention_mask`, `window_size` |
+| Attention shape | `heads`, `kv_heads`, `attention_mask`, `window_size`, `differential_attention`, `differential_lambda_init` |
 | Position handling | `rope_dims`, `rope_convention`, `relative_attention`, `relative_attention_window`, `relative_attention_parameterization` |
 | Projection extras | `attn_bias`, `attn_value_gate`, `qk_norm`, `qk_gain`, `xsa`, `sparse_attn_gate` |
 | FFN tail | `ffn_activation`, `ffn_pre_norm`, `ffn_bias` |
@@ -49,6 +49,10 @@ normally paired with FFN/channel mixers such as `swiglu`, `geglu`, `mlp`, or
 For strict GPT-2-compatible blocks, use learned absolute positions, affine
 LayerNorm, tied embeddings, `attn_bias: true`, `ffn_pre_norm: true`,
 `ffn_bias: true`, and `ffn_activation: "gelu_new"` or `"gelu"`.
+
+For DIFF Transformer-style attention, set `differential_attention: true` on
+`plain`. The `heads` value is the number of differential heads, so use half the
+ordinary baseline head count when matching parameter/FLOP scale.
 
 ## Parallel Hybrid Branches
 

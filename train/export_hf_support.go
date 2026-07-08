@@ -24,6 +24,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "plain.attn_value_gate", Status: hfExportSupported, Reason: "Value-projection attention gates are mirrored before the output projection in the generated PyTorch template."},
 		{Feature: "plain.attn_post_norm", Status: hfExportSupported, Reason: "Attention post-norm can inherit legacy after-output placement or explicitly run before the output projection."},
 		{Feature: "plain.qk_norm", Status: hfExportSupported, Reason: "Learned Q/K RMSNorm scales are mirrored in the generated PyTorch template."},
+		{Feature: "plain.differential_attention", Status: hfExportSupported, Reason: "DIFF Transformer two-softmax attention with per-head SubLN is mirrored in the generated PyTorch template."},
 		{Feature: "plain.xsa", Status: hfExportSupported, Reason: "XSA output projection is mirrored in the generated PyTorch template."},
 		{Feature: "plain.sparse_attn_gate", Status: hfExportSupported, Reason: "Sparse per-head attention gates are mirrored in the generated PyTorch template."},
 		{Feature: "plain.ffn_activation=gelu", Status: hfExportSupported, Reason: "Plain-block exact GELU FFN tails are mirrored in the generated PyTorch template."},
@@ -60,6 +61,9 @@ func hfExportCapabilities() []hfExportCapability {
 func hfExportBlockCapability(block BlockSpec) hfExportCapability {
 	switch strings.ToLower(strings.TrimSpace(block.Type)) {
 	case "plain":
+		if block.DifferentialAttention {
+			return capabilityByFeature("plain.differential_attention")
+		}
 		if hfNormalizePlainAttnPostNorm(block.AttnPostNorm) != "inherit" {
 			return capabilityByFeature("plain.attn_post_norm")
 		}

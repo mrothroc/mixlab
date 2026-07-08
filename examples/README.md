@@ -56,6 +56,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [packed_segment_mask_tiny.json](packed_segment_mask_tiny.json) | Packed segment masking | Block-diagonal plain attention from a boundary token |
 | [softcap_plain.json](softcap_plain.json) | Logit softcap | Bounded logits before loss |
 | [qk_norm_tiny.json](qk_norm_tiny.json) | QK-norm attention | Learned per-head-dimension Q/K RMSNorm |
+| [differential_attention_tiny.json](differential_attention_tiny.json) | Differential attention | DIFF Transformer two-softmax attention variant |
 | [layernorm_sandwich_tiny.json](layernorm_sandwich_tiny.json) | LayerNorm sandwich stack | HF-exportable GPT-BERT-style norms and GEGLU |
 | [gpt2_strict_small_2026.json](gpt2_strict_small_2026.json) | GPT-2 strict-small baseline | Learned absolute positions, GPT-2 FFN/norm/bias layout, native GPT-2 HF export |
 | [mlm_tiny.json](mlm_tiny.json) | Bidirectional transformer | Masked language modeling objective |
@@ -101,6 +102,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **EMA representation distillation**: Use `data2vec_hybrid_tiny.json` for experimental online data2vec-style hidden-state targets on masked objective steps. The current implementation prioritizes correctness and uses CPU EMA weight refreshes.
 - **Averaged checkpoints**: Use `swa_ema_tiny.json` to keep both live final and SWA/EMA averaged weights.
 - **Relative attention**: Use `deberta_relative_tiny.json` for DeBERTa-style P2C/C2P position bias. Add `relative_attention_parameterization: "shared_qk_reuse"` when you want GPT-BERT-style shared relative embeddings instead of per-block position projection weights.
+- **Differential attention**: Use `differential_attention_tiny.json` when you want to experiment with DIFF Transformer-style attention noise cancellation. Compare against both a same-seed ordinary-head baseline and a half-head baseline before attributing gains to the subtraction itself.
 - **Parallel hybrid branches**: Use `parallel_hybrid_branches_tiny.json` when you want bidirectional attention and a recurrent side branch to read the same input and add their outputs together. The recurrent branch starts zero-gated with `residual_scale_init: 0.0`.
 - **GPT-2-compatible baseline**: Use `gpt2_strict_small_2026.json` when you need a strict GPT-2-style architecture and native `GPT2LMHeadModel` export instead of Mixlab custom-code export.
 - **Character/byte features**: Use `char_features_plain.json` with data prepared using `-char-vocab-size 257`.

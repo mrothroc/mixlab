@@ -205,6 +205,11 @@ func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool
 			data[len(data)-1] = 1
 		}
 		return true
+	case "diff_lambda_normal_0_1":
+		for i := range data {
+			data[i] = float32(rng.NormFloat64() * 0.1)
+		}
+		return true
 	case "torch_linear_uniform":
 		if len(ws.Shape) < 2 || ws.Shape[0] <= 0 {
 			return false

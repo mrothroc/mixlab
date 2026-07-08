@@ -244,15 +244,28 @@ class MixlabPlainBlock(nn.Module):
         if self.rope_convention not in ("adjacent_pair", "half_rotation"):
             raise ValueError(f"unsupported exported rope_convention {self.rope_convention!r}")
         self.positional_embedding = str(getattr(config, "positional_embedding", "rope") or "rope").lower()
+        self.differential_attention = bool(block_config.get("differential_attention", False))
+        self.diff_sub_head_dim = self.head_dim // 2
+        self.differential_lambda_init = float(block_config.get("differential_lambda_init", 0.0) or 0.0)
+        if self.differential_attention:
+            if self.head_dim % 2 != 0:
+                raise ValueError("differential_attention requires an even per-head width")
+            if self.kv_heads != self.heads:
+                raise ValueError("differential_attention does not support kv_heads in v1")
         self.effective_rope_dims = self.rope_dims
-        if self.effective_rope_dims <= 0 or self.effective_rope_dims >= self.head_dim:
-            self.effective_rope_dims = self.head_dim
+        rope_limit = self.diff_sub_head_dim if self.differential_attention else self.head_dim
+        if self.effective_rope_dims <= 0 or self.effective_rope_dims >= rope_limit:
+            self.effective_rope_dims = rope_limit
         self.attention_mask = str(block_config.get("attention_mask", "") or "causal").lower()
         self.window_size = int(block_config.get("window_size", 0) or 0)
         self.attn_bias = bool(block_config.get("attn_bias", False))
         self.attn_value_gate = bool(block_config.get("attn_value_gate", False))
         self.xsa = bool(block_config.get("xsa", False))
         self.sparse_attn_gate = bool(block_config.get("sparse_attn_gate", False))
+        if self.differential_attention and self.attn_value_gate:
+            raise ValueError("differential_attention does not support attn_value_gate in v1")
+        if self.differential_attention and self.xsa:
+            raise ValueError("differential_attention does not support xsa in v1")
         self.attn_gate_dim = min(dim, 12)
         self.relative_attention = str(block_config.get("relative_attention", "") or "none").lower()
         self.relative_attention_window = int(block_config.get("relative_attention_window", 0) or 128)
@@ -261,6 +274,8 @@ class MixlabPlainBlock(nn.Module):
         ).lower()
         self.norm_placement = norm_placement(config)
         self.attn_post_norm = effective_attn_post_norm(block_config, self.norm_placement)
+        if self.differential_attention and self.attn_post_norm != "none":
+            raise ValueError("differential_attention does not support attn_post_norm in v1")
         self.ffn_internal_norm_enabled = bool(getattr(config, "ffn_internal_norm", False))
         self.ffn_activation = str(block_config.get("ffn_activation", "") or "silu").lower()
         if self.ffn_activation not in ("silu", "gelu", "gelu_new", "geglu", "swiglu"):
@@ -275,12 +290,31 @@ class MixlabPlainBlock(nn.Module):
         self.q_norm = None
         self.k_norm = None
         if bool(block_config.get("qk_norm", False)):
+            if self.differential_attention:
+                raise ValueError("differential_attention does not support qk_norm in v1")
             self.q_norm = MixlabRMSNorm(self.head_dim)
             self.k_norm = MixlabRMSNorm(self.head_dim)
+        self.diff_lambda_q1 = None
+        self.diff_lambda_k1 = None
+        self.diff_lambda_q2 = None
+        self.diff_lambda_k2 = None
+        self.diff_subln = None
+        if self.differential_attention:
+            self.diff_lambda_q1 = nn.Parameter(torch.empty(self.diff_sub_head_dim))
+            self.diff_lambda_k1 = nn.Parameter(torch.empty(self.diff_sub_head_dim))
+            self.diff_lambda_q2 = nn.Parameter(torch.empty(self.diff_sub_head_dim))
+            self.diff_lambda_k2 = nn.Parameter(torch.empty(self.diff_sub_head_dim))
+            self.diff_subln = MixlabRMSNorm(self.head_dim, eps=1e-3)
+            nn.init.normal_(self.diff_lambda_q1, mean=0.0, std=0.1)
+            nn.init.normal_(self.diff_lambda_k1, mean=0.0, std=0.1)
+            nn.init.normal_(self.diff_lambda_q2, mean=0.0, std=0.1)
+            nn.init.normal_(self.diff_lambda_k2, mean=0.0, std=0.1)
         self.relative_embeddings = None
         self.w_pos_key = None
         self.w_pos_query = None
         if self.relative_attention == "deberta_p2c_c2p":
+            if self.differential_attention:
+                raise ValueError("differential_attention does not support relative_attention in v1")
             if self.relative_attention_parameterization not in ("per_block_projections", "shared_qk_reuse"):
                 raise ValueError(
                     f"unsupported exported relative_attention_parameterization "
@@ -298,10 +332,14 @@ class MixlabPlainBlock(nn.Module):
             raise ValueError("shared_qk_reuse requires relative_attention='deberta_p2c_c2p'")
         self.qk_gain = None
         if float(block_config.get("qk_gain", 0.0) or 0.0) > 0.0:
+            if self.differential_attention:
+                raise ValueError("differential_attention does not support qk_gain in v1")
             self.qk_gain = nn.Parameter(torch.empty(heads))
             nn.init.constant_(self.qk_gain, float(block_config["qk_gain"]))
         self.attn_gate_w = None
         if self.sparse_attn_gate:
+            if self.differential_attention:
+                raise ValueError("differential_attention does not support sparse_attn_gate in v1")
             self.attn_gate_w = nn.Parameter(torch.empty(heads, self.attn_gate_dim))
             nn.init.zeros_(self.attn_gate_w)
         self.post_attn_norm = make_mixlab_norm(config, dim) if self.attn_post_norm != "none" else None
@@ -438,7 +476,55 @@ class MixlabPlainBlock(nn.Module):
         if self.q_norm is not None:
             q = self.q_norm(q)
             k = self.k_norm(k)
-        if self.relative_attention == "deberta_p2c_c2p":
+        if self.differential_attention:
+            q1, q2 = torch.split(q, [self.diff_sub_head_dim, self.diff_sub_head_dim], dim=-1)
+            k1, k2 = torch.split(k, [self.diff_sub_head_dim, self.diff_sub_head_dim], dim=-1)
+            if self.positional_embedding == "rope":
+                cos_t, sin_t = self._rope_tables(seq_len, q.device, q.dtype)
+                if self.rope_convention == "half_rotation":
+                    q1 = rotate_half_rope(q1, self.effective_rope_dims, cos_t, sin_t)
+                    k1 = rotate_half_rope(k1, self.effective_rope_dims, cos_t, sin_t)
+                    q2 = rotate_half_rope(q2, self.effective_rope_dims, cos_t, sin_t)
+                    k2 = rotate_half_rope(k2, self.effective_rope_dims, cos_t, sin_t)
+                else:
+                    q1 = rotate_adjacent_rope(q1, self.effective_rope_dims, cos_t, sin_t)
+                    k1 = rotate_adjacent_rope(k1, self.effective_rope_dims, cos_t, sin_t)
+                    q2 = rotate_adjacent_rope(q2, self.effective_rope_dims, cos_t, sin_t)
+                    k2 = rotate_adjacent_rope(k2, self.effective_rope_dims, cos_t, sin_t)
+            elif self.positional_embedding in ("learned_absolute", "none"):
+                pass
+            else:
+                raise ValueError(f"unsupported positional_embedding {self.positional_embedding!r}")
+
+            scores1 = torch.matmul(q1, k1.transpose(-1, -2)) / math.sqrt(float(self.diff_sub_head_dim))
+            scores2 = torch.matmul(q2, k2.transpose(-1, -2)) / math.sqrt(float(self.diff_sub_head_dim))
+            if self.attention_mask == "causal":
+                causal_mask = self._build_attention_mask(seq_len, self.window_size).to(scores1.device)
+                causal_mask = causal_mask.view(1, 1, seq_len, seq_len)
+                scores1 = scores1.masked_fill(causal_mask, -1e9)
+                scores2 = scores2.masked_fill(causal_mask, -1e9)
+            elif self.attention_mask in ("bidirectional", "none"):
+                pass
+            else:
+                raise ValueError(f"unsupported exported attention_mask {self.attention_mask!r}")
+            scores1 = self._apply_attention_mask(scores1, attention_mask)
+            scores2 = self._apply_attention_mask(scores2, attention_mask)
+            attn1 = torch.softmax(scores1, dim=-1)
+            attn2 = torch.softmax(scores2, dim=-1)
+            lambda_dot1 = torch.clamp(
+                torch.sum(self.diff_lambda_q1 * self.diff_lambda_k1), min=-5.0, max=5.0
+            )
+            lambda_dot2 = torch.clamp(
+                torch.sum(self.diff_lambda_q2 * self.diff_lambda_k2), min=-5.0, max=5.0
+            )
+            lambda_value = (
+                torch.exp(lambda_dot1)
+                - torch.exp(lambda_dot2)
+                + self.differential_lambda_init
+            )
+            ctx = torch.matmul(attn1 - lambda_value * attn2, v)
+            ctx = self.diff_subln(ctx) * (1.0 - self.differential_lambda_init)
+        elif self.relative_attention == "deberta_p2c_c2p":
             scores = torch.matmul(q, k.transpose(-1, -2))
             scores = scores + self._deberta_relative_bias(q, k, seq_len, shared_relative_embeddings)
             scores = scores / math.sqrt(float(self.head_dim * 3))
@@ -458,25 +544,26 @@ class MixlabPlainBlock(nn.Module):
             scores = torch.matmul(q, k.transpose(-1, -2)) / math.sqrt(float(self.head_dim))
         if self.qk_gain is not None:
             scores = scores * self.qk_gain.view(1, self.heads, 1, 1)
-        if self.attention_mask == "causal":
-            causal_mask = self._build_attention_mask(seq_len, self.window_size).to(scores.device)
-            causal_mask = causal_mask.view(1, 1, seq_len, seq_len)
-            scores = scores.masked_fill(causal_mask, -1e9)
-        elif self.attention_mask in ("bidirectional", "none"):
-            pass
-        else:
-            raise ValueError(f"unsupported exported attention_mask {self.attention_mask!r}")
-        scores = self._apply_attention_mask(scores, attention_mask)
-        attn = torch.softmax(scores, dim=-1)
-        ctx = torch.matmul(attn, v)
-        if self.xsa:
-            dot_yv = torch.sum(ctx * v, dim=-1, keepdim=True)
-            dot_vv = torch.sum(v * v, dim=-1, keepdim=True)
-            ctx = ctx - (dot_yv / (dot_vv + 1e-8)) * v
-        if self.sparse_attn_gate:
-            gate_in = residual[..., :self.attn_gate_dim]
-            gate = torch.sigmoid(torch.matmul(gate_in, self.attn_gate_w.transpose(0, 1)))
-            ctx = ctx * gate.transpose(1, 2).unsqueeze(-1)
+        if not self.differential_attention:
+            if self.attention_mask == "causal":
+                causal_mask = self._build_attention_mask(seq_len, self.window_size).to(scores.device)
+                causal_mask = causal_mask.view(1, 1, seq_len, seq_len)
+                scores = scores.masked_fill(causal_mask, -1e9)
+            elif self.attention_mask in ("bidirectional", "none"):
+                pass
+            else:
+                raise ValueError(f"unsupported exported attention_mask {self.attention_mask!r}")
+            scores = self._apply_attention_mask(scores, attention_mask)
+            attn = torch.softmax(scores, dim=-1)
+            ctx = torch.matmul(attn, v)
+            if self.xsa:
+                dot_yv = torch.sum(ctx * v, dim=-1, keepdim=True)
+                dot_vv = torch.sum(v * v, dim=-1, keepdim=True)
+                ctx = ctx - (dot_yv / (dot_vv + 1e-8)) * v
+            if self.sparse_attn_gate:
+                gate_in = residual[..., :self.attn_gate_dim]
+                gate = torch.sigmoid(torch.matmul(gate_in, self.attn_gate_w.transpose(0, 1)))
+                ctx = ctx * gate.transpose(1, 2).unsqueeze(-1)
         ctx = ctx.transpose(1, 2).contiguous().view(bsz, seq_len, dim)
         if value_gate is not None:
             ctx = ctx * value_gate

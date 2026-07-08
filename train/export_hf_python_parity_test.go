@@ -41,9 +41,45 @@ func TestExportHFNativePythonParity(t *testing.T) {
 	}
 
 	cases := []struct {
-		name   string
-		config string
+		name                string
+		config              string
+		compareMaskedLogits bool
 	}{
+		{
+			// DIFF Transformer two-softmax plain attention in the normal causal
+			// export path.
+			name: "differential_attention_causal",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 1, "differential_attention": true},
+					{"type": "swiglu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 9898}
+			}`,
+		},
+		{
+			// DIFF Transformer attention in a masked objective export. This
+			// writes a native masked-graph logits fixture, so the real
+			// AutoModelForMaskedLM path is compared numerically rather than only
+			// checked for loadability.
+			name: "differential_attention_masked",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 5, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "plain", "heads": 1, "differential_attention": true},
+					{"type": "swiglu"}
+				],
+				"training": {
+					"steps": 1,
+					"batch_tokens": 5,
+					"seed": 9998,
+					"objective": "mlm",
+					"mlm_mask_token_id": 1
+				}
+			}`,
+			compareMaskedLogits: true,
+		},
 		{
 			// Q/K/V/O projection biases plus a GELU value gate on the attention
 			// output, including a GQA block, against the Python template.
@@ -474,12 +510,12 @@ func TestExportHFNativePythonParity(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			runNativePythonParityCase(t, python, script, tc.config)
+			runNativePythonParityCase(t, python, script, tc.config, tc.compareMaskedLogits)
 		})
 	}
 }
 
-func runNativePythonParityCase(t *testing.T, python, script, config string) {
+func runNativePythonParityCase(t *testing.T, python, script, config string, compareMaskedLogits bool) {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, config, scaleHFExportWeightsToTrainedMagnitude)
@@ -527,6 +563,17 @@ func runNativePythonParityCase(t *testing.T, python, script, config string) {
 	}); err != nil {
 		t.Fatalf("write parity native logits: %v", err)
 	}
+	if compareMaskedLogits {
+		nativeMaskedLogits := nativeMLXMaskedLogitsForParity(t, cfgPath, weightsPath, window, seqLen, vocab)
+		if err := writeJSONFile(filepath.Join(outDir, "parity_native_masked_logits.json"), map[string]any{
+			"batch":   1,
+			"seq_len": seqLen,
+			"vocab":   vocab,
+			"logits":  nativeMaskedLogits,
+		}); err != nil {
+			t.Fatalf("write parity native masked logits: %v", err)
+		}
+	}
 
 	cmd := exec.Command(python, script, "--dir", outDir)
 	out, err := cmd.CombinedOutput()
@@ -534,6 +581,74 @@ func runNativePythonParityCase(t *testing.T, python, script, config string) {
 	if err != nil {
 		t.Fatalf("native-vs-HF parity failed: %v", err)
 	}
+}
+
+func nativeMLXMaskedLogitsForParity(t *testing.T, cfgPath, weightsPath string, window []uint16, seqLen, vocab int) []float32 {
+	t.Helper()
+	cfg, err := LoadArchConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadArchConfig(masked parity): %v", err)
+	}
+	objective := cfg.Training.EffectiveObjective()
+	if objective == "hybrid" {
+		objective = cfg.Training.EffectiveHybridSecondaryObjective()
+	}
+	if objective != "mlm" && objective != "mntp" {
+		t.Fatalf("masked parity objective=%q, want mlm or mntp", objective)
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+		RecurrenceActive:       true,
+		HeadUntied:             cfg.MTPUntieEnabled(),
+		MTPAuxInactive:         true,
+		DistillationInactive:   true,
+		Data2VecInactive:       true,
+		ZLossInactive:          true,
+		DropoutInactive:        true,
+		SegmentMaskInactive:    true,
+		ExampleFramingInactive: true,
+		Objective:              objective,
+	})
+	if err != nil {
+		t.Fatalf("BuildTrainingIRProgramFromConfig(masked parity): %v", err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes(masked parity): %v", err)
+	}
+	loadedWeights, err := loadSafetensorsWeights(weightsPath, shapes)
+	if err != nil {
+		t.Fatalf("load masked parity safetensors %q: %v", weightsPath, err)
+	}
+	trainer, err := initGPUTrainer(prog, cfg, loadedWeights, nil)
+	if err != nil {
+		t.Fatalf("initGPUTrainer(masked parity): %v", err)
+	}
+	defer trainer.CloseTrainer()
+	xTok := make([]int, seqLen)
+	yTok := make([]int, seqLen)
+	lossMask := make([]float32, seqLen)
+	for pos := 0; pos < seqLen; pos++ {
+		xTok[pos] = int(window[pos])
+		yTok[pos] = int(window[pos])
+		lossMask[pos] = 1
+	}
+	batch := objectiveBatch{
+		x:         xTok,
+		y:         yTok,
+		lossMask:  lossMask,
+		unmaskedX: append([]int(nil), xTok...),
+	}
+	if _, err := trainer.EvaluateObjectiveGPU(batch, 1, seqLen); err != nil {
+		t.Fatalf("EvaluateObjectiveGPU(masked parity): %v", err)
+	}
+	logits, err := readTrainerOutput(trainer, "logits", []int{seqLen, vocab})
+	if err != nil {
+		t.Fatalf("read masked logits: %v", err)
+	}
+	if len(logits) != seqLen*vocab {
+		t.Fatalf("native masked logits length=%d, want %d", len(logits), seqLen*vocab)
+	}
+	return logits
 }
 
 // nativeMLXLogitsForParity returns row-major [seqLen*vocab] logits from the

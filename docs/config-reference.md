@@ -266,6 +266,8 @@ Optional fields:
 - `kv_heads` — grouped-query attention (must divide `heads` evenly)
 - `qk_norm` — learned RMSNorm scales applied to each Q and K head after projection/GQA expansion and before RoPE or relative-attention score construction. Adds `q_norm_scale` and `k_norm_scale` weights of shape `[head_dim]`; a `kv_source` consumer block adds only `q_norm_scale` because it reuses K from the source block.
 - `qk_gain` — learnable per-head QK scaling. When set, allocates one trainable scalar per head initialized to this value, applied as `scores = qk_gain * (Q @ K^T / sqrt(d_k))`. Omit or set to `0` for standard scaling.
+- `differential_attention` — enable DIFF Transformer attention. `heads` is the number of differential heads; for a baseline with `N` ordinary heads, use `N/2` differential heads. Each differential head splits Q/K into two sub-maps, computes two masked softmax maps, subtracts the second with learned shared-per-layer λ, applies per-head RMSNorm scaled by `(1 - lambda_init)`, then projects with `wo`.
+- `differential_lambda_init` — optional DIFF λ override for this block. Omit to use the depth schedule `0.8 - 0.6 * exp(-0.3 * layer_depth)`, where the first block has `layer_depth=1`.
 - `attn_bias` — add learned zero-initialized biases to the Q/K/V/O projections. With `relative_attention_parameterization: "shared_qk_reuse"`, the same Q/K biases are reused when projecting the shared relative embedding table.
 - `attn_value_gate` — widen the V projection to emit both values and a GELU gate. The gate multiplies the merged attention output before the output projection. This is compatible with grouped-query attention by keeping the value slice at `kv_heads * head_dim` and the gate slice at `model_dim`; it cannot be used on a `kv_source` consumer block.
 - `attn_post_norm` — attention residual normalization placement. Omit or set to `"inherit"` to preserve the global `norm_placement` behavior: post/sandwich configs apply `post_attn_norm` after the output projection, while pre-norm configs do not add attention post-norm. Set to `"before_outproj"` to normalize the merged attention state before `wo`, set to `"after_outproj"` to force the legacy post-output placement, or set to `"none"` to disable attention post-norm for that block.
@@ -280,6 +282,8 @@ Optional fields:
 - `ffn_bias` — add zero-initialized learned biases to `ff1` and `ff2`. Use with `attn_bias` and `ffn_pre_norm` for GPT-2-compatible block tails.
 
 The `plain` block's relative-attention operator matches the DeBERTa/GPT-BERT C2P/P2C bucket and index semantics. The default `per_block_projections` layout remains Mixlab's original bias-free architecture with per-block projected position tensors. `shared_qk_reuse` switches only the relative-attention parameterization to the GPT-BERT-style shared embedding table and Q/K projection reuse; use `attn_bias` and `attn_value_gate` independently when matching recipes that need biased projections or value gating.
+
+DIFF attention is experimental and currently supports causal, bidirectional, and windowed causal masks plus RoPE applied independently to both Q/K sub-maps. V1 rejects `relative_attention`, `qk_norm`, `qk_gain`, `attn_value_gate`, `sparse_attn_gate`, `xsa`, `kv_source`, `kv_heads`, `parallel_group`, and attention post-norm. Explicit `rope_dims` is measured against the DIFF sub-head dimension, not the full differential head width. The two-softmax difference produces large early-training gradients, so set a finite `training.grad_clip` (e.g. `1.0`, as in the example); without gradient clipping the loss can diverge in the first few steps.
 - `xsa` — eXplicit Subspace Attention: after computing `y = softmax(QK^T)V`, projects `y` orthogonal to `V` at each position. Forces attention to contribute information that V doesn't already provide. Zero additional parameters. Compatible with GQA.
 - `attention_mask` — `"causal"`, `"bidirectional"`, or `"none"`. Omit to resolve from `training.objective`: causal objectives use `"causal"` and current masked objective graphs use `"bidirectional"`. For `training.objective: "hybrid"`, Mixlab ignores block-level `attention_mask` during training and chooses the mask from the concrete per-batch objective: causal batches use `"causal"` and MLM/MNTP batches use `"bidirectional"`. For `training.objective: "block_diffusion"`, `plain` attention uses a prefix-plus-block mask (committed prefix attends causally, the active block attends bidirectionally within itself and over the prefix) and `window_size` is rejected rather than approximating that rule. `"bidirectional"` and `"none"` both use dense softmax with no triangular mask.
 - `window_size` — sliding causal attention width. `0` means full causal attention. Valid only when the resolved `attention_mask` is `"causal"`.
@@ -304,6 +308,12 @@ GPT-BERT-style shared relative embedding example:
 
 ```json
 {"type": "plain", "heads": 8, "relative_attention": "deberta_p2c_c2p", "relative_attention_window": 32, "relative_attention_parameterization": "shared_qk_reuse"}
+```
+
+Differential attention example:
+
+```json
+{"type": "plain", "heads": 4, "attention_mask": "bidirectional", "differential_attention": true}
 ```
 
 KV sharing example:

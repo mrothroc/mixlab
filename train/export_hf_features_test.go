@@ -125,6 +125,61 @@ func TestExportHFDistillationStripsTrainingOnlyConfig(t *testing.T) {
 	}
 }
 
+func TestExportHFDifferentialAttentionConfigAndWeightMap(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+		"name": "hf_diff_attention",
+		"model_dim": 4,
+		"vocab_size": 7,
+		"seq_len": 3,
+		"mlp_mult": 1.0,
+		"tie_embeddings": true,
+		"blocks": [
+			{"type": "plain", "heads": 1, "differential_attention": true, "differential_lambda_init": 0.25},
+			{"type": "swiglu"}
+		],
+		"training": {"steps": 1, "batch_tokens": 3, "seed": 789, "objective": "causal"}
+	}`)
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+
+	var cfg hfConfigJSON
+	readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+	if got := cfg.Blocks[0]["differential_attention"]; got != true {
+		t.Fatalf("differential_attention=%v want true", got)
+	}
+	if got := cfg.Blocks[0]["differential_lambda_init"]; got != 0.25 {
+		t.Fatalf("differential_lambda_init=%v want 0.25", got)
+	}
+
+	var mapping []hfWeightMapping
+	readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+	want := map[string]bool{
+		"blocks.0.diff_lambda_q1":    false,
+		"blocks.0.diff_lambda_k1":    false,
+		"blocks.0.diff_lambda_q2":    false,
+		"blocks.0.diff_lambda_k2":    false,
+		"blocks.0.diff_subln.weight": false,
+	}
+	for _, entry := range mapping {
+		if _, ok := want[entry.HF]; ok {
+			want[entry.HF] = true
+		}
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Fatalf("missing HF mapping for %s in %#v", name, mapping)
+		}
+	}
+}
+
 func TestHFConfigWritesHalfRotationRoPEConvention(t *testing.T) {
 	cfg, err := ParseArchConfig([]byte(`{
 		"name": "hf_rope_convention",

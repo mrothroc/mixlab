@@ -9,6 +9,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `plain.attn_value_gate` | Supported | The V projection is widened to value plus GELU gate; the gate multiplies merged attention output before `wo`. |
 | `plain.attn_post_norm` | Supported | Inherited post/sandwich configs keep the legacy after-`wo` norm placement. Explicit `attn_post_norm: "before_outproj"` normalizes the merged attention state before `wo`. |
 | `plain.qk_norm` | Supported | Learned per-head-dimension Q/K RMSNorm scales before RoPE or DeBERTa relative score construction. |
+| `plain.differential_attention` | Supported | DIFF Transformer two-softmax attention with shared λ vectors, sub-map RoPE, causal/bidirectional/window masks, and per-head SubLN before `wo`. V1 rejects advanced attention extras that lack dedicated parity coverage. |
 | `plain.xsa` | Supported | Attention outputs are projected away from the corresponding value vector before the output projection. |
 | `plain.sparse_attn_gate` | Supported | Per-head attention outputs are gated from the first token-state channels before head merge and output projection. |
 | `plain.ffn_activation=geglu` | Supported | The `plain` block's internal FFN tail uses an exported `ff_gate` projection, tanh-approx GELU gate, up projection, product, and down projection. |

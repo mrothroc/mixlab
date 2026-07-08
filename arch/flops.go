@@ -315,6 +315,10 @@ func estimatePlainBlockFLOPs(block BlockSpec, B, T, D, ffn int) int64 {
 		}
 		total += 2 * i64(B) * i64(heads) * i64(T) * i64(attnWindow) * i64(headDim)
 		total += 2 * i64(B) * i64(heads) * i64(T) * i64(attnWindow) * i64(headDim)
+		if block.DifferentialAttention {
+			total += 8 * i64(headDim/2)                              // four lambda vector products and exponentials, approximate
+			total += 5 * i64(B) * i64(heads) * i64(T) * i64(headDim) // per-head SubLN
+		}
 		if relativeAttentionEnabled(block) {
 			relWindow := effectiveRelativeAttentionWindow(block)
 			relRows := 2*relWindow - 1

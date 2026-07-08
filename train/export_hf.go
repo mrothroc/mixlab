@@ -451,6 +451,11 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 				{mixlab: "wv_bias", hf: "wv.bias"},
 				{mixlab: "q_norm_scale", hf: "q_norm.weight"},
 				{mixlab: "k_norm_scale", hf: "k_norm.weight"},
+				{mixlab: "diff_lambda_q1", hf: "diff_lambda_q1"},
+				{mixlab: "diff_lambda_k1", hf: "diff_lambda_k1"},
+				{mixlab: "diff_lambda_q2", hf: "diff_lambda_q2"},
+				{mixlab: "diff_lambda_k2", hf: "diff_lambda_k2"},
+				{mixlab: "diff_subln_scale", hf: "diff_subln.weight"},
 				{mixlab: "relative_embeddings", hf: "relative_embeddings"},
 				{mixlab: "w_pos_key", hf: "w_pos_key.weight"},
 				{mixlab: "w_pos_query", hf: "w_pos_query.weight"},
@@ -496,6 +501,9 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 					continue
 				}
 				if (name.mixlab == "q_norm_scale" || name.mixlab == "k_norm_scale") && !block.QKNorm {
+					continue
+				}
+				if strings.HasPrefix(name.mixlab, "diff_") && !block.DifferentialAttention {
 					continue
 				}
 				switch name.mixlab {

@@ -412,6 +412,9 @@ func validateKVSources(cfg *ArchConfig, source string) error {
 		if relativeAttentionEnabled(src) {
 			return fmt.Errorf("config %q blocks[%d] type=plain has invalid kv_source=%d (source block uses relative_attention)", source, i, b.KVSource)
 		}
+		if src.DifferentialAttention {
+			return fmt.Errorf("config %q blocks[%d] type=plain has invalid kv_source=%d (source block uses differential_attention)", source, i, b.KVSource)
+		}
 
 		wantKVHeads, err := normalizePlainKVHeads(b.Heads, b.KVHeads)
 		if err != nil {

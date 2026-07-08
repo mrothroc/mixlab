@@ -131,6 +131,9 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		if D%heads != 0 {
 			return nil, fmt.Errorf("invalid attention dimensions D=%d H=%d", D, heads)
 		}
+		if spec.DifferentialAttention && (D/heads)%2 != 0 {
+			return nil, fmt.Errorf("differential_attention requires even head width, got model_dim/heads=%d", D/heads)
+		}
 		kvProjDim := kvHeads * (D / heads)
 		ffn := ffnDim(D, mlpMult)
 		attnPostNorm := effectivePlainAttnPostNorm(spec, placement)
@@ -164,6 +167,17 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			if spec.KVSource <= 0 {
 				metas = append(metas, WeightMeta{Name: "k_norm_scale", Shape: []int{headDim}, IsNormScale: true, InitOne: true})
 			}
+		}
+		if spec.DifferentialAttention {
+			headWidth := D / heads
+			subDim := headWidth / 2
+			metas = append(metas,
+				WeightMeta{Name: "diff_lambda_q1", Shape: []int{subDim}, InitMode: diffLambdaInitMode},
+				WeightMeta{Name: "diff_lambda_k1", Shape: []int{subDim}, InitMode: diffLambdaInitMode},
+				WeightMeta{Name: "diff_lambda_q2", Shape: []int{subDim}, InitMode: diffLambdaInitMode},
+				WeightMeta{Name: "diff_lambda_k2", Shape: []int{subDim}, InitMode: diffLambdaInitMode},
+				WeightMeta{Name: "diff_subln_scale", Shape: []int{headWidth}, IsNormScale: true, InitOne: true},
+			)
 		}
 		if relativeAttentionUsesPerBlockProjections(spec) {
 			relWindow := effectiveRelativeAttentionWindow(spec)
