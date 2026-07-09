@@ -92,7 +92,7 @@ func TestMinimalPairFactoryFlagsInPrepareHelpGroup(t *testing.T) {
 
 func TestScoreEBMPLLFlagsInHelpGroup(t *testing.T) {
 	groups := modeFlagGroups["score-ebm"]
-	for _, flagName := range []string{"score-pll-aggregation", "score-pll-skip-token-ids", "score-position-batch", "score-emit-token-energy"} {
+	for _, flagName := range []string{"score-pll-aggregation", "score-pll-window", "score-pll-attribution-dump", "score-pll-skip-token-ids", "score-position-batch", "score-emit-token-energy"} {
 		if !flagGroupContains(groups, flagName) {
 			t.Fatalf("score-ebm help groups missing %s", flagName)
 		}

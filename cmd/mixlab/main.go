@@ -51,8 +51,10 @@ func main() {
 	scorePositionBatch := flag.Int("score-position-batch", 0, "masked positions per diffusion or score-ebm full-sequence PLL scoring forward; <=0 auto-selects a memory-bounded value")
 	scoreBatch := flag.Int("score-batch", 0, "sequence rows per ELECTRA detector or score-ebm non-full-seq scoring forward; <=0 uses a conservative default")
 	scoreEmitTokenEnergy := flag.Bool("score-emit-token-energy", false, "include per-token energy values in score-ebm output for differing-span native energy configs")
-	scorePLLAggregation := flag.String("score-pll-aggregation", "config", "score-ebm scorer PLL aggregation: config, differing_span, or full_seq")
-	scorePLLSkipTokenIDs := flag.String("score-pll-skip-token-ids", "", "comma-separated token IDs to skip for score-ebm full-sequence PLL; mlm_mask_token_id is always skipped")
+	scorePLLAggregation := flag.String("score-pll-aggregation", "config", "score-ebm scorer PLL aggregation: config, full_seq, differing_span, or dependent_window")
+	scorePLLWindow := flag.Int("score-pll-window", 0, "context window K for score-ebm -score-pll-aggregation=dependent_window")
+	scorePLLAttributionDump := flag.String("score-pll-attribution-dump", "", "write score-ebm PLL per-token attribution JSONL for pair records")
+	scorePLLSkipTokenIDs := flag.String("score-pll-skip-token-ids", "", "comma-separated token IDs to skip for score-ebm PLL; mlm_mask_token_id is always skipped")
 	prompt := flag.String("prompt", "", "prompt for generate mode, e.g. token_ids:0,1,2")
 	logprobsOut := flag.String("logprobs-out", "", "write per-token eval NLLs to a binary file (eval mode)")
 	ranksOut := flag.String("ranks-out", "", "write per-token target ranks to a binary file (eval mode); can be combined with -logprobs-out for a single eval pass")
@@ -325,7 +327,9 @@ func main() {
 			ScoreBatch:         *scoreBatch,
 			ScorePositionBatch: *scorePositionBatch,
 			PLLAggregation:     *scorePLLAggregation,
+			PLLWindow:          *scorePLLWindow,
 			PLLSkipTokenIDs:    *scorePLLSkipTokenIDs,
+			PLLAttributionDump: *scorePLLAttributionDump,
 			EmitTokenEnergy:    *scoreEmitTokenEnergy,
 		}))
 	case "parity":
@@ -408,7 +412,7 @@ var modeFlagGroups = map[string][]flagGroup{
 	},
 	"score-ebm": {
 		{"Required", []string{"config", "safetensors-load", "score-in", "score-out"}},
-		{"Scoring", []string{"score-batch", "score-position-batch", "score-pll-aggregation", "score-pll-skip-token-ids", "score-emit-token-energy"}},
+		{"Scoring", []string{"score-batch", "score-position-batch", "score-pll-aggregation", "score-pll-window", "score-pll-attribution-dump", "score-pll-skip-token-ids", "score-emit-token-energy"}},
 	},
 	"export-hf": {
 		{"Required", []string{"config", "safetensors-load"}},

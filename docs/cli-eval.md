@@ -221,13 +221,22 @@ or `score_clean`/`score_corrupt` for `score_source: "mlm_span_pll"` configs.
 were scored.
 
 Use `-score-pll-aggregation full_seq` to compute full-sequence masked PLL for
-MLM/MNTP scorer configs. This masks each scored token position in turn, sums
-`log softmax(logits)[gold_token]`, and ignores `span`/`clean_span`/
-`corrupt_span`. `training.mlm_mask_token_id` is always skipped. Pass tokenizer
-special IDs such as `<unk>`, BOS, EOS, and PAD through
-`-score-pll-skip-token-ids` when they should be excluded from the PLL sum.
-Full-sequence PLL also works with ordinary single-objective `mlm` or `mntp`
-configs, which is useful for native scoring of trunks that are not HF-exportable.
+MLM/MNTP scorer configs. This masks each scored token position in turn and sums
+`log softmax(logits)[gold_token]`. Explicit `differing_span` scores only the
+alignment-derived or supplied differing span, and `dependent_window` scores that
+span plus `-score-pll-window K` context tokens on each side. These explicit PLL
+aggregations are deterministic score-time alternatives; `config` preserves the
+legacy native scoring path for existing `mlm_span_pll` configs.
+`training.mlm_mask_token_id` is always skipped. Pass tokenizer special IDs such as
+`<unk>`, BOS, EOS, and PAD through `-score-pll-skip-token-ids` when they should
+be excluded from the PLL sum. Length-normalized PLL variants are intentionally
+not included in v1 because they are an audit/experiment concern rather than a
+default scoring policy.
+
+`-score-pll-attribution-dump path.jsonl` writes one audit record per pair for
+PLL scorer modes. Each record contains clean/corrupt token IDs, sequence-aligned
+per-token log-prob arrays, derived differing spans, skipped token IDs, and the
+same aggregate scores/margin/correct fields written to `-score-out`.
 
 | Flag | Description |
 |------|-------------|
@@ -236,9 +245,11 @@ configs, which is useful for native scoring of trunks that are not HF-exportable
 | `-score-in` | Required. JSONL input with `tokens` rows or `clean`/`corrupt` pair rows. |
 | `-score-out` | Required. JSONL output path. |
 | `-score-batch` | Even sequence rows per energy forward. `0` uses a conservative default. |
-| `-score-position-batch` | Masked positions per full-sequence PLL forward. `0` auto-selects a memory-bounded value. |
-| `-score-pll-aggregation` | `config`, `differing_span`, or `full_seq`. `config` preserves current behavior: native energy uses energy scoring, multihead `mlm_span_pll` uses differing-span PLL, and single-objective `mlm`/`mntp` uses full-sequence PLL. |
-| `-score-pll-skip-token-ids` | Comma-separated token IDs to skip in full-sequence PLL, in addition to the mask token. |
+| `-score-position-batch` | Masked positions per explicit PLL forward. `0` auto-selects a memory-bounded value. |
+| `-score-pll-aggregation` | `config`, `full_seq`, `differing_span`, or `dependent_window`. `config` preserves current behavior: native energy uses energy scoring, multihead `mlm_span_pll` uses the configured span-PLL scoring path, and single-objective `mlm`/`mntp` uses full-sequence PLL. |
+| `-score-pll-window` | Context window for `dependent_window`; `0` is equivalent to `differing_span`. |
+| `-score-pll-attribution-dump` | Optional JSONL path for per-pair PLL attribution records. |
+| `-score-pll-skip-token-ids` | Comma-separated token IDs to skip in PLL aggregation, in addition to the mask token. |
 | `-score-emit-token-energy` | Include per-token energy arrays for differing-span native energy configs. Not supported for scorer span-PLL mode. |
 
 ## `hiddenstats`

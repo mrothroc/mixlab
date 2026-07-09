@@ -9,26 +9,6 @@ import (
 // Full-sequence pseudo-log-likelihood scoring for score-ebm: mask each scorable
 // position (in position-batched chunks) and sum the scorer head log-probs.
 
-func scoreEBMFullSeqPLLSequences(cfg *ArchConfig, evaluator diffusionGenerationEvaluator, sequences [][]int, opts scoreEBMRuntimeOptions) ([]float32, [][]float32, error) {
-	positionBatch := opts.scorePositionBatch
-	if positionBatch <= 0 {
-		var err error
-		positionBatch, err = effectiveScorePositionBatch(cfg.SeqLen, cfg.VocabSize, positionBatch)
-		if err != nil {
-			return nil, nil, err
-		}
-	}
-	out := make([]float32, len(sequences))
-	for i, tokens := range sequences {
-		score, err := scoreEBMFullSeqPLLSequence(cfg, evaluator, tokens, positionBatch, opts.pllSkipTokenIDs)
-		if err != nil {
-			return nil, nil, fmt.Errorf("sequence %d: %w", i, err)
-		}
-		out[i] = float32(score)
-	}
-	return out, nil, nil
-}
-
 func scoreEBMFullSeqPLLSequence(cfg *ArchConfig, evaluator diffusionGenerationEvaluator, tokens []int, positionBatch int, skipTokenIDs map[int]bool) (float64, error) {
 	if cfg == nil {
 		return 0, fmt.Errorf("nil config")
@@ -39,31 +19,62 @@ func scoreEBMFullSeqPLLSequence(cfg *ArchConfig, evaluator diffusionGenerationEv
 	if positionBatch <= 0 {
 		return 0, fmt.Errorf("invalid score position batch=%d", positionBatch)
 	}
-	effectiveSkip := make(map[int]bool, len(skipTokenIDs)+1)
-	for id := range skipTokenIDs {
-		effectiveSkip[id] = true
-	}
-	if cfg.Training.MLMMaskTokenID >= 0 && cfg.Training.MLMMaskTokenID < cfg.VocabSize {
-		effectiveSkip[cfg.Training.MLMMaskTokenID] = true
-	}
+	effectiveSkip := scoreEBMEffectivePLLSkipTokenIDs(cfg, skipTokenIDs)
 	positions := scoreEBMFullSeqPLLPositions(tokens, effectiveSkip)
 	if len(positions) == 0 {
 		return 0, nil
 	}
-	mode, err := scoreEBMMode(cfg)
+	trace, err := scoreEBMPLLTraceSequence(cfg, evaluator, tokens, positions, positionBatch)
 	if err != nil {
 		return 0, err
+	}
+	return trace.sumPositions(positions), nil
+}
+
+type scoreEBMPLLTrace struct {
+	Logprobs []*float64
+}
+
+func (t scoreEBMPLLTrace) sumPositions(positions []int) float64 {
+	var total float64
+	for _, pos := range positions {
+		if pos >= 0 && pos < len(t.Logprobs) && t.Logprobs[pos] != nil {
+			total += *t.Logprobs[pos]
+		}
+	}
+	return total
+}
+
+func scoreEBMPLLTraceSequence(cfg *ArchConfig, evaluator diffusionGenerationEvaluator, tokens []int, positions []int, positionBatch int) (scoreEBMPLLTrace, error) {
+	if cfg == nil {
+		return scoreEBMPLLTrace{}, fmt.Errorf("nil config")
+	}
+	if evaluator == nil {
+		return scoreEBMPLLTrace{}, fmt.Errorf("nil EBM evaluator")
+	}
+	if positionBatch <= 0 {
+		return scoreEBMPLLTrace{}, fmt.Errorf("invalid score position batch=%d", positionBatch)
+	}
+	if len(tokens) > cfg.SeqLen {
+		return scoreEBMPLLTrace{}, fmt.Errorf("token length %d exceeds seq_len %d", len(tokens), cfg.SeqLen)
+	}
+	mode, err := scoreEBMMode(cfg)
+	if err != nil {
+		return scoreEBMPLLTrace{}, err
 	}
 	outputName := "logits"
 	if mode == scoreEBMModeMLMSpanPLL {
 		outputName, err = mlmSpanPLLScoreLogitsOutputName(cfg)
 		if err != nil {
-			return 0, err
+			return scoreEBMPLLTrace{}, err
 		}
 	} else if mode != scoreEBMModeSinglePLL {
-		return 0, fmt.Errorf("full-sequence PLL scoring requires an MLM/MNTP scorer config")
+		return scoreEBMPLLTrace{}, fmt.Errorf("PLL scoring requires an MLM/MNTP scorer config")
 	}
-	var total float64
+	trace := scoreEBMPLLTrace{Logprobs: make([]*float64, len(tokens))}
+	if len(positions) == 0 {
+		return trace, nil
+	}
 	for start := 0; start < len(positions); start += positionBatch {
 		end := start + positionBatch
 		if end > len(positions) {
@@ -72,33 +83,34 @@ func scoreEBMFullSeqPLLSequence(cfg *ArchConfig, evaluator diffusionGenerationEv
 		chunk := positions[start:end]
 		batch, err := fullSeqPLLScoringBatch(cfg, tokens, chunk, positionBatch, mode)
 		if err != nil {
-			return 0, err
+			return scoreEBMPLLTrace{}, err
 		}
 		evalBatchSize := positionBatch
 		if batch.batchSizeOverride > 0 {
 			evalBatchSize = batch.batchSizeOverride
 		}
 		if _, err := evaluateObjectiveAndCacheOutputs(evaluator, batch, evalBatchSize, cfg.SeqLen, outputName); err != nil {
-			return 0, err
+			return scoreEBMPLLTrace{}, err
 		}
 		logits, err := evaluator.ReadOutput(outputName, []int{positionBatch * cfg.SeqLen, cfg.VocabSize})
 		if err != nil {
-			return 0, fmt.Errorf("read %s: %w", outputName, err)
+			return scoreEBMPLLTrace{}, fmt.Errorf("read %s: %w", outputName, err)
 		}
 		want := positionBatch * cfg.SeqLen * cfg.VocabSize
 		if len(logits) != want {
-			return 0, fmt.Errorf("PLL logits length mismatch: got=%d want=%d", len(logits), want)
+			return scoreEBMPLLTrace{}, fmt.Errorf("PLL logits length mismatch: got=%d want=%d", len(logits), want)
 		}
 		for row, pos := range chunk {
 			logitStart := (row*cfg.SeqLen + pos) * cfg.VocabSize
 			lp, err := targetLogProbFromLogits(logits[logitStart:logitStart+cfg.VocabSize], tokens[pos])
 			if err != nil {
-				return 0, fmt.Errorf("position %d: %w", pos, err)
+				return scoreEBMPLLTrace{}, fmt.Errorf("position %d: %w", pos, err)
 			}
-			total += lp
+			lpCopy := lp
+			trace.Logprobs[pos] = &lpCopy
 		}
 	}
-	return total, nil
+	return trace, nil
 }
 
 func scoreEBMFullSeqPLLPositions(tokens []int, skipTokenIDs map[int]bool) []int {

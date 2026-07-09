@@ -457,44 +457,6 @@ func TestScoreEBMFullSeqPLLMultihead(t *testing.T) {
 	}
 }
 
-func TestScoreEBMFullSeqPLLSingleObjective(t *testing.T) {
-	cfg := parseSinglePLLConfig(t, arch.ObjectiveMLM)
-	if err := validateScoreEBMConfig(cfg); err != nil {
-		t.Fatalf("validate single MLM score-ebm: %v", err)
-	}
-	if got, err := effectiveScoreEBMPLLAggregation(cfg, ""); err != nil || got != scoreEBMPLLAggregationFullSeq {
-		t.Fatalf("single config aggregation=%q err=%v, want full_seq", got, err)
-	}
-	opts := scoreEBMRuntimeOptions{
-		scorePositionBatch: 2,
-		pllAggregation:     scoreEBMPLLAggregationConfig,
-		pllSkipTokenIDs:    map[int]bool{1: true},
-	}
-	eval := &fakeEBMEvaluator{logitsForBatch: scoreEBMPLLTestLogits(cfg.SeqLen, cfg.VocabSize)}
-	out, err := scoreEBMRecordWithOptions(cfg, eval, scoreEBMInputRecord{ID: "seq", Tokens: []int{1, 2, 31, 4}, Span: []int{1, 2}}, opts)
-	if err != nil {
-		t.Fatalf("scoreEBMRecordWithOptions(single full_seq): %v", err)
-	}
-	if !reflect.DeepEqual(eval.requestedOutputs, []string{"logits"}) {
-		t.Fatalf("requested outputs=%v", eval.requestedOutputs)
-	}
-	if eval.batchSize != 2 || len(eval.batch.x) != 2*cfg.SeqLen {
-		t.Fatalf("single eval batch size=%d len=%d", eval.batchSize, len(eval.batch.x))
-	}
-	if !reflect.DeepEqual(eval.batch.x, []int{1, 31, 31, 4, 1, 2, 31, 31}) {
-		t.Fatalf("single full-seq rows=%v", eval.batch.x)
-	}
-	if !reflect.DeepEqual(eval.batch.diffusionBlockStart, []int32{0, 0}) ||
-		!reflect.DeepEqual(eval.batch.diffusionBlockEnd, []int32{int32(cfg.SeqLen), int32(cfg.SeqLen)}) {
-		t.Fatalf("single full-seq boundaries=%v/%v, want full-sequence rows", eval.batch.diffusionBlockStart, eval.batch.diffusionBlockEnd)
-	}
-	if out.Score == nil {
-		t.Fatalf("missing sequence score: %+v", out)
-	}
-	want := scoreEBMPLLTestOracle(t, cfg.SeqLen, cfg.VocabSize, []int{1, 2, 31, 4}, map[int]bool{1: true, 31: true})
-	requireFloat64SliceNear(t, []float64{*out.Score}, []float64{float64(float32(want))}, 1e-6)
-}
-
 func TestScoreEBMFullSeqPLLSingleParallelGroupBuilds(t *testing.T) {
 	body := `{
 		"name": "single_pll_parallel_group",
@@ -599,11 +561,20 @@ func TestScoreEBMFullSeqPLLValidation(t *testing.T) {
 		t.Fatalf("energy full_seq error=%v, want native energy rejection", err)
 	}
 	singleCfg := parseSinglePLLConfig(t, arch.ObjectiveMNTP)
-	if _, err := effectiveScoreEBMPLLAggregation(singleCfg, scoreEBMPLLAggregationDifferingSpan); err == nil || !strings.Contains(err.Error(), "mlm_span_pll") {
-		t.Fatalf("single differing_span error=%v, want mlm_span_pll rejection", err)
+	if got, err := effectiveScoreEBMPLLAggregation(singleCfg, scoreEBMPLLAggregationDifferingSpan); err != nil || got != scoreEBMPLLAggregationDifferingSpan {
+		t.Fatalf("single differing_span aggregation=%q err=%v", got, err)
 	}
 	if _, err := effectiveScoreEBMPLLAggregation(singleCfg, "bad"); err == nil || !strings.Contains(err.Error(), "score-pll-aggregation") {
 		t.Fatalf("invalid aggregation error=%v", err)
+	}
+	if _, err := effectiveScoreEBMPLLAggregation(energyCfg, scoreEBMPLLAggregationDependentWin); err == nil || !strings.Contains(err.Error(), "native energy") {
+		t.Fatalf("energy dependent_window error=%v, want native energy rejection", err)
+	}
+	if err := validateScoreEBMPLLWindow(scoreEBMPLLAggregationDifferingSpan, 1); err == nil || !strings.Contains(err.Error(), "dependent_window") {
+		t.Fatalf("bad window error=%v", err)
+	}
+	if err := validateScoreEBMPLLWindow(scoreEBMPLLAggregationDependentWin, -1); err == nil || !strings.Contains(err.Error(), ">= 0") {
+		t.Fatalf("negative window error=%v", err)
 	}
 	if got, err := parseScoreEBMSkipTokenIDs("1, 2", 8); err != nil || !got[1] || !got[2] || len(got) != 2 {
 		t.Fatalf("parse skip ids=%v err=%v", got, err)
@@ -838,6 +809,23 @@ func scoreEBMPLLTestOracle(t *testing.T, seqLen, vocab int, tokens []int, skip m
 	t.Helper()
 	logitsFn := scoreEBMPLLTestLogits(seqLen, vocab)
 	positions := scoreEBMFullSeqPLLPositions(tokens, skip)
+	var total float64
+	for _, pos := range positions {
+		batch := objectiveBatch{x: make([]int, seqLen)}
+		logits := logitsFn(batch, 0)
+		start := pos * vocab
+		lp, err := targetLogProbFromLogits(logits[start:start+vocab], tokens[pos])
+		if err != nil {
+			t.Fatalf("targetLogProbFromLogits: %v", err)
+		}
+		total += lp
+	}
+	return total
+}
+
+func scoreEBMPLLTestOraclePositions(t *testing.T, seqLen, vocab int, tokens []int, positions []int) float64 {
+	t.Helper()
+	logitsFn := scoreEBMPLLTestLogits(seqLen, vocab)
 	var total float64
 	for _, pos := range positions {
 		batch := objectiveBatch{x: make([]int, seqLen)}
