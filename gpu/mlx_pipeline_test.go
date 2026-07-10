@@ -14,11 +14,13 @@ func makePipelineTestProgram() *ir.Program {
 	prog.DeclareInput("tokens", ir.TensorInt32, []int{1, 4})
 	prog.DeclareInput("targets", ir.TensorInt32, []int{4})
 	prog.DeclareOutput("loss", ir.TensorFloat32, []int{1})
+	prog.DeclareOutput("component_loss", ir.TensorFloat32, []int{1})
 	prog.DeclareOutput("logits", ir.TensorFloat32, []int{4, 4})
 	prog.Embed("w0", "tokens", "emb")
 	prog.Reshape("emb", []int{4, 2}, "emb_flat")
 	prog.MatMul("emb_flat", "w1", "logits")
 	prog.CrossEntropy("logits", "targets", "loss")
+	prog.ScalarMul("loss", 1, "component_loss")
 	return prog
 }
 
@@ -226,6 +228,46 @@ func TestTrainerStepCanCaptureTrainOutputsForDebug(t *testing.T) {
 	}
 	if len(logits) != 16 {
 		t.Fatalf("logits len=%d, want 16", len(logits))
+	}
+}
+
+func TestTrainerPipelineReadsConfiguredScalarWithoutFlushingLookahead(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_CAPTURE_TRAIN_OUTPUTS", "0")
+
+	gpuProg, err := LowerIRProgram(makePipelineTestProgram())
+	if err != nil {
+		t.Fatalf("LowerIRProgram: %v", err)
+	}
+	defer gpuProg.Destroy()
+
+	trainer := createPipelineTestTrainer(t, gpuProg)
+	if err := TrainerSetStepOutputNames(trainer, []string{"component_loss"}); err != nil {
+		t.Fatalf("TrainerSetStepOutputNames: %v", err)
+	}
+	if err := TrainerSubmitStep(trainer, pipelineTestInputs(0)); err != nil {
+		t.Fatalf("TrainerSubmitStep step 0: %v", err)
+	}
+	if err := TrainerSubmitStep(trainer, pipelineTestInputs(1)); err != nil {
+		t.Fatalf("TrainerSubmitStep step 1: %v", err)
+	}
+	loss0, err := TrainerCollectLoss(trainer)
+	if err != nil {
+		t.Fatalf("TrainerCollectLoss step 0: %v", err)
+	}
+	component, err := TrainerReadCachedOutput(trainer, "component_loss", []int{1})
+	if err != nil {
+		t.Fatalf("TrainerReadCachedOutput(component_loss): %v", err)
+	}
+	if len(component) != 1 || math.Abs(float64(component[0]-loss0)) > 1e-6 {
+		t.Fatalf("component_loss=%v, want step loss %g", component, loss0)
+	}
+	// The second loss remains collectible only if the cached read left the
+	// submitted lookahead step intact.
+	if _, err := TrainerCollectLoss(trainer); err != nil {
+		t.Fatalf("TrainerCollectLoss step 1 after cached read: %v", err)
 	}
 }
 

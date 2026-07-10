@@ -326,6 +326,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return TrainResult{}, fmt.Errorf("init GPU trainer: %w", err)
 	}
 	defer trainer.CloseTrainer()
+	if opts.telemetry != nil {
+		if err := enableTrainingStepComponentLossCapture(trainer); err != nil {
+			return TrainResult{}, err
+		}
+	}
 	var data2vec *data2VecTeacher
 	if cfg.Training.Data2VecActive() {
 		initialWeights, err := readTrainerWeights(trainer)
@@ -380,6 +385,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	if telemetry == nil {
 		telemetry = &telemetryRuntime{state: newTelemetryState()}
 	}
+	componentTelemetryEnabled := opts.telemetry != nil
 	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
 	// steadyStart is set after step 0 completes — excludes one-time
@@ -672,6 +678,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step, err)
 			}
 			v := float64(lossV)
+			componentLosses, err := readTrainingStepComponentLosses(trainer, componentTelemetryEnabled)
+			if err != nil {
+				return TrainResult{}, fmt.Errorf("read component losses at step %d: %w", step, err)
+			}
 
 			if step == 0 {
 				firstLoss = v
@@ -710,7 +720,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					DataMS: float64(dataDuration) / float64(time.Millisecond),
 					GPUMS:  float64(gpuDuration) / float64(time.Millisecond),
 				},
-				HasTiming: true,
+				HasTiming:       true,
+				ComponentLosses: componentLosses,
 			})
 			handleMLXMemoryControls(name, step, mlxMemLogEvery, mlxClearCacheEvery, telemetry)
 
@@ -816,7 +827,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 						ValidationMS: float64(valDuration) / float64(time.Millisecond),
 						LogMS:        float64(logDuration) / float64(time.Millisecond),
 					},
-					HasTiming: true,
+					HasTiming:       true,
+					ComponentLosses: componentLosses,
 				})
 				if err := telemetry.writeSnapshot(true); err != nil {
 					return TrainResult{}, err
@@ -956,15 +968,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	fmt.Println(result.formatSummary())
 
 	return result, nil
-}
-
-func formatMultiheadHeadsForLog(heads []arch.MultiheadHeadSpec) string {
-	parts := make([]string, 0, len(heads))
-	for _, h := range heads {
-		parts = append(parts, fmt.Sprintf("%s:%s weight=%g output=%s agg=%s",
-			h.Name, h.Objective, h.LossWeight, h.OutputHead, h.LayerAggregation))
-	}
-	return strings.Join(parts, ", ")
 }
 
 // readTrainerWeights reads weights from a trainer via the weight-reading interface.

@@ -143,8 +143,11 @@ curl http://127.0.0.1:6060/debug/vars | jq .
 
 Telemetry includes current step, loss, learning rate, objective, sequence
 length, steady-state tokens/sec, MLX active/cache/peak memory, host RSS, and
-best-effort GPU utilization on macOS from `ioreg`. GPU utilization is omitted
-when the platform does not expose a no-sudo sampler.
+best-effort GPU utilization on macOS from `ioreg`. When a training graph
+declares active scalar auxiliary losses, it also includes a
+`component_losses` object, for example `invariance_loss`, `word_struct_loss`,
+or `moe_aux_loss`; absent/no-op objectives do not add keys. GPU utilization is
+omitted when the platform does not expose a no-sudo sampler.
 
 To keep a time series for plotting, add:
 

@@ -20,6 +20,8 @@ type mlxGPUTrainer struct {
 	shapes                     []WeightShape
 	baseLR                     float32
 	evalLossOutputName         string
+	componentLossOutputs       []string
+	captureComponentLosses     bool
 	vocabSize                  int
 	charVocabSize              int
 	charMaxPerToken            int
@@ -188,6 +190,7 @@ func initMLXGPUTrainer(
 		gpu.FreeHandles(handles)
 		return nil, fmt.Errorf("set GPU trainer QAT mode: %w", err)
 	}
+	componentLossOutputs := declaredComponentLossOutputs(irProg)
 
 	batchElems := cfg.Training.BatchTokens
 	declaredTargetSize := 0
@@ -327,6 +330,7 @@ func initMLXGPUTrainer(
 		shapes:                     shapes,
 		baseLR:                     optimizerSpec.DefaultBaseLR,
 		evalLossOutputName:         preferredEvalLossOutputName(irProg),
+		componentLossOutputs:       componentLossOutputs,
 		vocabSize:                  cfg.VocabSize,
 		charVocabSize:              cfg.CharVocabSize,
 		charMaxPerToken:            cfg.CharMaxPerToken,
@@ -579,9 +583,16 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 		}
 		return err
 	}
+	componentLossOutputs := declaredComponentLossOutputs(irProg)
+	if t.captureComponentLosses {
+		if err := gpu.TrainerSetStepOutputNames(t.handle, componentLossOutputs); err != nil {
+			return fmt.Errorf("configure GPU training step outputs: %w", err)
+		}
+	}
 	t.prog = gpuProg
 	t.activeIRProg = irProg
 	t.evalLossOutputName = preferredEvalLossOutputName(irProg)
+	t.componentLossOutputs = componentLossOutputs
 	t.charInput = programDeclaresInput(irProg, "char_ids")
 	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
 	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")
@@ -616,6 +627,20 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	if t.firstByteMaskInput && len(t.firstByteValid) == 0 {
 		t.firstByteValid = identityFirstByteMaskValid(t.vocabSize)
 	}
+	return nil
+}
+
+// EnableComponentLossCapture retains declared scalar component losses with
+// each training step for telemetry. It must be configured before submission so
+// regular runs retain their historical loss-only capture behavior.
+func (t *mlxGPUTrainer) EnableComponentLossCapture() error {
+	if t.captureComponentLosses {
+		return nil
+	}
+	if err := gpu.TrainerSetStepOutputNames(t.handle, t.componentLossOutputs); err != nil {
+		return fmt.Errorf("configure GPU training step outputs: %w", err)
+	}
+	t.captureComponentLosses = true
 	return nil
 }
 
@@ -797,6 +822,29 @@ func (t *mlxGPUTrainer) ReadOutput(name string, shape []int) ([]float32, error) 
 		return nil, err
 	}
 	return gpu.TrainerReadOutput(t.handle, name, shape)
+}
+
+// ReadComponentLossesGPU returns the declared scalar component losses from the
+// most recently collected training step without flushing a lookahead step.
+func (t *mlxGPUTrainer) ReadComponentLossesGPU() (map[string]float64, error) {
+	if !t.captureComponentLosses {
+		return nil, fmt.Errorf("component loss capture is not enabled")
+	}
+	if len(t.componentLossOutputs) == 0 {
+		return nil, nil
+	}
+	result := make(map[string]float64, len(t.componentLossOutputs))
+	for _, name := range t.componentLossOutputs {
+		out, err := gpu.TrainerReadCachedOutput(t.handle, name, []int{1})
+		if err != nil {
+			return nil, fmt.Errorf("read cached component loss %q: %w", name, err)
+		}
+		if len(out) != 1 {
+			return nil, fmt.Errorf("cached component loss %q returned %d values, want 1", name, len(out))
+		}
+		result[name] = float64(out[0])
+	}
+	return result, nil
 }
 
 // lowerIRToGPU converts a mixlab ir.Program to a gpu.Program.

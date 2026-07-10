@@ -2,10 +2,21 @@ package train
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/gpu"
 )
+
+func formatMultiheadHeadsForLog(heads []arch.MultiheadHeadSpec) string {
+	parts := make([]string, 0, len(heads))
+	for _, h := range heads {
+		parts = append(parts, fmt.Sprintf("%s:%s weight=%g output=%s agg=%s",
+			h.Name, h.Objective, h.LossWeight, h.OutputHead, h.LayerAggregation))
+	}
+	return strings.Join(parts, ", ")
+}
 
 func handleMLXMemoryControls(name string, step, logEvery, clearEvery int, telemetry *telemetryRuntime) {
 	if clearEvery > 0 && (step+1)%clearEvery == 0 {

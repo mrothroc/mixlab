@@ -1617,11 +1617,18 @@ bool capture_training_outputs() {
   return false;
 }
 
-std::vector<std::string> collect_training_step_output_names(const IRProgram& program) {
-  if (!capture_training_outputs()) {
-    return {"loss"};
+std::vector<std::string> collect_training_step_output_names(const IRTrainer& trainer) {
+  std::vector<std::string> output_names = capture_training_outputs()
+      ? collect_cached_output_names(trainer.program)
+      : std::vector<std::string>{"loss"};
+  for (const auto& name : trainer.training_step_extra_output_names) {
+    if (name != "loss" &&
+        program_produces_output(trainer.program, name) &&
+        std::find(output_names.begin(), output_names.end(), name) == output_names.end()) {
+      output_names.push_back(name);
+    }
   }
-  return collect_cached_output_names(program);
+  return output_names;
 }
 
 std::vector<std::string> sorted_input_names(const TensorMap& inputs) {
@@ -1842,7 +1849,7 @@ void refresh_named_step_metadata(IRTrainer& trainer, const TensorMap& inputs) {
       trainer.cached_named_step_argnums.begin(),
       trainer.cached_named_step_argnums.end(),
       0);
-  trainer.cached_named_step_output_names = collect_training_step_output_names(trainer.program);
+  trainer.cached_named_step_output_names = collect_training_step_output_names(trainer);
   trainer.cached_named_step_input_names = sorted_input_names(inputs);
   trainer.cached_named_step_input_dtypes.clear();
   trainer.cached_named_step_input_shapes.clear();
@@ -3412,6 +3419,24 @@ mx::array IRTrainer::read_grad(int weight_idx) const {
     throw std::runtime_error("invalid gradient weight index");
   }
   return last_grads[static_cast<size_t>(weight_idx)];
+}
+
+void IRTrainer::set_training_step_extra_output_names(const std::vector<std::string>& output_names) {
+  if (has_pending_step_ || has_ready_step_) {
+    throw std::runtime_error("cannot change training step outputs while a submitted step is pending");
+  }
+  training_step_extra_output_names = output_names;
+  cached_named_step_metadata_valid = false;
+  cached_named_step_argnums.clear();
+  cached_named_step_output_names.clear();
+  cached_named_step_input_names.clear();
+  cached_named_step_input_dtypes.clear();
+  cached_named_step_input_shapes.clear();
+  cached_named_step_signature.clear();
+  compiled_named_step = nullptr;
+  compiled_named_step_signature.clear();
+  compiled_named_update_step = nullptr;
+  compiled_named_update_step_signature.clear();
 }
 
 void IRTrainer::set_program(const IRProgram& new_program) {

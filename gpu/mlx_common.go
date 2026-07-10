@@ -134,6 +134,21 @@ func TrainerSetProgram(t TrainerHandle, program *Program) error {
 	return nil
 }
 
+// TrainerSetStepOutputNames retains the requested scalar outputs with each
+// completed training step. Callers can then read them without a second forward
+// pass or flushing a lookahead step.
+func TrainerSetStepOutputNames(t TrainerHandle, outputNames []string) error {
+	if t == 0 {
+		return fmt.Errorf("invalid trainer handle; create the trainer before configuring step outputs")
+	}
+	for i, name := range outputNames {
+		if name == "" {
+			return fmt.Errorf("outputNames[%d] is empty", i)
+		}
+	}
+	return mlxTrainerSetStepOutputNames(t, outputNames)
+}
+
 func createLegacyAdamTrainer(
 	program *Program,
 	weightHandles []int64,
@@ -357,6 +372,30 @@ func TrainerReadOutput(t TrainerHandle, name string, shape []int) ([]float32, er
 	}
 	out := make([]float32, elemCount)
 	if err := mlxTrainerReadOutput(t, name, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// TrainerReadCachedOutput reads an output retained by the completed training
+// step without flushing a submitted lookahead step. It is intentionally narrow:
+// callers must have configured the output with TrainerSetStepOutputNames.
+func TrainerReadCachedOutput(t TrainerHandle, name string, shape []int) ([]float32, error) {
+	if t == 0 {
+		return nil, fmt.Errorf("invalid trainer handle; create the trainer before reading cached outputs")
+	}
+	if name == "" {
+		return nil, fmt.Errorf("output name is required; pass a configured training-step output")
+	}
+	elemCount := 1
+	for i, dim := range shape {
+		if dim <= 0 {
+			return nil, fmt.Errorf("invalid output shape[%d]=%d", i, dim)
+		}
+		elemCount *= dim
+	}
+	out := make([]float32, elemCount)
+	if err := mlxTrainerReadCachedOutput(t, name, out); err != nil {
 		return nil, err
 	}
 	return out, nil

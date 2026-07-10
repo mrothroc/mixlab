@@ -45,6 +45,7 @@ type telemetryRunState struct {
 	TokensPerSec         float64            `json:"tokens_per_sec"`
 	Timing               *telemetryTiming   `json:"timing,omitempty"`
 	UpdatedAt            string             `json:"updated_at,omitempty"`
+	ComponentLosses      map[string]float64 `json:"component_losses,omitempty"`
 	Extra                map[string]float64 `json:"extra,omitempty"`
 }
 
@@ -56,23 +57,24 @@ type telemetryTiming struct {
 }
 
 type telemetryUpdate struct {
-	Model         string
-	Step          int
-	TotalSteps    int
-	Loss          float64
-	HasLoss       bool
-	ValLoss       float64
-	HasValLoss    bool
-	LR            float32
-	Objective     string
-	SeqLen        int
-	BatchTokens   int
-	Elapsed       time.Duration
-	SteadyElapsed time.Duration
-	TokensPerSec  float64
-	Timing        telemetryTiming
-	HasTiming     bool
-	Extra         map[string]float64
+	Model           string
+	Step            int
+	TotalSteps      int
+	Loss            float64
+	HasLoss         bool
+	ValLoss         float64
+	HasValLoss      bool
+	LR              float32
+	Objective       string
+	SeqLen          int
+	BatchTokens     int
+	Elapsed         time.Duration
+	SteadyElapsed   time.Duration
+	TokensPerSec    float64
+	Timing          telemetryTiming
+	HasTiming       bool
+	ComponentLosses map[string]float64
+	Extra           map[string]float64
 }
 
 type telemetrySnapshot struct {
@@ -229,7 +231,8 @@ func (s *telemetryState) update(u telemetryUpdate) {
 		SteadyElapsedSeconds: u.SteadyElapsed.Seconds(),
 		TokensPerSec:         u.TokensPerSec,
 		UpdatedAt:            time.Now().UTC().Format(time.RFC3339Nano),
-		Extra:                u.Extra,
+		ComponentLosses:      cloneTelemetryValues(u.ComponentLosses),
+		Extra:                cloneTelemetryValues(u.Extra),
 	}
 	if u.HasLoss {
 		loss := u.Loss
@@ -246,6 +249,17 @@ func (s *telemetryState) update(u telemetryUpdate) {
 	s.mu.Lock()
 	s.s = next
 	s.mu.Unlock()
+}
+
+func cloneTelemetryValues(values map[string]float64) map[string]float64 {
+	if len(values) == 0 {
+		return nil
+	}
+	cloned := make(map[string]float64, len(values))
+	for name, value := range values {
+		cloned[name] = value
+	}
+	return cloned
 }
 
 func (s *telemetryState) snapshot(sampleGPU bool) telemetrySnapshot {

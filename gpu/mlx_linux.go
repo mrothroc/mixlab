@@ -369,6 +369,30 @@ func mlxTrainerSetProgram(t TrainerHandle, programHandle int64) int {
 	return int(C.mlx_ir_trainer_set_program(C.int64_t(t), C.int64_t(programHandle)))
 }
 
+func mlxTrainerSetStepOutputNames(t TrainerHandle, outputNames []string) error {
+	if len(outputNames) == 0 {
+		if C.mlx_ir_trainer_set_step_output_names(C.int64_t(t), nil, 0) != 0 {
+			return fmt.Errorf("mlx_ir_trainer_set_step_output_names failed")
+		}
+		return nil
+	}
+	names := make([]*C.char, len(outputNames))
+	for i, name := range outputNames {
+		names[i] = C.CString(name)
+	}
+	defer func() {
+		for _, name := range names {
+			C.free(unsafe.Pointer(name))
+		}
+	}()
+	if C.mlx_ir_trainer_set_step_output_names(
+		C.int64_t(t), (**C.char)(unsafe.Pointer(&names[0])), C.int(len(names)),
+	) != 0 {
+		return fmt.Errorf("mlx_ir_trainer_set_step_output_names failed")
+	}
+	return nil
+}
+
 func mlxTrainerStep(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	cInputs, cleanup, err := marshalTensorInputs(inputs)
 	if err != nil {
@@ -658,6 +682,18 @@ func mlxTrainerReadOutput(t TrainerHandle, name string, out []float32) error {
 	))
 	if rc != 0 {
 		return fmt.Errorf("mlx_ir_trainer_read_output failed for %q", name)
+	}
+	return nil
+}
+
+func mlxTrainerReadCachedOutput(t TrainerHandle, name string, out []float32) error {
+	cName := C.CString(name)
+	defer C.free(unsafe.Pointer(cName))
+	rc := int(C.mlx_ir_trainer_read_cached_output(
+		C.int64_t(t), cName, (*C.float)(unsafe.Pointer(&out[0])), C.int(len(out)),
+	))
+	if rc != 0 {
+		return fmt.Errorf("mlx_ir_trainer_read_cached_output failed for %q", name)
 	}
 	return nil
 }

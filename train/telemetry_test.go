@@ -55,6 +55,7 @@ func TestParseIORegGPUUtilPercent(t *testing.T) {
 
 func TestTelemetrySnapshotJSONShape(t *testing.T) {
 	state := newTelemetryState()
+	componentLosses := map[string]float64{"invariance_loss": 0.25}
 	state.update(telemetryUpdate{
 		Model:         "tiny",
 		Step:          7,
@@ -76,8 +77,12 @@ func TestTelemetrySnapshotJSONShape(t *testing.T) {
 			ValidationMS: 3,
 			LogMS:        4,
 		},
-		HasTiming: true,
+		HasTiming:       true,
+		ComponentLosses: componentLosses,
 	})
+	// telemetry state owns the serialized snapshot rather than retaining a
+	// caller-owned map that training code can mutate on the next step.
+	componentLosses["invariance_loss"] = 999
 	snap := state.snapshot(false)
 	if snap.Model != "tiny" || snap.Step != 7 || snap.TotalSteps != 100 {
 		t.Fatalf("bad run fields: %+v", snap.telemetryRunState)
@@ -91,14 +96,29 @@ func TestTelemetrySnapshotJSONShape(t *testing.T) {
 	if snap.GPUUtilPercent != nil {
 		t.Fatalf("snapshot(false) sampled gpu util: %v", *snap.GPUUtilPercent)
 	}
+	if got := snap.ComponentLosses["invariance_loss"]; got != 0.25 {
+		t.Fatalf("component loss=%g, want 0.25", got)
+	}
 	raw, err := json.Marshal(snap)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, want := range []string{`"model":"tiny"`, `"tokens_per_sec":128`, `"mlx":`, `"host":`, `"rss_bytes":`} {
+	for _, want := range []string{`"model":"tiny"`, `"tokens_per_sec":128`, `"component_losses":{"invariance_loss":0.25}`, `"mlx":`, `"host":`, `"rss_bytes":`} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("snapshot JSON missing %s: %s", want, raw)
 		}
+	}
+}
+
+func TestTelemetryOmitsInactiveComponentLosses(t *testing.T) {
+	state := newTelemetryState()
+	state.update(telemetryUpdate{Model: "no-op"})
+	raw, err := json.Marshal(state.snapshot(false))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), "component_losses") {
+		t.Fatalf("inactive component losses serialized: %s", raw)
 	}
 }
 

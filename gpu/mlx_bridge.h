@@ -171,6 +171,10 @@ int64_t mlx_ir_create_trainer_v2(
     float default_base_lr,
     int compute_dtype);
 int mlx_ir_trainer_set_program(int64_t trainer, int64_t program);
+int mlx_ir_trainer_set_step_output_names(
+    int64_t trainer,
+    const char** output_names,
+    int n_outputs);
 float mlx_ir_trainer_step(int64_t trainer, const int* tokens, const int* targets, int B, int T);
 float mlx_ir_trainer_step_named(
     int64_t trainer,
@@ -212,6 +216,11 @@ float mlx_ir_trainer_evaluate_lora_named(
     int steps,
     float lr);
 int mlx_ir_trainer_read_output(
+    int64_t trainer,
+    const char* output_name,
+    float* out,
+    int out_size);
+int mlx_ir_trainer_read_cached_output(
     int64_t trainer,
     const char* output_name,
     float* out,

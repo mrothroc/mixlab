@@ -97,6 +97,9 @@ struct IRTrainer {
   bool memory_safe_step_notice_logged_ = false;
   bool low_memory_update_notice_logged_ = false;
   bool cached_named_step_metadata_valid = false;
+  // Additional scalar outputs retained with each training step. This keeps
+  // telemetry readback off the forward path and avoids retaining logits.
+  std::vector<std::string> training_step_extra_output_names;
   std::vector<int> cached_named_step_argnums;
   std::vector<std::string> cached_named_step_output_names;
   std::vector<std::string> cached_named_step_input_names;
@@ -172,6 +175,7 @@ struct IRTrainer {
   float compute_mean_square_grads_named(const TensorMap& inputs, const std::string& output_name);
   mlx::core::array read_output(const std::string& output_name) const;
   mlx::core::array read_grad(int weight_idx) const;
+  void set_training_step_extra_output_names(const std::vector<std::string>& output_names);
   void set_program(const IRProgram& new_program);
   void apply_optimizer_updates(const std::vector<mlx::core::array>& grads);
   void apply_weight_optimizer_update(size_t weight_index, const mlx::core::array& grad);

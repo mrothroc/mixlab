@@ -281,6 +281,37 @@ int mlx_ir_trainer_set_program(int64_t trainer, int64_t program) {
   }
 }
 
+int mlx_ir_trainer_set_step_output_names(
+    int64_t trainer,
+    const char** output_names,
+    int n_outputs) {
+  if (n_outputs < 0 || (n_outputs > 0 && !output_names)) {
+    return -1;
+  }
+  try {
+    auto* t = get_ir_trainer(trainer);
+    if (!t) {
+      return -1;
+    }
+    std::vector<std::string> names;
+    names.reserve(static_cast<size_t>(n_outputs));
+    for (int i = 0; i < n_outputs; ++i) {
+      if (!output_names[i] || output_names[i][0] == '\0') {
+        return -1;
+      }
+      names.emplace_back(output_names[i]);
+    }
+    t->set_training_step_extra_output_names(names);
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_set_step_output_names", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_set_step_output_names unknown exception" << std::endl;
+    return -1;
+  }
+}
+
 int mlx_ir_trainer_submit_step(int64_t trainer, const mlx_tensor_input* inputs, int n_inputs) {
   if (!inputs || n_inputs <= 0) {
     return -1;
@@ -505,6 +536,34 @@ int mlx_ir_trainer_read_output(int64_t trainer, const char* output_name, float* 
     return -1;
   } catch (...) {
     std::cerr << "[mlx_bridge] mlx_ir_trainer_read_output unknown exception" << std::endl;
+    return -1;
+  }
+}
+
+int mlx_ir_trainer_read_cached_output(int64_t trainer, const char* output_name, float* out, int out_size) {
+  if (!output_name || output_name[0] == '\0' || !out || out_size <= 0) {
+    return -1;
+  }
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return -1;
+    }
+    auto* t = get_ir_trainer(trainer);
+    if (!t) {
+      return -1;
+    }
+    auto output = t->read_output(output_name);
+    if (output.dtype() != mx::float32 || static_cast<int>(output.size()) != out_size) {
+      return -1;
+    }
+    mx::eval(output);
+    std::memcpy(out, output.data<float>(), static_cast<size_t>(out_size) * sizeof(float));
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_read_cached_output", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_read_cached_output unknown exception" << std::endl;
     return -1;
   }
 }
