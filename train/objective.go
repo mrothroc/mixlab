@@ -17,6 +17,7 @@ type objectiveBatch struct {
 	lossMask              []float32
 	wordStructTargets     []int
 	wordStructLossMask    []float32
+	invarianceLossMask    []float32
 	energySpanMask        []float32
 	attentionCausal       []int32
 	segmentIDs            []int32

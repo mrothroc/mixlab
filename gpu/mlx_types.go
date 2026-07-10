@@ -91,6 +91,7 @@ const (
 	OpSpanPLLPool          = 97
 	OpSpanPLLPairwise      = 98
 	OpMaskedDistillationKL = 99
+	OpMaskedSymmetricKL    = 100
 )
 
 const (

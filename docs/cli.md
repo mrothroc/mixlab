@@ -15,7 +15,7 @@ mode-specific flags.
 | `arch_race` | Train every JSON config in a directory and compare results. | [cli-train.md](cli-train.md) |
 | `smoke` | Run diagnostic checks for MLX availability and GPU health. | This page |
 | `prepare` | Tokenize raw text or JSONL into binary training shards. | [cli-prepare.md](cli-prepare.md) |
-| `prepare-pairs` | Validate minimal-pair JSONL and optionally compile it to a compact pair shard. | [cli-prepare.md](cli-prepare.md) |
+| `prepare-pairs` | Validate minimal-pair or invariance-pair JSONL and optionally compile it to a compact pair shard. | [cli-prepare.md](cli-prepare.md) |
 | `count` | Print parameter, size, block, FLOP, and IR op counts for a config. | [cli-eval.md](cli-eval.md) |
 | `eval` | Load safetensors and evaluate validation loss or per-token exports. | [cli-eval.md](cli-eval.md) |
 | `hiddenstats` | Export one batch of hidden states as float32 binary. | [cli-eval.md](cli-eval.md) |

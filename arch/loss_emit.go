@@ -110,6 +110,12 @@ func emitWordStructuralLossIR(prog *Program, logits, targets, lossMask string, w
 	prog.Add("loss", output+"_weighted", "loss")
 }
 
+func emitInvarianceLossIR(prog *Program, logits, lossMask string, seqLen int, weight float64, output string) {
+	prog.MaskedSymmetricKL(logits, lossMask, seqLen, output)
+	prog.ScalarMul(output, float32(weight), output+"_weighted")
+	prog.Add("loss", output+"_weighted", "loss")
+}
+
 func emitDistillationLanguageModelLossIR(prog *Program, logits, targets, teacherProbs string, rows int, ceWeight, klWeight, temperature float64) error {
 	if ceWeight < 0 || klWeight < 0 || ceWeight+klWeight <= 0 {
 		return fmt.Errorf("distillation loss weights must be non-negative and sum to > 0")

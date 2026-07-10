@@ -90,7 +90,11 @@ const (
 	OpSpanPLLPool          = 97 // OP_SPAN_PLL_POOL
 	OpSpanPLLPairwise      = 98 // OP_SPAN_PLL_PAIRWISE_LOSS
 	OpMaskedDistillationKL = 99 // OP_MASKED_DISTILLATION_KL
+)
 
+const OpMaskedSymmetricKL = 100 // OP_MASKED_SYMMETRIC_KL
+
+const (
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
 	SegmentMaskModeSelectiveCausal = 2
@@ -290,6 +294,13 @@ func (p *Program) DistillationKL(logits, teacherProbs, output string) {
 // lossMask > 0. Student logits are divided by temperature before softmax.
 func (p *Program) MaskedDistillationKL(logits, teacherProbs, lossMask string, temperature float32, output string) {
 	p.AddOp(OpMaskedDistillationKL, []string{logits, teacherProbs, lossMask}, []string{output}, []float32{temperature}, nil)
+}
+
+// MaskedSymmetricKL emits 0.5 * (KL(P_a||P_b) + KL(P_b||P_a)) for
+// contiguous A/B sequence-row pairs. lossMask selects the one compared
+// position in each view; inactive pairs have all-zero masks.
+func (p *Program) MaskedSymmetricKL(logits, lossMask string, seqLen int, output string) {
+	p.AddOp(OpMaskedSymmetricKL, []string{logits, lossMask}, []string{output}, nil, []int{seqLen})
 }
 
 // MaskedSmoothL1 emits mean Huber/SmoothL1 loss over rows where mask > 0.

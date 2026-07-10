@@ -286,6 +286,9 @@ func validateTrainingMultihead(cfg *ArchConfig, source string) error {
 	if err := validateWordStructuralObjective(cfg, source); err != nil {
 		return err
 	}
+	if err := validateTrainingInvariance(cfg, source); err != nil {
+		return err
+	}
 	if t.RTD != nil {
 		if t.RTD.Generator == "tied" {
 			if strings.TrimSpace(t.RTD.GeneratorHead) == "" {

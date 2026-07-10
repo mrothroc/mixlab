@@ -88,6 +88,7 @@ you are trying to measure.
 | `data2vec` | EMA self-distillation for masked objective paths. |
 | `rtd` | ELECTRA-style replaced-token detection auxiliary for multihead training. |
 | `minimal_pair` | Clean/corrupt pair data for native energy ranking or MLM/MNTP span-PLL scorer regularization. |
+| `invariance` | Structured two-view symmetric-KL consistency loss for masked vocab predictions. |
 | `word_structural_objective` | StructBERT-style local shuffle reconstruction for MLM/MNTP vocab heads. |
 | `mtp` | Parameter-free multi-token prediction auxiliary loss. |
 | `first_byte_mask` | First-byte masked loss path. |
@@ -112,6 +113,34 @@ regularizer that ranks clean/corrupt pairs by masked-span pseudo-log-likelihood.
 HF export/scoring. Omit it or set `enabled:false` for exact disabled parity.
 `loss_weight:0` keeps the input shuffle active and only removes the auxiliary
 loss contribution, which is useful as a corruption-only ablation.
+
+`training.invariance` is a training-only, corpus-owned consistency objective for
+MLM/MNTP models and multihead configs whose export head is MLM/MNTP. It samples
+explicitly annotated view pairs, masks one annotated position in each view, and
+adds `weight * 0.5 * (KL(P_a || P_b) + KL(P_b || P_a))` to the normal task loss.
+The pair records must keep the annotated target token unchanged across both
+views; Mixlab does not infer spans or learn a nuisance detector. Use
+`source: "file"` (the default) to auto-detect JSONL or a compiled pair binary,
+`loss: "sym_kl"`, and `target: "masked_position"`. `batch_fraction` defaults
+to `0.25`. `skip_token_ids` optionally excludes tokenizer special IDs from
+annotated targets; `mlm_mask_token_id` is always excluded. Set `weight: 0` for an exact no-op: Mixlab loads no pair artifact,
+declares no extra graph input, and produces the baseline graph and loss path.
+
+```jsonc
+"training": {
+  "objective": "mlm",
+  "mlm_mask_token_id": 103,
+  "invariance": {
+    "source": "file",
+    "path": "data/invariance_pairs.bin",
+    "loss": "sym_kl",
+    "weight": 0.1,
+    "batch_fraction": 0.25,
+    "target": "masked_position",
+    "skip_token_ids": [0, 1, 2]
+  }
+}
+```
 
 ## Validation And Logging
 

@@ -154,6 +154,31 @@ func TestDistillLossMaskMLXInputUsesMaskedLossMask(t *testing.T) {
 	}
 }
 
+func TestInvarianceLossMaskMLXInputMaterializes(t *testing.T) {
+	trainer := &mlxGPUTrainer{
+		invarianceInput:       true,
+		tokBuf:                make([]int32, 8),
+		tgtBuf:                make([]int32, 8),
+		invarianceLossMaskBuf: make([]float32, 8),
+	}
+	batch := objectiveBatch{
+		x:                  []int{10, 11, 12, 13, 20, 21, 22, 23},
+		y:                  []int{10, 11, 12, 13, 20, 21, 22, 23},
+		invarianceLossMask: []float32{0, 1, 0, 0, 0, 0, 1, 0},
+	}
+	inputs, err := trainer.makeObjectiveInputs(batch, 2, 4)
+	if err != nil {
+		t.Fatalf("makeObjectiveInputs(invariance): %v", err)
+	}
+	mask := tensorInputByName(t, inputs, "invariance_loss_mask")
+	if mask.DType != gpu.TensorFloat32 || !reflect.DeepEqual(mask.Shape, []int{8}) {
+		t.Fatalf("invariance mask dtype/shape=%d/%v, want float32/[8]", mask.DType, mask.Shape)
+	}
+	if !reflect.DeepEqual(mask.Data, batch.invarianceLossMask) {
+		t.Fatalf("invariance mask=%v want=%v", mask.Data, batch.invarianceLossMask)
+	}
+}
+
 func TestWordStructuralMLXInputsMaterializeTargetsAndMask(t *testing.T) {
 	trainer := &mlxGPUTrainer{
 		wordStructInput:       true,

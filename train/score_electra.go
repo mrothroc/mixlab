@@ -65,8 +65,9 @@ func runScoreElectraWithOptions(opts ScoreElectraOptions) error {
 		return err
 	}
 	prog, err := BuildTrainingIRProgramFromConfig(&scoreCfg, TrainingProgramState{
-		Objective:       arch.ObjectiveMultihead,
-		DropoutInactive: true,
+		Objective:          arch.ObjectiveMultihead,
+		DropoutInactive:    true,
+		InvarianceInactive: true,
 	})
 	if err != nil {
 		return fmt.Errorf("build ELECTRA scoring IR program: %w", err)

@@ -52,9 +52,10 @@ minimal-pair regularizer.
 
 ## `prepare-pairs`
 
-`prepare-pairs` validates an explicit minimal-pair JSONL file and can compile
-it to a compact binary shard for faster startup during minimal-pair training.
-It does not tokenize raw text; records must already contain token IDs.
+`prepare-pairs` validates either an explicit minimal-pair JSONL file or a
+structured invariance-pair JSONL file, then can compile it to a compact binary
+shard for faster startup. It does not tokenize raw text; records must already
+contain token IDs.
 
 ```bash
 ./mixlab -mode prepare-pairs \
@@ -65,17 +66,17 @@ It does not tokenize raw text; records must already contain token IDs.
 
 You can omit `-pair-out` to run validation only. With `-config`, Mixlab uses
 the config's `vocab_size` and `seq_len` as validation limits; if `-pair-in` is
-omitted and the config has `training.minimal_pair.source: "jsonl"`, Mixlab uses
-`training.minimal_pair.path`. Without `-config`, pass `-vocab-size`; use
-`-pair-max-len` to enforce a maximum clean/corrupt sequence length.
+omitted and the config has a JSONL `training.minimal_pair` or
+`training.invariance` source, Mixlab uses that path. Without `-config`, pass
+`-vocab-size`; use `-pair-max-len` to enforce a maximum view length.
 
 | Flag | Description |
 |------|-------------|
-| `-pair-in` | Minimal-pair JSONL input. Required unless `-config` supplies a JSONL `training.minimal_pair.path`. |
-| `-pair-out` | Optional compiled binary `.mpair` output. Omit for validation-only runs. |
+| `-pair-in` | Minimal-pair or invariance-pair JSONL input. Required unless `-config` supplies a JSONL pair path. |
+| `-pair-out` | Optional compiled binary output. Omit for validation-only runs. |
 | `-config` | Optional config used to infer `vocab_size`, `seq_len`, and pair input path. |
 | `-vocab-size` | Token-id upper bound when no config is supplied. |
-| `-pair-max-len` | Maximum clean/corrupt length. `0` uses config `seq_len` when a config is supplied; otherwise no length cap. |
+| `-pair-max-len` | Maximum pair-view length. `0` uses config `seq_len` when a config is supplied; otherwise no length cap. |
 
 Compiled shards are used with:
 
@@ -87,6 +88,12 @@ Compiled shards are used with:
   }
 }
 ```
+
+Invariance records use `view_a`, `view_a_pos`, `view_b`, and `view_b_pos`.
+Both positions are required and must point to the same token ID, which Mixlab
+masks before comparing their vocabulary distributions. A compiled invariance
+artifact can be referenced with `training.invariance.source: "file"` (automatic
+format detection) or `"bin"`.
 
 When `energy_aggregation` is `"differing_span"`, pair JSONL may include
 `clean_span` and `corrupt_span` half-open ranges. If spans are omitted, Mixlab

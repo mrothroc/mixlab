@@ -47,6 +47,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 			Objective:              ObjectiveCausal,
 			DistillationInactive:   true,
 			Data2VecInactive:       true,
+			InvarianceInactive:     true,
 			ZLossInactive:          true,
 			DropoutInactive:        true,
 			SegmentMaskInactive:    true,
@@ -59,6 +60,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		Objective:              ObjectiveCausal,
 		DistillationInactive:   true,
 		Data2VecInactive:       true,
+		InvarianceInactive:     true,
 		ZLossInactive:          true,
 		DropoutInactive:        true,
 		SegmentMaskInactive:    true,
@@ -97,6 +99,7 @@ func BuildDistillationTeacherIRProgramFromConfig(cfg *ArchConfig, objective stri
 		MTPAuxInactive:         true,
 		DistillationInactive:   true,
 		Data2VecInactive:       true,
+		InvarianceInactive:     true,
 		ZLossInactive:          true,
 		DropoutInactive:        true,
 		Objective:              objective,
@@ -113,6 +116,7 @@ type TrainingProgramState struct {
 	MTPAuxInactive         bool
 	DistillationInactive   bool
 	Data2VecInactive       bool
+	InvarianceInactive     bool
 	ZLossInactive          bool
 	DropoutInactive        bool
 	Objective              string
@@ -212,6 +216,10 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	if cfg.Training.Data2VecActive() && !state.Data2VecInactive && state.HiddenCaptureTopK == 0 {
 		data2vec = cfg.Training.Data2Vec
 	}
+	invariance := cfg.Training.Invariance
+	if state.InvarianceInactive || !cfg.Training.InvarianceActive() {
+		invariance = nil
+	}
 	zLoss := cfg.Training.ZLoss
 	if state.ZLossInactive {
 		zLoss = 0
@@ -278,6 +286,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		cfg.EffectiveNormPlacement(),
 		cfg.FFNInternalNorm,
 		wordStructural,
+		invariance,
 	)
 }
 
@@ -296,6 +305,7 @@ func BuildData2VecTeacherIRProgramFromConfig(cfg *ArchConfig, objective string) 
 		MTPAuxInactive:       true,
 		DistillationInactive: true,
 		Data2VecInactive:     true,
+		InvarianceInactive:   true,
 		ZLossInactive:        true,
 		DropoutInactive:      true,
 		Objective:            objective,

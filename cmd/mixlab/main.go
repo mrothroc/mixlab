@@ -96,8 +96,8 @@ func main() {
 	prepMinimalPairReportOut := flag.String("minimal-pair-report-out", "", "write minimal-pair generation report JSON (prepare mode)")
 	prepMinimalPairSampleOut := flag.String("minimal-pair-sample-out", "", "write auditable minimal-pair sample JSONL (prepare mode)")
 	prepMinimalPairSampleCount := flag.Int("minimal-pair-sample-count", 20, "maximum minimal-pair audit samples to write (prepare mode)")
-	pairIn := flag.String("pair-in", "", "minimal-pair JSONL input for prepare-pairs mode")
-	pairOut := flag.String("pair-out", "", "compiled minimal-pair binary output for prepare-pairs mode; omit to validate only")
+	pairIn := flag.String("pair-in", "", "minimal-pair or invariance-pair JSONL input for prepare-pairs mode")
+	pairOut := flag.String("pair-out", "", "compiled pair binary output for prepare-pairs mode; omit to validate only")
 	pairMaxLen := flag.Int("pair-max-len", 0, "maximum clean/corrupt token length for prepare-pairs; 0 uses config seq_len when -config is provided")
 
 	flag.Usage = func() {

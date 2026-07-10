@@ -83,6 +83,7 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		t.distillLossMaskBuf = make([]float32, need)
 		t.wordStructTargetBuf = make([]int32, need)
 		t.wordStructLossMaskBuf = make([]float32, need)
+		t.invarianceLossMaskBuf = make([]float32, need)
 		t.energySpanMaskBuf = make([]float32, need)
 		t.attentionCausalBuf = make([]int32, need)
 		t.segmentIDBuf = make([]int32, need)
@@ -206,6 +207,19 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 			gpu.TensorInput{Name: "word_struct_targets", DType: gpu.TensorInt32, Shape: []int{need}, Data: t.wordStructTargetBuf[:need]},
 			gpu.TensorInput{Name: "word_struct_loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.wordStructLossMaskBuf[:need]},
 		)
+	}
+	if t.invarianceInput {
+		if len(t.invarianceLossMaskBuf) < need {
+			t.invarianceLossMaskBuf = make([]float32, need)
+		}
+		if len(batch.invarianceLossMask) >= need {
+			copy(t.invarianceLossMaskBuf[:need], batch.invarianceLossMask[:need])
+		} else {
+			clear(t.invarianceLossMaskBuf[:need])
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "invariance_loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.invarianceLossMaskBuf[:need],
+		})
 	}
 	if t.energySpanMaskInput {
 		if len(t.energySpanMaskBuf) < need {

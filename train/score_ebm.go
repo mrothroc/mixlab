@@ -422,8 +422,9 @@ func buildScoreEBMIRProgram(cfg *ArchConfig, scoreMode, pllAggregation string) (
 	}
 	if pllAggregation != scoreEBMPLLAggregationFullSeq {
 		return BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
-			Objective:       arch.ObjectiveMultihead,
-			DropoutInactive: true,
+			Objective:          arch.ObjectiveMultihead,
+			DropoutInactive:    true,
+			InvarianceInactive: true,
 		})
 	}
 	objective := arch.ObjectiveMultihead
@@ -439,6 +440,7 @@ func buildScoreEBMIRProgram(cfg *ArchConfig, scoreMode, pllAggregation string) (
 		MTPAuxInactive:         true,
 		DistillationInactive:   true,
 		Data2VecInactive:       true,
+		InvarianceInactive:     true,
 		ZLossInactive:          true,
 		DropoutInactive:        true,
 		Objective:              objective,

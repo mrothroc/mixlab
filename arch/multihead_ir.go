@@ -33,6 +33,7 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		return nil, err
 	}
 	nWeights := len(nWeightsMeta)
+	invarianceEnabled := cfg.Training.InvarianceActive() && !state.InvarianceInactive
 	prog := NewProgram(nWeights)
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
@@ -40,6 +41,9 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	if multiheadUsesWordStructural(cfg) {
 		prog.DeclareInput("word_struct_targets", TensorInt32, []int{B * T})
 		prog.DeclareInput("word_struct_loss_mask", TensorFloat32, []int{B * T})
+	}
+	if invarianceEnabled {
+		prog.DeclareInput("invariance_loss_mask", TensorFloat32, []int{B * T})
 	}
 	prog.DeclareInput("diffusion_block_start", TensorInt32, []int{B})
 	prog.DeclareInput("diffusion_block_end", TensorInt32, []int{B})
@@ -182,6 +186,12 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		minimalPairScoreHead = cfg.Training.MinimalPair.ScoreHead
 	}
 	wordStructuralEnabled := multiheadUsesWordStructural(cfg)
+	invarianceHeadName := ""
+	if invarianceEnabled {
+		if head := cfg.Training.MultiheadExportHead(); head != nil {
+			invarianceHeadName = head.Name
+		}
+	}
 	lossAccum := ""
 	norm := cfg.EffectiveNormSpec()
 	for headIdx, head := range cfg.Training.Heads {
@@ -345,6 +355,17 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 			prog.Add(lossAccum, wordLoss+"_weighted", next)
 			lossAccum = next
 			prog.DeclareOutput(wordLoss, TensorFloat32, []int{1})
+		}
+		if invarianceEnabled && head.Name == invarianceHeadName {
+			invarianceMask := headPrefix + "_invariance_loss_mask"
+			invarianceLoss := headPrefix + "_invariance_loss"
+			prog.Slice("invariance_loss_mask", rowStart, rowStart+rawRows, 1, 0, invarianceMask)
+			prog.MaskedSymmetricKL(logits, invarianceMask, T, invarianceLoss)
+			prog.ScalarMul(invarianceLoss, float32(cfg.Training.Invariance.Weight), invarianceLoss+"_weighted")
+			next := headPrefix + "_invariance_loss_accum"
+			prog.Add(lossAccum, invarianceLoss+"_weighted", next)
+			lossAccum = next
+			prog.DeclareOutput(invarianceLoss, TensorFloat32, []int{1})
 		}
 	}
 	prog.Slice("x", 0, rawRows, 1, 0, "x_hidden_flat")

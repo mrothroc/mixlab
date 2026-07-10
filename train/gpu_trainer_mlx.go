@@ -4,7 +4,6 @@ package train
 
 import (
 	"fmt"
-	"log"
 	"runtime"
 
 	ir "github.com/mrothroc/mixlab/arch"
@@ -35,6 +34,7 @@ type mlxGPUTrainer struct {
 	lossMaskInput              bool
 	distillLossMaskInput       bool
 	wordStructInput            bool
+	invarianceInput            bool
 	energySpanMaskInput        bool
 	attentionCausalInput       bool
 	segmentIDsInput            bool
@@ -52,6 +52,7 @@ type mlxGPUTrainer struct {
 	distillLossMaskBuf     []float32
 	wordStructTargetBuf    []int32
 	wordStructLossMaskBuf  []float32
+	invarianceLossMaskBuf  []float32
 	energySpanMaskBuf      []float32
 	attentionCausalBuf     []int32
 	segmentIDBuf           []int32
@@ -200,6 +201,7 @@ func initMLXGPUTrainer(
 	lossMaskInput := false
 	distillLossMaskInput := false
 	wordStructInput := false
+	invarianceInput := false
 	energySpanMaskInput := false
 	attentionCausalInput := false
 	segmentIDsInput := false
@@ -230,6 +232,9 @@ func initMLXGPUTrainer(
 		}
 		if inp.Name == "word_struct_targets" {
 			wordStructInput = true
+		}
+		if inp.Name == "invariance_loss_mask" {
+			invarianceInput = true
 		}
 		if inp.Name == "energy_span_mask" {
 			energySpanMaskInput = true
@@ -336,6 +341,7 @@ func initMLXGPUTrainer(
 		lossMaskInput:              lossMaskInput,
 		distillLossMaskInput:       distillLossMaskInput,
 		wordStructInput:            wordStructInput,
+		invarianceInput:            invarianceInput,
 		energySpanMaskInput:        energySpanMaskInput,
 		attentionCausalInput:       attentionCausalInput,
 		segmentIDsInput:            segmentIDsInput,
@@ -352,6 +358,7 @@ func initMLXGPUTrainer(
 		distillLossMaskBuf:         make([]float32, batchElems),
 		wordStructTargetBuf:        make([]int32, batchElems),
 		wordStructLossMaskBuf:      make([]float32, batchElems),
+		invarianceLossMaskBuf:      make([]float32, batchElems),
 		energySpanMaskBuf:          make([]float32, batchElems),
 		attentionCausalBuf:         make([]int32, batchElems),
 		segmentIDBuf:               make([]int32, batchElems),
@@ -580,6 +587,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")
 	t.distillLossMaskInput = programDeclaresInput(irProg, "distill_loss_mask")
 	t.wordStructInput = programDeclaresInput(irProg, "word_struct_targets")
+	t.invarianceInput = programDeclaresInput(irProg, "invariance_loss_mask")
 	t.energySpanMaskInput = programDeclaresInput(irProg, "energy_span_mask")
 	t.attentionCausalInput = programDeclaresInput(irProg, "attention_causal_mask")
 	t.segmentIDsInput = programDeclaresInput(irProg, "segment_ids")
@@ -854,141 +862,4 @@ func programDeclaresInput(prog *ir.Program, name string) bool {
 		}
 	}
 	return false
-}
-
-func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.TrainerOptimizerSpec, error) {
-	if cfg == nil {
-		return gpu.TrainerOptimizerSpec{}, fmt.Errorf("nil config")
-	}
-	if cfg.TieEmbeddings && !cfg.MTPUntieEnabled() && cfg.Training.HeadLR != cfg.Training.EmbedLR {
-		log.Printf("warning: tie_embeddings=true ignores head_lr; using embed_lr for shared embedding/head weight")
-	}
-	muonNesterov := true
-	if cfg.Training.MuonNesterov != nil {
-		muonNesterov = *cfg.Training.MuonNesterov
-	}
-	matrixOptimizerName := matrixOptimizer(cfg)
-	embedOptimizerName := "adamw"
-	headOptimizerName := "adamw"
-	scalarOptimizerName := "adamw"
-	embedBeta1 := cfg.Training.Beta1
-	embedBeta2 := cfg.Training.Beta2
-	embedEps := cfg.Training.Epsilon
-	headBeta1 := cfg.Training.Beta1
-	headBeta2 := cfg.Training.Beta2
-	headEps := cfg.Training.Epsilon
-	scalarBeta1 := cfg.Training.Beta1
-	scalarBeta2 := cfg.Training.Beta2
-	scalarEps := cfg.Training.Epsilon
-	matrixBeta1 := cfg.Training.MuonMomentum
-	matrixBeta2 := cfg.Training.Beta2
-	matrixEps := cfg.Training.Epsilon
-	if cfg.Training.Optimizer == "lamb" {
-		embedOptimizerName = "lamb"
-		headOptimizerName = "lamb"
-		scalarOptimizerName = "lamb"
-		matrixOptimizerName = "lamb"
-		embedBeta1 = cfg.Training.LAMBBeta1
-		embedBeta2 = cfg.Training.LAMBBeta2
-		embedEps = cfg.Training.LAMBEps
-		headBeta1 = cfg.Training.LAMBBeta1
-		headBeta2 = cfg.Training.LAMBBeta2
-		headEps = cfg.Training.LAMBEps
-		scalarBeta1 = cfg.Training.LAMBBeta1
-		scalarBeta2 = cfg.Training.LAMBBeta2
-		scalarEps = cfg.Training.LAMBEps
-		matrixBeta1 = cfg.Training.LAMBBeta1
-		matrixBeta2 = cfg.Training.LAMBBeta2
-		matrixEps = cfg.Training.LAMBEps
-	}
-	cautiousWeightDecay := cfg.Training.CautiousWeightDecay
-	cautiousWeightDecayActivationStep := cfg.Training.EffectiveCautiousWeightDecayActivationStep()
-	wmeta := make([]gpu.OptimizerWeightMetadata, len(shapes))
-	for i, s := range shapes {
-		wmeta[i] = gpu.OptimizerWeightMetadata{
-			Name:        s.Name,
-			Shape:       s.Shape,
-			IsNormScale: s.IsNormScale,
-		}
-	}
-	return gpu.BuildTrainerOptimizerSpec(gpu.TrainerOptimizerConfig{
-		Weights: wmeta,
-		Embed: gpu.OptimizerSettings{
-			Name:                              embedOptimizerName,
-			LR:                                cfg.Training.EmbedLR,
-			Beta1:                             embedBeta1,
-			Beta2:                             embedBeta2,
-			Epsilon:                           embedEps,
-			WeightDecay:                       cfg.Training.EmbedWeightDecay,
-			LAMBTrustRatioCap:                 cfg.Training.LAMBTrustRatioCap,
-			CautiousWeightDecay:               cautiousWeightDecay,
-			CautiousWeightDecayActivationStep: cautiousWeightDecayActivationStep,
-		},
-		Head: gpu.OptimizerSettings{
-			Name:                              headOptimizerName,
-			LR:                                cfg.Training.HeadLR,
-			Beta1:                             headBeta1,
-			Beta2:                             headBeta2,
-			Epsilon:                           headEps,
-			WeightDecay:                       cfg.Training.HeadWeightDecay,
-			LAMBTrustRatioCap:                 cfg.Training.LAMBTrustRatioCap,
-			CautiousWeightDecay:               cautiousWeightDecay,
-			CautiousWeightDecayActivationStep: cautiousWeightDecayActivationStep,
-		},
-		Scalar: gpu.OptimizerSettings{
-			Name:                              scalarOptimizerName,
-			LR:                                cfg.Training.ScalarLR,
-			Beta1:                             scalarBeta1,
-			Beta2:                             scalarBeta2,
-			Epsilon:                           scalarEps,
-			WeightDecay:                       cfg.Training.ScalarWeightDecay,
-			LAMBTrustRatioCap:                 cfg.Training.LAMBTrustRatioCap,
-			CautiousWeightDecay:               cautiousWeightDecay,
-			CautiousWeightDecayActivationStep: cautiousWeightDecayActivationStep,
-		},
-		Matrix: gpu.OptimizerSettings{
-			Name:                              matrixOptimizerName,
-			LR:                                cfg.Training.MatrixLR,
-			Beta1:                             matrixBeta1,
-			Beta2:                             matrixBeta2,
-			Epsilon:                           matrixEps,
-			WeightDecay:                       cfg.Training.MatrixWeightDecay,
-			LAMBTrustRatioCap:                 cfg.Training.LAMBTrustRatioCap,
-			CautiousWeightDecay:               cautiousWeightDecay,
-			CautiousWeightDecayActivationStep: cautiousWeightDecayActivationStep,
-			BackendSteps:                      cfg.Training.MuonBackendSteps,
-			NewtonSchulzVariant:               cfg.Training.NewtonSchulzVariant,
-			Nesterov:                          muonNesterov,
-			MuonNormalization:                 matrixMuonNormalization(matrixOptimizerName),
-			RowNormalize:                      matrixOptimizerName == "muon_eq_r",
-		},
-		MaxGradNorm:   cfg.Training.GradClip,
-		DefaultBaseLR: float32(cfg.Training.LR),
-	})
-}
-
-func matrixOptimizer(cfg *ArchConfig) string {
-	switch cfg.Training.Optimizer {
-	case "adamw":
-		return "adamw"
-	case "muon_eq_r":
-		return "muon_eq_r"
-	case "normuon":
-		return "normuon"
-	case "lamb":
-		return "lamb"
-	default:
-		return "muon"
-	}
-}
-
-func matrixMuonNormalization(name string) gpu.MuonNormalization {
-	switch name {
-	case "muon_eq_r":
-		return gpu.MuonNormalizationRowL2
-	case "normuon":
-		return gpu.MuonNormalizationNorMuon
-	default:
-		return gpu.MuonNormalizationNone
-	}
 }

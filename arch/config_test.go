@@ -701,6 +701,7 @@ func TestGegluBlockNoHeadsRequired(t *testing.T) {
 func TestExampleConfigsParse(t *testing.T) {
 	examples := []string{
 		"examples/plain_3L.json",
+		"examples/invariance_mlm_tiny.json",
 	}
 	for _, rel := range examples {
 		t.Run(rel, func(t *testing.T) {

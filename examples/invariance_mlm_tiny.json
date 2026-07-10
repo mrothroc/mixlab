@@ -1,0 +1,32 @@
+{
+  "name": "invariance_mlm_tiny",
+  "model_dim": 128,
+  "vocab_size": 16384,
+  "seq_len": 64,
+  "tie_embeddings": true,
+  "mlm_head": "bert",
+  "blocks": [
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional"},
+    {"type": "geglu"},
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional"},
+    {"type": "geglu"}
+  ],
+  "training": {
+    "steps": 200,
+    "lr": 0.0003,
+    "batch_tokens": 512,
+    "objective": "mlm",
+    "mlm_mask_prob": 0.15,
+    "mlm_mask_token_id": 1,
+    "optimizer": "adamw",
+    "weight_decay": 0.01,
+    "invariance": {
+      "source": "file",
+      "path": "data/invariance_pairs.bin",
+      "loss": "sym_kl",
+      "weight": 0.1,
+      "batch_fraction": 0.25,
+      "target": "masked_position"
+    }
+  }
+}

@@ -85,6 +85,9 @@ func generateSyntheticBatch(rng *rand.Rand, batchTokens, vocabSize int) (x, y []
 // RTD, requires a generator forward pass) that the synthetic harness cannot
 // supply; it is exercised by dedicated multihead/RTD tests instead.
 func syntheticBatchUnsupportedReason(cfg *arch.ArchConfig) string {
+	if cfg.Training.InvarianceActive() {
+		return "structured invariance requires annotated A/B pair artifacts; covered by dedicated invariance pair and MLX training tests"
+	}
 	if cfg.Training.UsesBlockDiffusionObjective() {
 		return "block_diffusion needs per-example diffusion block-boundary inputs the synthetic next-token harness cannot supply; covered by dedicated block-diffusion tests"
 	}

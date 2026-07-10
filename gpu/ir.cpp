@@ -209,6 +209,54 @@ mx::array masked_distillation_kl_mean(
   return mx::sum(row_kl * mask) / denom;
 }
 
+mx::array masked_symmetric_kl_mean(
+    const mx::array& logits,
+    const mx::array& loss_mask,
+    int seq_len) {
+  if (seq_len <= 0) {
+    throw std::runtime_error("masked symmetric KL seq_len must be > 0");
+  }
+  if (logits.ndim() != 2) {
+    throw std::runtime_error("masked symmetric KL logits must have shape [rows, vocab]");
+  }
+  if (loss_mask.ndim() != 1 || loss_mask.shape(0) != logits.shape(0)) {
+    throw std::runtime_error("masked symmetric KL loss_mask must be a rank-1 vector matching logits rows");
+  }
+  const int token_rows = static_cast<int>(logits.shape(0));
+  if (token_rows <= 0 || (token_rows % (2 * seq_len)) != 0) {
+    throw std::runtime_error("masked symmetric KL logits must contain a positive number of contiguous A/B row pairs");
+  }
+  const int pairs = token_rows / (2 * seq_len);
+  const int vocab = static_cast<int>(logits.shape(1));
+  auto logits_bt = mx::reshape(mx::astype(logits, mx::float32), {pairs, 2, seq_len, vocab});
+  auto mask_bt = mx::reshape(
+      mx::astype(mx::greater(mx::astype(loss_mask, mx::float32), mx::array(0.0f, mx::float32)), mx::float32),
+      {pairs, 2, seq_len});
+  auto logits_a = mx::reshape(mx::slice(logits_bt, {0, 0, 0, 0}, {pairs, 1, seq_len, vocab}), {pairs, seq_len, vocab});
+  auto logits_b = mx::reshape(mx::slice(logits_bt, {0, 1, 0, 0}, {pairs, 2, seq_len, vocab}), {pairs, seq_len, vocab});
+  auto mask_a = mx::reshape(mx::slice(mask_bt, {0, 0, 0}, {pairs, 1, seq_len}), {pairs, seq_len});
+  auto mask_b = mx::reshape(mx::slice(mask_bt, {0, 1, 0}, {pairs, 2, seq_len}), {pairs, seq_len});
+  auto shifted_a = logits_a - mx::max(logits_a, 2, true);
+  auto shifted_b = logits_b - mx::max(logits_b, 2, true);
+  auto log_probs_a = shifted_a - mx::log(mx::sum(mx::exp(shifted_a), 2, true));
+  auto log_probs_b = shifted_b - mx::log(mx::sum(mx::exp(shifted_b), 2, true));
+  auto probs_a = mx::exp(log_probs_a);
+  auto probs_b = mx::exp(log_probs_b);
+  auto p_a = mx::sum(probs_a * mx::expand_dims(mask_a, 2), 1);
+  auto p_b = mx::sum(probs_b * mx::expand_dims(mask_b, 2), 1);
+  auto lp_a = mx::sum(log_probs_a * mx::expand_dims(mask_a, 2), 1);
+  auto lp_b = mx::sum(log_probs_b * mx::expand_dims(mask_b, 2), 1);
+  auto safe_a = mx::maximum(p_a, mx::array(1e-20f, mx::float32));
+  auto safe_b = mx::maximum(p_b, mx::array(1e-20f, mx::float32));
+  auto kl_ab = mx::sum(p_a * (mx::log(safe_a) - lp_b), 1);
+  auto kl_ba = mx::sum(p_b * (mx::log(safe_b) - lp_a), 1);
+  auto pair_mask = mx::astype(
+      mx::greater(mx::sum(mask_a, 1) * mx::sum(mask_b, 1), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto denom = mx::maximum(mx::sum(pair_mask), mx::array(1.0f, mx::float32));
+  return mx::sum((kl_ab + kl_ba) * mx::array(0.5f, mx::float32) * pair_mask) / denom;
+}
+
 mx::array masked_smooth_l1_mean(
     const mx::array& pred,
     const mx::array& target,
@@ -3020,6 +3068,13 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           throw std::runtime_error("OP_MASKED_DISTILLATION_KL requires temperature float param");
         }
         set_out(op, 0, masked_distillation_kl_mean(get(op, 0), get(op, 1), get(op, 2), op.float_params[0]));
+        break;
+      }
+      case OP_MASKED_SYMMETRIC_KL: {
+        if (op.n_int_params < 1) {
+          throw std::runtime_error("OP_MASKED_SYMMETRIC_KL requires seq_len int param");
+        }
+        set_out(op, 0, masked_symmetric_kl_mean(get(op, 0), get(op, 1), op.int_params[0]));
         break;
       }
       case OP_MASKED_SMOOTH_L1: {

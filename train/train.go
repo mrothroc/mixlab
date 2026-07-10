@@ -168,6 +168,15 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		fmt.Printf("  [%s] minimal pairs: source=%s records=%d loss=%s margin=%g pair_batch_fraction=%.3f\n",
 			name, pairSampler.path, len(pairSampler.records), cfg.Training.MinimalPair.Loss, cfg.Training.MinimalPair.Margin, cfg.Training.MinimalPair.PairBatchFraction)
 	}
+	invarianceSampler, err := newInvariancePairSampler(cfg)
+	if err != nil {
+		return TrainResult{}, err
+	}
+	if invarianceSampler != nil {
+		s := cfg.Training.Invariance
+		fmt.Printf("  [%s] invariance: source=%s records=%d loss=%s weight=%g batch_fraction=%.3f target=%s\n",
+			name, invarianceSampler.path, len(invarianceSampler.records), s.Loss, s.Weight, s.BatchFraction, s.Target)
+	}
 
 	// Build IR program
 	prog, err := BuildIRProgramFromConfig(cfg)
@@ -442,6 +451,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			stopInitialSubmit()
 			return TrainResult{}, err
 		}
+		prepared, err = maybeAttachInvariancePairs(invarianceSampler, cfg, 0, prepared, currentBatchSize, currentSeqLen, currentObjective)
+		if err != nil {
+			stopInitialSubmit()
+			return TrainResult{}, fmt.Errorf("prepare step 0 invariance batch: %w", err)
+		}
 		prepared, err = attachDistillationTeacherProbs(distiller, prepared, currentBatchSize, currentSeqLen)
 		if err != nil {
 			stopInitialSubmit()
@@ -550,6 +564,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if err != nil {
 				stopSubmit()
 				return 0, err
+			}
+			prepared, err = maybeAttachInvariancePairs(invarianceSampler, cfg, nextStep, prepared, nextBatchSize, nextSeqLen, nextObjective)
+			if err != nil {
+				stopSubmit()
+				return 0, fmt.Errorf("prepare step %d invariance batch: %w", nextStep, err)
 			}
 			prepared, err = attachDistillationTeacherProbs(distiller, prepared, nextBatchSize, nextSeqLen)
 			if err != nil {
@@ -733,7 +752,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					if cfg.Training.MultiheadEnabled() {
 						err = causalEval.withCausalEvalProgram(currentProgramKey, func() error {
 							var evalErr error
-							valAvg, evalErr = meanMultiheadValidationLoss(cfg, valSet, trainer, pairSampler, step, batchSize, seqLen)
+							valAvg, evalErr = meanMultiheadValidationLoss(cfg, valSet, trainer, pairSampler, invarianceSampler, step, batchSize, seqLen)
 							return evalErr
 						})
 					} else {
@@ -851,6 +870,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			finalEvalBatch, err = maybeAttachMinimalPairs(pairSampler, cfg, steps, finalEvalBatch, batchSize, seqLen)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("prepare final minimal-pair training loss batch: %w", err)
+			}
+			finalEvalBatch, err = maybeAttachInvariancePairs(invarianceSampler, cfg, steps, finalEvalBatch, batchSize, seqLen, arch.ObjectiveMultihead)
+			if err != nil {
+				return TrainResult{}, fmt.Errorf("prepare final invariance training loss batch: %w", err)
 			}
 		} else if cfg.Training.ExampleFramingEnabled() {
 			var err error

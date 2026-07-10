@@ -534,6 +534,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		NormPlacementPre,
 		false,
 		nil,
+		nil,
 	)
 }
 
@@ -575,6 +576,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	normPlacement string,
 	ffnInternalNorm bool,
 	wordStructural *WordStructuralObjectiveSpec,
+	invariance *InvarianceSpec,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -699,6 +701,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	maskedLoss := maskedObjective || (framedCausalLoss && objective == ObjectiveCausal)
 	distillationEnabled := distillation != nil && distillation.EffectiveKLActive()
 	wordStructuralEnabled := wordStructural != nil && wordStructural.Enabled && (objective == ObjectiveMLM || objective == ObjectiveMNTP || objective == ObjectiveHybridExample)
+	invarianceEnabled := invariance != nil && invariance.Active()
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
 	if maskedLoss {
@@ -707,6 +710,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	if wordStructuralEnabled {
 		prog.DeclareInput("word_struct_targets", TensorInt32, []int{B * T})
 		prog.DeclareInput("word_struct_loss_mask", TensorFloat32, []int{B * T})
+	}
+	if invarianceEnabled {
+		prog.DeclareInput("invariance_loss_mask", TensorFloat32, []int{B * T})
 	}
 	if objective == ObjectiveHybridExample {
 		prog.DeclareInput("attention_causal_mask", TensorInt32, []int{B})
@@ -931,6 +937,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	if wordStructuralEnabled {
 		emitWordStructuralLossIR(prog, logitsState, "word_struct_targets", "word_struct_loss_mask", wordStructural.LossWeight, "word_struct_loss")
 	}
+	if invarianceEnabled {
+		emitInvarianceLossIR(prog, logitsState, "invariance_loss_mask", T, invariance.Weight, "invariance_loss")
+	}
 	if data2VecEnabled {
 		emitData2VecLossIR(prog, data2vec)
 	}
@@ -947,6 +956,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	if wordStructuralEnabled {
 		prog.DeclareOutput("word_struct_loss", TensorFloat32, []int{1})
+	}
+	if invarianceEnabled {
+		prog.DeclareOutput("invariance_loss", TensorFloat32, []int{1})
 	}
 	prog.DeclareOutput("per_token_nll", TensorFloat32, []int{B * T})
 	prog.DeclareOutput("x_hidden", TensorFloat32, []int{B, T, D})

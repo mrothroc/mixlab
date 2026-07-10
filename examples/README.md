@@ -69,6 +69,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [multihead_mntp_rtd_dedicated_tiny.json](multihead_mntp_rtd_dedicated_tiny.json) | Multihead scorer + dedicated RTD | ELECTRA-style detector with a separate small MLM generator |
 | [multihead_mntp_energy_tiny.json](multihead_mntp_energy_tiny.json) | Multihead scorer + energy ranking | Shared trunk with an MNTP/BERT-MLM scorer head and native minimal-pair energy head |
 | [multihead_mntp_span_pll_ranking_tiny.json](multihead_mntp_span_pll_ranking_tiny.json) | Multihead scorer + span-PLL ranking | Exportable MNTP/BERT-MLM scorer regularized by minimal-pair span PLL |
+| [invariance_mlm_tiny.json](invariance_mlm_tiny.json) | Structured masked-LM invariance | MLM with explicit two-view symmetric-KL consistency pairs |
 | [block_diffusion_sampler_sweep.json](block_diffusion_sampler_sweep.json) | Block diffusion sampler variant | Same tiny block-diffusion backbone with more aggressive sampler defaults |
 | [distillation_tiny.json](distillation_tiny.json) | Teacher distillation | Causal LM with internal teacher ensemble loss |
 | [distillation_mntp_tiny.json](distillation_mntp_tiny.json) | Masked teacher distillation | MNTP/BERT-MLM scorer distilled from masked teacher checkpoints |
