@@ -82,6 +82,61 @@ func TestMaskedSymmetricKLMatchesCPUOracle(t *testing.T) {
 	}
 }
 
+func TestMaskedSymmetricKLNearDegenerateDistributionHasFiniteLossAndGradients(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	const (
+		seqLen = 1
+		vocab  = 4
+	)
+	prog := ir.NewProgram(1)
+	prog.DeclareInput("tokens", ir.TensorInt32, []int{2})
+	prog.DeclareInput("invariance_loss_mask", ir.TensorFloat32, []int{2})
+	prog.DeclareOutput("loss", ir.TensorFloat32, []int{1})
+	prog.Embed("w0", "tokens", "logits")
+	prog.MaskedSymmetricKL("logits", "invariance_loss_mask", seqLen, "loss")
+	gpuProg, err := LowerIRProgram(prog)
+	if err != nil {
+		t.Fatalf("LowerIRProgram: %v", err)
+	}
+	defer gpuProg.Destroy()
+
+	// One almost one-hot view and one uniform view. This drove an unbounded
+	// cross-distribution term before the probability-floor implementation.
+	weights := []float32{
+		80, -80, -80, -80,
+		0, 0, 0, 0,
+	}
+	weight, err := FromDataShape(weights, []int{2, vocab})
+	if err != nil {
+		t.Fatalf("FromDataShape: %v", err)
+	}
+	defer FreeHandle(weight)
+	inputs := []TensorInput{
+		{Name: "tokens", DType: TensorInt32, Shape: []int{2}, Data: []int32{0, 1}},
+		{Name: "invariance_loss_mask", DType: TensorFloat32, Shape: []int{2}, Data: []float32{1, 1}},
+	}
+	loss, grads, err := EvalProgramGradientsForOutput(gpuProg, []int64{weight}, inputs, "loss")
+	if err != nil {
+		t.Fatalf("EvalProgramGradientsForOutput: %v", err)
+	}
+	if !(loss >= 0) || math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
+		t.Fatalf("loss=%g, want finite non-negative", loss)
+	}
+	if loss > 20 {
+		t.Fatalf("loss=%g, want bounded collapsed-tail KL", loss)
+	}
+	if len(grads) != 1 || len(grads[0]) != len(weights) {
+		t.Fatalf("gradient shape=%v, want one [%d] tensor", grads, len(weights))
+	}
+	for i, grad := range grads[0] {
+		if math.IsNaN(float64(grad)) || math.IsInf(float64(grad), 0) {
+			t.Fatalf("gradient[%d]=%g, want finite", i, grad)
+		}
+	}
+}
+
 func symmetricKLOracle(logits, mask []float32, seqLen, vocab int) float32 {
 	pairs := len(mask) / (2 * seqLen)
 	total := 0.0

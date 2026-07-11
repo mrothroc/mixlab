@@ -119,7 +119,9 @@ MLM/MNTP models and multihead configs whose export head is MLM/MNTP. It samples
 explicitly annotated view pairs, masks one annotated position in each view, and
 adds `weight * 0.5 * (KL(P_a || P_b) + KL(P_b || P_a))` to the normal task loss.
 The pair records must keep the annotated target token unchanged across both
-views; Mixlab does not infer spans or learn a nuisance detector. Use
+views; Mixlab does not infer spans or learn a nuisance detector. For numerical
+stability, probability tails below `1e-8` are floored and renormalized before
+the divergence, bounding only collapsed-tail contributions. Use
 `source: "file"` (the default) to auto-detect JSONL or a compiled pair binary,
 `loss: "sym_kl"`, and `target: "masked_position"`. `batch_fraction` defaults
 to `0.25`. `skip_token_ids` optionally excludes tokenizer special IDs from

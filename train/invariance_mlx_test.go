@@ -4,6 +4,7 @@ package train
 
 import (
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -32,6 +33,78 @@ func TestInvariance500StepTrainingSmoke(t *testing.T) {
 	losses := runInvarianceOnlyTinySteps(t, 500)
 	if losses[len(losses)-1] >= losses[0] {
 		t.Fatalf("symmetric-KL loss did not decrease over 500 steps: first=%g last=%g", losses[0], losses[len(losses)-1])
+	}
+}
+
+func TestInvarianceHighWeightLAMBStaysFinite(t *testing.T) {
+	if !mlxAvailable() || !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+	for _, weight := range []float64{0.5, 1, 2} {
+		t.Run(fmt.Sprintf("weight_%g", weight), func(t *testing.T) {
+			cfg := parseTrainInvarianceConfig(t, arch.ObjectiveMNTP)
+			cfg.Training.Invariance.Weight = weight
+			cfg.Training.Optimizer = "lamb"
+			cfg.Training.LR = 0.007
+			cfg.Training.GradClip = 1
+			cfg.Training.WeightDecay = 0.1
+			cfg.Training.LAMBBeta1 = 0.9
+			cfg.Training.LAMBBeta2 = 0.98
+			cfg.Training.LAMBEps = 1e-6
+			cfg.Training.LAMBTrustRatioCap = 10
+			prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{Objective: arch.ObjectiveMNTP})
+			if err != nil {
+				t.Fatalf("BuildTrainingIRProgramFromConfig: %v", err)
+			}
+			trainer, err := initGPUTrainer(prog, cfg, nil, nil)
+			if err != nil {
+				t.Fatalf("initGPUTrainer: %v", err)
+			}
+			defer trainer.CloseTrainer()
+			objectiveTrainer, ok := trainer.(*mlxGPUTrainer)
+			if !ok {
+				t.Fatalf("initGPUTrainer returned %T, want *mlxGPUTrainer", trainer)
+			}
+			if err := objectiveTrainer.EnableComponentLossCapture(); err != nil {
+				t.Fatalf("EnableComponentLossCapture: %v", err)
+			}
+			sampler := &invariancePairSampler{records: []invariancePairRecord{{
+				ID: "p", Family: "distractor_agreement",
+				ViewA: []int{1, 2, 3, 4}, ViewAPos: 2,
+				ViewB: []int{1, 5, 3, 4}, ViewBPos: 2,
+				viewAPosSet: true, viewBPosSet: true,
+			}}}
+			raw := trainBatch{x: []int{1, 2, 3, 4, 4, 3, 2, 1, 2, 3, 4, 5, 5, 4, 3, 2}, y: make([]int, 16)}
+			for i := range raw.y {
+				raw.y[i] = raw.x[i]
+			}
+			batchSize := cfg.Training.BatchTokens / cfg.SeqLen
+			for step := 0; step < 128; step++ {
+				batch, err := prepareObjectiveBatch(cfg, raw, step, arch.ObjectiveMNTP)
+				if err != nil {
+					t.Fatalf("prepare step %d: %v", step, err)
+				}
+				batch, err = maybeAttachInvariancePairs(sampler, cfg, step, batch, batchSize, cfg.SeqLen, arch.ObjectiveMNTP)
+				if err != nil {
+					t.Fatalf("attach step %d: %v", step, err)
+				}
+				loss, err := objectiveTrainer.TrainObjectiveStepGPU(batch, batchSize, cfg.SeqLen, float32(cfg.Training.LR))
+				if err != nil {
+					t.Fatalf("TrainObjectiveStepGPU step %d: %v", step, err)
+				}
+				if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
+					t.Fatalf("loss step %d=%g, want finite", step, loss)
+				}
+				components, err := objectiveTrainer.ReadComponentLossesGPU()
+				if err != nil {
+					t.Fatalf("ReadComponentLossesGPU step %d: %v", step, err)
+				}
+				invarianceLoss, ok := components["invariance_loss"]
+				if !ok || math.IsNaN(invarianceLoss) || math.IsInf(invarianceLoss, 0) {
+					t.Fatalf("invariance_loss step %d=%v, want finite", step, components)
+				}
+			}
+		})
 	}
 }
 

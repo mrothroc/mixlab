@@ -209,6 +209,31 @@ mx::array masked_distillation_kl_mean(
   return mx::sum(row_kl * mask) / denom;
 }
 
+// The invariance objective compares distributions which can legitimately be
+// extremely sharp. Floor and renormalize before taking KL so a collapsed tail
+// cannot create an unbounded cross-distribution log-probability or gradient.
+// The floor only changes probabilities below 1e-8.
+constexpr float kSymmetricKLProbabilityFloor = 1e-8f;
+
+struct SymmetricKLDistribution {
+  mx::array probs;
+  mx::array log_probs;
+};
+
+SymmetricKLDistribution stable_symmetric_kl_distribution(const mx::array& logits) {
+  auto logits_f32 = mx::astype(logits, mx::float32);
+  auto shifted = logits_f32 - mx::max(logits_f32, 2, true);
+  auto raw_log_probs = shifted - mx::log(mx::sum(mx::exp(shifted), 2, true));
+  auto floored_probs = mx::maximum(
+      mx::exp(raw_log_probs),
+      mx::array(kSymmetricKLProbabilityFloor, mx::float32));
+  auto normalization = mx::sum(floored_probs, 2, true);
+  return {
+      floored_probs / normalization,
+      mx::log(floored_probs) - mx::log(normalization),
+  };
+}
+
 mx::array masked_symmetric_kl_mean(
     const mx::array& logits,
     const mx::array& loss_mask,
@@ -236,20 +261,14 @@ mx::array masked_symmetric_kl_mean(
   auto logits_b = mx::reshape(mx::slice(logits_bt, {0, 1, 0, 0}, {pairs, 2, seq_len, vocab}), {pairs, seq_len, vocab});
   auto mask_a = mx::reshape(mx::slice(mask_bt, {0, 0, 0}, {pairs, 1, seq_len}), {pairs, seq_len});
   auto mask_b = mx::reshape(mx::slice(mask_bt, {0, 1, 0}, {pairs, 2, seq_len}), {pairs, seq_len});
-  auto shifted_a = logits_a - mx::max(logits_a, 2, true);
-  auto shifted_b = logits_b - mx::max(logits_b, 2, true);
-  auto log_probs_a = shifted_a - mx::log(mx::sum(mx::exp(shifted_a), 2, true));
-  auto log_probs_b = shifted_b - mx::log(mx::sum(mx::exp(shifted_b), 2, true));
-  auto probs_a = mx::exp(log_probs_a);
-  auto probs_b = mx::exp(log_probs_b);
-  auto p_a = mx::sum(probs_a * mx::expand_dims(mask_a, 2), 1);
-  auto p_b = mx::sum(probs_b * mx::expand_dims(mask_b, 2), 1);
-  auto lp_a = mx::sum(log_probs_a * mx::expand_dims(mask_a, 2), 1);
-  auto lp_b = mx::sum(log_probs_b * mx::expand_dims(mask_b, 2), 1);
-  auto safe_a = mx::maximum(p_a, mx::array(1e-20f, mx::float32));
-  auto safe_b = mx::maximum(p_b, mx::array(1e-20f, mx::float32));
-  auto kl_ab = mx::sum(p_a * (mx::log(safe_a) - lp_b), 1);
-  auto kl_ba = mx::sum(p_b * (mx::log(safe_b) - lp_a), 1);
+  auto distribution_a = stable_symmetric_kl_distribution(logits_a);
+  auto distribution_b = stable_symmetric_kl_distribution(logits_b);
+  auto p_a = mx::sum(distribution_a.probs * mx::expand_dims(mask_a, 2), 1);
+  auto p_b = mx::sum(distribution_b.probs * mx::expand_dims(mask_b, 2), 1);
+  auto lp_a = mx::sum(distribution_a.log_probs * mx::expand_dims(mask_a, 2), 1);
+  auto lp_b = mx::sum(distribution_b.log_probs * mx::expand_dims(mask_b, 2), 1);
+  auto kl_ab = mx::sum(p_a * (lp_a - lp_b), 1);
+  auto kl_ba = mx::sum(p_b * (lp_b - lp_a), 1);
   auto pair_mask = mx::astype(
       mx::greater(mx::sum(mask_a, 1) * mx::sum(mask_b, 1), mx::array(0.0f, mx::float32)),
       mx::float32);
