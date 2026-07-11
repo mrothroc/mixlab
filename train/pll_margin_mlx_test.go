@@ -14,22 +14,27 @@ import (
 	"github.com/mrothroc/mixlab/gpu"
 )
 
-func TestPLLMarginHighWeightLAMBStaysFinite(t *testing.T) {
+func TestPLLMarginLAMBStaysFinite(t *testing.T) {
 	if !mlxAvailable() || !gpu.Available() {
 		t.Skip("MLX backend not available")
 	}
 	for _, tc := range []struct {
-		weight float64
-		margin float64
-		steps  int
+		name       string
+		weight     float64
+		useDefault bool
+		margin     float64
+		steps      int
 	}{
-		{weight: 0.5, margin: 1, steps: 128},
-		{weight: 1, margin: 2, steps: 3000},
-		{weight: 2, margin: 1, steps: 128},
+		{name: "default_weight", useDefault: true, margin: 1, steps: 512},
+		{name: "weight_0.5", weight: 0.5, margin: 1, steps: 128},
+		{name: "weight_1", weight: 1, margin: 2, steps: 3000},
+		{name: "weight_2", weight: 2, margin: 1, steps: 128},
 	} {
-		t.Run(fmt.Sprintf("weight_%g_margin_%g", tc.weight, tc.margin), func(t *testing.T) {
+		t.Run(fmt.Sprintf("%s_margin_%g", tc.name, tc.margin), func(t *testing.T) {
 			cfg := parseTrainPLLMarginConfig(t, arch.ObjectiveMNTP)
-			cfg.Training.PLLMargin.Weight = tc.weight
+			if !tc.useDefault {
+				cfg.Training.PLLMargin.Weight = tc.weight
+			}
 			cfg.Training.PLLMargin.Margin = tc.margin
 			cfg.Training.Optimizer = "lamb"
 			cfg.Training.LR = 0.007

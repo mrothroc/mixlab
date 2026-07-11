@@ -75,7 +75,10 @@ func (s *PLLMarginSpec) applyDefaults() {
 		s.Margin = 1
 	}
 	if !s.weightSet && s.Weight == 0 {
-		s.Weight = 1
+		// The paired anchor is deliberately sharp early in masked-LM training.
+		// Keep the default additive contribution conservative; callers that have
+		// validated a larger coefficient can still set it explicitly.
+		s.Weight = 0.1
 	}
 	if !s.anchorWeightSet && s.AnchorWeight == 0 {
 		s.AnchorWeight = 0.5

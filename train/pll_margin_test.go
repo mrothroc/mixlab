@@ -132,7 +132,7 @@ func parseTrainPLLMarginConfig(t *testing.T, objective string) *ArchConfig {
 		"training": {
 			"steps":1, "lr":0.001, "seed":42, "batch_tokens":16,
 			"objective":"`+objective+`", "mlm_mask_token_id":15, "mlm_mask_prob":0,
-			"pll_margin":{"path":"pairs.bin", "weight":0.1, "anchor_weight":0.5, "batch_fraction":0.5}
+			"pll_margin":{"path":"pairs.bin", "anchor_weight":0.5, "batch_fraction":0.5}
 		}
 	}`), "pll_margin_test")
 	if err != nil {

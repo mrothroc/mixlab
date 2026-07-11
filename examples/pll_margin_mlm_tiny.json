@@ -19,7 +19,7 @@
       "source": "file",
       "path": "data/pll_margin_pairs.bin",
       "margin": 1.0,
-      "weight": 1.0,
+      "weight": 0.1,
       "anchor_weight": 0.5,
       "batch_fraction": 0.25,
       "target": "annotated_span",

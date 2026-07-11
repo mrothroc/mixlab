@@ -23,6 +23,14 @@ func TestPLLMarginDefaultsAndZeroWeightParity(t *testing.T) {
 	if got.Source != PLLMarginSourceFile || got.Margin != 1 || got.AnchorWeight != 0.5 || got.BatchFraction != 0.25 || got.Target != PLLMarginTargetAnnotatedSpan {
 		t.Fatalf("unexpected PLL margin defaults: %+v", got)
 	}
+	enabled := parseObjectiveConfig(t, `"training": {
+		"steps": 1, "lr": 0.001, "batch_tokens": 8,
+		"objective": "mlm", "mlm_mask_token_id": 7,
+		"pll_margin": {"path": "pairs.bin"}
+	}`)
+	if got := enabled.Training.PLLMargin.Weight; got != 0.1 {
+		t.Fatalf("default PLL margin weight=%g, want conservative default 0.1", got)
+	}
 	baseProg, err := BuildTrainingIRProgramFromConfig(base, TrainingProgramState{Objective: ObjectiveMLM})
 	if err != nil {
 		t.Fatalf("build base: %v", err)

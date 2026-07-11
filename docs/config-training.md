@@ -164,7 +164,7 @@ v1 with other batch-mutating pair auxiliaries.
     "source": "file",
     "path": "data/pll_margin_pairs.bin",
     "margin": 1.0,
-    "weight": 1.0,
+    "weight": 0.1,
     "anchor_weight": 0.5,
     "batch_fraction": 0.25,
     "target": "annotated_span",
@@ -172,6 +172,16 @@ v1 with other batch-mutating pair auxiliaries.
   }
 }
 ```
+
+`weight` defaults to `0.1`. The paired anchor is intentionally sharp before a
+from-scratch masked model has learned its target span, so start with the
+default for high-learning-rate recipes and raise it only while monitoring
+`pll_margin_loss`, `pll_margin_loss_anchor_loss`, and the primary loss. An
+explicit `weight: 1.0` remains available for recipes that have been tuned for
+it. The native loss excludes a pair if either auxiliary sequence contains a
+non-finite token-logit row and bounds its auxiliary logit input before
+log-softmax, so a bad pair cannot turn an otherwise finite primary training
+step non-finite.
 
 ## Validation And Logging
 

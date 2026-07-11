@@ -30,6 +30,10 @@ namespace {
 constexpr float kGatedDeltaGateFloor = 1e-30f;
 constexpr float kGatedDeltaExpClampMin = -80.0f;
 constexpr float kGatedDeltaExpClampMax = 0.0f;
+// PLL-margin is an auxiliary loss. Keep its log-softmax input in a range
+// where subtracting a row maximum remains finite, and isolate a bad pair
+// rather than allowing an invalid auxiliary row to poison the primary step.
+constexpr float kPLLMarginLogitClamp = 80.0f;
 // Safety bound: even when fusing, evaluate every K chunks to cap lazy-graph depth on user-overridden small chunk_size with long T.
 constexpr int EVAL_EVERY_K_CHUNKS = 16;
 
@@ -578,6 +582,48 @@ struct PLLMarginResult {
   mx::array delta_mean;
 };
 
+struct PLLMarginSafeLogits {
+  mx::array logits;
+  mx::array valid_row_mask;
+};
+
+PLLMarginSafeLogits sanitize_pll_margin_logits(const mx::array& logits, int seq_len) {
+  if (logits.ndim() != 2) {
+    throw std::runtime_error("PLL margin logits must have shape [rows*T, vocab]");
+  }
+  const int token_rows = static_cast<int>(logits.shape(0));
+  const int vocab = static_cast<int>(logits.shape(1));
+  if (seq_len <= 0 || token_rows <= 0 || (token_rows % seq_len) != 0 || vocab <= 0) {
+    throw std::runtime_error("PLL margin logits must have non-zero rows and vocab");
+  }
+  const int rows = token_rows / seq_len;
+  auto logits_f32 = mx::astype(logits, mx::float32);
+  auto finite = mx::isfinite(logits_f32);
+  // Select finite values before clamping so min/max never receives NaN.
+  auto finite_logits = mx::where(finite, logits_f32, mx::zeros_like(logits_f32));
+  auto bounded_logits = mx::minimum(
+      mx::maximum(finite_logits, mx::array(-kPLLMarginLogitClamp, mx::float32)),
+      mx::array(kPLLMarginLogitClamp, mx::float32));
+  auto finite_count = mx::sum(mx::astype(finite, mx::float32), 1, true);
+  auto valid_token_mask = mx::reshape(
+      mx::astype(
+          mx::greater(finite_count, mx::array(static_cast<float>(vocab) - 0.5f, mx::float32)),
+          mx::float32),
+      {rows, seq_len});
+  auto valid_row_mask = mx::reshape(
+      mx::astype(
+          mx::greater(
+              mx::sum(valid_token_mask, 1, true),
+              mx::array(static_cast<float>(seq_len) - 0.5f, mx::float32)),
+          mx::float32),
+      {rows});
+  return PLLMarginSafeLogits{bounded_logits, valid_row_mask};
+}
+
+mx::array finite_or_zero(const mx::array& x) {
+  return mx::where(mx::isfinite(x), x, mx::zeros_like(x));
+}
+
 // pll_margin_loss trains a preferred/contrast ordering at an explicitly
 // annotated span. span_pll_pool works entirely from log-softmax values, and
 // the softplus form below avoids materializing exp() of a large positive value.
@@ -594,7 +640,8 @@ PLLMarginResult pll_margin_loss(
   if (!(anchor_weight >= 0.0f) || !std::isfinite(anchor_weight)) {
     throw std::runtime_error("PLL anchor weight must be finite and >= 0");
   }
-  auto pooled = span_pll_pool(logits, targets, span_mask, seq_len);
+  auto safe_logits = sanitize_pll_margin_logits(logits, seq_len);
+  auto pooled = span_pll_pool(safe_logits.logits, targets, span_mask, seq_len);
   mx::array scores = mx::astype(pooled.pooled, mx::float32);
   if (scores.ndim() == 2 && scores.shape(1) == 1) {
     scores = mx::reshape(scores, {scores.shape(0)});
@@ -611,18 +658,20 @@ PLLMarginResult pll_margin_loss(
   auto preferred_mask = mx::astype(
       mx::greater(mx::slice(pooled.row_mask, {0}, {rows}, {2}), mx::array(0.0f, mx::float32)),
       mx::float32);
+  preferred_mask = preferred_mask * mx::slice(safe_logits.valid_row_mask, {0}, {rows}, {2});
   auto contrast_mask = mx::astype(
       mx::greater(mx::slice(pooled.row_mask, {1}, {rows}, {2}), mx::array(0.0f, mx::float32)),
       mx::float32);
+  contrast_mask = contrast_mask * mx::slice(safe_logits.valid_row_mask, {1}, {rows}, {2});
   auto pair_mask = preferred_mask * contrast_mask;
   auto denom = mx::maximum(mx::sum(pair_mask), mx::array(1.0f, mx::float32));
-  auto delta = preferred - contrast;
+  auto delta = finite_or_zero(preferred - contrast);
   auto rank_input = mx::array(margin, mx::float32) - delta;
-  auto rank =
+  auto rank = finite_or_zero(
       mx::maximum(rank_input, mx::array(0.0f, mx::float32)) +
-      mx::log(mx::array(1.0f, mx::float32) + mx::exp(-mx::abs(rank_input)));
-  auto anchor = -preferred;
-  auto loss = rank + mx::array(anchor_weight, mx::float32) * anchor;
+      mx::log(mx::array(1.0f, mx::float32) + mx::exp(-mx::abs(rank_input))));
+  auto anchor = finite_or_zero(-preferred);
+  auto loss = finite_or_zero(rank + mx::array(anchor_weight, mx::float32) * anchor);
   return PLLMarginResult{
       mx::sum(loss * pair_mask) / denom,
       mx::sum(rank * pair_mask) / denom,
