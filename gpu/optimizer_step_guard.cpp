@@ -48,7 +48,58 @@ float evaluated_count(const mx::array& count, const char* label) {
   return value;
 }
 
+uint64_t active_optimizer_state_elements(const IRTrainer& trainer) {
+  uint64_t count = 0;
+  for (size_t i = 0; i < trainer.weights.size(); ++i) {
+    count += static_cast<uint64_t>(trainer.weights[i].size());
+    if (trainer.has_adam_state[i] != 0) {
+      count += static_cast<uint64_t>(trainer.adam_m[i].size());
+      count += static_cast<uint64_t>(trainer.adam_v[i].size());
+    }
+    if (trainer.has_muon_state[i] != 0) {
+      count += static_cast<uint64_t>(trainer.muon_momentum[i].size());
+    }
+    if (trainer.has_muon_second_moment_state[i] != 0) {
+      count += static_cast<uint64_t>(trainer.muon_second_moment[i].size());
+    }
+    if (trainer.has_sgd_state[i] != 0) {
+      count += static_cast<uint64_t>(trainer.sgd_momentum[i].size());
+    }
+  }
+  return count;
+}
+
 } // namespace
+
+mx::array sanitize_and_clip_gradients(
+    std::vector<mx::array>& gradients,
+    float max_grad_norm) {
+  auto nonfinite = mx::array(0.0f, mx::float32);
+  auto norm_sq = mx::array(0.0f, mx::float32);
+  for (auto& gradient : gradients) {
+    auto value = mx::astype(gradient, mx::float32);
+    auto finite = mx::isfinite(value);
+    nonfinite = nonfinite + mx::sum(mx::astype(mx::logical_not(finite), mx::float32));
+    gradient = mx::where(finite, value, mx::zeros_like(value));
+    norm_sq = norm_sq + mx::sum(mx::square(gradient));
+  }
+  if (max_grad_norm <= 0.0f) {
+    return nonfinite;
+  }
+  auto norm = mx::sqrt(norm_sq);
+  auto ordinary_scale = mx::minimum(
+      mx::array(1.0f, mx::float32),
+      mx::array(max_grad_norm, mx::float32) /
+          (norm + mx::array(1e-6f, mx::float32)));
+  auto valid = mx::logical_and(
+      mx::equal(nonfinite, mx::array(0.0f, mx::float32)),
+      mx::isfinite(norm));
+  auto scale = mx::where(valid, ordinary_scale, mx::array(0.0f, mx::float32));
+  for (auto& gradient : gradients) {
+    gradient = gradient * scale;
+  }
+  return nonfinite;
+}
 
 OptimizerStepTransaction::OptimizerStepTransaction(IRTrainer& trainer)
     : trainer_(trainer),
@@ -72,14 +123,12 @@ void OptimizerStepTransaction::append_validation_arrays(
     const mx::array& loss,
     const std::vector<mx::array>& gradients,
     std::vector<mx::array>& eval_arrays,
-    uint64_t known_gradient_nonfinite) {
+    const mx::array& known_gradient_nonfinite) {
   if (validation_prepared_) {
     throw std::runtime_error("optimizer-step validation was prepared more than once");
   }
   loss_nonfinite_count_ = nonfinite_count(loss);
-  gradient_nonfinite_count_ = mx::array(
-      static_cast<float>(known_gradient_nonfinite),
-      mx::float32);
+  gradient_nonfinite_count_ = mx::astype(known_gradient_nonfinite, mx::float32);
   accumulate_nonfinite(gradient_nonfinite_count_, gradients);
   state_nonfinite_count_ = mx::array(0.0f, mx::float32);
   accumulate_active_optimizer_state_nonfinite(state_nonfinite_count_, trainer_);
@@ -103,6 +152,7 @@ bool OptimizerStepTransaction::finish() {
   const bool valid = loss_bad == 0.0f && gradient_bad == 0.0f && state_bad == 0.0f;
   if (valid) {
     trainer_.optimizer_step_count++;
+    trainer_.consecutive_skipped_optimizer_steps = 0;
     trainer_.last_optimizer_step_skipped = false;
     trainer_.last_optimizer_loss_nonfinite = 0;
     trainer_.last_optimizer_gradient_nonfinite = 0;
@@ -110,6 +160,7 @@ bool OptimizerStepTransaction::finish() {
   } else {
     restore();
     trainer_.skipped_optimizer_steps++;
+    trainer_.consecutive_skipped_optimizer_steps++;
     trainer_.last_optimizer_step_skipped = true;
     trainer_.last_optimizer_loss_nonfinite = static_cast<uint64_t>(loss_bad);
     trainer_.last_optimizer_gradient_nonfinite = static_cast<uint64_t>(gradient_bad);
@@ -120,9 +171,23 @@ bool OptimizerStepTransaction::finish() {
               << " loss_nonfinite=" << loss_bad
               << " gradient_nonfinite=" << gradient_bad
               << " state_nonfinite=" << state_bad
+              << " consecutive_skips=" << trainer_.consecutive_skipped_optimizer_steps
               << std::endl;
   }
   finalized_ = true;
+  const auto state_elements = active_optimizer_state_elements(trainer_);
+  const bool fully_nonfinite_state =
+      state_elements > 0 && state_bad >= static_cast<float>(state_elements);
+  if (!valid &&
+      (fully_nonfinite_state ||
+       trainer_.consecutive_skipped_optimizer_steps >= kMaxConsecutiveSkippedOptimizerSteps)) {
+    throw OptimizerStepCircuitBreaker(
+        "optimizer safety circuit breaker: rejected " +
+        std::to_string(trainer_.consecutive_skipped_optimizer_steps) +
+        " consecutive non-finite updates" +
+        (fully_nonfinite_state ? " (candidate optimizer state was fully non-finite)" : "") +
+        "; restored the last committed weights and optimizer moments");
+  }
   return valid;
 }
 

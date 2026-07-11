@@ -34,6 +34,7 @@ constexpr float kGatedDeltaExpClampMax = 0.0f;
 // where subtracting a row maximum remains finite, and isolate a bad pair
 // rather than allowing an invalid auxiliary row to poison the primary step.
 constexpr float kPLLMarginLogitClamp = 80.0f;
+constexpr float kPLLMarginTokenGradClamp = 1.0f;
 // Safety bound: even when fusing, evaluate every K chunks to cap lazy-graph depth on user-overridden small chunk_size with long T.
 constexpr int EVAL_EVERY_K_CHUNKS = 16;
 
@@ -627,7 +628,7 @@ mx::array finite_or_zero(const mx::array& x) {
 // pll_margin_loss trains a preferred/contrast ordering at an explicitly
 // annotated span. span_pll_pool works entirely from log-softmax values, and
 // the softplus form below avoids materializing exp() of a large positive value.
-PLLMarginResult pll_margin_loss(
+PLLMarginResult pll_margin_loss_forward(
     const mx::array& logits,
     const mx::array& targets,
     const mx::array& span_mask,
@@ -677,6 +678,123 @@ PLLMarginResult pll_margin_loss(
       mx::sum(rank * pair_mask) / denom,
       mx::sum(anchor * pair_mask) / denom,
       mx::sum(delta * pair_mask) / denom};
+}
+
+mx::array pll_margin_logits_vjp(
+    const mx::array& logits,
+    const mx::array& targets,
+    const mx::array& span_mask,
+    const mx::array& loss_cotangent,
+    int seq_len,
+    float margin,
+    float anchor_weight) {
+  auto safe_logits = sanitize_pll_margin_logits(logits, seq_len);
+  auto pooled = span_pll_pool(safe_logits.logits, targets, span_mask, seq_len);
+  auto scores = mx::reshape(mx::astype(pooled.pooled, mx::float32), {pooled.pooled.shape(0)});
+  const int rows = static_cast<int>(scores.shape(0));
+  const int token_rows = static_cast<int>(logits.shape(0));
+
+  auto preferred = mx::slice(scores, {0}, {rows}, {2});
+  auto contrast = mx::slice(scores, {1}, {rows}, {2});
+  auto preferred_mask = mx::astype(
+      mx::greater(mx::slice(pooled.row_mask, {0}, {rows}, {2}), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  preferred_mask = preferred_mask * mx::slice(safe_logits.valid_row_mask, {0}, {rows}, {2});
+  auto contrast_mask = mx::astype(
+      mx::greater(mx::slice(pooled.row_mask, {1}, {rows}, {2}), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  contrast_mask = contrast_mask * mx::slice(safe_logits.valid_row_mask, {1}, {rows}, {2});
+  auto pair_mask = preferred_mask * contrast_mask;
+  auto denom = mx::maximum(mx::sum(pair_mask), mx::array(1.0f, mx::float32));
+  auto rank_slope = mx::sigmoid(mx::array(margin, mx::float32) - (preferred - contrast));
+  auto preferred_coeff = (-rank_slope - mx::array(anchor_weight, mx::float32)) * pair_mask / denom;
+  auto contrast_coeff = rank_slope * pair_mask / denom;
+  const int pairs = rows / 2;
+  auto row_coeff = mx::reshape(
+      mx::concatenate(
+          {mx::reshape(preferred_coeff, {pairs, 1}),
+           mx::reshape(contrast_coeff, {pairs, 1})},
+          1),
+      {rows, 1});
+  auto mask_bt = mx::reshape(
+      mx::astype(
+          mx::greater(mx::astype(span_mask, mx::float32), mx::array(0.0f, mx::float32)),
+          mx::float32),
+      {rows, seq_len});
+  auto token_coeff = mx::reshape(row_coeff * mask_bt, {token_rows, 1});
+
+  auto shifted = safe_logits.logits - mx::max(safe_logits.logits, 1, true);
+  auto exp_shifted = mx::exp(shifted);
+  auto probabilities = exp_shifted / mx::sum(exp_shifted, 1, true);
+  auto target_col = mx::reshape(mx::astype(targets, mx::int32), {token_rows, 1});
+  auto logprob_grad = -probabilities;
+  auto target_grad = mx::take_along_axis(logprob_grad, target_col, 1) +
+      mx::array(1.0f, mx::float32);
+  logprob_grad = mx::put_along_axis(logprob_grad, target_col, target_grad, 1);
+
+  auto cotangent = finite_or_zero(mx::astype(loss_cotangent, mx::float32));
+  auto grad = logprob_grad * token_coeff * cotangent;
+  grad = mx::minimum(
+      mx::maximum(grad, mx::array(-kPLLMarginTokenGradClamp, mx::float32)),
+      mx::array(kPLLMarginTokenGradClamp, mx::float32));
+  auto raw_logits = mx::astype(logits, mx::float32);
+  auto differentiable = mx::logical_and(
+      mx::isfinite(raw_logits),
+      mx::logical_and(
+          mx::greater(raw_logits, mx::array(-kPLLMarginLogitClamp, mx::float32)),
+          mx::less(raw_logits, mx::array(kPLLMarginLogitClamp, mx::float32))));
+  grad = mx::where(
+      mx::logical_and(differentiable, mx::isfinite(grad)),
+      grad,
+      mx::zeros_like(grad));
+  return mx::astype(grad, logits.dtype());
+}
+
+PLLMarginResult pll_margin_loss(
+    const mx::array& logits,
+    const mx::array& targets,
+    const mx::array& span_mask,
+    int seq_len,
+    float margin,
+    float anchor_weight) {
+  auto bounded = mx::custom_vjp(
+      [seq_len, margin, anchor_weight](const std::vector<mx::array>& args) {
+        auto result = pll_margin_loss_forward(
+            args[0],
+            mx::astype(args[1], mx::int32),
+            args[2],
+            seq_len,
+            margin,
+            anchor_weight);
+        return std::vector<mx::array>{
+            result.loss,
+            result.rank_loss,
+            result.anchor_loss,
+            result.delta_mean};
+      },
+      [seq_len, margin, anchor_weight](
+          const std::vector<mx::array>& args,
+          const std::vector<mx::array>& cotangents,
+          const std::vector<mx::array>& outputs) {
+        (void)outputs;
+        auto grad_logits = pll_margin_logits_vjp(
+            args[0],
+            mx::astype(args[1], mx::int32),
+            args[2],
+            cotangents[0],
+            seq_len,
+            margin,
+            anchor_weight);
+        return std::vector<mx::array>{
+            grad_logits,
+            mx::zeros_like(args[1]),
+            mx::zeros_like(args[2])};
+      });
+  auto outputs = bounded({
+      logits,
+      mx::astype(targets, mx::float32),
+      mx::astype(span_mask, mx::float32)});
+  return PLLMarginResult{outputs[0], outputs[1], outputs[2], outputs[3]};
 }
 
 mx::array z_loss_mean(const mx::array& logits) {

@@ -516,27 +516,6 @@ mx::array lamb_trust_ratio(const mx::array& w, const mx::array& update, float ca
   return mx::where(valid_ratio, raw_ratio, mx::array(1.0f, mx::float32));
 }
 
-void clip_gradients(std::vector<mx::array>& grads, float max_grad_norm) {
-  if (max_grad_norm <= 0.0f) {
-    for (auto& g : grads) {
-      g = mx::astype(g, mx::float32);
-    }
-    return;
-  }
-  auto total_norm_sq = mx::array(0.0f, mx::float32);
-  for (auto& g : grads) {
-    g = mx::astype(g, mx::float32);
-    total_norm_sq = total_norm_sq + mx::sum(mx::square(g));
-  }
-  auto total_norm = mx::sqrt(total_norm_sq);
-  auto clip_scale = mx::minimum(
-      mx::array(1.0f, mx::float32),
-      mx::array(max_grad_norm, mx::float32) / (total_norm + mx::array(1e-6f, mx::float32)));
-  for (auto& g : grads) {
-    g = g * clip_scale;
-  }
-}
-
 using StepForwardFn = std::function<std::vector<mx::array>(const std::vector<mx::array>&)>;
 using StepArrayFn = std::function<std::vector<mx::array>(const std::vector<mx::array>&)>;
 
@@ -1962,7 +1941,7 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   auto loss = out.first;
   auto grads = std::move(out.second);
   OptimizerStepTransaction transaction(*this);
-  clip_gradients(grads, max_grad_norm);
+  auto raw_gradient_nonfinite = sanitize_and_clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
 
   std::vector<mx::array> eval_arrays;
@@ -1970,7 +1949,7 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
       1 + weights.size() + adam_m.size() * 2 + muon_momentum.size() + muon_second_moment.size() + sgd_momentum.size());
   eval_arrays.push_back(loss);
   collect_state_for_eval(*this, eval_arrays, false);
-  transaction.append_validation_arrays(loss, grads, eval_arrays);
+  transaction.append_validation_arrays(loss, grads, eval_arrays, raw_gradient_nonfinite);
   mx::eval(eval_arrays);
   const bool committed = transaction.finish();
   if (!committed) {
@@ -2460,7 +2439,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         loss,
         no_validation_grads,
         validation_arrays,
-        low_memory_gradient_nonfinite);
+        mx::array(static_cast<float>(low_memory_gradient_nonfinite), mx::float32));
     eval_arrays_with_context(validation_arrays, "canonical Mamba3 optimizer transaction validation");
     const bool committed = transaction.finish();
     if (!committed) {
@@ -2641,7 +2620,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         eval_arrays.push_back(output);
       }
       collect_state_for_eval(*this, eval_arrays, false);
-      transaction.append_validation_arrays(loss, {}, eval_arrays);
+      transaction.append_validation_arrays(
+          loss, {}, eval_arrays, mx::array(0.0f, mx::float32));
       const auto eval_t0 = HostClock::now();
       mx::eval(eval_arrays);
       if (timing_enabled) {
@@ -2661,6 +2641,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       pending_step_index_ = step_count;
       log_timing("compiled-update-step");
       return true;
+    } catch (const OptimizerStepCircuitBreaker&) {
+      throw;
     } catch (const std::exception& e) {
       if (env_truthy("MIXLAB_FORCE_MAMBA3_COMPILED_UPDATE_STEP")) {
         throw;
@@ -2915,7 +2897,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         eval_arrays.push_back(output);
       }
       collect_state_for_eval(*this, eval_arrays, false);
-      transaction.append_validation_arrays(loss, grads, eval_arrays);
+      transaction.append_validation_arrays(
+          loss, grads, eval_arrays, mx::array(0.0f, mx::float32));
       const auto eval_t0 = HostClock::now();
       mx::eval(eval_arrays);
       if (timing_enabled) {
@@ -2935,6 +2918,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       pending_step_index_ = step_count;
       log_timing("compiled-gradient+compiled-adamw");
       return true;
+    } catch (const OptimizerStepCircuitBreaker&) {
+      throw;
     } catch (const std::exception& e) {
       log_fused_mamba3_compiled_optimizer_update_fallback_once(*this, e);
       fused_mamba3_compiled_optimizer_update_disabled = true;
@@ -2949,7 +2934,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   auto preclip_grads = grads;
   OptimizerStepTransaction transaction(*this);
   const auto opt_t0 = HostClock::now();
-  clip_gradients(grads, max_grad_norm);
+  auto raw_gradient_nonfinite = sanitize_and_clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
   if (timing_enabled) {
     timing_opt_us = elapsed_us(opt_t0, HostClock::now());
@@ -2965,7 +2950,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     eval_arrays.push_back(output);
   }
   collect_state_for_eval(*this, eval_arrays, false);
-  transaction.append_validation_arrays(loss, grads, eval_arrays);
+  transaction.append_validation_arrays(loss, grads, eval_arrays, raw_gradient_nonfinite);
   const auto eval_t0 = HostClock::now();
   mx::eval(eval_arrays);
   if (timing_enabled) {
@@ -3382,7 +3367,7 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
     }
     auto out = fn(params);
     auto grads = std::move(out.second);
-    clip_gradients(grads, max_grad_norm);
+    sanitize_and_clip_gradients(grads, max_grad_norm);
 
     size_t grad_idx = 0;
     for (size_t weight_idx : adapter_indices) {

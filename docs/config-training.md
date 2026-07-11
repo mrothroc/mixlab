@@ -180,8 +180,9 @@ default for high-learning-rate recipes and raise it only while monitoring
 explicit `weight: 1.0` remains available for recipes that have been tuned for
 it. The native loss excludes a pair if either auxiliary sequence contains a
 non-finite token-logit row and bounds its auxiliary logit input before
-log-softmax, so a bad pair cannot turn an otherwise finite primary training
-step non-finite.
+log-softmax. Its analytical backward computes the log-softmax/ranking gradient
+directly and bounds each auxiliary token-logit gradient to `[-1,1]`; this bound
+is applied before the model-wide gradient clip.
 
 ## Validation And Logging
 

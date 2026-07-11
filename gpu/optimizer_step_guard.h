@@ -3,10 +3,27 @@
 
 #include "ir_trainer.h"
 
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
 namespace mlx_ir {
+
+constexpr uint64_t kMaxConsecutiveSkippedOptimizerSteps = 3;
+
+class OptimizerStepCircuitBreaker : public std::runtime_error {
+ public:
+  explicit OptimizerStepCircuitBreaker(const std::string& message)
+      : std::runtime_error(message) {}
+};
+
+// Converts gradients to float32, replaces non-finite values with zero, and
+// clips only when every raw gradient is finite. The returned scalar counts raw
+// non-finite values so the transaction can reject the candidate update even
+// though the arrays passed to the optimizer are safe to evaluate.
+mlx::core::array sanitize_and_clip_gradients(
+    std::vector<mlx::core::array>& gradients,
+    float max_grad_norm);
 
 // OptimizerStepTransaction owns the atomicity boundary for one persistent
 // full-model optimizer update. Optimizer implementations build candidate
@@ -24,7 +41,7 @@ class OptimizerStepTransaction {
       const mlx::core::array& loss,
       const std::vector<mlx::core::array>& gradients,
       std::vector<mlx::core::array>& eval_arrays,
-      uint64_t known_gradient_nonfinite = 0);
+      const mlx::core::array& known_gradient_nonfinite);
   bool finish();
   bool loss_was_nonfinite() const;
 

@@ -124,6 +124,7 @@ type TrainerOptimizerStats struct {
 	AttemptedSteps        uint64
 	CommittedSteps        uint64
 	SkippedSteps          uint64
+	ConsecutiveSkipped    uint64
 	LastStepSkipped       bool
 	LastLossNonfinite     uint64
 	LastGradientNonfinite uint64

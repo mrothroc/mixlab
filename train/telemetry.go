@@ -49,6 +49,7 @@ type telemetryRunState struct {
 	Extra                 map[string]float64 `json:"extra,omitempty"`
 	OptimizerSteps        uint64             `json:"optimizer_steps"`
 	SkippedOptimizerSteps uint64             `json:"skipped_optimizer_steps"`
+	ConsecutiveSkipped    uint64             `json:"consecutive_skipped_optimizer_steps"`
 	OptimizerStepSkipped  bool               `json:"optimizer_step_skipped,omitempty"`
 }
 
@@ -80,6 +81,7 @@ type telemetryUpdate struct {
 	Extra                 map[string]float64
 	OptimizerSteps        uint64
 	SkippedOptimizerSteps uint64
+	ConsecutiveSkipped    uint64
 	OptimizerStepSkipped  bool
 }
 
@@ -241,6 +243,7 @@ func (s *telemetryState) update(u telemetryUpdate) {
 		Extra:                 cloneTelemetryValues(u.Extra),
 		OptimizerSteps:        u.OptimizerSteps,
 		SkippedOptimizerSteps: u.SkippedOptimizerSteps,
+		ConsecutiveSkipped:    u.ConsecutiveSkipped,
 		OptimizerStepSkipped:  u.OptimizerStepSkipped,
 	}
 	if u.HasLoss {
@@ -304,7 +307,9 @@ func formatTelemetryLine(s telemetrySnapshot) string {
 		formatMiB(s.MLX.ActiveBytes), formatMiB(s.MLX.CacheBytes), formatMiB(s.MLX.PeakBytes),
 		formatMiB(s.Host.RSSBytes))
 	if s.SkippedOptimizerSteps > 0 {
-		line += fmt.Sprintf(" optimizer_steps=%d skipped_optimizer_steps=%d", s.OptimizerSteps, s.SkippedOptimizerSteps)
+		line += fmt.Sprintf(
+			" optimizer_steps=%d skipped_optimizer_steps=%d consecutive_skips=%d",
+			s.OptimizerSteps, s.SkippedOptimizerSteps, s.ConsecutiveSkipped)
 		if s.OptimizerStepSkipped {
 			line += " optimizer_step_skipped=true"
 		}

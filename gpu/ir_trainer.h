@@ -88,6 +88,7 @@ struct IRTrainer {
   int step_count = 0;
   int optimizer_step_count = 0;
   uint64_t skipped_optimizer_steps = 0;
+  uint64_t consecutive_skipped_optimizer_steps = 0;
   bool last_optimizer_step_skipped = false;
   uint64_t last_optimizer_loss_nonfinite = 0;
   uint64_t last_optimizer_gradient_nonfinite = 0;

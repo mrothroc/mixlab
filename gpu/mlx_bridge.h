@@ -259,6 +259,7 @@ int mlx_ir_trainer_optimizer_stats(
     uint64_t* attempted_steps,
     uint64_t* committed_steps,
     uint64_t* skipped_steps,
+    uint64_t* consecutive_skipped_steps,
     int* last_step_skipped,
     uint64_t* last_loss_nonfinite,
     uint64_t* last_gradient_nonfinite,

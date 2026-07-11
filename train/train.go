@@ -696,6 +696,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				ComponentLosses:       componentLosses,
 				OptimizerSteps:        optimizerStats.CommittedSteps,
 				SkippedOptimizerSteps: optimizerStats.SkippedSteps,
+				ConsecutiveSkipped:    optimizerStats.ConsecutiveSkipped,
 				OptimizerStepSkipped:  optimizerStats.LastStepSkipped,
 			})
 			handleMLXMemoryControls(name, step, mlxMemLogEvery, mlxClearCacheEvery, telemetry)
@@ -806,6 +807,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					ComponentLosses:       componentLosses,
 					OptimizerSteps:        optimizerStats.CommittedSteps,
 					SkippedOptimizerSteps: optimizerStats.SkippedSteps,
+					ConsecutiveSkipped:    optimizerStats.ConsecutiveSkipped,
 					OptimizerStepSkipped:  optimizerStats.LastStepSkipped,
 				})
 				if err := telemetry.writeSnapshot(true); err != nil {

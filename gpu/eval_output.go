@@ -192,7 +192,7 @@ func mlxTrainerCompileStats(t TrainerHandle) (TrainerCompileStats, error) {
 }
 
 func mlxTrainerOptimizerStats(t TrainerHandle) (TrainerOptimizerStats, error) {
-	var attempted, committed, skipped C.uint64_t
+	var attempted, committed, skipped, consecutiveSkipped C.uint64_t
 	var lastSkipped C.int
 	var lossBad, gradientBad, stateBad C.uint64_t
 	rc := int(C.mlx_ir_trainer_optimizer_stats(
@@ -200,6 +200,7 @@ func mlxTrainerOptimizerStats(t TrainerHandle) (TrainerOptimizerStats, error) {
 		&attempted,
 		&committed,
 		&skipped,
+		&consecutiveSkipped,
 		&lastSkipped,
 		&lossBad,
 		&gradientBad,
@@ -212,6 +213,7 @@ func mlxTrainerOptimizerStats(t TrainerHandle) (TrainerOptimizerStats, error) {
 		AttemptedSteps:        uint64(attempted),
 		CommittedSteps:        uint64(committed),
 		SkippedSteps:          uint64(skipped),
+		ConsecutiveSkipped:    uint64(consecutiveSkipped),
 		LastStepSkipped:       lastSkipped != 0,
 		LastLossNonfinite:     uint64(lossBad),
 		LastGradientNonfinite: uint64(gradientBad),
