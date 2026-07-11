@@ -1,4 +1,5 @@
 #include "ir_trainer.h"
+#include "optimizer_step_guard.h"
 
 #include <mlx/compile.h>
 #include <mlx/transforms.h>
@@ -793,19 +794,15 @@ MaterializedGradResult materialize_weight_grad_chunks(
       std::vector<mx::array> flat_grads;
       flat_grads.reserve(grads.size());
       auto partial_norm_sq = mx::array(0.0f, mx::float32);
-      auto nonfinite_count = mx::array(0.0f, mx::float32);
       for (const auto& grad : grads) {
         auto flat = mx::reshape(
             mx::astype(grad, mx::float32),
             {static_cast<mx::ShapeElem>(grad.size())});
         partial_norm_sq = partial_norm_sq + mx::sum(mx::square(flat));
-        nonfinite_count = nonfinite_count +
-            mx::sum(mx::astype(mx::logical_not(mx::isfinite(flat)), mx::float32));
         flat_grads.push_back(flat);
       }
       std::vector<mx::array> eval_arrays = flat_grads;
       eval_arrays.push_back(partial_norm_sq);
-      eval_arrays.push_back(nonfinite_count);
       try {
         eval_arrays_with_context(
             eval_arrays,
@@ -818,21 +815,7 @@ MaterializedGradResult materialize_weight_grad_chunks(
         }
         throw;
       }
-      const float nonfinite = nonfinite_count.item<float>();
-      if (nonfinite > 0.0f) {
-        throw std::runtime_error(
-            "canonical Mamba3 materialized grad chunk [" +
-            std::to_string(chunk.start) + "," + std::to_string(chunk.end) +
-            ") produced " + std::to_string(static_cast<int>(nonfinite)) +
-            " non-finite gradient values");
-      }
       const float chunk_norm_sq = partial_norm_sq.item<float>();
-      if (!std::isfinite(chunk_norm_sq)) {
-        throw std::runtime_error(
-            "canonical Mamba3 materialized grad chunk [" +
-            std::to_string(chunk.start) + "," + std::to_string(chunk.end) +
-            ") produced non-finite gradient norm");
-      }
       out.norm_sq += static_cast<double>(chunk_norm_sq);
       for (size_t i = chunk.start; i < chunk.end; ++i) {
         const auto& flat = flat_grads[i - chunk.start];
@@ -1083,12 +1066,13 @@ std::vector<mx::array> build_compiled_adamw_update_step_args(
   args.insert(args.end(), trainer.adam_v.begin(), trainer.adam_v.end());
   args.insert(args.end(), input_arrays.begin(), input_arrays.end());
   args.push_back(mx::array(trainer.lr_scale, mx::float32));
+  const int optimizer_step = trainer.optimizer_step_count + 1;
   for (const auto& group : trainer.optimizer_groups) {
     args.push_back(mx::array(
-        1.0f - std::pow(group.beta1, static_cast<float>(trainer.step_count)),
+        1.0f - std::pow(group.beta1, static_cast<float>(optimizer_step)),
         mx::float32));
     args.push_back(mx::array(
-        1.0f - std::pow(group.beta2, static_cast<float>(trainer.step_count)),
+        1.0f - std::pow(group.beta2, static_cast<float>(optimizer_step)),
         mx::float32));
   }
   return args;
@@ -1108,12 +1092,13 @@ std::vector<mx::array> build_compiled_adamw_optimizer_update_args(
   args.insert(args.end(), trainer.adam_v.begin(), trainer.adam_v.end());
   args.insert(args.end(), grads.begin(), grads.end());
   args.push_back(mx::array(trainer.lr_scale, mx::float32));
+  const int optimizer_step = trainer.optimizer_step_count + 1;
   for (const auto& group : trainer.optimizer_groups) {
     args.push_back(mx::array(
-        1.0f - std::pow(group.beta1, static_cast<float>(trainer.step_count)),
+        1.0f - std::pow(group.beta1, static_cast<float>(optimizer_step)),
         mx::float32));
     args.push_back(mx::array(
-        1.0f - std::pow(group.beta2, static_cast<float>(trainer.step_count)),
+        1.0f - std::pow(group.beta2, static_cast<float>(optimizer_step)),
         mx::float32));
   }
   return args;
@@ -1976,6 +1961,7 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   auto out = fn(weights);
   auto loss = out.first;
   auto grads = std::move(out.second);
+  OptimizerStepTransaction transaction(*this);
   clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
 
@@ -1984,7 +1970,13 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
       1 + weights.size() + adam_m.size() * 2 + muon_momentum.size() + muon_second_moment.size() + sgd_momentum.size());
   eval_arrays.push_back(loss);
   collect_state_for_eval(*this, eval_arrays, false);
+  transaction.append_validation_arrays(loss, grads, eval_arrays);
   mx::eval(eval_arrays);
+  const bool committed = transaction.finish();
+  if (!committed) {
+    std::unordered_map<std::string, mx::array> outputs;
+    sanitize_skipped_step_reporting(loss, outputs, transaction.loss_was_nonfinite());
+  }
   loss.detach();
   detach_trainer_state(*this);
   report_gated_delta_timing_summary("step", step_count);
@@ -2014,6 +2006,7 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
   }
   const auto& group = optimizer_groups[spec.group_index];
   const float effective_lr = group.lr * lr_scale;
+  const int optimizer_step = optimizer_step_count + 1;
   auto& w = weights[i];
   auto grad = mx::astype(g, mx::float32);
 
@@ -2022,8 +2015,8 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
       if (has_adam_state[i] == 0) {
         throw std::runtime_error("AdamW state missing for weight");
       }
-      const float b1t = 1.0f - std::pow(group.beta1, static_cast<float>(step_count));
-      const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(step_count));
+      const float b1t = 1.0f - std::pow(group.beta1, static_cast<float>(optimizer_step));
+      const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(optimizer_step));
       const float one_minus_beta1 = 1.0f - group.beta1;
       const float one_minus_beta2 = 1.0f - group.beta2;
       adam_m[i] = group.beta1 * adam_m[i] + one_minus_beta1 * grad;
@@ -2032,7 +2025,7 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
       auto mhat = adam_m[i] / b1t;
       auto vhat = adam_v[i] / b2t;
 
-      w = apply_weight_decay(w, grad, group, spec.decay, step_count, effective_lr);
+      w = apply_weight_decay(w, grad, group, spec.decay, optimizer_step, effective_lr);
       w = w - effective_lr * mhat / (mx::sqrt(vhat) + group.eps);
       break;
     }
@@ -2040,8 +2033,8 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
       if (has_adam_state[i] == 0) {
         throw std::runtime_error("LAMB state missing for weight");
       }
-      const float b1t = 1.0f - std::pow(group.beta1, static_cast<float>(step_count));
-      const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(step_count));
+      const float b1t = 1.0f - std::pow(group.beta1, static_cast<float>(optimizer_step));
+      const float b2t = 1.0f - std::pow(group.beta2, static_cast<float>(optimizer_step));
       const float one_minus_beta1 = 1.0f - group.beta1;
       const float one_minus_beta2 = 1.0f - group.beta2;
       adam_m[i] = group.beta1 * adam_m[i] + one_minus_beta1 * grad;
@@ -2050,7 +2043,7 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
       auto mhat = adam_m[i] / b1t;
       auto vhat = adam_v[i] / b2t;
       auto update = mhat / (mx::sqrt(vhat) + group.eps);
-      update = update + weight_decay_update_term(w, grad, group, spec.decay, step_count);
+      update = update + weight_decay_update_term(w, grad, group, spec.decay, optimizer_step);
       auto trust_ratio = lamb_trust_ratio(w, update, group.lamb_trust_ratio_cap);
       w = w - effective_lr * trust_ratio * update;
       break;
@@ -2082,7 +2075,7 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
           update = normuon_normalize(update, muon_second_moment[i], group.beta2);
           break;
       }
-      w = apply_weight_decay(w, grad, group, spec.decay, step_count, effective_lr);
+      w = apply_weight_decay(w, grad, group, spec.decay, optimizer_step, effective_lr);
       w = w - effective_lr * update;
       break;
     }
@@ -2091,7 +2084,7 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
         throw std::runtime_error("SGD state missing for weight");
       }
       sgd_momentum[i] = group.beta1 * sgd_momentum[i] + grad;
-      w = apply_weight_decay(w, grad, group, spec.decay, step_count, effective_lr);
+      w = apply_weight_decay(w, grad, group, spec.decay, optimizer_step, effective_lr);
       w = w - effective_lr * sgd_momentum[i];
       break;
     }
@@ -2388,6 +2381,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         "canonical Mamba3 low-memory output eval");
     loss.detach();
     detach_output_map(outputs);
+    OptimizerStepTransaction transaction(*this);
 
     float clip_scale_value = 1.0f;
     if (gradient_mode == Mamba3LowMemoryGradientMode::SingleBackward) {
@@ -2411,6 +2405,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
               grad_chunk_size);
     }
     const auto clip_scale = mx::array(clip_scale_value, mx::float32);
+    uint64_t low_memory_gradient_nonfinite = 0;
 
     for (size_t start = 0; start < weights.size(); start += static_cast<size_t>(update_chunk_size)) {
       const size_t end = std::min(weights.size(), start + static_cast<size_t>(update_chunk_size));
@@ -2437,18 +2432,40 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         throw std::runtime_error("canonical Mamba3 gradient chunk size mismatch");
       }
       std::vector<mx::array> update_eval_arrays;
-      update_eval_arrays.reserve((end - start) * 3);
+      update_eval_arrays.reserve((end - start) * 3 + 1);
+      auto chunk_gradient_nonfinite = mx::array(0.0f, mx::float32);
       for (size_t i = start; i < end; ++i) {
+        chunk_gradient_nonfinite = chunk_gradient_nonfinite + mx::sum(mx::astype(
+            mx::logical_not(mx::isfinite(grads[i - start])),
+            mx::float32));
         auto clipped_grad = grads[i - start] * clip_scale;
         apply_weight_optimizer_update(i, clipped_grad);
         collect_weight_state_for_eval(i, update_eval_arrays);
       }
+      update_eval_arrays.push_back(chunk_gradient_nonfinite);
       eval_arrays_with_context(
           update_eval_arrays,
           "canonical Mamba3 optimizer update chunk [" + std::to_string(start) +
           "," + std::to_string(end) + ")");
+      const float chunk_bad = chunk_gradient_nonfinite.item<float>();
+      if (std::isfinite(chunk_bad) && chunk_bad > 0.0f) {
+        low_memory_gradient_nonfinite += static_cast<uint64_t>(chunk_bad);
+      }
     }
 
+    std::vector<mx::array> validation_arrays;
+    validation_arrays.reserve(3);
+    const std::vector<mx::array> no_validation_grads;
+    transaction.append_validation_arrays(
+        loss,
+        no_validation_grads,
+        validation_arrays,
+        low_memory_gradient_nonfinite);
+    eval_arrays_with_context(validation_arrays, "canonical Mamba3 optimizer transaction validation");
+    const bool committed = transaction.finish();
+    if (!committed) {
+      sanitize_skipped_step_reporting(loss, outputs, transaction.loss_was_nonfinite());
+    }
     detach_trainer_state(*this);
     report_gated_delta_timing_summary("step", step_count);
     pending_loss_ = loss;
@@ -2613,29 +2630,30 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         next_adam_v.push_back(update_out[offset + i]);
       }
 
+      OptimizerStepTransaction transaction(*this);
+      weights = std::move(next_weights);
+      adam_m = std::move(next_adam_m);
+      adam_v = std::move(next_adam_v);
       std::vector<mx::array> eval_arrays;
-      eval_arrays.reserve(
-          1 + outputs.size() + next_weights.size() + next_adam_m.size() + next_adam_v.size());
+      eval_arrays.reserve(1 + outputs.size() + weights.size() + adam_m.size() + adam_v.size() + 3);
       eval_arrays.push_back(loss);
       for (const auto& [_, output] : outputs) {
         eval_arrays.push_back(output);
       }
-      eval_arrays.insert(eval_arrays.end(), next_weights.begin(), next_weights.end());
-      eval_arrays.insert(eval_arrays.end(), next_adam_m.begin(), next_adam_m.end());
-      eval_arrays.insert(eval_arrays.end(), next_adam_v.begin(), next_adam_v.end());
+      collect_state_for_eval(*this, eval_arrays, false);
+      transaction.append_validation_arrays(loss, {}, eval_arrays);
       const auto eval_t0 = HostClock::now();
       mx::eval(eval_arrays);
       if (timing_enabled) {
         timing_eval_us = elapsed_us(eval_t0, HostClock::now());
       }
+      const bool committed = transaction.finish();
+      if (!committed) {
+        sanitize_skipped_step_reporting(loss, outputs, transaction.loss_was_nonfinite());
+      }
       loss.detach();
       detach_output_map(outputs);
-      detach_array_vector(next_weights);
-      detach_array_vector(next_adam_m);
-      detach_array_vector(next_adam_v);
-      weights = std::move(next_weights);
-      adam_m = std::move(next_adam_m);
-      adam_v = std::move(next_adam_v);
+      detach_trainer_state(*this);
       report_gated_delta_timing_summary("step", step_count);
       pending_loss_ = loss;
       pending_outputs_ = std::move(outputs);
@@ -2886,29 +2904,30 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         next_adam_v.push_back(update_out[offset + i]);
       }
 
+      OptimizerStepTransaction transaction(*this);
+      weights = std::move(next_weights);
+      adam_m = std::move(next_adam_m);
+      adam_v = std::move(next_adam_v);
       std::vector<mx::array> eval_arrays;
-      eval_arrays.reserve(
-          1 + outputs.size() + next_weights.size() + next_adam_m.size() + next_adam_v.size());
+      eval_arrays.reserve(1 + outputs.size() + weights.size() + adam_m.size() + adam_v.size() + 3);
       eval_arrays.push_back(loss);
       for (const auto& [_, output] : outputs) {
         eval_arrays.push_back(output);
       }
-      eval_arrays.insert(eval_arrays.end(), next_weights.begin(), next_weights.end());
-      eval_arrays.insert(eval_arrays.end(), next_adam_m.begin(), next_adam_m.end());
-      eval_arrays.insert(eval_arrays.end(), next_adam_v.begin(), next_adam_v.end());
+      collect_state_for_eval(*this, eval_arrays, false);
+      transaction.append_validation_arrays(loss, grads, eval_arrays);
       const auto eval_t0 = HostClock::now();
       mx::eval(eval_arrays);
       if (timing_enabled) {
         timing_eval_us = elapsed_us(eval_t0, HostClock::now());
       }
+      const bool committed = transaction.finish();
+      if (!committed) {
+        sanitize_skipped_step_reporting(loss, outputs, transaction.loss_was_nonfinite());
+      }
       loss.detach();
       detach_output_map(outputs);
-      detach_array_vector(next_weights);
-      detach_array_vector(next_adam_m);
-      detach_array_vector(next_adam_v);
-      weights = std::move(next_weights);
-      adam_m = std::move(next_adam_m);
-      adam_v = std::move(next_adam_v);
+      detach_trainer_state(*this);
       report_gated_delta_timing_summary("step", step_count);
       pending_loss_ = loss;
       pending_outputs_ = std::move(outputs);
@@ -2928,6 +2947,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     return;
   }
   auto preclip_grads = grads;
+  OptimizerStepTransaction transaction(*this);
   const auto opt_t0 = HostClock::now();
   clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
@@ -2945,10 +2965,15 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     eval_arrays.push_back(output);
   }
   collect_state_for_eval(*this, eval_arrays, false);
+  transaction.append_validation_arrays(loss, grads, eval_arrays);
   const auto eval_t0 = HostClock::now();
   mx::eval(eval_arrays);
   if (timing_enabled) {
     timing_eval_us = elapsed_us(eval_t0, HostClock::now());
+  }
+  const bool committed = transaction.finish();
+  if (!committed) {
+    sanitize_skipped_step_reporting(loss, outputs, transaction.loss_was_nonfinite());
   }
   loss.detach();
   detach_output_map(outputs);

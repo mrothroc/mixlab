@@ -254,6 +254,15 @@ int mlx_ir_trainer_compile_stats(
     uint64_t* training_step_misses,
     uint64_t* categorical_sampler_hits,
     uint64_t* categorical_sampler_misses);
+int mlx_ir_trainer_optimizer_stats(
+    int64_t trainer,
+    uint64_t* attempted_steps,
+    uint64_t* committed_steps,
+    uint64_t* skipped_steps,
+    int* last_step_skipped,
+    uint64_t* last_loss_nonfinite,
+    uint64_t* last_gradient_nonfinite,
+    uint64_t* last_state_nonfinite);
 float mlx_ir_trainer_evaluate(int64_t trainer, const int* tokens, const int* targets, int B, int T);
 int mlx_ir_trainer_num_weights(int64_t trainer);
 int mlx_ir_trainer_weight_size(int64_t trainer, int weight_idx);

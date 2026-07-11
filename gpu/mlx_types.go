@@ -120,6 +120,16 @@ type TrainerCompileStats struct {
 	CategoricalSamplerCacheMisses uint64
 }
 
+type TrainerOptimizerStats struct {
+	AttemptedSteps        uint64
+	CommittedSteps        uint64
+	SkippedSteps          uint64
+	LastStepSkipped       bool
+	LastLossNonfinite     uint64
+	LastGradientNonfinite uint64
+	LastStateNonfinite    uint64
+}
+
 type Program struct {
 	handle      int64
 	nWeights    int

@@ -146,8 +146,14 @@ length, steady-state tokens/sec, MLX active/cache/peak memory, host RSS, and
 best-effort GPU utilization on macOS from `ioreg`. When a training graph
 declares active scalar auxiliary losses, it also includes a
 `component_losses` object, for example `invariance_loss`, `pll_margin_loss`,
-`word_struct_loss`, or `moe_aux_loss`; absent/no-op objectives do not add keys. GPU utilization is
-omitted when the platform does not expose a no-sudo sampler.
+`word_struct_loss`, or `moe_aux_loss`; absent/no-op objectives do not add keys.
+Optimizer telemetry includes committed `optimizer_steps`, cumulative
+`skipped_optimizer_steps`, and `optimizer_step_skipped` for the current batch.
+Mixlab validates the complete persistent optimizer transaction after each
+step. If the loss, any gradient, candidate weight, or optimizer moment is
+non-finite, the candidate update is discarded atomically and the previous
+weights and optimizer state remain active. GPU utilization is omitted when the
+platform does not expose a no-sudo sampler.
 
 To keep a time series for plotting, add:
 

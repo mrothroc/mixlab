@@ -31,22 +31,25 @@ type telemetryState struct {
 }
 
 type telemetryRunState struct {
-	Model                string             `json:"model,omitempty"`
-	Step                 int                `json:"step"`
-	TotalSteps           int                `json:"total_steps"`
-	Loss                 *float64           `json:"loss,omitempty"`
-	ValLoss              *float64           `json:"val_loss,omitempty"`
-	LR                   float64            `json:"lr"`
-	Objective            string             `json:"objective,omitempty"`
-	SeqLen               int                `json:"seq_len"`
-	BatchTokens          int                `json:"batch_tokens"`
-	ElapsedSeconds       float64            `json:"elapsed_seconds"`
-	SteadyElapsedSeconds float64            `json:"steady_elapsed_seconds"`
-	TokensPerSec         float64            `json:"tokens_per_sec"`
-	Timing               *telemetryTiming   `json:"timing,omitempty"`
-	UpdatedAt            string             `json:"updated_at,omitempty"`
-	ComponentLosses      map[string]float64 `json:"component_losses,omitempty"`
-	Extra                map[string]float64 `json:"extra,omitempty"`
+	Model                 string             `json:"model,omitempty"`
+	Step                  int                `json:"step"`
+	TotalSteps            int                `json:"total_steps"`
+	Loss                  *float64           `json:"loss,omitempty"`
+	ValLoss               *float64           `json:"val_loss,omitempty"`
+	LR                    float64            `json:"lr"`
+	Objective             string             `json:"objective,omitempty"`
+	SeqLen                int                `json:"seq_len"`
+	BatchTokens           int                `json:"batch_tokens"`
+	ElapsedSeconds        float64            `json:"elapsed_seconds"`
+	SteadyElapsedSeconds  float64            `json:"steady_elapsed_seconds"`
+	TokensPerSec          float64            `json:"tokens_per_sec"`
+	Timing                *telemetryTiming   `json:"timing,omitempty"`
+	UpdatedAt             string             `json:"updated_at,omitempty"`
+	ComponentLosses       map[string]float64 `json:"component_losses,omitempty"`
+	Extra                 map[string]float64 `json:"extra,omitempty"`
+	OptimizerSteps        uint64             `json:"optimizer_steps"`
+	SkippedOptimizerSteps uint64             `json:"skipped_optimizer_steps"`
+	OptimizerStepSkipped  bool               `json:"optimizer_step_skipped,omitempty"`
 }
 
 type telemetryTiming struct {
@@ -57,24 +60,27 @@ type telemetryTiming struct {
 }
 
 type telemetryUpdate struct {
-	Model           string
-	Step            int
-	TotalSteps      int
-	Loss            float64
-	HasLoss         bool
-	ValLoss         float64
-	HasValLoss      bool
-	LR              float32
-	Objective       string
-	SeqLen          int
-	BatchTokens     int
-	Elapsed         time.Duration
-	SteadyElapsed   time.Duration
-	TokensPerSec    float64
-	Timing          telemetryTiming
-	HasTiming       bool
-	ComponentLosses map[string]float64
-	Extra           map[string]float64
+	Model                 string
+	Step                  int
+	TotalSteps            int
+	Loss                  float64
+	HasLoss               bool
+	ValLoss               float64
+	HasValLoss            bool
+	LR                    float32
+	Objective             string
+	SeqLen                int
+	BatchTokens           int
+	Elapsed               time.Duration
+	SteadyElapsed         time.Duration
+	TokensPerSec          float64
+	Timing                telemetryTiming
+	HasTiming             bool
+	ComponentLosses       map[string]float64
+	Extra                 map[string]float64
+	OptimizerSteps        uint64
+	SkippedOptimizerSteps uint64
+	OptimizerStepSkipped  bool
 }
 
 type telemetrySnapshot struct {
@@ -220,19 +226,22 @@ func (s *telemetryState) update(u telemetryUpdate) {
 		return
 	}
 	next := telemetryRunState{
-		Model:                u.Model,
-		Step:                 u.Step,
-		TotalSteps:           u.TotalSteps,
-		LR:                   float64(u.LR),
-		Objective:            u.Objective,
-		SeqLen:               u.SeqLen,
-		BatchTokens:          u.BatchTokens,
-		ElapsedSeconds:       u.Elapsed.Seconds(),
-		SteadyElapsedSeconds: u.SteadyElapsed.Seconds(),
-		TokensPerSec:         u.TokensPerSec,
-		UpdatedAt:            time.Now().UTC().Format(time.RFC3339Nano),
-		ComponentLosses:      cloneTelemetryValues(u.ComponentLosses),
-		Extra:                cloneTelemetryValues(u.Extra),
+		Model:                 u.Model,
+		Step:                  u.Step,
+		TotalSteps:            u.TotalSteps,
+		LR:                    float64(u.LR),
+		Objective:             u.Objective,
+		SeqLen:                u.SeqLen,
+		BatchTokens:           u.BatchTokens,
+		ElapsedSeconds:        u.Elapsed.Seconds(),
+		SteadyElapsedSeconds:  u.SteadyElapsed.Seconds(),
+		TokensPerSec:          u.TokensPerSec,
+		UpdatedAt:             time.Now().UTC().Format(time.RFC3339Nano),
+		ComponentLosses:       cloneTelemetryValues(u.ComponentLosses),
+		Extra:                 cloneTelemetryValues(u.Extra),
+		OptimizerSteps:        u.OptimizerSteps,
+		SkippedOptimizerSteps: u.SkippedOptimizerSteps,
+		OptimizerStepSkipped:  u.OptimizerStepSkipped,
 	}
 	if u.HasLoss {
 		loss := u.Loss
@@ -290,8 +299,15 @@ func formatTelemetryLine(s telemetrySnapshot) string {
 	if s.GPUUtilPercent != nil {
 		gpuUtil = fmt.Sprintf("%.0f%%", *s.GPUUtilPercent)
 	}
-	return fmt.Sprintf("[telemetry] step %d/%d tok/s=%.0f gpu_util=%s mlx_active=%s mlx_cache=%s mlx_peak=%s rss=%s",
+	line := fmt.Sprintf("[telemetry] step %d/%d tok/s=%.0f gpu_util=%s mlx_active=%s mlx_cache=%s mlx_peak=%s rss=%s",
 		s.Step, s.TotalSteps, s.TokensPerSec, gpuUtil,
 		formatMiB(s.MLX.ActiveBytes), formatMiB(s.MLX.CacheBytes), formatMiB(s.MLX.PeakBytes),
 		formatMiB(s.Host.RSSBytes))
+	if s.SkippedOptimizerSteps > 0 {
+		line += fmt.Sprintf(" optimizer_steps=%d skipped_optimizer_steps=%d", s.OptimizerSteps, s.SkippedOptimizerSteps)
+		if s.OptimizerStepSkipped {
+			line += " optimizer_step_skipped=true"
+		}
+	}
+	return line
 }

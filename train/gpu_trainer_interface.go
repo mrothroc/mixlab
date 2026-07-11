@@ -57,6 +57,18 @@ type gpuCompileStatsReader interface {
 	CompileStatsGPU() (gpu.TrainerCompileStats, error)
 }
 
+type gpuOptimizerStatsReader interface {
+	OptimizerStatsGPU() (gpu.TrainerOptimizerStats, error)
+}
+
+func readOptimizerStats(trainer GPUTrainer) (gpu.TrainerOptimizerStats, error) {
+	reader, ok := trainer.(gpuOptimizerStatsReader)
+	if !ok {
+		return gpu.TrainerOptimizerStats{}, nil
+	}
+	return reader.OptimizerStatsGPU()
+}
+
 func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, seqLen int, lr float32) error {
 	if batch.batchSizeOverride > 0 {
 		batchSize = batch.batchSizeOverride

@@ -77,8 +77,11 @@ func TestTelemetrySnapshotJSONShape(t *testing.T) {
 			ValidationMS: 3,
 			LogMS:        4,
 		},
-		HasTiming:       true,
-		ComponentLosses: componentLosses,
+		HasTiming:             true,
+		ComponentLosses:       componentLosses,
+		OptimizerSteps:        7,
+		SkippedOptimizerSteps: 1,
+		OptimizerStepSkipped:  true,
 	})
 	// telemetry state owns the serialized snapshot rather than retaining a
 	// caller-owned map that training code can mutate on the next step.
@@ -99,11 +102,14 @@ func TestTelemetrySnapshotJSONShape(t *testing.T) {
 	if got := snap.ComponentLosses["invariance_loss"]; got != 0.25 {
 		t.Fatalf("component loss=%g, want 0.25", got)
 	}
+	if snap.OptimizerSteps != 7 || snap.SkippedOptimizerSteps != 1 || !snap.OptimizerStepSkipped {
+		t.Fatalf("optimizer telemetry=%+v", snap.telemetryRunState)
+	}
 	raw, err := json.Marshal(snap)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, want := range []string{`"model":"tiny"`, `"tokens_per_sec":128`, `"component_losses":{"invariance_loss":0.25}`, `"mlx":`, `"host":`, `"rss_bytes":`} {
+	for _, want := range []string{`"model":"tiny"`, `"tokens_per_sec":128`, `"component_losses":{"invariance_loss":0.25}`, `"optimizer_steps":7`, `"skipped_optimizer_steps":1`, `"optimizer_step_skipped":true`, `"mlx":`, `"host":`, `"rss_bytes":`} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("snapshot JSON missing %s: %s", want, raw)
 		}
@@ -195,12 +201,15 @@ func TestTelemetryRuntimeDisabledDoesNotStartServer(t *testing.T) {
 func TestFormatTelemetryLine(t *testing.T) {
 	util := 95.0
 	line := formatTelemetryLine(telemetrySnapshot{
-		telemetryRunState: telemetryRunState{Step: 5, TotalSteps: 10, TokensPerSec: 1234},
-		MLX:               telemetryMLX{ActiveBytes: 1024 * 1024, CacheBytes: 2 * 1024 * 1024, PeakBytes: 3 * 1024 * 1024},
-		Host:              telemetryHost{RSSBytes: 4 * 1024 * 1024},
-		GPUUtilPercent:    &util,
+		telemetryRunState: telemetryRunState{
+			Step: 5, TotalSteps: 10, TokensPerSec: 1234,
+			OptimizerSteps: 4, SkippedOptimizerSteps: 1, OptimizerStepSkipped: true,
+		},
+		MLX:            telemetryMLX{ActiveBytes: 1024 * 1024, CacheBytes: 2 * 1024 * 1024, PeakBytes: 3 * 1024 * 1024},
+		Host:           telemetryHost{RSSBytes: 4 * 1024 * 1024},
+		GPUUtilPercent: &util,
 	})
-	for _, want := range []string{"[telemetry]", "step 5/10", "tok/s=1234", "gpu_util=95%", "mlx_active=1.0MiB", "rss=4.0MiB"} {
+	for _, want := range []string{"[telemetry]", "step 5/10", "tok/s=1234", "gpu_util=95%", "mlx_active=1.0MiB", "rss=4.0MiB", "optimizer_steps=4", "skipped_optimizer_steps=1", "optimizer_step_skipped=true"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("line missing %q: %s", want, line)
 		}

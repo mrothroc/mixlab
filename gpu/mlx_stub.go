@@ -167,6 +167,10 @@ func TrainerCompileStatsSnapshot(t TrainerHandle) (TrainerCompileStats, error) {
 	return TrainerCompileStats{}, errNotBuilt
 }
 
+func TrainerOptimizerStatsSnapshot(t TrainerHandle) (TrainerOptimizerStats, error) {
+	return TrainerOptimizerStats{}, errNotBuilt
+}
+
 func EvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) (float32, [][]float32, error) {
 	return 0, nil, errNotBuilt
 }

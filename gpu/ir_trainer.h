@@ -83,7 +83,15 @@ struct IRTrainer {
   std::vector<uint8_t> has_muon_second_moment_state;
   std::vector<mlx::core::array> sgd_momentum;
   std::vector<uint8_t> has_sgd_state;
+  // step_count counts attempted training batches. optimizer_step_count counts
+  // only atomically committed updates and drives optimizer bias correction.
   int step_count = 0;
+  int optimizer_step_count = 0;
+  uint64_t skipped_optimizer_steps = 0;
+  bool last_optimizer_step_skipped = false;
+  uint64_t last_optimizer_loss_nonfinite = 0;
+  uint64_t last_optimizer_gradient_nonfinite = 0;
+  uint64_t last_optimizer_state_nonfinite = 0;
   std::unordered_map<std::string, mlx::core::array> last_outputs;
   std::vector<mlx::core::array> last_grads;
   bool has_pending_step_ = false;

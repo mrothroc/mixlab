@@ -190,3 +190,31 @@ func mlxTrainerCompileStats(t TrainerHandle) (TrainerCompileStats, error) {
 		CategoricalSamplerCacheMisses: uint64(samplerMisses),
 	}, nil
 }
+
+func mlxTrainerOptimizerStats(t TrainerHandle) (TrainerOptimizerStats, error) {
+	var attempted, committed, skipped C.uint64_t
+	var lastSkipped C.int
+	var lossBad, gradientBad, stateBad C.uint64_t
+	rc := int(C.mlx_ir_trainer_optimizer_stats(
+		C.int64_t(t),
+		&attempted,
+		&committed,
+		&skipped,
+		&lastSkipped,
+		&lossBad,
+		&gradientBad,
+		&stateBad,
+	))
+	if rc != 0 {
+		return TrainerOptimizerStats{}, fmt.Errorf("mlx_ir_trainer_optimizer_stats failed")
+	}
+	return TrainerOptimizerStats{
+		AttemptedSteps:        uint64(attempted),
+		CommittedSteps:        uint64(committed),
+		SkippedSteps:          uint64(skipped),
+		LastStepSkipped:       lastSkipped != 0,
+		LastLossNonfinite:     uint64(lossBad),
+		LastGradientNonfinite: uint64(gradientBad),
+		LastStateNonfinite:    uint64(stateBad),
+	}, nil
+}

@@ -666,6 +666,37 @@ int mlx_ir_trainer_compile_stats(
   }
 }
 
+int mlx_ir_trainer_optimizer_stats(
+    int64_t trainer,
+    uint64_t* attempted_steps,
+    uint64_t* committed_steps,
+    uint64_t* skipped_steps,
+    int* last_step_skipped,
+    uint64_t* last_loss_nonfinite,
+    uint64_t* last_gradient_nonfinite,
+    uint64_t* last_state_nonfinite) {
+  if (!attempted_steps || !committed_steps || !skipped_steps || !last_step_skipped ||
+      !last_loss_nonfinite || !last_gradient_nonfinite || !last_state_nonfinite) {
+    return -1;
+  }
+  try {
+    auto* t = get_ir_trainer(trainer);
+    if (!t) {
+      return -1;
+    }
+    *attempted_steps = static_cast<uint64_t>(t->step_count);
+    *committed_steps = static_cast<uint64_t>(t->optimizer_step_count);
+    *skipped_steps = t->skipped_optimizer_steps;
+    *last_step_skipped = t->last_optimizer_step_skipped ? 1 : 0;
+    *last_loss_nonfinite = t->last_optimizer_loss_nonfinite;
+    *last_gradient_nonfinite = t->last_optimizer_gradient_nonfinite;
+    *last_state_nonfinite = t->last_optimizer_state_nonfinite;
+    return 0;
+  } catch (...) {
+    return -1;
+  }
+}
+
 float mlx_ir_trainer_evaluate(int64_t trainer, const int* tokens, const int* targets, int B, int T) {
   if (!tokens || !targets || B <= 0 || T <= 0) {
     return std::nanf("");
