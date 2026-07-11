@@ -52,9 +52,9 @@ minimal-pair regularizer.
 
 ## `prepare-pairs`
 
-`prepare-pairs` validates either an explicit minimal-pair JSONL file or a
-structured invariance-pair JSONL file, then can compile it to a compact binary
-shard for faster startup. It does not tokenize raw text; records must already
+`prepare-pairs` validates explicit minimal-pair, structured invariance-pair,
+or annotated PLL-margin JSONL files, then can compile them to compact binary
+shards for faster startup. It does not tokenize raw text; records must already
 contain token IDs.
 
 ```bash
@@ -66,13 +66,14 @@ contain token IDs.
 
 You can omit `-pair-out` to run validation only. With `-config`, Mixlab uses
 the config's `vocab_size` and `seq_len` as validation limits; if `-pair-in` is
-omitted and the config has a JSONL `training.minimal_pair` or
-`training.invariance` source, Mixlab uses that path. Without `-config`, pass
+omitted and the config has a JSONL `training.minimal_pair`,
+`training.invariance`, or `training.pll_margin` source, Mixlab uses that path.
+Without `-config`, pass
 `-vocab-size`; use `-pair-max-len` to enforce a maximum view length.
 
 | Flag | Description |
 |------|-------------|
-| `-pair-in` | Minimal-pair or invariance-pair JSONL input. Required unless `-config` supplies a JSONL pair path. |
+| `-pair-in` | Minimal-pair, invariance-pair, or PLL-margin JSONL input. Required unless `-config` supplies a JSONL pair path. |
 | `-pair-out` | Optional compiled binary output. Omit for validation-only runs. |
 | `-config` | Optional config used to infer `vocab_size`, `seq_len`, and pair input path. |
 | `-vocab-size` | Token-id upper bound when no config is supplied. |
@@ -94,6 +95,16 @@ Both positions are required and must point to the same token ID, which Mixlab
 masks before comparing their vocabulary distributions. A compiled invariance
 artifact can be referenced with `training.invariance.source: "file"` (automatic
 format detection) or `"bin"`.
+
+PLL-margin records use `view_pos`, `target_pos_positions`, `view_neg`,
+`target_neg_positions`, and `target_ids`. Both position lists are non-empty,
+strictly increasing, and must select the same token-id span supplied in
+`target_ids`. Mixlab masks the complete annotated span in both views, ranks its
+log pseudo-likelihood higher in `view_pos`, and anchors its prediction in that
+preferred view. `training.pll_margin.source: "file"` auto-detects JSONL or its
+compiled binary artifact. The target is general-purpose; the optional
+`scripts/make_distractor_margin_pairs.py` tool is one conservative corpus-only
+producer for agreement-attractor experiments.
 
 When `energy_aggregation` is `"differing_span"`, pair JSONL may include
 `clean_span` and `corrupt_span` half-open ranges. If spans are omitted, Mixlab

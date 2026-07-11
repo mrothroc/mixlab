@@ -182,6 +182,7 @@ func hfExportInferenceConfig(cfg *ArchConfig) *ArchConfig {
 	out.Training = cfg.Training
 	out.Training.Data2Vec = nil
 	out.Training.Distillation = nil
+	out.Training.PLLMargin = nil
 	if cfg.Training.MultiheadEnabled() {
 		if head, ok := multiheadExportHeadSpec(cfg); ok {
 			out.Training.Objective = head.Objective
@@ -191,6 +192,7 @@ func hfExportInferenceConfig(cfg *ArchConfig) *ArchConfig {
 			out.Training.Diffusion = nil
 			out.Training.RTD = nil
 			out.Training.Data2Vec = nil
+			out.Training.PLLMargin = nil
 			out.LayerAggregation = head.LayerAggregation
 			out.TieEmbeddings = head.TieEmbeddings
 			switch head.OutputHead {

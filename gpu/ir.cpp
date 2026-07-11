@@ -571,6 +571,65 @@ EnergyPairwiseResult span_pll_pairwise_loss(
       mx::sum(corrupt * pair_mask) / denom};
 }
 
+struct PLLMarginResult {
+  mx::array loss;
+  mx::array rank_loss;
+  mx::array anchor_loss;
+  mx::array delta_mean;
+};
+
+// pll_margin_loss trains a preferred/contrast ordering at an explicitly
+// annotated span. span_pll_pool works entirely from log-softmax values, and
+// the softplus form below avoids materializing exp() of a large positive value.
+PLLMarginResult pll_margin_loss(
+    const mx::array& logits,
+    const mx::array& targets,
+    const mx::array& span_mask,
+    int seq_len,
+    float margin,
+    float anchor_weight) {
+  if (!(margin >= 0.0f) || !std::isfinite(margin)) {
+    throw std::runtime_error("PLL margin must be finite and >= 0");
+  }
+  if (!(anchor_weight >= 0.0f) || !std::isfinite(anchor_weight)) {
+    throw std::runtime_error("PLL anchor weight must be finite and >= 0");
+  }
+  auto pooled = span_pll_pool(logits, targets, span_mask, seq_len);
+  mx::array scores = mx::astype(pooled.pooled, mx::float32);
+  if (scores.ndim() == 2 && scores.shape(1) == 1) {
+    scores = mx::reshape(scores, {scores.shape(0)});
+  }
+  if (scores.ndim() != 1) {
+    throw std::runtime_error("PLL margin scores must have shape [rows] or [rows,1]");
+  }
+  const int rows = static_cast<int>(scores.shape(0));
+  if (rows <= 0 || (rows % 2) != 0) {
+    throw std::runtime_error("PLL margin rows must be a positive even number");
+  }
+  auto preferred = mx::slice(scores, {0}, {rows}, {2});
+  auto contrast = mx::slice(scores, {1}, {rows}, {2});
+  auto preferred_mask = mx::astype(
+      mx::greater(mx::slice(pooled.row_mask, {0}, {rows}, {2}), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto contrast_mask = mx::astype(
+      mx::greater(mx::slice(pooled.row_mask, {1}, {rows}, {2}), mx::array(0.0f, mx::float32)),
+      mx::float32);
+  auto pair_mask = preferred_mask * contrast_mask;
+  auto denom = mx::maximum(mx::sum(pair_mask), mx::array(1.0f, mx::float32));
+  auto delta = preferred - contrast;
+  auto rank_input = mx::array(margin, mx::float32) - delta;
+  auto rank =
+      mx::maximum(rank_input, mx::array(0.0f, mx::float32)) +
+      mx::log(mx::array(1.0f, mx::float32) + mx::exp(-mx::abs(rank_input)));
+  auto anchor = -preferred;
+  auto loss = rank + mx::array(anchor_weight, mx::float32) * anchor;
+  return PLLMarginResult{
+      mx::sum(loss * pair_mask) / denom,
+      mx::sum(rank * pair_mask) / denom,
+      mx::sum(anchor * pair_mask) / denom,
+      mx::sum(delta * pair_mask) / denom};
+}
+
 mx::array z_loss_mean(const mx::array& logits) {
   if (logits.ndim() != 2) {
     throw std::runtime_error("z_loss expects logits shape [rows, vocab]");
@@ -3094,6 +3153,26 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           throw std::runtime_error("OP_MASKED_SYMMETRIC_KL requires seq_len int param");
         }
         set_out(op, 0, masked_symmetric_kl_mean(get(op, 0), get(op, 1), op.int_params[0]));
+        break;
+      }
+      case OP_MASKED_MARGIN_PLL: {
+        if (op.n_outputs != 4) {
+          throw std::runtime_error("OP_MASKED_MARGIN_PLL requires four outputs");
+        }
+        if (op.n_int_params < 1 || op.n_float_params < 2) {
+          throw std::runtime_error("OP_MASKED_MARGIN_PLL requires seq_len, margin, and anchor weight params");
+        }
+        auto result = pll_margin_loss(
+            get(op, 0),
+            mx::astype(get(op, 1), mx::int32),
+            get(op, 2),
+            op.int_params[0],
+            op.float_params[0],
+            op.float_params[1]);
+        set_out(op, 0, result.loss);
+        set_out(op, 1, result.rank_loss);
+        set_out(op, 2, result.anchor_loss);
+        set_out(op, 3, result.delta_mean);
         break;
       }
       case OP_MASKED_SMOOTH_L1: {

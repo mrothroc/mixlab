@@ -274,6 +274,7 @@ type TrainingSpec struct {
 	RTD                               *RTDSpec                     `json:"rtd,omitempty"`
 	MinimalPair                       *MinimalPairSpec             `json:"minimal_pair,omitempty"`
 	Invariance                        *InvarianceSpec              `json:"invariance,omitempty"`
+	PLLMargin                         *PLLMarginSpec               `json:"pll_margin,omitempty"`
 	WordStructuralObjective           *WordStructuralObjectiveSpec `json:"word_structural_objective,omitempty"`
 	Distillation                      *DistillationSpec            `json:"distillation,omitempty"`
 	Data2Vec                          *Data2VecSpec                `json:"data2vec,omitempty"`
@@ -488,6 +489,9 @@ func (t *TrainingSpec) ApplyDefaults() {
 	}
 	if t.Invariance != nil {
 		t.Invariance.applyDefaults()
+	}
+	if t.PLLMargin != nil {
+		t.PLLMargin.applyDefaults()
 	}
 	if t.WordStructuralObjective != nil {
 		t.WordStructuralObjective.applyDefaults(t.MLMMaskTokenID)

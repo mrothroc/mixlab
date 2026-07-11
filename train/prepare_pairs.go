@@ -26,6 +26,8 @@ func runPreparePairsWithOptions(opts PreparePairsOptions) error {
 	energyAggregation := ""
 	pairKind := ""
 	invarianceSkipIDs := map[int]bool(nil)
+	pllMarginSkipIDs := map[int]bool(nil)
+	pllMarginMaskTokenID := -1
 	if strings.TrimSpace(opts.ConfigPath) != "" {
 		cfg, err := LoadArchConfig(opts.ConfigPath)
 		if err != nil {
@@ -35,8 +37,18 @@ func runPreparePairsWithOptions(opts PreparePairsOptions) error {
 		if maxLen == 0 {
 			maxLen = cfg.SeqLen
 		}
-		if pairIn == "" && cfg.Training.MinimalPair != nil && cfg.Training.Invariance != nil {
-			return fmt.Errorf("-pair-in is required when config contains both training.minimal_pair and training.invariance")
+		configuredPairSources := 0
+		if cfg.Training.MinimalPair != nil {
+			configuredPairSources++
+		}
+		if cfg.Training.Invariance != nil {
+			configuredPairSources++
+		}
+		if cfg.Training.PLLMargin != nil {
+			configuredPairSources++
+		}
+		if pairIn == "" && configuredPairSources > 1 {
+			return fmt.Errorf("-pair-in is required when config contains multiple pair artifact settings")
 		}
 		if pairIn == "" && cfg.Training.MinimalPair != nil && cfg.Training.MinimalPair.Source == arch.MinimalPairSourceJSONL {
 			pairIn = resolveConfigRelativePath(cfg.SourcePath, cfg.Training.MinimalPair.Path)
@@ -46,13 +58,21 @@ func runPreparePairsWithOptions(opts PreparePairsOptions) error {
 			pairIn = resolveConfigRelativePath(cfg.SourcePath, cfg.Training.Invariance.Path)
 			pairKind = "invariance"
 		}
+		if pairIn == "" && cfg.Training.PLLMargin != nil && cfg.Training.PLLMargin.Source != arch.PLLMarginSourceBinary {
+			pairIn = resolveConfigRelativePath(cfg.SourcePath, cfg.Training.PLLMargin.Path)
+			pairKind = "pll_margin"
+		}
 		invarianceSkipIDs = invarianceSkipTokenIDs(cfg)
+		pllMarginSkipIDs = pllMarginSkipTokenIDs(cfg)
+		if cfg.Training.PLLMargin != nil {
+			pllMarginMaskTokenID = cfg.Training.MLMMaskTokenID
+		}
 		if cfg.Training.MinimalPair != nil {
 			energyAggregation = cfg.Training.MinimalPair.EnergyAggregationMode()
 		}
 	}
 	if pairIn == "" {
-		return fmt.Errorf("-pair-in is required for prepare-pairs mode unless -config supplies a JSONL training.minimal_pair or training.invariance path")
+		return fmt.Errorf("-pair-in is required for prepare-pairs mode unless -config supplies a JSONL training.minimal_pair, training.invariance, or training.pll_margin path")
 	}
 	if vocabSize <= 0 {
 		return fmt.Errorf("-vocab-size must be > 0 for prepare-pairs mode, or provide -config")
@@ -72,6 +92,9 @@ func runPreparePairsWithOptions(opts PreparePairsOptions) error {
 	}
 	if pairKind == "invariance" {
 		return runPrepareInvariancePairs(pairIn, opts.PairOut, vocabSize, maxLen, invarianceSkipIDs)
+	}
+	if pairKind == "pll_margin" {
+		return runPreparePLLMarginPairs(pairIn, opts.PairOut, vocabSize, maxLen, pllMarginMaskTokenID, pllMarginSkipIDs)
 	}
 	records, err := loadMinimalPairs(pairIn, arch.MinimalPairSourceJSONL, minimalPairDecodeOptions{
 		VocabSize:         vocabSize,
@@ -137,6 +160,11 @@ func detectPreparePairKind(path string) (string, error) {
 		if err := json.Unmarshal([]byte(line), &fields); err != nil {
 			return "", fmt.Errorf("%s line %d: invalid JSON: %w", path, lineNo, err)
 		}
+		_, viewPos := fields["view_pos"]
+		_, viewNeg := fields["view_neg"]
+		if viewPos || viewNeg {
+			return "pll_margin", nil
+		}
 		_, viewA := fields["view_a"]
 		_, viewB := fields["view_b"]
 		if viewA || viewB {
@@ -193,5 +221,51 @@ func runPrepareInvariancePairs(pairIn, pairOut string, vocabSize, maxLen int, sk
 		return fmt.Errorf("marshal invariance-pair summary: %w", err)
 	}
 	fmt.Printf("invariance-pair validation summary: %s\n", summary)
+	return nil
+}
+
+func runPreparePLLMarginPairs(pairIn, pairOut string, vocabSize, maxLen, maskTokenID int, skipTokenIDs map[int]bool) error {
+	records, err := loadPLLMarginPairs(pairIn, arch.PLLMarginSourceJSONL, pllMarginPairDecodeOptions{
+		VocabSize:     vocabSize,
+		MaxLen:        maxLen,
+		MaskTokenID:   maskTokenID,
+		SkipTokenIDs:  skipTokenIDs,
+		RequireFamily: true,
+	})
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return fmt.Errorf("PLL margin pair file %q has no records", pairIn)
+	}
+	if pairOut != "" {
+		if err := os.MkdirAll(filepath.Dir(pairOut), 0o755); err != nil && filepath.Dir(pairOut) != "." {
+			return fmt.Errorf("create pair output directory: %w", err)
+		}
+		f, err := os.Create(pairOut)
+		if err != nil {
+			return fmt.Errorf("create pair output %q: %w", pairOut, err)
+		}
+		closeOut := true
+		defer func() {
+			if closeOut {
+				_ = f.Close()
+			}
+		}()
+		if err := writePLLMarginPairBinary(f, records, vocabSize, maxLen); err != nil {
+			return err
+		}
+		if err := f.Close(); err != nil {
+			closeOut = false
+			return fmt.Errorf("close pair output %q: %w", pairOut, err)
+		}
+		closeOut = false
+		fmt.Printf("wrote PLL margin pair binary shard to %s\n", pairOut)
+	}
+	summary, err := json.Marshal(summarizePLLMarginPairs(records))
+	if err != nil {
+		return fmt.Errorf("marshal PLL margin pair summary: %w", err)
+	}
+	fmt.Printf("PLL margin pair validation summary: %s\n", summary)
 	return nil
 }

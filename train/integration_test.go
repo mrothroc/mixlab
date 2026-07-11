@@ -88,6 +88,9 @@ func syntheticBatchUnsupportedReason(cfg *arch.ArchConfig) string {
 	if cfg.Training.InvarianceActive() {
 		return "structured invariance requires annotated A/B pair artifacts; covered by dedicated invariance pair and MLX training tests"
 	}
+	if cfg.Training.PLLMarginActive() {
+		return "paired PLL margin requires annotated preferred/contrast pair artifacts; covered by dedicated PLL-margin pair and MLX training tests"
+	}
 	if cfg.Training.UsesBlockDiffusionObjective() {
 		return "block_diffusion needs per-example diffusion block-boundary inputs the synthetic next-token harness cannot supply; covered by dedicated block-diffusion tests"
 	}

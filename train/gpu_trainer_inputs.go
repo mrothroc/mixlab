@@ -84,6 +84,7 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		t.wordStructTargetBuf = make([]int32, need)
 		t.wordStructLossMaskBuf = make([]float32, need)
 		t.invarianceLossMaskBuf = make([]float32, need)
+		t.pllMarginLossMaskBuf = make([]float32, need)
 		t.energySpanMaskBuf = make([]float32, need)
 		t.attentionCausalBuf = make([]int32, need)
 		t.segmentIDBuf = make([]int32, need)
@@ -219,6 +220,19 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		}
 		inputs = append(inputs, gpu.TensorInput{
 			Name: "invariance_loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.invarianceLossMaskBuf[:need],
+		})
+	}
+	if t.pllMarginInput {
+		if len(t.pllMarginLossMaskBuf) < need {
+			t.pllMarginLossMaskBuf = make([]float32, need)
+		}
+		if len(batch.pllMarginLossMask) >= need {
+			copy(t.pllMarginLossMaskBuf[:need], batch.pllMarginLossMask[:need])
+		} else {
+			clear(t.pllMarginLossMaskBuf[:need])
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "pll_margin_loss_mask", DType: gpu.TensorFloat32, Shape: []int{need}, Data: t.pllMarginLossMaskBuf[:need],
 		})
 	}
 	if t.energySpanMaskInput {

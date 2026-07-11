@@ -1,0 +1,29 @@
+{
+  "name": "pll_margin_mlm_tiny",
+  "model_dim": 64,
+  "vocab_size": 256,
+  "seq_len": 16,
+  "tie_embeddings": true,
+  "blocks": [
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional"},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "steps": 100,
+    "lr": 0.001,
+    "seed": 42,
+    "batch_tokens": 64,
+    "objective": "mlm",
+    "mlm_mask_token_id": 1,
+    "pll_margin": {
+      "source": "file",
+      "path": "data/pll_margin_pairs.bin",
+      "margin": 1.0,
+      "weight": 1.0,
+      "anchor_weight": 0.5,
+      "batch_fraction": 0.25,
+      "target": "annotated_span",
+      "skip_token_ids": [0, 1]
+    }
+  }
+}

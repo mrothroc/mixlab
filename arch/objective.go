@@ -259,6 +259,9 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	if err := validateTrainingInvariance(cfg, source); err != nil {
 		return err
 	}
+	if err := validateTrainingPLLMargin(cfg, source); err != nil {
+		return err
+	}
 	return nil
 }
 

@@ -425,6 +425,7 @@ func buildScoreEBMIRProgram(cfg *ArchConfig, scoreMode, pllAggregation string) (
 			Objective:          arch.ObjectiveMultihead,
 			DropoutInactive:    true,
 			InvarianceInactive: true,
+			PLLMarginInactive:  true,
 		})
 	}
 	objective := arch.ObjectiveMultihead
@@ -441,6 +442,7 @@ func buildScoreEBMIRProgram(cfg *ArchConfig, scoreMode, pllAggregation string) (
 		DistillationInactive:   true,
 		Data2VecInactive:       true,
 		InvarianceInactive:     true,
+		PLLMarginInactive:      true,
 		ZLossInactive:          true,
 		DropoutInactive:        true,
 		Objective:              objective,

@@ -48,6 +48,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 			DistillationInactive:   true,
 			Data2VecInactive:       true,
 			InvarianceInactive:     true,
+			PLLMarginInactive:      true,
 			ZLossInactive:          true,
 			DropoutInactive:        true,
 			SegmentMaskInactive:    true,
@@ -61,6 +62,7 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 		DistillationInactive:   true,
 		Data2VecInactive:       true,
 		InvarianceInactive:     true,
+		PLLMarginInactive:      true,
 		ZLossInactive:          true,
 		DropoutInactive:        true,
 		SegmentMaskInactive:    true,
@@ -100,6 +102,7 @@ func BuildDistillationTeacherIRProgramFromConfig(cfg *ArchConfig, objective stri
 		DistillationInactive:   true,
 		Data2VecInactive:       true,
 		InvarianceInactive:     true,
+		PLLMarginInactive:      true,
 		ZLossInactive:          true,
 		DropoutInactive:        true,
 		Objective:              objective,
@@ -117,6 +120,7 @@ type TrainingProgramState struct {
 	DistillationInactive   bool
 	Data2VecInactive       bool
 	InvarianceInactive     bool
+	PLLMarginInactive      bool
 	ZLossInactive          bool
 	DropoutInactive        bool
 	Objective              string
@@ -220,6 +224,10 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	if state.InvarianceInactive || !cfg.Training.InvarianceActive() {
 		invariance = nil
 	}
+	pllMargin := cfg.Training.PLLMargin
+	if state.PLLMarginInactive || !cfg.Training.PLLMarginActive() {
+		pllMargin = nil
+	}
 	zLoss := cfg.Training.ZLoss
 	if state.ZLossInactive {
 		zLoss = 0
@@ -287,6 +295,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		cfg.FFNInternalNorm,
 		wordStructural,
 		invariance,
+		pllMargin,
 	)
 }
 
@@ -306,6 +315,7 @@ func BuildData2VecTeacherIRProgramFromConfig(cfg *ArchConfig, objective string) 
 		DistillationInactive: true,
 		Data2VecInactive:     true,
 		InvarianceInactive:   true,
+		PLLMarginInactive:    true,
 		ZLossInactive:        true,
 		DropoutInactive:      true,
 		Objective:            objective,

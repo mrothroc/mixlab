@@ -26,7 +26,7 @@ func meanValidationLoss(valSet *data.ValSet, trainer GPUTrainer, batchSize, seqL
 	return meanValidationLossWithTTT(valSet, trainer, batchSize, seqLen, "full", 0, 0, 0)
 }
 
-func meanMultiheadValidationLoss(cfg *ArchConfig, valSet *data.ValSet, trainer GPUTrainer, pairSampler *minimalPairSampler, invarianceSampler *invariancePairSampler, step, batchSize, seqLen int) (float64, error) {
+func meanMultiheadValidationLoss(cfg *ArchConfig, valSet *data.ValSet, trainer GPUTrainer, pairSampler *minimalPairSampler, invarianceSampler *invariancePairSampler, pllMarginSampler *pllMarginPairSampler, step, batchSize, seqLen int) (float64, error) {
 	if cfg == nil {
 		return 0, fmt.Errorf("nil config")
 	}
@@ -46,6 +46,10 @@ func meanMultiheadValidationLoss(cfg *ArchConfig, valSet *data.ValSet, trainer G
 			return 0, err
 		}
 		batch, err = maybeAttachInvariancePairs(invarianceSampler, cfg, step, batch, batchSize, seqLen, arch.ObjectiveMultihead)
+		if err != nil {
+			return 0, err
+		}
+		batch, err = maybeAttachPLLMarginPairs(pllMarginSampler, cfg, step, batch, batchSize, seqLen, arch.ObjectiveMultihead)
 		if err != nil {
 			return 0, err
 		}

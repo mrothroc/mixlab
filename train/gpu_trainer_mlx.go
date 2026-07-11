@@ -37,6 +37,7 @@ type mlxGPUTrainer struct {
 	distillLossMaskInput       bool
 	wordStructInput            bool
 	invarianceInput            bool
+	pllMarginInput             bool
 	energySpanMaskInput        bool
 	attentionCausalInput       bool
 	segmentIDsInput            bool
@@ -55,6 +56,7 @@ type mlxGPUTrainer struct {
 	wordStructTargetBuf    []int32
 	wordStructLossMaskBuf  []float32
 	invarianceLossMaskBuf  []float32
+	pllMarginLossMaskBuf   []float32
 	energySpanMaskBuf      []float32
 	attentionCausalBuf     []int32
 	segmentIDBuf           []int32
@@ -205,6 +207,7 @@ func initMLXGPUTrainer(
 	distillLossMaskInput := false
 	wordStructInput := false
 	invarianceInput := false
+	pllMarginInput := false
 	energySpanMaskInput := false
 	attentionCausalInput := false
 	segmentIDsInput := false
@@ -238,6 +241,9 @@ func initMLXGPUTrainer(
 		}
 		if inp.Name == "invariance_loss_mask" {
 			invarianceInput = true
+		}
+		if inp.Name == "pll_margin_loss_mask" {
+			pllMarginInput = true
 		}
 		if inp.Name == "energy_span_mask" {
 			energySpanMaskInput = true
@@ -346,6 +352,7 @@ func initMLXGPUTrainer(
 		distillLossMaskInput:       distillLossMaskInput,
 		wordStructInput:            wordStructInput,
 		invarianceInput:            invarianceInput,
+		pllMarginInput:             pllMarginInput,
 		energySpanMaskInput:        energySpanMaskInput,
 		attentionCausalInput:       attentionCausalInput,
 		segmentIDsInput:            segmentIDsInput,
@@ -363,6 +370,7 @@ func initMLXGPUTrainer(
 		wordStructTargetBuf:        make([]int32, batchElems),
 		wordStructLossMaskBuf:      make([]float32, batchElems),
 		invarianceLossMaskBuf:      make([]float32, batchElems),
+		pllMarginLossMaskBuf:       make([]float32, batchElems),
 		energySpanMaskBuf:          make([]float32, batchElems),
 		attentionCausalBuf:         make([]int32, batchElems),
 		segmentIDBuf:               make([]int32, batchElems),
@@ -599,6 +607,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.distillLossMaskInput = programDeclaresInput(irProg, "distill_loss_mask")
 	t.wordStructInput = programDeclaresInput(irProg, "word_struct_targets")
 	t.invarianceInput = programDeclaresInput(irProg, "invariance_loss_mask")
+	t.pllMarginInput = programDeclaresInput(irProg, "pll_margin_loss_mask")
 	t.energySpanMaskInput = programDeclaresInput(irProg, "energy_span_mask")
 	t.attentionCausalInput = programDeclaresInput(irProg, "attention_causal_mask")
 	t.segmentIDsInput = programDeclaresInput(irProg, "segment_ids")

@@ -34,6 +34,7 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	}
 	nWeights := len(nWeightsMeta)
 	invarianceEnabled := cfg.Training.InvarianceActive() && !state.InvarianceInactive
+	pllMarginEnabled := cfg.Training.PLLMarginActive() && !state.PLLMarginInactive
 	prog := NewProgram(nWeights)
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
@@ -44,6 +45,9 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	}
 	if invarianceEnabled {
 		prog.DeclareInput("invariance_loss_mask", TensorFloat32, []int{B * T})
+	}
+	if pllMarginEnabled {
+		prog.DeclareInput("pll_margin_loss_mask", TensorFloat32, []int{B * T})
 	}
 	prog.DeclareInput("diffusion_block_start", TensorInt32, []int{B})
 	prog.DeclareInput("diffusion_block_end", TensorInt32, []int{B})
@@ -190,6 +194,12 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 	if invarianceEnabled {
 		if head := cfg.Training.MultiheadExportHead(); head != nil {
 			invarianceHeadName = head.Name
+		}
+	}
+	pllMarginHeadName := ""
+	if pllMarginEnabled {
+		if head := cfg.Training.MultiheadExportHead(); head != nil {
+			pllMarginHeadName = head.Name
 		}
 	}
 	lossAccum := ""
@@ -366,6 +376,31 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 			prog.Add(lossAccum, invarianceLoss+"_weighted", next)
 			lossAccum = next
 			prog.DeclareOutput(invarianceLoss, TensorFloat32, []int{1})
+		}
+		if pllMarginEnabled && head.Name == pllMarginHeadName {
+			pllMarginMask := headPrefix + "_pll_margin_loss_mask"
+			pllMarginLoss := "pll_margin_loss"
+			prog.Slice("pll_margin_loss_mask", rowStart, rowStart+rawRows, 1, 0, pllMarginMask)
+			prog.MaskedMarginPLL(
+				logits,
+				targets,
+				pllMarginMask,
+				T,
+				float32(cfg.Training.PLLMargin.Margin),
+				float32(cfg.Training.PLLMargin.AnchorWeight),
+				pllMarginLoss,
+				"pll_margin_loss_rank_loss",
+				"pll_margin_loss_anchor_loss",
+				"pll_margin_loss_delta",
+			)
+			prog.ScalarMul(pllMarginLoss, float32(cfg.Training.PLLMargin.Weight), "pll_margin_loss_weighted")
+			next := headPrefix + "_pll_margin_loss_accum"
+			prog.Add(lossAccum, "pll_margin_loss_weighted", next)
+			lossAccum = next
+			prog.DeclareOutput(pllMarginLoss, TensorFloat32, []int{1})
+			prog.DeclareOutput("pll_margin_loss_rank_loss", TensorFloat32, []int{1})
+			prog.DeclareOutput("pll_margin_loss_anchor_loss", TensorFloat32, []int{1})
+			prog.DeclareOutput("pll_margin_loss_delta", TensorFloat32, []int{1})
 		}
 	}
 	prog.Slice("x", 0, rawRows, 1, 0, "x_hidden_flat")

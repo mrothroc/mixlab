@@ -94,6 +94,8 @@ const (
 
 const OpMaskedSymmetricKL = 100 // OP_MASKED_SYMMETRIC_KL
 
+const OpMaskedMarginPLL = 101 // OP_MASKED_MARGIN_PLL
+
 const (
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -348,6 +350,14 @@ func (p *Program) SpanPLLPool(logits, targets, spanMask string, seqLen int, outp
 // logistic or hinge ranking loss where higher clean scores are preferred.
 func (p *Program) SpanPLLPairwiseLoss(logits, targets, spanMask string, seqLen, lossKind int, margin float32, loss, accuracy, cleanMean, corruptMean string) {
 	p.AddOp(OpSpanPLLPairwise, []string{logits, targets, spanMask}, []string{loss, accuracy, cleanMean, corruptMean}, []float32{margin}, []int{seqLen, lossKind})
+}
+
+// MaskedMarginPLL emits a directional paired span-PLL margin loss over
+// contiguous preferred/contrast row pairs. Each row's positive mask selects
+// the unchanged target span. The result is rank_loss + anchor_weight *
+// negative(preferred_score), where rank_loss is softplus(margin - delta).
+func (p *Program) MaskedMarginPLL(logits, targets, spanMask string, seqLen int, margin, anchorWeight float32, loss, rankLoss, anchorLoss, deltaMean string) {
+	p.AddOp(OpMaskedMarginPLL, []string{logits, targets, spanMask}, []string{loss, rankLoss, anchorLoss, deltaMean}, []float32{margin, anchorWeight}, []int{seqLen})
 }
 
 // ZLoss emits mean(square(logsumexp(logits))) over token rows.

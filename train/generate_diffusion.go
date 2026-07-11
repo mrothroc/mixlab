@@ -175,6 +175,7 @@ func buildGenerateDiffusionIRProgram(cfg *ArchConfig) (*arch.Program, error) {
 		DistillationInactive: true,
 		Data2VecInactive:     true,
 		InvarianceInactive:   true,
+		PLLMarginInactive:    true,
 		ZLossInactive:        true,
 		DropoutInactive:      true,
 		Objective:            arch.ObjectiveBlockDiffusion,

@@ -535,6 +535,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		false,
 		nil,
 		nil,
+		nil,
 	)
 }
 
@@ -577,6 +578,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	ffnInternalNorm bool,
 	wordStructural *WordStructuralObjectiveSpec,
 	invariance *InvarianceSpec,
+	pllMargin *PLLMarginSpec,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -702,6 +704,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	distillationEnabled := distillation != nil && distillation.EffectiveKLActive()
 	wordStructuralEnabled := wordStructural != nil && wordStructural.Enabled && (objective == ObjectiveMLM || objective == ObjectiveMNTP || objective == ObjectiveHybridExample)
 	invarianceEnabled := invariance != nil && invariance.Active()
+	pllMarginEnabled := pllMargin != nil && pllMargin.Active()
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
 	if maskedLoss {
@@ -713,6 +716,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	if invarianceEnabled {
 		prog.DeclareInput("invariance_loss_mask", TensorFloat32, []int{B * T})
+	}
+	if pllMarginEnabled {
+		prog.DeclareInput("pll_margin_loss_mask", TensorFloat32, []int{B * T})
 	}
 	if objective == ObjectiveHybridExample {
 		prog.DeclareInput("attention_causal_mask", TensorInt32, []int{B})
@@ -940,6 +946,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	if invarianceEnabled {
 		emitInvarianceLossIR(prog, logitsState, "invariance_loss_mask", T, invariance.Weight, "invariance_loss")
 	}
+	if pllMarginEnabled {
+		emitPLLMarginLossIR(prog, logitsState, "targets", "pll_margin_loss_mask", T, pllMargin, "pll_margin_loss")
+	}
 	if data2VecEnabled {
 		emitData2VecLossIR(prog, data2vec)
 	}
@@ -959,6 +968,12 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	if invarianceEnabled {
 		prog.DeclareOutput("invariance_loss", TensorFloat32, []int{1})
+	}
+	if pllMarginEnabled {
+		prog.DeclareOutput("pll_margin_loss", TensorFloat32, []int{1})
+		prog.DeclareOutput("pll_margin_loss_rank_loss", TensorFloat32, []int{1})
+		prog.DeclareOutput("pll_margin_loss_anchor_loss", TensorFloat32, []int{1})
+		prog.DeclareOutput("pll_margin_loss_delta", TensorFloat32, []int{1})
 	}
 	prog.DeclareOutput("per_token_nll", TensorFloat32, []int{B * T})
 	prog.DeclareOutput("x_hidden", TensorFloat32, []int{B, T, D})

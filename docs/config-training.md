@@ -89,6 +89,7 @@ you are trying to measure.
 | `rtd` | ELECTRA-style replaced-token detection auxiliary for multihead training. |
 | `minimal_pair` | Clean/corrupt pair data for native energy ranking or MLM/MNTP span-PLL scorer regularization. |
 | `invariance` | Structured two-view symmetric-KL consistency loss for masked vocab predictions. |
+| `pll_margin` | Directional paired annotated-span PLL margin auxiliary for masked vocab predictions. |
 | `word_structural_objective` | StructBERT-style local shuffle reconstruction for MLM/MNTP vocab heads. |
 | `mtp` | Parameter-free multi-token prediction auxiliary loss. |
 | `first_byte_mask` | First-byte masked loss path. |
@@ -139,6 +140,34 @@ declares no extra graph input, and produces the baseline graph and loss path.
     "weight": 0.1,
     "batch_fraction": 0.25,
     "target": "masked_position",
+    "skip_token_ids": [0, 1, 2]
+  }
+}
+```
+
+`training.pll_margin` is a training-only paired ranking objective for MLM,
+MNTP, or a multihead masked export head. Each pair supplies preferred and
+contrast views plus an unchanged annotated target span. Mixlab masks that span
+in both views, computes stable span PLL values with `log_softmax`, and adds
+`weight * (softplus(margin - (pll_pos - pll_neg)) + anchor_weight * -pll_pos)`.
+The ordinary MLM/MNTP loss mask is cleared on selected pair rows: the contrast
+view is input context only, while the explicit positive-view anchor prevents a
+trivial decrease of both scores. `weight: 0` is an exact no-op with no pair-file
+load, graph input, or additional RNG use. It is intentionally incompatible in
+v1 with other batch-mutating pair auxiliaries.
+
+```jsonc
+"training": {
+  "objective": "mntp",
+  "mlm_mask_token_id": 103,
+  "pll_margin": {
+    "source": "file",
+    "path": "data/pll_margin_pairs.bin",
+    "margin": 1.0,
+    "weight": 1.0,
+    "anchor_weight": 0.5,
+    "batch_fraction": 0.25,
+    "target": "annotated_span",
     "skip_token_ids": [0, 1, 2]
   }
 }

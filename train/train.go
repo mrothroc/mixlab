@@ -177,6 +177,15 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		fmt.Printf("  [%s] invariance: source=%s records=%d loss=%s weight=%g batch_fraction=%.3f target=%s\n",
 			name, invarianceSampler.path, len(invarianceSampler.records), s.Loss, s.Weight, s.BatchFraction, s.Target)
 	}
+	pllMarginSampler, err := newPLLMarginPairSampler(cfg)
+	if err != nil {
+		return TrainResult{}, err
+	}
+	if pllMarginSampler != nil {
+		s := cfg.Training.PLLMargin
+		fmt.Printf("  [%s] PLL margin: source=%s records=%d margin=%g weight=%g anchor_weight=%g batch_fraction=%.3f target=%s\n",
+			name, pllMarginSampler.path, len(pllMarginSampler.records), s.Margin, s.Weight, s.AnchorWeight, s.BatchFraction, s.Target)
+	}
 
 	// Build IR program
 	prog, err := BuildIRProgramFromConfig(cfg)
@@ -462,6 +471,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("prepare step 0 invariance batch: %w", err)
 		}
+		prepared, err = maybeAttachPLLMarginPairs(pllMarginSampler, cfg, 0, prepared, currentBatchSize, currentSeqLen, currentObjective)
+		if err != nil {
+			stopInitialSubmit()
+			return TrainResult{}, fmt.Errorf("prepare step 0 PLL margin batch: %w", err)
+		}
 		prepared, err = attachDistillationTeacherProbs(distiller, prepared, currentBatchSize, currentSeqLen)
 		if err != nil {
 			stopInitialSubmit()
@@ -575,6 +589,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if err != nil {
 				stopSubmit()
 				return 0, fmt.Errorf("prepare step %d invariance batch: %w", nextStep, err)
+			}
+			prepared, err = maybeAttachPLLMarginPairs(pllMarginSampler, cfg, nextStep, prepared, nextBatchSize, nextSeqLen, nextObjective)
+			if err != nil {
+				stopSubmit()
+				return 0, fmt.Errorf("prepare step %d PLL margin batch: %w", nextStep, err)
 			}
 			prepared, err = attachDistillationTeacherProbs(distiller, prepared, nextBatchSize, nextSeqLen)
 			if err != nil {
@@ -763,7 +782,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					if cfg.Training.MultiheadEnabled() {
 						err = causalEval.withCausalEvalProgram(currentProgramKey, func() error {
 							var evalErr error
-							valAvg, evalErr = meanMultiheadValidationLoss(cfg, valSet, trainer, pairSampler, invarianceSampler, step, batchSize, seqLen)
+							valAvg, evalErr = meanMultiheadValidationLoss(cfg, valSet, trainer, pairSampler, invarianceSampler, pllMarginSampler, step, batchSize, seqLen)
 							return evalErr
 						})
 					} else {
@@ -887,6 +906,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("prepare final invariance training loss batch: %w", err)
 			}
+			finalEvalBatch, err = maybeAttachPLLMarginPairs(pllMarginSampler, cfg, steps, finalEvalBatch, batchSize, seqLen, arch.ObjectiveMultihead)
+			if err != nil {
+				return TrainResult{}, fmt.Errorf("prepare final PLL margin training loss batch: %w", err)
+			}
 		} else if cfg.Training.ExampleFramingEnabled() {
 			var err error
 			finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveCausal, seqLen)
@@ -968,26 +991,4 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	fmt.Println(result.formatSummary())
 
 	return result, nil
-}
-
-// readTrainerWeights reads weights from a trainer via the weight-reading interface.
-// Falls back gracefully if the trainer doesn't support weight reading.
-func readTrainerWeights(trainer any) ([][]float32, error) {
-	type weightReader interface {
-		ReadWeights() ([][]float32, error)
-	}
-	if wr, ok := trainer.(weightReader); ok {
-		return wr.ReadWeights()
-	}
-	return nil, fmt.Errorf("trainer does not support weight reading; ensure you are using the MLX backend")
-}
-
-func readTrainerOutput(trainer GPUTrainer, name string, shape []int) ([]float32, error) {
-	type outputReader interface {
-		ReadOutput(name string, shape []int) ([]float32, error)
-	}
-	if or, ok := trainer.(outputReader); ok {
-		return or.ReadOutput(name, shape)
-	}
-	return nil, fmt.Errorf("trainer does not support reading named outputs; ensure you are using the MLX backend")
 }

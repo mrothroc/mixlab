@@ -116,6 +116,23 @@ func emitInvarianceLossIR(prog *Program, logits, lossMask string, seqLen int, we
 	prog.Add("loss", output+"_weighted", "loss")
 }
 
+func emitPLLMarginLossIR(prog *Program, logits, targets, spanMask string, seqLen int, spec *PLLMarginSpec, output string) {
+	prog.MaskedMarginPLL(
+		logits,
+		targets,
+		spanMask,
+		seqLen,
+		float32(spec.Margin),
+		float32(spec.AnchorWeight),
+		output,
+		output+"_rank_loss",
+		output+"_anchor_loss",
+		output+"_delta",
+	)
+	prog.ScalarMul(output, float32(spec.Weight), output+"_weighted")
+	prog.Add("loss", output+"_weighted", "loss")
+}
+
 func emitDistillationLanguageModelLossIR(prog *Program, logits, targets, teacherProbs string, rows int, ceWeight, klWeight, temperature float64) error {
 	if ceWeight < 0 || klWeight < 0 || ceWeight+klWeight <= 0 {
 		return fmt.Errorf("distillation loss weights must be non-negative and sum to > 0")

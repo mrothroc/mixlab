@@ -68,6 +68,7 @@ func runScoreElectraWithOptions(opts ScoreElectraOptions) error {
 		Objective:          arch.ObjectiveMultihead,
 		DropoutInactive:    true,
 		InvarianceInactive: true,
+		PLLMarginInactive:  true,
 	})
 	if err != nil {
 		return fmt.Errorf("build ELECTRA scoring IR program: %w", err)

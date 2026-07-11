@@ -125,6 +125,51 @@ func TestExportHFDistillationStripsTrainingOnlyConfig(t *testing.T) {
 	}
 }
 
+func TestExportHFPLLMarginStripsTrainingOnlyConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
+		"name": "hf_pll_margin",
+		"model_dim": 4,
+		"vocab_size": 7,
+		"seq_len": 3,
+		"mlp_mult": 1.0,
+		"tie_embeddings": true,
+		"blocks": [
+			{"type": "plain", "heads": 2, "attention_mask": "bidirectional"},
+			{"type": "swiglu"}
+		],
+		"training": {
+			"steps": 1,
+			"batch_tokens": 6,
+			"seed": 789,
+			"objective": "mlm",
+			"mlm_mask_token_id": 1,
+			"pll_margin": {"path": "pairs.bin", "weight": 1.0}
+		}
+	}`)
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+	var cfg map[string]any
+	readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+	if _, ok := cfg["training"]; ok {
+		t.Fatalf("exported config unexpectedly contains training config: %#v", cfg["training"])
+	}
+	var mapping []hfWeightMapping
+	readJSON(t, filepath.Join(outDir, "weight_map.json"), &mapping)
+	for _, entry := range mapping {
+		if strings.Contains(entry.Mixlab, "pll_margin") || strings.Contains(entry.HF, "pll_margin") {
+			t.Fatalf("exported PLL-margin training-only mapping: %#v", entry)
+		}
+	}
+}
+
 func TestExportHFDifferentialAttentionConfigAndWeightMap(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, `{
