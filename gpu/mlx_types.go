@@ -93,6 +93,7 @@ const (
 	OpMaskedDistillationKL = 99
 	OpMaskedSymmetricKL    = 100
 	OpMaskedMarginPLL      = 101
+	OpMaskedZLoss          = 102
 )
 
 const (

@@ -96,6 +96,8 @@ const OpMaskedSymmetricKL = 100 // OP_MASKED_SYMMETRIC_KL
 
 const OpMaskedMarginPLL = 101 // OP_MASKED_MARGIN_PLL
 
+const OpMaskedZLoss = 102 // OP_MASKED_Z_LOSS
+
 const (
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -363,6 +365,11 @@ func (p *Program) MaskedMarginPLL(logits, targets, spanMask string, seqLen int, 
 // ZLoss emits mean(square(logsumexp(logits))) over token rows.
 func (p *Program) ZLoss(logits, output string) {
 	p.AddOp(OpZLoss, []string{logits}, []string{output}, nil, nil)
+}
+
+// MaskedZLoss emits mean(square(logsumexp(logits))) over positive mask rows.
+func (p *Program) MaskedZLoss(logits, lossMask, output string) {
+	p.AddOp(OpMaskedZLoss, []string{logits, lossMask}, []string{output}, nil, nil)
 }
 
 // RMSNorm emits RMS normalization with a learned scale parameter.

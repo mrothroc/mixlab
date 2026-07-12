@@ -223,7 +223,7 @@ func emitData2VecLossIR(prog *Program, spec *Data2VecSpec) {
 	prog.Add("primary_loss", "data2vec_loss_weighted", "loss")
 }
 
-func emitZLossIR(prog *Program, logits string, weight float64, taskLossHasEvalLoss bool) bool {
+func emitZLossIR(prog *Program, logits, lossMask string, weight float64, taskLossHasEvalLoss bool) bool {
 	if weight <= 0 {
 		return taskLossHasEvalLoss
 	}
@@ -231,7 +231,11 @@ func emitZLossIR(prog *Program, logits string, weight float64, taskLossHasEvalLo
 		prog.ScalarMul("loss", 1.0, "eval_loss")
 		taskLossHasEvalLoss = true
 	}
-	prog.ZLoss(logits, "z_loss_raw")
+	if lossMask != "" {
+		prog.MaskedZLoss(logits, lossMask, "z_loss_raw")
+	} else {
+		prog.ZLoss(logits, "z_loss_raw")
+	}
 	prog.ScalarMul("z_loss_raw", float32(weight), "z_loss_weighted")
 	prog.Add("loss", "z_loss_weighted", "loss")
 	return taskLossHasEvalLoss

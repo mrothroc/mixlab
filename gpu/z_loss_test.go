@@ -51,6 +51,53 @@ func TestZLossMatchesCPUOracle(t *testing.T) {
 	}
 }
 
+func TestMaskedZLossIgnoresFiniteExtremeInactiveRows(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	const (
+		rows  = 2
+		vocab = 3
+	)
+	weights := []float32{
+		0, 1, -1,
+		math.MaxFloat32, -math.MaxFloat32, 0,
+	}
+	prog := ir.NewProgram(1)
+	prog.DeclareInput("mask", ir.TensorFloat32, []int{rows})
+	prog.DeclareOutput("loss", ir.TensorFloat32, []int{1})
+	prog.MaskedZLoss("w0", "mask", "loss")
+	gpuProg, err := LowerIRProgram(prog)
+	if err != nil {
+		t.Fatalf("LowerIRProgram: %v", err)
+	}
+	defer gpuProg.Destroy()
+	weight, err := FromDataShape(weights, []int{rows, vocab})
+	if err != nil {
+		t.Fatalf("FromDataShape: %v", err)
+	}
+	defer FreeHandle(weight)
+	inputs := []TensorInput{{
+		Name: "mask", DType: TensorFloat32, Shape: []int{rows}, Data: []float32{1, 0},
+	}}
+	loss, grads, err := EvalProgramGradientsForOutput(gpuProg, []int64{weight}, inputs, "loss")
+	if err != nil {
+		t.Fatalf("EvalProgramGradientsForOutput: %v", err)
+	}
+	want := zLossOracle(weights[:vocab], 1, vocab)
+	if !isFiniteOptimizerGuardValue(loss) || math.Abs(float64(loss-want)) > 1e-5 {
+		t.Fatalf("masked z_loss=%g want %g", loss, want)
+	}
+	for i, grad := range grads[0] {
+		if !isFiniteOptimizerGuardValue(grad) {
+			t.Fatalf("gradient[%d]=%g, want finite", i, grad)
+		}
+		if i >= vocab && grad != 0 {
+			t.Fatalf("inactive-row gradient[%d]=%g, want 0", i, grad)
+		}
+	}
+}
+
 func zLossOracle(logits []float32, rows, vocab int) float32 {
 	total := 0.0
 	for r := 0; r < rows; r++ {

@@ -452,6 +452,27 @@ func TestBuildIRProgram_ZLossAddsTrainingOnlyLoss(t *testing.T) {
 	}
 }
 
+func TestBuildIRProgram_MaskedObjectiveUsesMaskedZLoss(t *testing.T) {
+	cfg := parseObjectiveConfig(t, `"training": {
+		"steps": 1,
+		"lr": 0.001,
+		"batch_tokens": 8,
+		"objective": "mntp",
+		"mlm_mask_token_id": 7,
+		"z_loss": 0.0001
+	}`)
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	if n := countOps(prog, OpMaskedZLoss); n != 1 {
+		t.Fatalf("OpMaskedZLoss count=%d, want 1", n)
+	}
+	if n := countOps(prog, OpZLoss); n != 0 {
+		t.Fatalf("OpZLoss count=%d, want 0 for masked objective", n)
+	}
+}
+
 func TestBuildIRProgram_MLMUsesMaskedLossAndBidirectionalPlainAttention(t *testing.T) {
 	cfg := parseObjectiveConfig(t, `"training": {
 		"steps": 1,

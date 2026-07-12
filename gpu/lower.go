@@ -96,6 +96,7 @@ var irToGPUOp = map[int]int{
 	ir.OpMaskedDistillationKL: OpMaskedDistillationKL,
 	ir.OpMaskedSymmetricKL:    OpMaskedSymmetricKL,
 	ir.OpMaskedMarginPLL:      OpMaskedMarginPLL,
+	ir.OpMaskedZLoss:          OpMaskedZLoss,
 }
 
 // irToGPUDType maps ir tensor dtype codes to gpu dtype codes.

@@ -122,12 +122,19 @@ mx::array masked_cross_entropy_mean(
   if (loss_mask.ndim() != 1 || loss_mask.shape(0) != targets.shape(0)) {
     throw std::runtime_error("loss_mask must be a rank-1 vector matching targets");
   }
-  auto nll = cross_entropy_per_token(logits, targets);
-  auto mask = mx::astype(
-      mx::greater(mx::astype(loss_mask, mx::float32), mx::array(0.0f, mx::float32)),
-      mx::float32);
+  auto active = mx::greater(
+      mx::astype(loss_mask, mx::float32),
+      mx::array(0.0f, mx::float32));
+  auto mask = mx::astype(active, mx::float32);
+  // Ignored rows must be finite before log-softmax. Multiplying an Inf NLL by
+  // a zero mask afterwards produces NaN and poisons the full backward pass.
+  auto effective_logits = mx::where(
+      mx::expand_dims(active, 1),
+      logits,
+      mx::zeros_like(logits));
+  auto nll = cross_entropy_per_token(effective_logits, targets);
   auto denom = mx::maximum(mx::sum(mask), mx::array(1.0f, mx::float32));
-  return mx::sum(nll * mask) / denom;
+  return mx::sum(mx::where(active, nll, mx::zeros_like(nll))) / denom;
 }
 
 mx::array masked_cross_entropy_per_token(
@@ -137,11 +144,15 @@ mx::array masked_cross_entropy_per_token(
   if (loss_mask.ndim() != 1 || loss_mask.shape(0) != targets.shape(0)) {
     throw std::runtime_error("loss_mask must be a rank-1 vector matching targets");
   }
-  auto nll = cross_entropy_per_token(logits, targets);
-  auto mask = mx::astype(
-      mx::greater(mx::astype(loss_mask, mx::float32), mx::array(0.0f, mx::float32)),
-      mx::float32);
-  return nll * mask;
+  auto active = mx::greater(
+      mx::astype(loss_mask, mx::float32),
+      mx::array(0.0f, mx::float32));
+  auto effective_logits = mx::where(
+      mx::expand_dims(active, 1),
+      logits,
+      mx::zeros_like(logits));
+  auto nll = cross_entropy_per_token(effective_logits, targets);
+  return mx::where(active, nll, mx::zeros_like(nll));
 }
 
 mx::array first_byte_masked_cross_entropy_mean(
@@ -806,6 +817,31 @@ mx::array z_loss_mean(const mx::array& logits) {
   auto shifted = logits_f32 - row_max;
   auto log_z = row_max + mx::log(mx::sum(mx::exp(shifted), 1, true));
   return mx::mean(mx::square(log_z));
+}
+
+mx::array masked_z_loss_mean(
+    const mx::array& logits,
+    const mx::array& loss_mask) {
+  if (logits.ndim() != 2 || loss_mask.ndim() != 1 ||
+      loss_mask.shape(0) != logits.shape(0)) {
+    throw std::runtime_error("masked z_loss expects logits [rows,vocab] and loss_mask [rows]");
+  }
+  auto active = mx::greater(
+      mx::astype(loss_mask, mx::float32),
+      mx::array(0.0f, mx::float32));
+  auto effective_logits = mx::where(
+      mx::expand_dims(active, 1),
+      logits,
+      mx::zeros_like(logits));
+  auto logits_f32 = mx::astype(effective_logits, mx::float32);
+  auto row_max = mx::max(logits_f32, 1, true);
+  auto shifted = logits_f32 - row_max;
+  auto log_z = mx::reshape(
+      row_max + mx::log(mx::sum(mx::exp(shifted), 1, true)),
+      {logits.shape(0)});
+  auto mask = mx::astype(active, mx::float32);
+  auto denom = mx::maximum(mx::sum(mask), mx::array(1.0f, mx::float32));
+  return mx::sum(mx::where(active, mx::square(log_z), mx::zeros_like(log_z))) / denom;
 }
 
 mx::array apply_rope_convention(
@@ -3340,6 +3376,10 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 1, result.rank_loss);
         set_out(op, 2, result.anchor_loss);
         set_out(op, 3, result.delta_mean);
+        break;
+      }
+      case OP_MASKED_Z_LOSS: {
+        set_out(op, 0, masked_z_loss_mean(get(op, 0), get(op, 1)));
         break;
       }
       case OP_MASKED_SMOOTH_L1: {
