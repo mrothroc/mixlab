@@ -220,3 +220,31 @@ func mlxTrainerOptimizerStats(t TrainerHandle) (TrainerOptimizerStats, error) {
 		LastStateNonfinite:    uint64(stateBad),
 	}, nil
 }
+
+func mlxTrainerBackwardTraceStats(t TrainerHandle) (TrainerBackwardTraceStats, error) {
+	var badEdges C.uint64_t
+	var firstForwardBadOp, firstForwardBadOpType, firstForwardBadOutput C.int
+	var firstBadOp, firstBadOpType, firstBadInput C.int
+	rc := int(C.mlx_ir_trainer_backward_trace_stats(
+		C.int64_t(t),
+		&badEdges,
+		&firstForwardBadOp,
+		&firstForwardBadOpType,
+		&firstForwardBadOutput,
+		&firstBadOp,
+		&firstBadOpType,
+		&firstBadInput,
+	))
+	if rc != 0 {
+		return TrainerBackwardTraceStats{}, fmt.Errorf("mlx_ir_trainer_backward_trace_stats failed")
+	}
+	return TrainerBackwardTraceStats{
+		BadEdges:              uint64(badEdges),
+		FirstForwardBadOp:     int(firstForwardBadOp),
+		FirstForwardBadOpType: int(firstForwardBadOpType),
+		FirstForwardBadOutput: int(firstForwardBadOutput),
+		FirstBadOp:            int(firstBadOp),
+		FirstBadOpType:        int(firstBadOpType),
+		FirstBadInput:         int(firstBadInput),
+	}, nil
+}

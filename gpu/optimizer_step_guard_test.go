@@ -40,6 +40,22 @@ func optimizerGuardLinearProgram(t *testing.T) *Program {
 	return gpuProg
 }
 
+func optimizerGuardForwardProgram(t *testing.T) *Program {
+	t.Helper()
+	prog := ir.NewProgram(1)
+	prog.DeclareInput("x", ir.TensorFloat32, []int{1, 1})
+	prog.DeclareOutput("loss", ir.TensorFloat32, []int{1})
+	prog.Exp("w0", "exploded")
+	prog.Mul("exploded", "x", "scaled")
+	prog.MeanAxis("scaled", 0, "mean0")
+	prog.MeanAxis("mean0", 0, "loss")
+	gpuProg, err := LowerIRProgram(prog)
+	if err != nil {
+		t.Fatalf("LowerIRProgram: %v", err)
+	}
+	return gpuProg
+}
+
 func optimizerGuardTrainer(t *testing.T, prog *Program, initial float32, group OptimizerGroup, decay bool) TrainerHandle {
 	t.Helper()
 	weight, err := FromDataShape([]float32{initial}, []int{1, 1})
@@ -139,6 +155,91 @@ func TestOptimizerStepGuardRollsBackNonFiniteGradientAndBiasStep(t *testing.T) {
 				t.Fatalf("stats after recovery=%+v", stats)
 			}
 		})
+	}
+}
+
+func TestBackwardTraceAttributesFiniteForwardNonFiniteBackward(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_MLX_BACKWARD_TRACE", "1")
+	t.Setenv("MIXLAB_MLX_BACKWARD_TRACE_START", "1")
+	t.Setenv("MIXLAB_MLX_BACKWARD_TRACE_END", "1")
+	prog := optimizerGuardBackwardProgram(t)
+	defer prog.Destroy()
+	trainer := optimizerGuardTrainer(t, prog, 0, OptimizerGroup{
+		Kind: OptimizerAdamW, LR: 0.01, Beta1: 0.9, Beta2: 0.99, Epsilon: 1e-6,
+	}, false)
+	if _, err := TrainerStep(trainer, optimizerGuardInput(0)); err != nil {
+		t.Fatalf("TrainerStep: %v", err)
+	}
+	stats, err := TrainerBackwardTraceStatsSnapshot(trainer)
+	if err != nil {
+		t.Fatalf("TrainerBackwardTraceStatsSnapshot: %v", err)
+	}
+	if stats.BadEdges == 0 {
+		t.Fatalf("backward trace did not observe the non-finite gradient: %+v", stats)
+	}
+	if stats.FirstBadOp != 0 || stats.FirstBadOpType != OpSqrt || stats.FirstBadInput != 0 {
+		t.Fatalf("backward trace source=%+v, want op 0 OP_SQRT input 0", stats)
+	}
+}
+
+func TestBackwardTraceAfterSkipPreservesLeadUp(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_MLX_BACKWARD_TRACE_AFTER_SKIP", "1")
+	prog := optimizerGuardBackwardProgram(t)
+	defer prog.Destroy()
+	trainer := optimizerGuardTrainer(t, prog, 0, OptimizerGroup{
+		Kind: OptimizerAdamW, LR: 0.01, Beta1: 0.9, Beta2: 0.99, Epsilon: 1e-6,
+	}, false)
+	if _, err := TrainerStep(trainer, optimizerGuardInput(0)); err != nil {
+		t.Fatalf("first TrainerStep: %v", err)
+	}
+	before, err := TrainerBackwardTraceStatsSnapshot(trainer)
+	if err != nil {
+		t.Fatalf("trace stats before retry: %v", err)
+	}
+	if before.BadEdges != 0 || before.FirstBadOp != -1 {
+		t.Fatalf("first failing step was unexpectedly traced: %+v", before)
+	}
+	if _, err := TrainerStep(trainer, optimizerGuardInput(0)); err != nil {
+		t.Fatalf("traced retry TrainerStep: %v", err)
+	}
+	after, err := TrainerBackwardTraceStatsSnapshot(trainer)
+	if err != nil {
+		t.Fatalf("trace stats after retry: %v", err)
+	}
+	if after.BadEdges == 0 || after.FirstBadOp != 0 ||
+		after.FirstBadOpType != OpSqrt || after.FirstBadInput != 0 {
+		t.Fatalf("retry trace source=%+v, want op 0 OP_SQRT input 0", after)
+	}
+}
+
+func TestBackwardTraceAttributesFirstForwardNonFiniteOp(t *testing.T) {
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_MLX_BACKWARD_TRACE", "1")
+	t.Setenv("MIXLAB_MLX_BACKWARD_TRACE_START", "1")
+	t.Setenv("MIXLAB_MLX_BACKWARD_TRACE_END", "1")
+	prog := optimizerGuardForwardProgram(t)
+	defer prog.Destroy()
+	trainer := optimizerGuardTrainer(t, prog, 1000, OptimizerGroup{
+		Kind: OptimizerAdamW, LR: 0.01, Beta1: 0.9, Beta2: 0.99, Epsilon: 1e-6,
+	}, false)
+	if _, err := TrainerStep(trainer, optimizerGuardInput(1)); err != nil {
+		t.Fatalf("TrainerStep: %v", err)
+	}
+	stats, err := TrainerBackwardTraceStatsSnapshot(trainer)
+	if err != nil {
+		t.Fatalf("TrainerBackwardTraceStatsSnapshot: %v", err)
+	}
+	if stats.FirstForwardBadOp != 0 || stats.FirstForwardBadOpType != OpExp ||
+		stats.FirstForwardBadOutput != 0 {
+		t.Fatalf("forward trace source=%+v, want op 0 OP_EXP output 0", stats)
 	}
 }
 

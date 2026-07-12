@@ -160,6 +160,36 @@ non-finite candidate state, terminate training with an error after restoring
 the last committed state. GPU utilization is omitted when the platform does
 not expose a no-sudo sampler.
 
+### Backward non-finite tracing
+
+For a reproducible finite-forward/non-finite-backward failure, opt into the
+per-op backward tracer for a narrow step range:
+
+```bash
+MIXLAB_MLX_BACKWARD_TRACE=1 \
+MIXLAB_MLX_BACKWARD_TRACE_START=190 \
+MIXLAB_MLX_BACKWARD_TRACE_END=192 \
+mixlab -mode arch -config model.json -train 'data/train_*.bin'
+```
+
+If the start/end variables are omitted, direct tracing is limited to step 1.
+
+For a persistent failure protected by the optimizer circuit breaker, trace the
+first retry after a rejected update without perturbing the lead-up:
+
+```bash
+MIXLAB_MLX_BACKWARD_TRACE_AFTER_SKIP=1 \
+mixlab -mode arch -config model.json -train 'data/train_*.bin'
+```
+
+Traced steps run eagerly and inspect every floating-point IR input/output edge.
+Mixlab separately reports the earliest op that creates a non-finite forward
+output and the highest forward op index whose backward emits a non-finite input
+gradient. Diagnostics include op type, edge index/name, non-finite count, and
+largest finite magnitude. This is expensive: keep the range small and leave it
+disabled for normal training. The optimizer transaction still rejects and
+rolls back a bad step.
+
 To keep a time series for plotting, add:
 
 ```bash

@@ -700,6 +700,38 @@ int mlx_ir_trainer_optimizer_stats(
   }
 }
 
+int mlx_ir_trainer_backward_trace_stats(
+    int64_t trainer,
+    uint64_t* bad_edges,
+    int* first_forward_bad_op,
+    int* first_forward_bad_op_type,
+    int* first_forward_bad_output,
+    int* first_bad_op,
+    int* first_bad_op_type,
+    int* first_bad_input) {
+  if (!bad_edges || !first_forward_bad_op || !first_forward_bad_op_type ||
+      !first_forward_bad_output || !first_bad_op || !first_bad_op_type ||
+      !first_bad_input) {
+    return -1;
+  }
+  try {
+    auto* t = get_ir_trainer(trainer);
+    if (!t) {
+      return -1;
+    }
+    *bad_edges = t->last_backward_trace_bad_edges;
+    *first_forward_bad_op = t->last_backward_trace_first_forward_bad_op;
+    *first_forward_bad_op_type = t->last_backward_trace_first_forward_bad_op_type;
+    *first_forward_bad_output = t->last_backward_trace_first_forward_bad_output;
+    *first_bad_op = t->last_backward_trace_first_bad_op;
+    *first_bad_op_type = t->last_backward_trace_first_bad_op_type;
+    *first_bad_input = t->last_backward_trace_first_bad_input;
+    return 0;
+  } catch (...) {
+    return -1;
+  }
+}
+
 float mlx_ir_trainer_evaluate(int64_t trainer, const int* tokens, const int* targets, int B, int T) {
   if (!tokens || !targets || B <= 0 || T <= 0) {
     return std::nanf("");

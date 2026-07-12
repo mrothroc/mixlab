@@ -1,4 +1,5 @@
 #include "ir_trainer.h"
+#include "backward_trace.h"
 #include "optimizer_step_guard.h"
 
 #include <mlx/compile.h>
@@ -2196,6 +2197,13 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   };
 
   bool use_compiled_step = use_compiled_training_step(program);
+  const bool trace_backward =
+      backward_trace_enabled_for_step(step_count) ||
+      (env_truthy("MIXLAB_MLX_BACKWARD_TRACE_AFTER_SKIP") &&
+       consecutive_skipped_optimizer_steps > 0);
+  if (trace_backward) {
+    use_compiled_step = false;
+  }
   if (program_has_fused_canonical_mamba3_block(program) &&
       fused_mamba3_compiled_step_disabled &&
       !env_truthy("MIXLAB_FORCE_COMPILED_STEP")) {
@@ -2660,6 +2668,10 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   }
 
   std::vector<mx::array> step_out;
+  std::unique_ptr<BackwardTraceCollector> backward_trace;
+  if (trace_backward) {
+    backward_trace = std::make_unique<BackwardTraceCollector>(step_count);
+  }
   if (use_compiled_step) {
     if (program_has_fused_canonical_mamba3_block(program) &&
         !fused_mamba3_compiled_step_notice_logged) {
@@ -2740,7 +2752,13 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       return;
     }
   } else {
-    if (!memory_safe_step_notice_logged_) {
+    if (trace_backward) {
+      std::cerr << "[mlx_ir] backward trace enabled"
+                << " training_step=" << step_count
+                << " path=eager"
+                << std::endl;
+    } else if (program_has_canonical_mamba3(program) &&
+               !memory_safe_step_notice_logged_) {
       std::cerr << "[mlx_ir] canonical Mamba3 detected; using uncompiled"
                 << (checkpoint_step ? " checkpointed" : "")
                 << " training step to avoid oversized CUDA graphs"
@@ -2751,6 +2769,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     auto eager_forward_fn = checkpoint_step ? mx::checkpoint(base_forward_fn) : base_forward_fn;
     auto grad_fn = mx::value_and_grad(eager_forward_fn, argnums);
     const auto grad_t0 = HostClock::now();
+    BackwardTraceScope trace_scope(backward_trace.get());
     auto result = grad_fn(args);
     if (timing_enabled) {
       timing_grad_us = elapsed_us(grad_t0, HostClock::now());
@@ -2951,8 +2970,24 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   }
   collect_state_for_eval(*this, eval_arrays, false);
   transaction.append_validation_arrays(loss, grads, eval_arrays, raw_gradient_nonfinite);
+  if (backward_trace) {
+    backward_trace->append_evaluation_arrays(eval_arrays);
+  }
   const auto eval_t0 = HostClock::now();
   mx::eval(eval_arrays);
+  if (backward_trace) {
+    const auto trace_summary = backward_trace->summarize_and_log();
+    last_backward_trace_bad_edges = trace_summary.bad_edges;
+    last_backward_trace_first_forward_bad_op =
+        trace_summary.first_forward_bad_op_index;
+    last_backward_trace_first_forward_bad_op_type =
+        trace_summary.first_forward_bad_op_type;
+    last_backward_trace_first_forward_bad_output =
+        trace_summary.first_forward_bad_output_index;
+    last_backward_trace_first_bad_op = trace_summary.first_bad_op_index;
+    last_backward_trace_first_bad_op_type = trace_summary.first_bad_op_type;
+    last_backward_trace_first_bad_input = trace_summary.first_bad_input_index;
+  }
   if (timing_enabled) {
     timing_eval_us = elapsed_us(eval_t0, HostClock::now());
   }

@@ -1,4 +1,5 @@
 #include "ir.h"
+#include "backward_trace.h"
 #include "gated_delta_cuda_primitive.h"
 #include "gated_delta_metal_primitive.h"
 #include "mamba3_cuda_primitive.h"
@@ -17,6 +18,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_map>
@@ -2946,6 +2948,8 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
     }
   }
 
+  size_t current_op_index = 0;
+  std::vector<std::optional<mx::array>> traced_inputs;
   auto get = [&](const IRop& op, int idx) -> const mx::array& {
     if (idx < 0 || idx >= op.n_inputs) {
       throw std::runtime_error("IR input index out of range");
@@ -2954,7 +2958,19 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
     if (it == env.end()) {
       throw std::runtime_error("IR input not found: " + op.inputs[idx]);
     }
-    return it->second;
+    if (traced_inputs.empty()) {
+      return it->second;
+    }
+    auto& traced = traced_inputs[static_cast<size_t>(idx)];
+    if (!traced.has_value()) {
+      traced = trace_backward_input(
+          it->second,
+          current_op_index,
+          op.type,
+          idx,
+          op.inputs[idx]);
+    }
+    return *traced;
   };
 
   auto op_overwrites_name = [&](const IRop& op, const std::string& name) {
@@ -2970,6 +2986,14 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
     if (idx < 0 || idx >= op.n_outputs) {
       throw std::runtime_error("IR output index out of range");
     }
+    if (backward_trace_active()) {
+      arr = trace_backward_output(
+          arr,
+          current_op_index,
+          op.type,
+          idx,
+          op.outputs[idx]);
+    }
     auto it = env.find(op.outputs[idx]);
     if (it == env.end()) {
       env.emplace(op.outputs[idx], std::move(arr));
@@ -2982,6 +3006,11 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
     const auto& op = program.ops[op_idx];
     if (!needed_ops.empty() && !needed_ops[op_idx]) {
       continue;
+    }
+    current_op_index = op_idx;
+    traced_inputs.clear();
+    if (backward_trace_active()) {
+      traced_inputs.resize(static_cast<size_t>(op.n_inputs));
     }
     try {
       switch (op.type) {

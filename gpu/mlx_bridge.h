@@ -264,6 +264,15 @@ int mlx_ir_trainer_optimizer_stats(
     uint64_t* last_loss_nonfinite,
     uint64_t* last_gradient_nonfinite,
     uint64_t* last_state_nonfinite);
+int mlx_ir_trainer_backward_trace_stats(
+    int64_t trainer,
+    uint64_t* bad_edges,
+    int* first_forward_bad_op,
+    int* first_forward_bad_op_type,
+    int* first_forward_bad_output,
+    int* first_bad_op,
+    int* first_bad_op_type,
+    int* first_bad_input);
 float mlx_ir_trainer_evaluate(int64_t trainer, const int* tokens, const int* targets, int B, int T);
 int mlx_ir_trainer_num_weights(int64_t trainer);
 int mlx_ir_trainer_weight_size(int64_t trainer, int weight_idx);

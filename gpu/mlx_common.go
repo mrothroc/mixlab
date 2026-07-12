@@ -483,6 +483,13 @@ func TrainerOptimizerStatsSnapshot(t TrainerHandle) (TrainerOptimizerStats, erro
 	return mlxTrainerOptimizerStats(t)
 }
 
+func TrainerBackwardTraceStatsSnapshot(t TrainerHandle) (TrainerBackwardTraceStats, error) {
+	if t == 0 {
+		return TrainerBackwardTraceStats{}, fmt.Errorf("invalid trainer handle; create the trainer before reading backward trace stats")
+	}
+	return mlxTrainerBackwardTraceStats(t)
+}
+
 func EvalProgramGradientsForOutput(program *Program, weightHandles []int64, inputs []TensorInput, outputName string) (float32, [][]float32, error) {
 	if program == nil || program.handle == 0 {
 		return 0, nil, fmt.Errorf("invalid GPU program; create and populate a gpu.Program before evaluating gradients")

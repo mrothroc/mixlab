@@ -93,6 +93,13 @@ struct IRTrainer {
   uint64_t last_optimizer_loss_nonfinite = 0;
   uint64_t last_optimizer_gradient_nonfinite = 0;
   uint64_t last_optimizer_state_nonfinite = 0;
+  uint64_t last_backward_trace_bad_edges = 0;
+  int last_backward_trace_first_forward_bad_op = -1;
+  int last_backward_trace_first_forward_bad_op_type = 0;
+  int last_backward_trace_first_forward_bad_output = -1;
+  int last_backward_trace_first_bad_op = -1;
+  int last_backward_trace_first_bad_op_type = 0;
+  int last_backward_trace_first_bad_input = -1;
   std::unordered_map<std::string, mlx::core::array> last_outputs;
   std::vector<mlx::core::array> last_grads;
   bool has_pending_step_ = false;

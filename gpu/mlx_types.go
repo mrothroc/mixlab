@@ -132,6 +132,16 @@ type TrainerOptimizerStats struct {
 	LastStateNonfinite    uint64
 }
 
+type TrainerBackwardTraceStats struct {
+	BadEdges              uint64
+	FirstForwardBadOp     int
+	FirstForwardBadOpType int
+	FirstForwardBadOutput int
+	FirstBadOp            int
+	FirstBadOpType        int
+	FirstBadInput         int
+}
+
 type Program struct {
 	handle      int64
 	nWeights    int
