@@ -73,12 +73,12 @@ func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, 
 	if batch.batchSizeOverride > 0 {
 		batchSize = batch.batchSizeOverride
 	}
-	if batch.lossMask == nil {
+	if batch.lossMask == nil && batch.tttInnerLRScale == nil {
 		return trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, lr)
 	}
 	submitter, ok := trainer.(gpuObjectiveStepSubmitter)
 	if !ok {
-		return fmt.Errorf("trainer does not support masked objective batches")
+		return fmt.Errorf("trainer does not support objective-aware batches")
 	}
 	return submitter.SubmitObjectiveStepGPU(batch, batchSize, seqLen, lr)
 }

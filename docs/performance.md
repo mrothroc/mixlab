@@ -147,6 +147,10 @@ best-effort GPU utilization on macOS from `ioreg`. When a training graph
 declares active scalar auxiliary losses, it also includes a
 `component_losses` object, for example `invariance_loss`, `pll_margin_loss`,
 `word_struct_loss`, or `moe_aux_loss`; absent/no-op objectives do not add keys.
+Native `ttt_mlp` runs also publish an `extra` object with block-qualified inner
+loss before/after update, update norm, state drift, and inner-LR mean/min/max.
+The same aggregate values print on a separate `[ttt]` line at normal training
+log cadence; no per-token or per-chunk arrays are read back by default.
 Optimizer telemetry includes committed `optimizer_steps`, cumulative
 `skipped_optimizer_steps`, `consecutive_skipped_optimizer_steps`, and
 `optimizer_step_skipped` for the current batch.

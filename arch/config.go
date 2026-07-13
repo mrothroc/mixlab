@@ -127,6 +127,11 @@ type BlockSpec struct {
 	FFNPreNorm                        bool         `json:"ffn_pre_norm,omitempty"`                        // plain: add a second pre-FFN norm after attention residual.
 	FFNBias                           bool         `json:"ffn_bias,omitempty"`                            // plain: add learned biases to FFN up/down projections.
 	InnerDim                          int          `json:"inner_dim,omitempty"`                           // Mamba inner dimension; defaults to model_dim.
+	ChunkSize                         int          `json:"chunk_size,omitempty"`                          // ttt_mlp: inner-update mini-batch width; defaults to 16.
+	InnerHiddenMult                   float64      `json:"inner_hidden_mult,omitempty"`                   // ttt_mlp: inner MLP expansion; defaults to 4.
+	InnerLRBase                       float64      `json:"inner_lr_base,omitempty"`                       // ttt_mlp: learned inner-LR ceiling; defaults to 0.1.
+	InnerLRInit                       float64      `json:"inner_lr_init,omitempty"`                       // ttt_mlp: inner base LR at outer step zero before per-token scaling; defaults to 0.01.
+	InnerLRWarmupSteps                *int         `json:"inner_lr_warmup_steps,omitempty"`               // ttt_mlp: linear inner-LR warmup; defaults to 5000; explicit zero disables it.
 	DK                                int          `json:"d_k,omitempty"`                                 // gated_deltanet: key/query dim per head.
 	DV                                int          `json:"d_v,omitempty"`                                 // gated_deltanet: value dim per head; defaults to 2*d_k.
 	DState                            int          `json:"d_state,omitempty"`                             // hgrn2: matrix-state key/query dim per head; defaults to model_dim/heads.
@@ -148,6 +153,10 @@ type BlockSpec struct {
 	Ops                               []OpSpec     `json:"ops,omitempty"`                                 // custom block operation sequence
 
 	loadBalanceLossWeightSet bool
+	chunkSizeSet             bool
+	innerHiddenMultSet       bool
+	innerLRBaseSet           bool
+	innerLRInitSet           bool
 }
 
 // UnmarshalJSON records MoE scalar field presence so an explicit
@@ -165,6 +174,10 @@ func (b *BlockSpec) UnmarshalJSON(data []byte) error {
 	}
 	*b = BlockSpec(alias)
 	_, b.loadBalanceLossWeightSet = raw["load_balance_loss_weight"]
+	_, b.chunkSizeSet = raw["chunk_size"]
+	_, b.innerHiddenMultSet = raw["inner_hidden_mult"]
+	_, b.innerLRBaseSet = raw["inner_lr_base"]
+	_, b.innerLRInitSet = raw["inner_lr_init"]
 	return nil
 }
 
@@ -788,6 +801,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 
 	cfg.Training.ApplyDefaults()
+	if err := validateTTTMLPPolicy(cfg, source); err != nil {
+		return nil, err
+	}
 	if err := validateTrainingRecipeKnobs(cfg, source); err != nil {
 		return nil, err
 	}

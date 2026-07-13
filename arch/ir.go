@@ -98,6 +98,8 @@ const OpMaskedMarginPLL = 101 // OP_MASKED_MARGIN_PLL
 
 const OpMaskedZLoss = 102 // OP_MASKED_Z_LOSS
 
+const OpTTTMLPScan = 103 // OP_TTT_MLP_SCAN
+
 const (
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -445,6 +447,12 @@ func (p *Program) DepthwiseConv1D(x, weight, output string, B, T, D, K int) {
 	p.AddOp(OpDepthwiseConv1D, []string{x, weight}, []string{output}, nil, []int{B, T, D, K})
 }
 
+// DepthwiseConv1DReversed uses PyTorch Conv1d tap storage: the final tap
+// multiplies the current token and preceding taps move backward in time.
+func (p *Program) DepthwiseConv1DReversed(x, weight, output string, B, T, D, K int) {
+	p.AddOp(OpDepthwiseConv1D, []string{x, weight}, []string{output}, nil, []int{B, T, D, K, 1})
+}
+
 // Mamba3SelectiveScan emits the canonical Mamba-3 recurrent core from Lahoti
 // et al. 2026, Sections 3.1-3.3 / Propositions 1, 2, and 4.
 //
@@ -555,6 +563,23 @@ func (p *Program) HGRN2Scan(q, k, v, gate, out string, B, T, H, Ds, Dv int) {
 // IntParams layout: [B, T, H, Dk, Dv].
 func (p *Program) MLSTMScan(q, k, v, inputGate, forgetGate, out string, B, T, H, Dk, Dv int) {
 	p.AddOp(OpMLSTMScan, []string{q, k, v, inputGate, forgetGate}, []string{out}, nil, []int{B, T, H, Dk, Dv})
+}
+
+// TTTMLPScan emits the reference TTT-MLP chunked dual-form recurrence. The
+// recurrent state is local to each sequence row and resets on every call.
+func (p *Program) TTTMLPScan(
+	q, k, v, lrLogits, lrScale, tokenCoeff, w1, b1, w2, b2, normScale, normBias string,
+	output, lossBefore, lossAfter, updateNorm, stateDrift, lrMean, lrMin, lrMax string,
+	B, T, H, D, hidden, chunk int,
+	baseLR float32,
+) {
+	p.AddOp(
+		OpTTTMLPScan,
+		[]string{q, k, v, lrLogits, lrScale, tokenCoeff, w1, b1, w2, b2, normScale, normBias},
+		[]string{output, lossBefore, lossAfter, updateNorm, stateDrift, lrMean, lrMin, lrMax},
+		[]float32{baseLR},
+		[]int{B, T, H, D, hidden, chunk},
+	)
 }
 
 // DebertaRelativeBias emits DeBERTa-style C2P+P2C disentangled relative

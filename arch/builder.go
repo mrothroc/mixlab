@@ -610,6 +610,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	pllMarginEnabled := pllMargin != nil && pllMargin.Active()
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
+	if containsTTTMLP(blocks) {
+		prog.DeclareInput("ttt_inner_lr_scale", TensorFloat32, []int{len(blocks)})
+	}
 	if maskedLoss {
 		prog.DeclareInput("loss_mask", TensorFloat32, []int{B * T})
 	}

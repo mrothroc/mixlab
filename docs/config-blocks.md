@@ -17,7 +17,7 @@ field and validation rule.
 }
 ```
 
-Token mixers such as `plain`, recurrent/SSM blocks, `hgrn2`, and `mlstm` are
+Token mixers such as `plain`, recurrent/SSM blocks, `hgrn2`, `ttt_mlp`, and `mlstm` are
 normally paired with FFN/channel mixers such as `swiglu`, `geglu`, `mlp`, or
 `moe`.
 
@@ -30,7 +30,7 @@ normally paired with FFN/channel mixers such as `swiglu`, `geglu`, `mlp`, or
 | `moe` | Top-k routed FFN replacement with load-balancing auxiliary loss. |
 | `mamba`, `mamba3-canonical`, `gated_linear_ssm` | State-space token mixers. |
 | `retnet`, `rwkv`, `gated_deltanet` | Retention/recurrent token mixers. |
-| `hgrn2`, `mlstm` | Correctness-first recurrent token mixers. |
+| `hgrn2`, `ttt_mlp`, `mlstm` | Correctness-first recurrent token mixers. `ttt_mlp` uses a nonlinear per-sequence inner model and is native causal-only in v1. |
 | `perceiver`, `bottleneck`, `cross_attention`, `token_blend` | Specialized mixing/adapter blocks. |
 | `custom` | JSON-declared block using the supported custom op surface. |
 

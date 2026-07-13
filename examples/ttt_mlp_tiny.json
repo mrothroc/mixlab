@@ -1,0 +1,31 @@
+{
+  "name": "ttt_mlp_tiny",
+
+  // Native correctness-first TTT-MLP mixer plus ordinary channel mixing.
+  "model_dim": 64,
+  "vocab_size": 1024,
+  "seq_len": 32,
+
+  "blocks": [
+    {
+      "type": "ttt_mlp",
+      "heads": 4,
+      "chunk_size": 16,
+      "inner_hidden_mult": 4,
+      "inner_lr_base": 0.1,
+      "inner_lr_init": 0.01,
+      "inner_lr_warmup_steps": 5000
+    },
+    {"type": "swiglu"}
+  ],
+
+  "training": {
+    "objective": "causal",
+    "steps": 50,
+    "lr": 3e-4,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42,
+    "batch_tokens": 64
+  }
+}

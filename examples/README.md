@@ -84,6 +84,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [retnet_2L.json](retnet_2L.json) | RetNet | Exponential decay retention |
 | [rwkv_2L.json](rwkv_2L.json) | RWKV | Linear attention with time decay |
 | [hgrn2_2L.json](hgrn2_2L.json) | HGRN2 mixer | Matrix-state recurrence token mixer |
+| [ttt_mlp_tiny.json](ttt_mlp_tiny.json) | TTT-MLP mixer | Native nonlinear per-sequence model-state updates |
 | [mlstm_2L.json](mlstm_2L.json) | mLSTM mixer | Stabilized matrix-memory token mixer |
 | [perceiver_2L.json](perceiver_2L.json) | Perceiver | Latent bottleneck cross-attention |
 | [custom_geglu.json](custom_geglu.json) | Custom block | Gated feed-forward block defined in pure JSON |
@@ -107,12 +108,13 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **Relative attention**: Use `deberta_relative_tiny.json` for DeBERTa-style P2C/C2P position bias. Add `relative_attention_parameterization: "shared_qk_reuse"` when you want GPT-BERT-style shared relative embeddings instead of per-block position projection weights.
 - **Differential attention**: Use `differential_attention_tiny.json` when you want to experiment with DIFF Transformer-style attention noise cancellation. Compare against both a same-seed ordinary-head baseline and a half-head baseline before attributing gains to the subtraction itself.
 - **Parallel hybrid branches**: Use `parallel_hybrid_branches_tiny.json` when you want bidirectional attention and a recurrent side branch to read the same input and add their outputs together. The recurrent branch starts zero-gated with `residual_scale_init: 0.0`.
+- **Nonlinear test-time-training layer**: Use `ttt_mlp_tiny.json` to exercise the native causal TTT-MLP token mixer. This experimental correctness-first path resets its inner MLP state per sequence and is not yet available for HF export or cached generation.
 - **GPT-2-compatible baseline**: Use `gpt2_strict_small_2026.json` when you need a strict GPT-2-style architecture and native `GPT2LMHeadModel` export instead of Mixlab custom-code export.
 - **Character/byte features**: Use `char_features_plain.json` with data prepared using `-char-vocab-size 257`.
 - **Packed document boundaries**: Use `packed_segment_mask_tiny.json` when your packed shards already contain a boundary token and you want block-diagonal attention inside each packed sequence.
 - **Large-batch optimizer**: Use `lamb_plain_tiny.json` as a minimal whole-model LAMB starting point.
 - **Sparse feed-forward experts**: Use `moe_tiny.json` for top-k routed MoE blocks with load balancing.
-- **Exploring block types**: Try `mamba_2L.json`, `retnet_2L.json`, `rwkv_2L.json`, `hgrn2_2L.json`, or `mlstm_2L.json`.
+- **Exploring block types**: Try `mamba_2L.json`, `retnet_2L.json`, `rwkv_2L.json`, `hgrn2_2L.json`, `ttt_mlp_tiny.json`, or `mlstm_2L.json`.
 - **Custom architectures**: See `custom_geglu.json` and [custom_geglu.md](custom_geglu.md).
 - **Advanced features**: `unet_transformer.json` and `recurrent_parallel.json` cover U-Net skips, recurrence, parallel residuals, block scales, residual mixing, tied embeddings, and TTT.
 

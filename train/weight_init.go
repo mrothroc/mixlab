@@ -210,6 +210,17 @@ func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool
 			data[i] = float32(rng.NormFloat64() * 0.1)
 		}
 		return true
+	case "ttt_normal_0_02":
+		for i := range data {
+			data[i] = float32(rng.NormFloat64() * 0.02)
+		}
+		return true
+	case "ttt_conv_uniform_4":
+		const bound = 0.5 // PyTorch depthwise Conv1d fan_in is kernel_size=4.
+		for i := range data {
+			data[i] = float32(rng.Float64()*2*bound - bound)
+		}
+		return true
 	case "torch_linear_uniform":
 		if len(ws.Shape) < 2 || ws.Shape[0] <= 0 {
 			return false

@@ -48,6 +48,8 @@ type mlxGPUTrainer struct {
 	diffusionBlockStartInput   bool
 	diffusionBlockEndInput     bool
 	diffusionTimestepInput     bool
+	tttInnerLRScaleInput       bool
+	tttInnerLRScaleCount       int
 	// Pre-allocated input buffers to avoid per-step allocation.
 	tokBuf                 []int32
 	tgtBuf                 []int32
@@ -73,6 +75,7 @@ type mlxGPUTrainer struct {
 	charBuf                []int32
 	bigramBuf              []int32
 	trigramBuf             []int32
+	tttInnerLRScaleBuf     []float32
 	charFeatures           []int32
 	firstByteValid         []int32
 	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
@@ -218,6 +221,8 @@ func initMLXGPUTrainer(
 	diffusionBlockStartInput := false
 	diffusionBlockEndInput := false
 	diffusionTimestepInput := false
+	tttInnerLRScaleInput := false
+	tttInnerLRScaleCount := 0
 	for _, inp := range irProg.Inputs {
 		if inp.Name == "tokens" && len(inp.Shape) == 2 {
 			declaredBatchSize = inp.Shape[0]
@@ -226,6 +231,10 @@ func initMLXGPUTrainer(
 		}
 		if inp.Name == "targets" && len(inp.Shape) == 1 {
 			declaredTargetSize = inp.Shape[0]
+		}
+		if inp.Name == "ttt_inner_lr_scale" && len(inp.Shape) == 1 {
+			tttInnerLRScaleInput = true
+			tttInnerLRScaleCount = inp.Shape[0]
 		}
 		if inp.Name == "first_byte_valid" {
 			firstByteMaskInput = true
@@ -363,6 +372,8 @@ func initMLXGPUTrainer(
 		diffusionBlockStartInput:   diffusionBlockStartInput,
 		diffusionBlockEndInput:     diffusionBlockEndInput,
 		diffusionTimestepInput:     diffusionTimestepInput,
+		tttInnerLRScaleInput:       tttInnerLRScaleInput,
+		tttInnerLRScaleCount:       tttInnerLRScaleCount,
 		tokBuf:                     make([]int32, batchElems),
 		tgtBuf:                     make([]int32, batchElems),
 		lossMaskBuf:                make([]float32, batchElems),
@@ -387,6 +398,7 @@ func initMLXGPUTrainer(
 		charBuf:                    make([]int32, batchElems*cfg.CharMaxPerToken),
 		bigramBuf:                  make([]int32, batchElems),
 		trigramBuf:                 make([]int32, batchElems),
+		tttInnerLRScaleBuf:         make([]float32, tttInnerLRScaleCount),
 		charFeatures:               charFeatures,
 		firstByteValid:             firstByteValid,
 		lockedOSThread:             true,
@@ -615,10 +627,18 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.data2VecInput = programDeclaresInput(irProg, "data2vec_targets")
 	t.rtdGeneratorInput = programDeclaresInput(irProg, "rtd_generator_tokens")
 	t.rtdGeneratorPositionsInput = programDeclaresInput(irProg, "rtd_generator_positions")
+	t.tttInnerLRScaleInput = programDeclaresInput(irProg, "ttt_inner_lr_scale")
+	t.tttInnerLRScaleCount = 0
 	t.rtdGeneratorBatchSize = 0
 	t.rtdGeneratorSeqLen = 0
 	t.rtdGeneratorMaskSlots = 0
 	for _, inp := range irProg.Inputs {
+		if inp.Name == "ttt_inner_lr_scale" && len(inp.Shape) == 1 {
+			t.tttInnerLRScaleCount = inp.Shape[0]
+			if len(t.tttInnerLRScaleBuf) < t.tttInnerLRScaleCount {
+				t.tttInnerLRScaleBuf = make([]float32, t.tttInnerLRScaleCount)
+			}
+		}
 		if inp.Name == "rtd_generator_tokens" && len(inp.Shape) == 2 {
 			t.rtdGeneratorBatchSize = inp.Shape[0]
 			t.rtdGeneratorSeqLen = inp.Shape[1]

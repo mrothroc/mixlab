@@ -38,6 +38,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `hgrn2` | Gated | Matrix-state scan export is deferred until the PyTorch template has explicit recurrent-state parity coverage. |
 | `mlstm` | Gated | Stabilized matrix-memory scan export is deferred until the PyTorch template has explicit recurrent-state parity coverage. |
 | `gated_deltanet` | Gated | Chunked delta-rule recurrence uses native scan semantics not yet mirrored by the HF template. |
+| `ttt_mlp` | Gated | The nonlinear inner-loop recurrence and per-sequence MLP state are native-only until the PyTorch template has forward and recurrent-state parity coverage. |
 | `mamba`, `gated_linear_ssm`, `mamba3`, `mamba3-canonical` | Gated | Selective-scan and canonical Mamba-3 paths rely on native scan and backend-specific execution details. |
 | `retnet` and `rwkv` | Gated | Recurrent/retention semantics need dedicated exported-state parity fixtures before support is enabled. |
 | `custom` blocks | Unsupported | Arbitrary JSON custom op graphs cannot be safely converted into one static generated template. |

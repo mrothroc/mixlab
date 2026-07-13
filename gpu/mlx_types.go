@@ -94,6 +94,7 @@ const (
 	OpMaskedSymmetricKL    = 100
 	OpMaskedMarginPLL      = 101
 	OpMaskedZLoss          = 102
+	OpTTTMLPScan           = 103
 )
 
 const (

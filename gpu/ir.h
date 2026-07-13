@@ -107,13 +107,14 @@ enum OpType {
   OP_MASKED_SYMMETRIC_KL = 100,
   OP_MASKED_MARGIN_PLL = 101,
   OP_MASKED_Z_LOSS = 102,
+  OP_TTT_MLP_SCAN = 103,
 };
 
 struct IRop {
   int type = 0;
   std::string inputs[256];
   int n_inputs = 0;
-  std::string outputs[4];
+  std::string outputs[8];
   int n_outputs = 0;
 
   float float_params[4] = {0.0f, 0.0f, 0.0f, 0.0f};

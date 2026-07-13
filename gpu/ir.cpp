@@ -1397,7 +1397,8 @@ mx::array causal_depthwise_conv1d(
     int B,
     int T,
     int D,
-    int K) {
+    int K,
+    bool reverse_taps = false) {
   if (B <= 0 || T <= 0 || D <= 0 || K <= 0) {
     throw std::runtime_error("OP_DEPTHWISE_CONV1D requires positive B,T,D,K");
   }
@@ -1410,7 +1411,10 @@ mx::array causal_depthwise_conv1d(
               {mx::zeros({B, k, D}, mx::float32),
                mx::slice(x, {0, 0, 0}, {B, T - k, D})},
               1);
-    auto wk = mx::reshape(mx::slice(weight, {0, k}, {D, k + 1}), {1, 1, D});
+    const int weight_tap = reverse_taps ? K - 1 - k : k;
+    auto wk = mx::reshape(
+        mx::slice(weight, {0, weight_tap}, {D, weight_tap + 1}),
+        {1, 1, D});
     out = out + shifted * wk;
   }
   return mx::reshape(out, {B * T, D});
@@ -2564,6 +2568,217 @@ mx::array hgrn2_scan_naive(
         mx::Shape{B, t + 1, H, Dv});
   }
   return mx::reshape(out, {B * T * H, Dv});
+}
+
+struct TTTMLPScanResult {
+  mx::array output;
+  mx::array loss_before;
+  mx::array loss_after;
+  mx::array update_norm;
+  mx::array state_drift;
+  mx::array lr_mean;
+  mx::array lr_min;
+  mx::array lr_max;
+};
+
+mx::array ttt_gelu(const mx::array& x) {
+  return 0.5f * x *
+      (1.0f + mx::tanh(0.7978845608f * (x + 0.044715f * x * mx::square(x))));
+}
+
+mx::array ttt_gelu_derivative(const mx::array& x) {
+  auto tanh_out = mx::tanh(0.79788456f * x * (1.0f + 0.044715f * mx::square(x)));
+  return 0.5f * x *
+          ((1.0f - mx::square(tanh_out)) *
+           (0.79788456f + 0.1070322243f * mx::square(x))) +
+      0.5f * (1.0f + tanh_out);
+}
+
+mx::array ttt_layer_norm(
+    const mx::array& x,
+    const mx::array& scale,
+    const mx::array& bias,
+    float eps) {
+  auto mean = mx::mean(x, -1, true);
+  auto centered = x - mean;
+  auto variance = mx::mean(mx::square(centered), -1, true);
+  return centered / mx::sqrt(variance + eps) * scale + bias;
+}
+
+mx::array ttt_layer_norm_l2_vjp(
+    const mx::array& x,
+    const mx::array& target,
+    const mx::array& scale,
+    const mx::array& bias,
+    int dim,
+    float eps) {
+  auto mean = mx::mean(x, -1, true);
+  auto centered = x - mean;
+  auto variance = mx::mean(mx::square(centered), -1, true);
+  auto std = mx::sqrt(variance + eps);
+  auto x_hat = centered / std;
+  auto grad_output = scale * x_hat + bias - target;
+  auto grad_x_hat = grad_output * scale;
+  return (grad_x_hat * static_cast<float>(dim) -
+          mx::sum(grad_x_hat, -1, true) -
+          x_hat * mx::sum(grad_x_hat * x_hat, -1, true)) /
+      (static_cast<float>(dim) * std);
+}
+
+TTTMLPScanResult ttt_mlp_scan(
+    const mx::array& q_flat,
+    const mx::array& k_flat,
+    const mx::array& v_flat,
+    const mx::array& lr_logits_flat,
+    const mx::array& lr_scale_in,
+    const mx::array& token_coeff_in,
+    const mx::array& w1_in,
+    const mx::array& b1_in,
+    const mx::array& w2_in,
+    const mx::array& b2_in,
+    const mx::array& norm_scale_in,
+    const mx::array& norm_bias_in,
+    int B,
+    int T,
+    int H,
+    int D,
+    int hidden,
+    int chunk_size,
+    float base_lr) {
+  if (B <= 0 || T <= 0 || H <= 0 || D <= 0 || hidden <= 0 || chunk_size <= 0 ||
+      (D % 2) != 0 || !(base_lr > 0.0f) || !std::isfinite(base_lr)) {
+    throw std::runtime_error("OP_TTT_MLP_SCAN has invalid shape or learning-rate parameters");
+  }
+  constexpr float eps = 1e-6f;
+  auto q_all = mx::transpose(mx::reshape(mx::astype(q_flat, mx::float32), {B, T, H, D}), {0, 2, 1, 3});
+  auto k_all = mx::transpose(mx::reshape(mx::astype(k_flat, mx::float32), {B, T, H, D}), {0, 2, 1, 3});
+  auto v_all = mx::transpose(mx::reshape(mx::astype(v_flat, mx::float32), {B, T, H, D}), {0, 2, 1, 3});
+  auto lr_all = mx::transpose(mx::reshape(mx::astype(lr_logits_flat, mx::float32), {B, T, H}), {0, 2, 1});
+  auto lr_scale = mx::reshape(mx::astype(lr_scale_in, mx::float32), {});
+
+  auto w1_base = mx::reshape(mx::astype(w1_in, mx::float32), {H, D, hidden});
+  auto b1_base = mx::reshape(mx::astype(b1_in, mx::float32), {H, 1, hidden});
+  auto w2_base = mx::reshape(mx::astype(w2_in, mx::float32), {H, hidden, D});
+  auto b2_base = mx::reshape(mx::astype(b2_in, mx::float32), {H, 1, D});
+  auto w1 = mx::broadcast_to(mx::expand_dims(w1_base, 0), {B, H, D, hidden});
+  auto b1 = mx::broadcast_to(mx::expand_dims(b1_base, 0), {B, H, 1, hidden});
+  auto w2 = mx::broadcast_to(mx::expand_dims(w2_base, 0), {B, H, hidden, D});
+  auto b2 = mx::broadcast_to(mx::expand_dims(b2_base, 0), {B, H, 1, D});
+  const auto initial_w1 = w1;
+  const auto initial_b1 = b1;
+  const auto initial_w2 = w2;
+  const auto initial_b2 = b2;
+  auto norm_scale = mx::reshape(mx::astype(norm_scale_in, mx::float32), {1, H, 1, D});
+  auto norm_bias = mx::reshape(mx::astype(norm_bias_in, mx::float32), {1, H, 1, D});
+
+  auto loss_before_sum = mx::array(0.0f, mx::float32);
+  auto loss_after_sum = mx::array(0.0f, mx::float32);
+  auto update_norm_sum = mx::array(0.0f, mx::float32);
+  auto lr_sum = mx::array(0.0f, mx::float32);
+  mx::array lr_min_value = mx::array(0.0f, mx::float32);
+  mx::array lr_max_value = mx::array(0.0f, mx::float32);
+  bool have_lr = false;
+  int chunk_count = 0;
+  std::vector<mx::array> output_chunks;
+  output_chunks.reserve(static_cast<size_t>((T + chunk_size - 1) / chunk_size));
+
+  for (int start = 0; start < T; start += chunk_size) {
+    const int end = std::min(T, start + chunk_size);
+    const int K = end - start;
+    auto q = mx::slice(q_all, {0, 0, start, 0}, {B, H, end, D});
+    auto k = mx::slice(k_all, {0, 0, start, 0}, {B, H, end, D});
+    auto v = mx::slice(v_all, {0, 0, start, 0}, {B, H, end, D});
+
+    auto dim_idx = mx::astype(mx::arange(0, D / 2), mx::float32);
+    auto freqs = mx::exp(dim_idx * static_cast<float>(-std::log(10000.0) * 2.0 / static_cast<double>(D)));
+    auto positions = mx::astype(mx::arange(0, K), mx::float32);
+    auto angles = mx::reshape(positions, {K, 1}) * mx::reshape(freqs, {1, D / 2});
+    auto cos_t = mx::reshape(mx::cos(angles), {1, 1, K, D / 2});
+    auto sin_t = mx::reshape(mx::sin(angles), {1, 1, K, D / 2});
+    q = apply_rope_convention(q, cos_t, sin_t, K, D, D, 0, "OP_TTT_MLP_SCAN");
+    k = apply_rope_convention(k, cos_t, sin_t, K, D, D, 0, "OP_TTT_MLP_SCAN");
+
+    auto lr_gate = mx::sigmoid(mx::slice(lr_all, {0, 0, start}, {B, H, end}));
+    auto learned_coeff_all = mx::reshape(mx::astype(token_coeff_in, mx::float32), {chunk_size});
+    auto learned_coeff = mx::slice(learned_coeff_all, {0}, {K});
+    auto base_coeff = 1.0f / mx::astype(mx::arange(1, K + 1), mx::float32);
+    auto token_coeff = mx::maximum(base_coeff + learned_coeff, mx::array(0.0f, mx::float32));
+    auto effective_lr = mx::reshape(token_coeff, {1, 1, K}) *
+        lr_gate * (base_lr / static_cast<float>(D)) * lr_scale;
+    auto eta = mx::reshape(token_coeff, {1, 1, K, 1}) *
+        mx::reshape(lr_gate, {B, H, 1, K}) *
+        (base_lr / static_cast<float>(D)) * lr_scale;
+    auto eta_lower = mx::tril(eta);
+
+    auto z1 = mx::matmul(k, w1) + b1;
+    auto x2 = ttt_gelu(z1);
+    auto z2 = mx::matmul(x2, w2) + b2;
+    auto target = v - k;
+    auto pred_before = ttt_layer_norm(z2, norm_scale, norm_bias, eps);
+    loss_before_sum = loss_before_sum + 0.5f * mx::sum(mx::square(pred_before - target));
+    auto grad_z2 = ttt_layer_norm_l2_vjp(z2, target, norm_scale, norm_bias, D, eps);
+    auto grad_z1 = mx::matmul(grad_z2, mx::transpose(w2, {0, 1, 3, 2})) * ttt_gelu_derivative(z1);
+
+    auto attn1 = mx::tril(mx::matmul(q, mx::transpose(k, {0, 1, 3, 2})));
+    auto b1_bar = b1 - mx::matmul(eta_lower, grad_z1);
+    auto z1_bar = mx::matmul(q, w1) - mx::matmul(eta * attn1, grad_z1) + b1_bar;
+    auto x2_bar = ttt_gelu(z1_bar);
+    auto attn2 = mx::tril(mx::matmul(x2_bar, mx::transpose(x2, {0, 1, 3, 2})));
+    auto b2_bar = b2 - mx::matmul(eta_lower, grad_z2);
+    auto z2_bar = mx::matmul(x2_bar, w2) - mx::matmul(eta * attn2, grad_z2) + b2_bar;
+    output_chunks.push_back(q + ttt_layer_norm(z2_bar, norm_scale, norm_bias, eps));
+
+    auto k_attn1 = mx::tril(mx::matmul(k, mx::transpose(k, {0, 1, 3, 2})));
+    auto k_z1_bar = mx::matmul(k, w1) - mx::matmul(eta * k_attn1, grad_z1) + b1_bar;
+    auto k_x2_bar = ttt_gelu(k_z1_bar);
+    auto k_attn2 = mx::tril(mx::matmul(k_x2_bar, mx::transpose(x2, {0, 1, 3, 2})));
+    auto k_z2_bar = mx::matmul(k_x2_bar, w2) - mx::matmul(eta * k_attn2, grad_z2) + b2_bar;
+    auto pred_after = ttt_layer_norm(k_z2_bar, norm_scale, norm_bias, eps);
+    loss_after_sum = loss_after_sum + 0.5f * mx::sum(mx::square(pred_after - target));
+
+    auto last_eta = mx::reshape(mx::slice(eta, {0, 0, K - 1, 0}, {B, H, K, K}), {B, H, K, 1});
+    auto delta_w1 = mx::matmul(mx::transpose(last_eta * k, {0, 1, 3, 2}), grad_z1);
+    auto delta_b1 = mx::sum(last_eta * grad_z1, 2, true);
+    auto delta_w2 = mx::matmul(mx::transpose(last_eta * x2, {0, 1, 3, 2}), grad_z2);
+    auto delta_b2 = mx::sum(last_eta * grad_z2, 2, true);
+    update_norm_sum = update_norm_sum + mx::sqrt(
+        mx::sum(mx::square(delta_w1)) + mx::sum(mx::square(delta_b1)) +
+        mx::sum(mx::square(delta_w2)) + mx::sum(mx::square(delta_b2)) + 1e-20f);
+    w1 = w1 - delta_w1;
+    b1 = b1 - delta_b1;
+    w2 = w2 - delta_w2;
+    b2 = b2 - delta_b2;
+
+    lr_sum = lr_sum + mx::sum(effective_lr);
+    auto chunk_lr_min = mx::min(effective_lr);
+    auto chunk_lr_max = mx::max(effective_lr);
+    if (!have_lr) {
+      lr_min_value = chunk_lr_min;
+      lr_max_value = chunk_lr_max;
+      have_lr = true;
+    } else {
+      lr_min_value = mx::minimum(lr_min_value, chunk_lr_min);
+      lr_max_value = mx::maximum(lr_max_value, chunk_lr_max);
+    }
+    chunk_count++;
+  }
+
+  auto output_bhtd = output_chunks.size() == 1 ? output_chunks[0] : mx::concatenate(output_chunks, 2);
+  auto output = mx::reshape(mx::transpose(output_bhtd, {0, 2, 1, 3}), {B * T * H, D});
+  const float loss_denom = static_cast<float>(B * H * T * D);
+  const float lr_denom = static_cast<float>(B * H * T);
+  auto drift = mx::sqrt(
+      mx::sum(mx::square(w1 - initial_w1)) + mx::sum(mx::square(b1 - initial_b1)) +
+      mx::sum(mx::square(w2 - initial_w2)) + mx::sum(mx::square(b2 - initial_b2)) + 1e-20f);
+  return TTTMLPScanResult{
+      output,
+      mx::reshape(loss_before_sum / loss_denom, {1}),
+      mx::reshape(loss_after_sum / loss_denom, {1}),
+      mx::reshape(update_norm_sum / static_cast<float>(std::max(1, chunk_count)), {1}),
+      mx::reshape(drift, {1}),
+      mx::reshape(lr_sum / lr_denom, {1}),
+      mx::reshape(lr_min_value, {1}),
+      mx::reshape(lr_max_value, {1})};
 }
 
 mx::array mlstm_scan_naive(
@@ -3801,6 +4016,25 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mlstm_scan_naive(q, k, v, input_gate, forget_gate, B, T, H, Dk, Dv));
         break;
       }
+      case OP_TTT_MLP_SCAN: {
+        if (op.n_inputs != 12 || op.n_outputs != 8 || op.n_int_params < 6 || op.n_float_params < 1) {
+          throw std::runtime_error("OP_TTT_MLP_SCAN requires 12 inputs, 8 outputs, B,T,H,D,hidden,chunk, and base_lr");
+        }
+        auto result = ttt_mlp_scan(
+            get(op, 0), get(op, 1), get(op, 2), get(op, 3), get(op, 4), get(op, 5),
+            get(op, 6), get(op, 7), get(op, 8), get(op, 9), get(op, 10), get(op, 11),
+            op.int_params[0], op.int_params[1], op.int_params[2], op.int_params[3],
+            op.int_params[4], op.int_params[5], op.float_params[0]);
+        set_out(op, 0, result.output);
+        set_out(op, 1, result.loss_before);
+        set_out(op, 2, result.loss_after);
+        set_out(op, 3, result.update_norm);
+        set_out(op, 4, result.state_drift);
+        set_out(op, 5, result.lr_mean);
+        set_out(op, 6, result.lr_min);
+        set_out(op, 7, result.lr_max);
+        break;
+      }
       case OP_DEBERTA_RELATIVE_BIAS: {
         if (op.n_int_params < 5) {
           throw std::runtime_error("OP_DEBERTA_RELATIVE_BIAS requires B,T,H,D,window");
@@ -3841,7 +4075,8 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         int T = op.int_params[1];
         int D = op.int_params[2];
         int K = op.int_params[3];
-        set_out(op, 0, causal_depthwise_conv1d(get(op, 0), get(op, 1), B, T, D, K));
+        const bool reverse_taps = op.n_int_params >= 5 && op.int_params[4] != 0;
+        set_out(op, 0, causal_depthwise_conv1d(get(op, 0), get(op, 1), B, T, D, K, reverse_taps));
         break;
       }
       case OP_MAMBA3_SELECTIVE_SCAN: {

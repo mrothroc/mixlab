@@ -34,6 +34,7 @@ type objectiveBatch struct {
 	rtdGeneratorPositions []int32
 	rtdGeneratorY         []int
 	rtdGeneratorLossMask  []float32
+	tttInnerLRScale       []float32
 }
 
 func objectiveForStep(spec TrainingSpec, step int) string {
@@ -116,6 +117,7 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 			return objectiveBatch{}, err
 		}
 	}
+	prepared.tttInnerLRScale = arch.TTTMLPInnerLRScalesForStep(cfg.Blocks, step)
 	return prepared, nil
 }
 

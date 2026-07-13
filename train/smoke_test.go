@@ -1,10 +1,13 @@
 package train
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/mrothroc/mixlab/arch"
 )
 
 // embeddedPlainConfig is a minimal config embedded in the test binary so that
@@ -201,6 +204,11 @@ var exampleConfigs = []exampleConfigCase{
 		minOps:      8,
 	},
 	{
+		filename:    "ttt_mlp_tiny.json",
+		wantWeights: 27, // 3 base + 20 ttt_mlp + 4 swiglu
+		minOps:      10,
+	},
+	{
 		filename:    "mlstm_2L.json",
 		wantWeights: 33, // 3 base + 2*(11 mlstm + 4 swiglu)
 		minOps:      8,
@@ -281,6 +289,10 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 			if cfg.TrigramVocabSize > 0 {
 				wantInputs++
 			}
+			hasTTTMLP := len(arch.TTTMLPInnerLRScalesForStep(cfg.Blocks, 0)) > 0
+			if hasTTTMLP {
+				wantInputs++
+			}
 			if len(prog.Inputs) != wantInputs {
 				t.Fatalf("expected %d inputs, got %d", wantInputs, len(prog.Inputs))
 			}
@@ -303,6 +315,12 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 				}
 				inputIdx++
 			}
+			if hasTTTMLP {
+				if prog.Inputs[inputIdx].Name != "ttt_inner_lr_scale" {
+					t.Errorf("input[%d].Name = %q, want \"ttt_inner_lr_scale\"", inputIdx, prog.Inputs[inputIdx].Name)
+				}
+				inputIdx++
+			}
 			if cfg.CharVocabSize > 0 {
 				if prog.Inputs[inputIdx].Name != "char_ids" {
 					t.Errorf("input[%d].Name = %q, want \"char_ids\"", inputIdx, prog.Inputs[inputIdx].Name)
@@ -322,9 +340,26 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 			}
 
 			// Check outputs: scalar loss, per-token NLLs, plus hidden-state/logit exports.
-			wantOutputs := []string{"loss", "per_token_nll", "x_hidden", "logits"}
+			var wantOutputs []string
+			for blockIdx, block := range cfg.Blocks {
+				if block.Type != "ttt_mlp" {
+					continue
+				}
+				for _, suffix := range []string{
+					"ttt_inner_loss_before",
+					"ttt_inner_loss_after",
+					"ttt_inner_update_norm",
+					"ttt_state_drift",
+					"ttt_inner_lr_mean",
+					"ttt_inner_lr_min",
+					"ttt_inner_lr_max",
+				} {
+					wantOutputs = append(wantOutputs, fmt.Sprintf("block_%d_%s", blockIdx, suffix))
+				}
+			}
+			wantOutputs = append(wantOutputs, "loss", "per_token_nll", "x_hidden", "logits")
 			if cfg.Training.Distillation != nil {
-				wantOutputs = []string{"loss", "eval_loss", "per_token_nll", "x_hidden", "logits"}
+				wantOutputs = append(wantOutputs[:len(wantOutputs)-4], "loss", "eval_loss", "per_token_nll", "x_hidden", "logits")
 			}
 			if len(prog.Outputs) != len(wantOutputs) {
 				t.Fatalf("expected %d outputs, got %d", len(wantOutputs), len(prog.Outputs))

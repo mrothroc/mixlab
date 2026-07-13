@@ -513,6 +513,7 @@ func TestExportHFAdvancedUnsupportedPolicies(t *testing.T) {
 		{name: "hgrn2", block: `{"type": "hgrn2", "heads": 2}`, wantErr: "hgrn2"},
 		{name: "mlstm", block: `{"type": "mlstm", "heads": 2, "d_k": 2, "d_v": 3}`, wantErr: "mlstm"},
 		{name: "gated_deltanet", block: `{"type": "gated_deltanet", "heads": 2, "d_k": 2}`, wantErr: "gated_deltanet"},
+		{name: "ttt_mlp", block: `{"type": "ttt_mlp", "heads": 2}`, wantErr: "ttt_mlp"},
 		{name: "mamba", block: `{"type": "mamba"}`, wantErr: "mamba"},
 		{name: "mamba3_canonical", block: `{"type": "mamba3-canonical", "inner_dim": 8, "state_size": 4, "n_groups": 2}`, wantErr: "mamba3-canonical"},
 		{name: "retnet", block: `{"type": "retnet", "heads": 2}`, wantErr: "retnet"},
@@ -561,6 +562,7 @@ func TestExportHFRecurrentPolicy(t *testing.T) {
 		want  string
 	}{
 		{name: "gated_deltanet", block: `{"type": "gated_deltanet", "heads": 2, "d_k": 2}`, want: "gated_deltanet"},
+		{name: "ttt_mlp", block: `{"type": "ttt_mlp", "heads": 2}`, want: "ttt_mlp"},
 		{name: "mamba", block: `{"type": "mamba"}`, want: "mamba"},
 		{name: "mamba3_canonical", block: `{"type": "mamba3-canonical", "inner_dim": 8, "state_size": 4, "n_groups": 2}`, want: "mamba3-canonical"},
 		{name: "retnet", block: `{"type": "retnet", "heads": 2}`, want: "retnet"},
@@ -615,6 +617,7 @@ func TestExportHFPartialAdvancedRegistryAndSupportMatrix(t *testing.T) {
 		"hgrn2":          hfExportGated,
 		"mlstm":          hfExportGated,
 		"gated_deltanet": hfExportGated,
+		"ttt_mlp":        hfExportGated,
 	}
 	for feature, status := range want {
 		got := capabilityByFeature(feature)

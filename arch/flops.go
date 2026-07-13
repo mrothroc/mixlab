@@ -262,6 +262,8 @@ func estimateBlockFLOPs(block BlockSpec, B, T, D, V, ffn int, mlpMult float64, b
 		return estimateHGRN2BlockFLOPs(block, B, T, D)
 	case "mlstm":
 		return estimateMLSTMBlockFLOPs(block, B, T, D)
+	case "ttt_mlp":
+		return estimateTTTMLPBlockFLOPs(block, B, T, D)
 	default:
 		return estimateWeightShapeFLOPs(block, B, T, D, V, mlpMult, blockScales, residMix)
 	}

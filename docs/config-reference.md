@@ -590,6 +590,55 @@ Example:
 {"type": "hgrn2", "heads": 6, "d_state": 128}
 ```
 
+### `ttt_mlp`
+
+Experimental nonlinear Test-Time Training token mixer. Each sequence row owns
+an independent per-head two-layer MLP state. The block updates that state from
+the current chunk's self-supervised reconstruction loss, then reads it through
+the query view. The recurrent state resets for every sequence row and every
+forward call; it never persists across training batches.
+
+Required fields:
+
+- `type: "ttt_mlp"`
+- `heads` - number of inner MLP heads. `model_dim` must be divisible by
+  `heads`, and the resulting head dimension must be even for chunk-relative
+  RoPE.
+
+Optional fields:
+
+- `chunk_size` - mini-batch TTT chunk width. Defaults to `16`; the final
+  ragged chunk is supported.
+- `inner_hidden_mult` - inner MLP hidden width relative to head dimension.
+  Defaults to `4`.
+- `inner_lr_base` - learned inner-SGD base learning rate before head-dimension,
+  token-position, and sigmoid-gate scaling. Defaults to `0.1`.
+- `inner_lr_init` - value of the inner base learning rate at outer step zero,
+  before head-dimension, token-position, and learned-gate scaling. Defaults to
+  `0.01` and must not exceed `inner_lr_base`.
+- `inner_lr_warmup_steps` - outer steps used to linearly warm the inner rate
+  from `inner_lr_init` to `inner_lr_base`. Defaults to `5000`; explicit `0`
+  disables warmup.
+
+The v1 algorithm is fixed to the reference two-layer tanh-GELU MLP, affine
+LayerNorm residual, one SGD update, learned per-token rate, full meta-gradient,
+shared Q/K projection with independent causal depthwise convolutions,
+chunk-relative RoPE, post LayerNorm, and GELU output gate. It is a token mixer,
+so pair it with `swiglu` or `geglu` for channel mixing.
+
+V1 supports only normal sequential causal training. It rejects masked,
+hybrid, diffusion, and multihead objectives; recurrence/custom/U-Net execution;
+parallel groups; segment packing; and auxiliary training objectives. Hugging
+Face export is gated until the nonlinear recurrence has PyTorch forward and
+state parity. Native training telemetry reports per-block inner loss before
+and after update, update norm, state drift, and inner-LR mean/min/max.
+
+Example:
+
+```json
+{"type":"ttt_mlp","heads":4,"chunk_size":16,"inner_hidden_mult":4,"inner_lr_base":0.1,"inner_lr_init":0.01,"inner_lr_warmup_steps":5000}
+```
+
 ### `mlstm`
 
 mLSTM token-mixer block with pre-norm RMSNorm, Q/K/V projections, input and forget gate preactivations, stabilized matrix-memory recurrence, per-head output normalization, output gate, output projection, and residual add. This block is a sequence mixer only; pair it with `swiglu` or `geglu` blocks for channel mixing.

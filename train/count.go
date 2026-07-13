@@ -40,6 +40,12 @@ func runCount(configPath string) error {
 	} else if hasMoE {
 		fmt.Printf("Active parameters per token: %d\n", activeParams)
 	}
+	if stateScalars, hasTTTMLP, err := arch.TTTMLPRecurrentStateCountFromConfig(cfg); err != nil {
+		return fmt.Errorf("compute TTT-MLP recurrent state count: %w", err)
+	} else if hasTTTMLP {
+		fmt.Printf("TTT-MLP recurrent state per sequence: %d float scalars (%.2f MiB)\n",
+			stateScalars, float64(stateScalars*4)/bytesPerMiB)
+	}
 	fmt.Printf("Total size (float32, in MB): %.2f\n", float32MiB)
 	fmt.Printf("Total size (int8 quantized, in MB): %.2f\n", int8MiB)
 	fmt.Printf("Number of blocks: %d\n", countConfigBlocks(cfg))

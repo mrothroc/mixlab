@@ -134,7 +134,7 @@ func validateWeightGroups(cfg *ArchConfig, source string) error {
 
 func weightGroupHeadCount(spec BlockSpec) (int, bool) {
 	switch blockTypeKey(spec) {
-	case "plain", "retnet", "perceiver", "bottleneck", "cross_attention", "gated_deltanet", "hgrn2", "mlstm":
+	case "plain", "retnet", "perceiver", "bottleneck", "cross_attention", "gated_deltanet", "hgrn2", "mlstm", "ttt_mlp":
 		return spec.Heads, true
 	case "custom":
 		if spec.Heads <= 0 {
@@ -177,7 +177,7 @@ func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, c
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	switch b.Type {
-	case "plain", "swiglu", "geglu", "mlp", "moe", "mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "hgrn2", "mlstm", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
+	case "plain", "swiglu", "geglu", "mlp", "moe", "mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "hgrn2", "mlstm", "ttt_mlp", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
 		// valid
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)
@@ -188,6 +188,29 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	}
 	if b.Type == "plain" && b.Heads <= 0 {
 		return fmt.Errorf("config %q %s[%d] type=plain requires heads > 0", source, groupName, idx)
+	}
+	if blockTypeKey(b) == "ttt_mlp" {
+		if b.Heads <= 0 {
+			return fmt.Errorf("config %q %s[%d] type=ttt_mlp requires heads > 0", source, groupName, idx)
+		}
+		if b.chunkSizeSet && b.ChunkSize <= 0 {
+			return fmt.Errorf("config %q %s[%d] type=ttt_mlp has invalid chunk_size=%d (must be > 0 when set)", source, groupName, idx, b.ChunkSize)
+		}
+		if (b.innerHiddenMultSet && b.InnerHiddenMult <= 0) || math.IsNaN(b.InnerHiddenMult) || math.IsInf(b.InnerHiddenMult, 0) {
+			return fmt.Errorf("config %q %s[%d] type=ttt_mlp has invalid inner_hidden_mult=%g (must be finite and > 0 when set)", source, groupName, idx, b.InnerHiddenMult)
+		}
+		if (b.innerLRBaseSet && b.InnerLRBase <= 0) || math.IsNaN(b.InnerLRBase) || math.IsInf(b.InnerLRBase, 0) {
+			return fmt.Errorf("config %q %s[%d] type=ttt_mlp has invalid inner_lr_base=%g (must be finite and > 0 when set)", source, groupName, idx, b.InnerLRBase)
+		}
+		if (b.innerLRInitSet && b.InnerLRInit <= 0) || math.IsNaN(b.InnerLRInit) || math.IsInf(b.InnerLRInit, 0) {
+			return fmt.Errorf("config %q %s[%d] type=ttt_mlp has invalid inner_lr_init=%g (must be finite and > 0 when set)", source, groupName, idx, b.InnerLRInit)
+		}
+		if effectiveTTTMLPInnerLRInit(b) > effectiveTTTMLPInnerLRBase(b) {
+			return fmt.Errorf("config %q %s[%d] type=ttt_mlp requires inner_lr_init <= inner_lr_base", source, groupName, idx)
+		}
+		if b.InnerLRWarmupSteps != nil && *b.InnerLRWarmupSteps < 0 {
+			return fmt.Errorf("config %q %s[%d] type=ttt_mlp has invalid inner_lr_warmup_steps=%d (must be >= 0)", source, groupName, idx, *b.InnerLRWarmupSteps)
+		}
 	}
 	if b.Type == "plain" && b.QKGain < 0 {
 		return fmt.Errorf("config %q %s[%d] type=plain has invalid qk_gain=%g (must be >= 0)", source, groupName, idx, b.QKGain)
@@ -477,6 +500,19 @@ func validateRecurrentMixerDims(b BlockSpec, modelDim int, source, groupName str
 	case "mlstm":
 		// mLSTM projects to heads*d_k and heads*d_v, so model_dim does not need
 		// to divide evenly by heads.
+	case "ttt_mlp":
+		if b.Heads <= 0 {
+			return nil
+		}
+		if modelDim%b.Heads != 0 {
+			return fmt.Errorf("config %q %s[%d] type=ttt_mlp requires model_dim=%d divisible by heads=%d", source, groupName, idx, modelDim, b.Heads)
+		}
+		if (modelDim/b.Heads)%2 != 0 {
+			return fmt.Errorf("config %q %s[%d] type=ttt_mlp requires an even head_dim for chunk-relative RoPE", source, groupName, idx)
+		}
+		if _, err := effectiveTTTMLPInnerHiddenDim(b, modelDim); err != nil {
+			return fmt.Errorf("config %q %s[%d] type=ttt_mlp: %w", source, groupName, idx, err)
+		}
 	}
 	return nil
 }

@@ -30,3 +30,19 @@ func TestDeclaredComponentLossOutputsNoOpProgramIsEmpty(t *testing.T) {
 		t.Fatalf("component outputs=%v, want none", got)
 	}
 }
+
+func TestTTTDiagnosticsAreSeparatedAndFormattedDeterministically(t *testing.T) {
+	values := map[string]float64{
+		"primary_loss":                  2.5,
+		"block_0_ttt_state_drift":       0.125,
+		"block_0_ttt_inner_loss_before": 0.75,
+	}
+	losses, extra := splitTrainingDiagnostics(values)
+	if !reflect.DeepEqual(losses, map[string]float64{"primary_loss": 2.5}) {
+		t.Fatalf("losses=%v", losses)
+	}
+	want := "block_0_ttt_inner_loss_before=0.75 block_0_ttt_state_drift=0.125"
+	if got := formatTrainingExtraDiagnostics(extra); got != want {
+		t.Fatalf("formatted=%q want %q", got, want)
+	}
+}

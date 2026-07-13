@@ -284,7 +284,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return TrainResult{}, fmt.Errorf("init GPU trainer: %w", err)
 	}
 	defer trainer.CloseTrainer()
-	if opts.telemetry != nil {
+	tttTelemetryEnabled := len(arch.TTTMLPInnerLRScalesForStep(cfg.Blocks, 0)) > 0
+	if opts.telemetry != nil || tttTelemetryEnabled {
 		if err := enableTrainingStepComponentLossCapture(trainer); err != nil {
 			return TrainResult{}, err
 		}
@@ -343,7 +344,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	if telemetry == nil {
 		telemetry = &telemetryRuntime{state: newTelemetryState()}
 	}
-	componentTelemetryEnabled := opts.telemetry != nil
+	componentTelemetryEnabled := opts.telemetry != nil || tttTelemetryEnabled
 	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
 	// steadyStart is set after step 0 completes — excludes one-time
@@ -646,10 +647,12 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step, err)
 			}
 			v := float64(lossV)
-			componentLosses, err := readTrainingStepComponentLosses(trainer, componentTelemetryEnabled)
+			readStepDiagnostics := opts.telemetry != nil || (tttTelemetryEnabled && shouldLogTrainingStep(step, steps, logEvery))
+			componentLosses, err := readTrainingStepComponentLosses(trainer, componentTelemetryEnabled && readStepDiagnostics)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("read component losses at step %d: %w", step, err)
 			}
+			componentLosses, trainingExtra := splitTrainingDiagnostics(componentLosses)
 			optimizerStats, err := readOptimizerStats(trainer)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("read optimizer stats at step %d: %w", step, err)
@@ -694,6 +697,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				},
 				HasTiming:             true,
 				ComponentLosses:       componentLosses,
+				Extra:                 trainingExtra,
 				OptimizerSteps:        optimizerStats.CommittedSteps,
 				SkippedOptimizerSteps: optimizerStats.SkippedSteps,
 				ConsecutiveSkipped:    optimizerStats.ConsecutiveSkipped,
@@ -771,6 +775,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 				fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f%s tok/s=%.0f%s %s\n",
 					name, step, steps, v, valStr, sched.At(step), phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), steadyElapsed, stepsForRate, step, steps))
+				if extra := formatTrainingExtraDiagnostics(trainingExtra); extra != "" {
+					fmt.Printf("  [%s] [ttt] %s\n", name, extra)
+				}
 				logDuration := time.Since(logStart)
 				if opts.Timing {
 					compileStatsStr := formatCompileStats(trainer)
@@ -805,6 +812,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					},
 					HasTiming:             true,
 					ComponentLosses:       componentLosses,
+					Extra:                 trainingExtra,
 					OptimizerSteps:        optimizerStats.CommittedSteps,
 					SkippedOptimizerSteps: optimizerStats.SkippedSteps,
 					ConsecutiveSkipped:    optimizerStats.ConsecutiveSkipped,

@@ -198,6 +198,16 @@ func init() {
 			return mlstmWeightShapes(spec, D, T, B, V)
 		},
 	})
+	RegisterBlock("ttt_mlp", blockRegistration{
+		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
+			return emitTTTMLPIR(prog, spec, stream, wi, D, T, B, idx, opts)
+		},
+		WeightCount:  tttMLPWeightCount,
+		WeightShapes: tttMLPWeightShapes,
+		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
+			return tttMLPWeightShapesWithOptions(spec, D, opts.BlockScales)
+		},
+	})
 	for _, name := range []string{"mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
 		RegisterBlock(name, blockRegistration{
 			Emitter:     builtinBlockEmitter,

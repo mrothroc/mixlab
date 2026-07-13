@@ -160,6 +160,23 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		{Name: "tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.tokBuf[:need]},
 		{Name: "targets", DType: gpu.TensorInt32, Shape: targetShape, Data: targetData},
 	}
+	if t.tttInnerLRScaleInput {
+		if t.tttInnerLRScaleCount <= 0 {
+			return nil, fmt.Errorf("program declares ttt_inner_lr_scale with invalid length=%d", t.tttInnerLRScaleCount)
+		}
+		if len(t.tttInnerLRScaleBuf) < t.tttInnerLRScaleCount {
+			t.tttInnerLRScaleBuf = make([]float32, t.tttInnerLRScaleCount)
+		}
+		for i := 0; i < t.tttInnerLRScaleCount; i++ {
+			t.tttInnerLRScaleBuf[i] = 1
+		}
+		if len(batch.tttInnerLRScale) >= t.tttInnerLRScaleCount {
+			copy(t.tttInnerLRScaleBuf[:t.tttInnerLRScaleCount], batch.tttInnerLRScale[:t.tttInnerLRScaleCount])
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "ttt_inner_lr_scale", DType: gpu.TensorFloat32, Shape: []int{t.tttInnerLRScaleCount}, Data: t.tttInnerLRScaleBuf[:t.tttInnerLRScaleCount],
+		})
+	}
 	if t.lossMaskInput {
 		if len(batch.lossMask) >= need {
 			copy(t.lossMaskBuf[:need], batch.lossMask[:need])
