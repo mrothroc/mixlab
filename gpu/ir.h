@@ -108,6 +108,7 @@ enum OpType {
   OP_MASKED_MARGIN_PLL = 101,
   OP_MASKED_Z_LOSS = 102,
   OP_TTT_MLP_SCAN = 103,
+  OP_TTT_MLP_STATEFUL_SCAN = 104,
 };
 
 struct IRop {

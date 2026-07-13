@@ -31,6 +31,8 @@ std::vector<std::unique_ptr<mlx_ir::IRProgram>> g_ir_program_pool;
 std::vector<std::unique_ptr<mlx_ir::IRTrainer>> g_ir_trainer_pool;
 std::unordered_map<std::string, std::function<std::vector<mx::array>(const std::vector<mx::array>&)>>
     g_compiled_ir_grad_pool;
+std::unordered_map<std::string, std::function<std::vector<mx::array>(const std::vector<mx::array>&)>>
+    g_compiled_ir_eval_pool;
 
 namespace {
 
@@ -227,6 +229,17 @@ void erase_compiled_ir_grad_cache_for_program(int64_t program) {
   for (auto it = g_compiled_ir_grad_pool.begin(); it != g_compiled_ir_grad_pool.end();) {
     if (it->first.rfind(prefix, 0) == 0) {
       it = g_compiled_ir_grad_pool.erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
+void erase_compiled_ir_eval_cache_for_program(int64_t program) {
+  const std::string prefix = std::to_string(program) + "|";
+  for (auto it = g_compiled_ir_eval_pool.begin(); it != g_compiled_ir_eval_pool.end();) {
+    if (it->first.rfind(prefix, 0) == 0) {
+      it = g_compiled_ir_eval_pool.erase(it);
     } else {
       ++it;
     }
@@ -677,6 +690,7 @@ void mlx_ir_program_add_op(
     }
     p->ops.push_back(std::move(op));
     erase_compiled_ir_grad_cache_for_program(prog);
+    erase_compiled_ir_eval_cache_for_program(prog);
   } catch (...) {
   }
 }
@@ -690,6 +704,7 @@ void mlx_ir_program_destroy(int64_t prog) {
     return;
   }
   erase_compiled_ir_grad_cache_for_program(prog);
+  erase_compiled_ir_eval_cache_for_program(prog);
   g_ir_program_pool[idx].reset();
 }
 
@@ -753,7 +768,7 @@ int mlx_ir_eval_program_output_size_named_for_output(
       weights.push_back(*w);
     }
 
-    auto tensor_map = to_tensor_map(inputs, n_inputs);
+    auto tensor_map = mlx_ir::tensor_map_to_arrays(to_tensor_map(inputs, n_inputs));
     mx::array out = (output_name && output_name[0] != '\0')
                         ? mlx_ir::ir_interpret(*prog, weights, tensor_map, std::string(output_name))
                         : mlx_ir::ir_interpret(*prog, weights, tensor_map);
@@ -915,6 +930,141 @@ int mlx_ir_eval_program_named_outputs(
     return -1;
   } catch (...) {
     std::cerr << "[mlx_bridge] mlx_ir_eval_program_named_outputs unknown exception" << std::endl;
+    return -1;
+  }
+}
+
+int mlx_ir_eval_program_handle_outputs(
+    int64_t program,
+    int64_t* weight_handles,
+    int n_weights,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char** handle_input_names,
+    const int64_t* handle_inputs,
+    int n_handle_inputs,
+    const char** output_names,
+    int n_outputs,
+    int64_t* output_handles) {
+  if (program <= 0 || !weight_handles || n_weights <= 0 || !inputs || n_inputs <= 0 ||
+      !handle_input_names || !handle_inputs || n_handle_inputs <= 0 ||
+      !output_names || n_outputs <= 0 || !output_handles) {
+    return -1;
+  }
+  try {
+    if (!g_initialized && mlx_init() != 0) {
+      return -1;
+    }
+    auto* prog = get_ir_program(program);
+    if (!prog || prog->n_weights != n_weights) {
+      return -1;
+    }
+
+    std::vector<mx::array> weights;
+    weights.reserve(static_cast<size_t>(n_weights));
+    for (int i = 0; i < n_weights; ++i) {
+      auto* weight = get_handle(weight_handles[i]);
+      if (!weight) {
+        return -1;
+      }
+      weights.push_back(*weight);
+    }
+
+    auto tensor_map = mlx_ir::tensor_map_to_arrays(to_tensor_map(inputs, n_inputs));
+    std::vector<std::string> input_names;
+    input_names.reserve(static_cast<size_t>(n_inputs + n_handle_inputs));
+    std::vector<mx::array> args;
+    args.reserve(static_cast<size_t>(n_weights + n_inputs + n_handle_inputs));
+    args.insert(args.end(), weights.begin(), weights.end());
+    for (int i = 0; i < n_inputs; ++i) {
+      input_names.emplace_back(inputs[i].name);
+      args.push_back(tensor_map.at(input_names.back()));
+    }
+    for (int i = 0; i < n_handle_inputs; ++i) {
+      if (!handle_input_names[i] || handle_input_names[i][0] == '\0') {
+        return -1;
+      }
+      auto* input = get_handle(handle_inputs[i]);
+      if (!input) {
+        return -1;
+      }
+      tensor_map.insert_or_assign(std::string(handle_input_names[i]), *input);
+      input_names.emplace_back(handle_input_names[i]);
+      args.push_back(*input);
+    }
+
+    std::vector<std::string> names;
+    names.reserve(static_cast<size_t>(n_outputs));
+    for (int i = 0; i < n_outputs; ++i) {
+      if (!output_names[i] || output_names[i][0] == '\0') {
+        return -1;
+      }
+      names.emplace_back(output_names[i]);
+      output_handles[i] = 0;
+    }
+    std::ostringstream key;
+    key << program << "|" << ir_program_fingerprint(*prog)
+        << "|handle_eval|nw=" << n_weights << tensor_input_signature(inputs, n_inputs);
+    for (int i = 0; i < n_handle_inputs; ++i) {
+      auto* input = get_handle(handle_inputs[i]);
+      key << "|hi=" << handle_input_names[i] << ":";
+      for (auto dim : input->shape()) {
+        key << dim << ",";
+      }
+      key << ":dtype=" << input->dtype();
+    }
+    for (const auto& name : names) {
+      key << "|out=" << name;
+    }
+    auto compiled_it = g_compiled_ir_eval_pool.find(key.str());
+    if (compiled_it == g_compiled_ir_eval_pool.end()) {
+      auto compiled = mx::compile(
+          [prog, input_names, names, n_weights](const std::vector<mx::array>& fn_args) {
+            if (fn_args.size() != static_cast<size_t>(n_weights) + input_names.size()) {
+              throw std::runtime_error("compiled handle evaluation argument count mismatch");
+            }
+            std::vector<mx::array> local_weights;
+            local_weights.reserve(static_cast<size_t>(n_weights));
+            for (int i = 0; i < n_weights; ++i) {
+              local_weights.push_back(fn_args[static_cast<size_t>(i)]);
+            }
+            mlx_ir::ArrayMap local_inputs;
+            local_inputs.reserve(input_names.size());
+            for (size_t i = 0; i < input_names.size(); ++i) {
+              local_inputs.emplace(input_names[i], fn_args[static_cast<size_t>(n_weights) + i]);
+            }
+            auto local_outputs = mlx_ir::ir_interpret_outputs(*prog, local_weights, local_inputs, names);
+            std::vector<mx::array> values;
+            values.reserve(names.size());
+            for (const auto& name : names) {
+              values.push_back(local_outputs.at(name));
+            }
+            return values;
+          },
+          false);
+      compiled_it = g_compiled_ir_eval_pool.emplace(key.str(), std::move(compiled)).first;
+    }
+    auto evaluated = compiled_it->second(args);
+    if (evaluated.size() != names.size()) {
+      return -1;
+    }
+    mx::eval(evaluated);
+    for (int i = 0; i < n_outputs; ++i) {
+      output_handles[i] = alloc_handle(std::move(evaluated[static_cast<size_t>(i)]));
+      if (output_handles[i] <= 0) {
+        for (int j = 0; j < i; ++j) {
+          mlx_free_handle(output_handles[j]);
+          output_handles[j] = 0;
+        }
+        return -1;
+      }
+    }
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_eval_program_handle_outputs", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_eval_program_handle_outputs unknown exception" << std::endl;
     return -1;
   }
 }

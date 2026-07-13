@@ -95,6 +95,10 @@ func mlxFreeHandles(handles []int64) {
 	C.mlx_free_handles((*C.int64_t)(unsafe.Pointer(&cHandles[0])), C.int(len(cHandles)))
 }
 
+func mlxReadHandle(handle int64, out []float32) {
+	C.mlx_read_handle(C.int64_t(handle), (*C.float)(unsafe.Pointer(&out[0])), C.int(len(out)))
+}
+
 func mlxCreateProgram(nWeights int) int64 {
 	return int64(C.mlx_ir_program_create(C.int(nWeights)))
 }

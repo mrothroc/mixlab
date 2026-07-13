@@ -145,6 +145,61 @@ func TestTTTMLPIRAndWarmupInput(t *testing.T) {
 	}
 }
 
+func TestTTTMLPStatefulInferenceIRUsesCheckpointLayout(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim":16,"vocab_size":64,"seq_len":8,
+		"blocks":[{"type":"ttt_mlp","heads":2,"chunk_size":4},{"type":"swiglu"}],
+		"training":{"objective":"causal","batch_tokens":8,"steps":1,"lr":0.001}
+	}`), "ttt-stateful")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, layouts, err := BuildTTTMLPStatefulInferenceIRProgram(cfg, 2, []int{1})
+	if err != nil {
+		t.Fatalf("BuildTTTMLPStatefulInferenceIRProgram: %v", err)
+	}
+	wantWeights, err := CountIRWeightsFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prog.NumWeights != wantWeights {
+		t.Fatalf("NumWeights=%d want checkpoint layout %d", prog.NumWeights, wantWeights)
+	}
+	if len(layouts) != 1 || layouts[0].BlockIndex != 0 || layouts[0].ChunkSize != 4 || layouts[0].StateSize != 1104 {
+		t.Fatalf("unexpected layouts: %+v", layouts)
+	}
+	if got := countOps(prog, OpTTTMLPStatefulScan); got != 1 {
+		t.Fatalf("stateful scan ops=%d want 1", got)
+	}
+	if got := countOps(prog, OpTTTMLPScan); got != 0 {
+		t.Fatalf("stateless scan ops=%d want 0", got)
+	}
+	for _, name := range []string{layouts[0].StateInput, layouts[0].GradientInput, layouts[0].ConvInput} {
+		found := false
+		for _, input := range prog.Inputs {
+			found = found || input.Name == name
+		}
+		if !found {
+			t.Fatalf("missing state input %q", name)
+		}
+	}
+}
+
+func TestTTTMLPStatefulInferenceIRRejectsBoundaryCrossingAndOtherMixers(t *testing.T) {
+	cfg, err := ParseArchConfig(validTTTMLPConfigJSON(ObjectiveCausal), "ttt-stateful")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Blocks[0].ChunkSize = 4
+	if _, _, err := BuildTTTMLPStatefulInferenceIRProgram(cfg, 2, []int{3}); err == nil || !strings.Contains(err.Error(), "crosses") {
+		t.Fatalf("boundary crossing error=%v", err)
+	}
+	cfg.Blocks = append(cfg.Blocks, BlockSpec{Type: "plain", Heads: 2})
+	if _, _, err := BuildTTTMLPStatefulInferenceIRProgram(cfg, 1, []int{0}); err == nil || !strings.Contains(err.Error(), "no state cache") {
+		t.Fatalf("unsupported mixer error=%v", err)
+	}
+}
+
 func TestTTTMLPRejectsExplicitZeroPositiveFields(t *testing.T) {
 	for _, field := range []string{"chunk_size", "inner_hidden_mult", "inner_lr_base", "inner_lr_init"} {
 		t.Run(field, func(t *testing.T) {

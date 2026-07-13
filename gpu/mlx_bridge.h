@@ -143,6 +143,18 @@ int mlx_ir_eval_program_named_outputs(
     int n_outputs,
     float** outs,
     const int* out_sizes);
+int mlx_ir_eval_program_handle_outputs(
+    int64_t program,
+    int64_t* weight_handles,
+    int n_weights,
+    const mlx_tensor_input* inputs,
+    int n_inputs,
+    const char** handle_input_names,
+    const int64_t* handle_inputs,
+    int n_handle_inputs,
+    const char** output_names,
+    int n_outputs,
+    int64_t* output_handles);
 int mlx_ir_eval_program_grads_named_for_output(
     int64_t program,
     int64_t* weight_handles,

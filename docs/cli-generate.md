@@ -27,6 +27,11 @@ Generate causal next-token samples:
 `training.diffusion.steps_per_block`, `confidence_threshold`, or `commit_floor`;
 those drive `generate-diffusion` instead.
 
+Eligible TTT-MLP stacks automatically use persistent inner-model and Q/K
+convolution state instead of replaying the full prefix. The cached path supports
+`ttt_mlp` mixed with pointwise `swiglu`, `geglu`, or `mlp` blocks and can stream
+beyond configured `seq_len`. See [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md).
+
 ## `generate-diffusion`
 
 Generate from a `training.objective: "block_diffusion"` checkpoint, a hybrid

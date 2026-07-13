@@ -60,6 +60,20 @@ func FreeHandles(handles []int64) {
 	mlxFreeHandles(handles)
 }
 
+// ReadHandle evaluates and copies a GPU array handle to host float32 memory.
+func ReadHandle(handle int64) ([]float32, error) {
+	if handle <= 0 {
+		return nil, fmt.Errorf("invalid GPU array handle %d", handle)
+	}
+	size, ok := getHandleSize(handle)
+	if !ok || size <= 0 {
+		return nil, fmt.Errorf("unknown GPU array handle %d", handle)
+	}
+	out := make([]float32, size)
+	mlxReadHandle(handle, out)
+	return out, nil
+}
+
 func NewProgram(nWeights int) (*Program, error) {
 	if nWeights <= 0 {
 		return nil, fmt.Errorf("invalid nWeights=%d; create GPU programs with at least one trainable weight", nWeights)
@@ -439,6 +453,56 @@ func EvalProgramOutputs(program *Program, weightHandles []int64, inputs []Tensor
 		}
 	}
 	return evalProgramOutputs(program, weightHandles, inputs, outputNames, outputSizes)
+}
+
+// EvalProgramHandleOutputs evaluates named outputs while binding selected
+// inputs and retaining all outputs as GPU array handles. Returned handles are
+// caller-owned and must be released with FreeHandle or FreeHandles.
+func EvalProgramHandleOutputs(program *Program, weightHandles []int64, inputs []TensorInput, handleInputs []HandleInput, outputNames []string) (map[string]int64, error) {
+	if program == nil || program.handle == 0 {
+		return nil, fmt.Errorf("invalid GPU program")
+	}
+	if len(weightHandles) == 0 || program.nWeights != len(weightHandles) {
+		return nil, fmt.Errorf("program weight mismatch: program=%d weights=%d", program.nWeights, len(weightHandles))
+	}
+	if len(inputs) == 0 || len(handleInputs) == 0 || len(outputNames) == 0 {
+		return nil, fmt.Errorf("host inputs, handle inputs, and output names must be non-empty")
+	}
+	seenInputs := make(map[string]struct{}, len(handleInputs))
+	for i, input := range handleInputs {
+		if input.Name == "" || input.Handle <= 0 {
+			return nil, fmt.Errorf("invalid handle input[%d]", i)
+		}
+		if _, ok := program.inputDecls[input.Name]; !ok {
+			return nil, fmt.Errorf("handle input %q is not declared by the program", input.Name)
+		}
+		if _, duplicate := seenInputs[input.Name]; duplicate {
+			return nil, fmt.Errorf("duplicate handle input %q", input.Name)
+		}
+		seenInputs[input.Name] = struct{}{}
+	}
+	outputSizes := make([]int, len(outputNames))
+	for i, name := range outputNames {
+		decl, ok := program.outputDecls[name]
+		if !ok {
+			return nil, fmt.Errorf("output %q is not declared by the program", name)
+		}
+		size, err := shapeElemCount(decl.Shape)
+		if err != nil {
+			return nil, fmt.Errorf("output %q shape: %w", name, err)
+		}
+		outputSizes[i] = size
+	}
+	handles, err := evalProgramHandleOutputs(program, weightHandles, inputs, handleInputs, outputNames)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]int64, len(outputNames))
+	for i, name := range outputNames {
+		setHandleSize(handles[i], outputSizes[i])
+		out[name] = handles[i]
+	}
+	return out, nil
 }
 
 func TrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, outputName string, rows, vocab int, temperature float32, seed uint64) ([]int32, error) {

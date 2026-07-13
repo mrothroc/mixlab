@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/mrothroc/mixlab/arch"
 )
 
 func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature float32, topK int, prompt string) error {
@@ -34,6 +36,11 @@ func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 	cfg, err := LoadArchConfig(configPath)
 	if err != nil {
 		return err
+	}
+	if countTTTMLPBlocks(cfg.Blocks) > 0 {
+		if _, _, statefulErr := arch.BuildTTTMLPStatefulInferenceIRProgram(cfg, 1, make([]int, countTTTMLPBlocks(cfg.Blocks))); statefulErr == nil {
+			return runGenerateTTTMLPStateful(configPath, safetensorsLoad, cfg, maxTokens, temperature, topK, prompt)
+		}
 	}
 	genCfg := *cfg
 	genCfg.Training.BatchTokens = genCfg.SeqLen
@@ -88,6 +95,43 @@ func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 		context = append(context, next)
 	}
 
+	fmt.Printf("generated token_ids:%s\n", formatTokenIDs(context))
+	return nil
+}
+
+func runGenerateTTTMLPStateful(configPath, safetensorsLoad string, cfg *ArchConfig, maxTokens int, temperature float32, topK int, prompt string) error {
+	rng := rand.New(rand.NewSource(cfg.Training.Seed))
+	context, err := generationPromptTokens(prompt, cfg.VocabSize, rng)
+	if err != nil {
+		return err
+	}
+	session, err := NewTTTMLPInferenceSession(configPath, safetensorsLoad)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = session.Close() }()
+	state, err := session.NewState()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = state.Close() }()
+	logits, err := session.PrefillLast(state, context)
+	if err != nil {
+		return fmt.Errorf("stateful TTT-MLP prefill: %w", err)
+	}
+	fmt.Printf("TTT-MLP stateful inference enabled (prompt_tokens=%d)\n", len(context))
+	for i := 0; i < maxTokens; i++ {
+		last := logits[len(logits)-cfg.VocabSize:]
+		next, err := sampleNextToken(last, temperature, topK, rng)
+		if err != nil {
+			return fmt.Errorf("sample token at step %d: %w", i, err)
+		}
+		context = append(context, next)
+		logits, err = session.Decode(state, next)
+		if err != nil {
+			return fmt.Errorf("stateful TTT-MLP decode step %d: %w", i, err)
+		}
+	}
 	fmt.Printf("generated token_ids:%s\n", formatTokenIDs(context))
 	return nil
 }

@@ -2781,6 +2781,192 @@ TTTMLPScanResult ttt_mlp_scan(
       mx::reshape(lr_max_value, {1})};
 }
 
+struct TTTMLPStatefulScanResult {
+  mx::array output;
+  mx::array state;
+  mx::array gradient_state;
+  mx::array conv_state;
+};
+
+mx::array ttt_pack_state(
+    const mx::array& w1,
+    const mx::array& b1,
+    const mx::array& w2,
+    const mx::array& b2,
+    int B) {
+  return mx::concatenate(
+      {mx::reshape(w1, {B, -1}), mx::reshape(b1, {B, -1}),
+       mx::reshape(w2, {B, -1}), mx::reshape(b2, {B, -1})},
+      1);
+}
+
+mx::array ttt_stateful_causal_conv(
+    const mx::array& x,
+    const mx::array& history,
+    const mx::array& weight,
+    int B,
+    int T,
+    int width) {
+  constexpr int K = 4;
+  auto combined = mx::concatenate({history, x}, 1);
+  auto out = mx::zeros({B, T, width}, mx::float32);
+  for (int lag = 0; lag < K; ++lag) {
+    auto shifted = mx::slice(
+        combined,
+        {0, K - 1 - lag, 0},
+        {B, K - 1 - lag + T, width});
+    auto tap = mx::reshape(
+        mx::slice(weight, {0, K - 1 - lag}, {width, K - lag}),
+        {1, 1, width});
+    out = out + shifted * tap;
+  }
+  return out;
+}
+
+TTTMLPStatefulScanResult ttt_mlp_stateful_scan(
+    const mx::array& qk_flat,
+    const mx::array& v_flat,
+    const mx::array& lr_logits_flat,
+    const mx::array& q_conv_weight,
+    const mx::array& q_conv_bias,
+    const mx::array& k_conv_weight,
+    const mx::array& k_conv_bias,
+    const mx::array& lr_scale_in,
+    const mx::array& token_coeff_in,
+    const mx::array& norm_scale_in,
+    const mx::array& norm_bias_in,
+    const mx::array& state_in,
+    const mx::array& gradient_state_in,
+    const mx::array& conv_state_in,
+    int B,
+    int T,
+    int H,
+    int D,
+    int hidden,
+    int chunk_size,
+    int offset,
+    float base_lr) {
+  if (B <= 0 || T <= 0 || H <= 0 || D <= 0 || hidden <= 0 || chunk_size <= 0 ||
+      offset < 0 || offset >= chunk_size || offset + T > chunk_size || (D % 2) != 0 ||
+      !(base_lr > 0.0f) || !std::isfinite(base_lr)) {
+    throw std::runtime_error("OP_TTT_MLP_STATEFUL_SCAN has invalid parameters or crosses a chunk boundary");
+  }
+  constexpr float eps = 1e-6f;
+  const int width = H * D;
+  const int w1_size = H * D * hidden;
+  const int b1_size = H * hidden;
+  const int w2_size = H * hidden * D;
+  const int b2_size = H * D;
+  const int state_size = w1_size + b1_size + w2_size + b2_size;
+
+  auto unpack = [&](const mx::array& packed) {
+    std::array<mx::array, 4> parts{
+        mx::reshape(mx::slice(packed, {0, 0}, {B, w1_size}), {B, H, D, hidden}),
+        mx::reshape(mx::slice(packed, {0, w1_size}, {B, w1_size + b1_size}), {B, H, 1, hidden}),
+        mx::reshape(mx::slice(packed, {0, w1_size + b1_size}, {B, w1_size + b1_size + w2_size}), {B, H, hidden, D}),
+        mx::reshape(mx::slice(packed, {0, w1_size + b1_size + w2_size}, {B, state_size}), {B, H, 1, D})};
+    return parts;
+  };
+
+  auto state = unpack(mx::reshape(mx::astype(state_in, mx::float32), {B, state_size}));
+  auto gradient = unpack(mx::reshape(mx::astype(gradient_state_in, mx::float32), {B, state_size}));
+  auto w1 = state[0];
+  auto b1 = state[1];
+  auto w2 = state[2];
+  auto b2 = state[3];
+  auto grad_w1 = gradient[0];
+  auto grad_b1 = gradient[1];
+  auto grad_w2 = gradient[2];
+  auto grad_b2 = gradient[3];
+
+  auto qk = mx::reshape(mx::astype(qk_flat, mx::float32), {B, T, width});
+  auto conv_state = mx::reshape(mx::astype(conv_state_in, mx::float32), {B, 2, 3, width});
+  auto q_history = mx::reshape(mx::slice(conv_state, {0, 0, 0, 0}, {B, 1, 3, width}), {B, 3, width});
+  auto k_history = mx::reshape(mx::slice(conv_state, {0, 1, 0, 0}, {B, 2, 3, width}), {B, 3, width});
+  auto q_seq = ttt_stateful_causal_conv(qk, q_history, q_conv_weight, B, T, width) +
+      mx::reshape(mx::astype(q_conv_bias, mx::float32), {1, 1, width});
+  auto k_seq = ttt_stateful_causal_conv(qk, k_history, k_conv_weight, B, T, width) +
+      mx::reshape(mx::astype(k_conv_bias, mx::float32), {1, 1, width});
+  auto combined = mx::concatenate({q_history, qk}, 1);
+  auto q_next_history = mx::slice(combined, {0, T, 0}, {B, T + 3, width});
+  combined = mx::concatenate({k_history, qk}, 1);
+  auto k_next_history = mx::slice(combined, {0, T, 0}, {B, T + 3, width});
+  auto next_conv_state = mx::concatenate(
+      {mx::reshape(q_next_history, {B, 1, 3, width}),
+       mx::reshape(k_next_history, {B, 1, 3, width})},
+      1);
+
+  auto q = mx::transpose(mx::reshape(q_seq, {B, T, H, D}), {0, 2, 1, 3});
+  auto k = mx::transpose(mx::reshape(k_seq, {B, T, H, D}), {0, 2, 1, 3});
+  auto v = mx::transpose(mx::reshape(mx::astype(v_flat, mx::float32), {B, T, H, D}), {0, 2, 1, 3});
+  auto lr_logits = mx::transpose(mx::reshape(mx::astype(lr_logits_flat, mx::float32), {B, T, H}), {0, 2, 1});
+  auto lr_scale = mx::reshape(mx::astype(lr_scale_in, mx::float32), {});
+  auto token_coeff = mx::reshape(mx::astype(token_coeff_in, mx::float32), {chunk_size});
+  auto norm_scale = mx::reshape(mx::astype(norm_scale_in, mx::float32), {1, H, 1, D});
+  auto norm_bias = mx::reshape(mx::astype(norm_bias_in, mx::float32), {1, H, 1, D});
+
+  std::vector<mx::array> outputs;
+  outputs.reserve(static_cast<size_t>(T));
+  for (int t = 0; t < T; ++t) {
+    const int position = offset + t;
+    auto qt = mx::slice(q, {0, 0, t, 0}, {B, H, t + 1, D});
+    auto kt = mx::slice(k, {0, 0, t, 0}, {B, H, t + 1, D});
+    auto vt = mx::slice(v, {0, 0, t, 0}, {B, H, t + 1, D});
+
+    auto dim_idx = mx::astype(mx::arange(0, D / 2), mx::float32);
+    auto freqs = mx::exp(dim_idx * static_cast<float>(-std::log(10000.0) * 2.0 / static_cast<double>(D)));
+    auto angles = static_cast<float>(position) * freqs;
+    auto cos_t = mx::reshape(mx::cos(angles), {1, 1, 1, D / 2});
+    auto sin_t = mx::reshape(mx::sin(angles), {1, 1, 1, D / 2});
+    qt = apply_rope_convention(qt, cos_t, sin_t, 1, D, D, 0, "OP_TTT_MLP_STATEFUL_SCAN");
+    kt = apply_rope_convention(kt, cos_t, sin_t, 1, D, D, 0, "OP_TTT_MLP_STATEFUL_SCAN");
+
+    auto z1 = mx::matmul(kt, w1) + b1;
+    auto x2 = ttt_gelu(z1);
+    auto z2 = mx::matmul(x2, w2) + b2;
+    auto target = vt - kt;
+    auto grad_z2 = ttt_layer_norm_l2_vjp(z2, target, norm_scale, norm_bias, D, eps);
+    auto grad_z1 = mx::matmul(grad_z2, mx::transpose(w2, {0, 1, 3, 2})) * ttt_gelu_derivative(z1);
+    auto gate = mx::reshape(mx::sigmoid(mx::slice(lr_logits, {0, 0, t}, {B, H, t + 1})), {B, H, 1, 1}) *
+        (base_lr / static_cast<float>(D)) * lr_scale;
+    grad_w1 = grad_w1 + gate * mx::matmul(mx::transpose(kt, {0, 1, 3, 2}), grad_z1);
+    grad_b1 = grad_b1 + gate * grad_z1;
+    grad_w2 = grad_w2 + gate * mx::matmul(mx::transpose(x2, {0, 1, 3, 2}), grad_z2);
+    grad_b2 = grad_b2 + gate * grad_z2;
+
+    auto coeff = mx::maximum(
+        mx::reshape(mx::slice(token_coeff, {position}, {position + 1}), {}) +
+            (1.0f / static_cast<float>(position + 1)),
+        mx::array(0.0f, mx::float32));
+    auto query_w1 = w1 - coeff * grad_w1;
+    auto query_b1 = b1 - coeff * grad_b1;
+    auto query_w2 = w2 - coeff * grad_w2;
+    auto query_b2 = b2 - coeff * grad_b2;
+    auto query_z1 = mx::matmul(qt, query_w1) + query_b1;
+    auto query_z2 = mx::matmul(ttt_gelu(query_z1), query_w2) + query_b2;
+    outputs.push_back(qt + ttt_layer_norm(query_z2, norm_scale, norm_bias, eps));
+
+    if (position + 1 == chunk_size) {
+      w1 = query_w1;
+      b1 = query_b1;
+      w2 = query_w2;
+      b2 = query_b2;
+      grad_w1 = mx::zeros_like(grad_w1);
+      grad_b1 = mx::zeros_like(grad_b1);
+      grad_w2 = mx::zeros_like(grad_w2);
+      grad_b2 = mx::zeros_like(grad_b2);
+    }
+  }
+
+  auto output_bhtd = outputs.size() == 1 ? outputs[0] : mx::concatenate(outputs, 2);
+  auto output = mx::reshape(mx::transpose(output_bhtd, {0, 2, 1, 3}), {B * T * H, D});
+  return TTTMLPStatefulScanResult{
+      output,
+      ttt_pack_state(w1, b1, w2, b2, B),
+      ttt_pack_state(grad_w1, grad_b1, grad_w2, grad_b2, B),
+      next_conv_state};
+}
+
 mx::array mlstm_scan_naive(
     const mx::array& q,
     const mx::array& k,
@@ -4033,6 +4219,21 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 5, result.lr_mean);
         set_out(op, 6, result.lr_min);
         set_out(op, 7, result.lr_max);
+        break;
+      }
+      case OP_TTT_MLP_STATEFUL_SCAN: {
+        if (op.n_inputs != 14 || op.n_outputs != 4 || op.n_int_params < 7 || op.n_float_params < 1) {
+          throw std::runtime_error("OP_TTT_MLP_STATEFUL_SCAN requires 14 inputs, 4 outputs, B,T,H,D,hidden,chunk,offset, and base_lr");
+        }
+        auto result = ttt_mlp_stateful_scan(
+            get(op, 0), get(op, 1), get(op, 2), get(op, 3), get(op, 4), get(op, 5), get(op, 6),
+            get(op, 7), get(op, 8), get(op, 9), get(op, 10), get(op, 11), get(op, 12), get(op, 13),
+            op.int_params[0], op.int_params[1], op.int_params[2], op.int_params[3], op.int_params[4],
+            op.int_params[5], op.int_params[6], op.float_params[0]);
+        set_out(op, 0, result.output);
+        set_out(op, 1, result.state);
+        set_out(op, 2, result.gradient_state);
+        set_out(op, 3, result.conv_state);
         break;
       }
       case OP_DEBERTA_RELATIVE_BIAS: {

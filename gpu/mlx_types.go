@@ -95,7 +95,15 @@ const (
 	OpMaskedMarginPLL      = 101
 	OpMaskedZLoss          = 102
 	OpTTTMLPScan           = 103
+	OpTTTMLPStatefulScan   = 104
 )
+
+// HandleInput binds an existing GPU array handle to a declared IR input.
+// The handle remains owned by the caller.
+type HandleInput struct {
+	Name   string
+	Handle int64
+}
 
 const (
 	TensorInt32   = 0

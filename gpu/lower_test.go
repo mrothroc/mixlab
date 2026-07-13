@@ -94,6 +94,7 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"MaskedMarginPLL", ir.OpMaskedMarginPLL, OpMaskedMarginPLL},
 		{"MaskedZLoss", ir.OpMaskedZLoss, OpMaskedZLoss},
 		{"TTTMLPScan", ir.OpTTTMLPScan, OpTTTMLPScan},
+		{"TTTMLPStatefulScan", ir.OpTTTMLPStatefulScan, OpTTTMLPStatefulScan},
 		{"StopGradient", ir.OpStopGradient, OpStopGradient},
 		{"FirstByteMaskedCrossEntropy", ir.OpFirstByteMaskedCE, OpFirstByteMaskedCE},
 	}

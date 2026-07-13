@@ -22,6 +22,7 @@ This directory holds focused guides for using and extending mixlab.
 | [hf-export-support-matrix.md](hf-export-support-matrix.md) | Supported HF export features by model surface. |
 | [performance.md](performance.md) | MLX tuning, memory limits, step timing, and profiling. |
 | [canonical_mamba3.md](canonical_mamba3.md) | Canonical Mamba-3 implementation notes. |
+| [ttt-mlp-stateful-inference.md](ttt-mlp-stateful-inference.md) | Native TTT-MLP prefill/decode state, ownership, and Apple runtime measurements. |
 | [diffusion-experiments.md](diffusion-experiments.md) | Workflow for causal, MLM, block-diffusion, hybrid-diffusion, and sampler sweeps. |
 | [block-diffusion-design.md](block-diffusion-design.md) | Technical design for the block-diffusion walking skeleton. |
 | [block-diffusion-release-verification.md](block-diffusion-release-verification.md) | Release verification notes for the block-diffusion walking skeleton. |

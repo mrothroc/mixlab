@@ -100,6 +100,8 @@ const OpMaskedZLoss = 102 // OP_MASKED_Z_LOSS
 
 const OpTTTMLPScan = 103 // OP_TTT_MLP_SCAN
 
+const OpTTTMLPStatefulScan = 104 // OP_TTT_MLP_STATEFUL_SCAN
+
 const (
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -579,6 +581,26 @@ func (p *Program) TTTMLPScan(
 		[]string{output, lossBefore, lossAfter, updateNorm, stateDrift, lrMean, lrMin, lrMax},
 		[]float32{baseLR},
 		[]int{B, T, H, D, hidden, chunk},
+	)
+}
+
+// TTTMLPStatefulScan emits an inference-only TTT-MLP recurrence over one
+// chunk fragment. State and gradientState are packed [B,state_size] tensors;
+// convState is [B,2,3,H*D]. offset+T must not cross chunk.
+func (p *Program) TTTMLPStatefulScan(
+	qk, v, lrLogits, qConvWeight, qConvBias, kConvWeight, kConvBias,
+	lrScale, tokenCoeff, normScale, normBias, state, gradientState, convState string,
+	output, nextState, nextGradientState, nextConvState string,
+	B, T, H, D, hidden, chunk, offset int,
+	baseLR float32,
+) {
+	p.AddOp(
+		OpTTTMLPStatefulScan,
+		[]string{qk, v, lrLogits, qConvWeight, qConvBias, kConvWeight, kConvBias,
+			lrScale, tokenCoeff, normScale, normBias, state, gradientState, convState},
+		[]string{output, nextState, nextGradientState, nextConvState},
+		[]float32{baseLR},
+		[]int{B, T, H, D, hidden, chunk, offset},
 	)
 }
 

@@ -135,6 +135,81 @@ func evalProgramOutputs(program *Program, weightHandles []int64, inputs []Tensor
 	return out, nil
 }
 
+func evalProgramHandleOutputs(program *Program, weightHandles []int64, inputs []TensorInput, handleInputs []HandleInput, outputNames []string) ([]int64, error) {
+	cInputs, cleanup, err := marshalTensorInputs(inputs)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	cWeights := make([]C.int64_t, len(weightHandles))
+	for i, handle := range weightHandles {
+		cWeights[i] = C.int64_t(handle)
+	}
+	inputNameArray := C.malloc(C.size_t(len(handleInputs)) * C.size_t(unsafe.Sizeof(uintptr(0))))
+	inputHandleArray := C.malloc(C.size_t(len(handleInputs)) * C.size_t(unsafe.Sizeof(C.int64_t(0))))
+	outputNameArray := C.malloc(C.size_t(len(outputNames)) * C.size_t(unsafe.Sizeof(uintptr(0))))
+	outputHandleArray := C.malloc(C.size_t(len(outputNames)) * C.size_t(unsafe.Sizeof(C.int64_t(0))))
+	if inputNameArray == nil || inputHandleArray == nil || outputNameArray == nil || outputHandleArray == nil {
+		for _, ptr := range []unsafe.Pointer{inputNameArray, inputHandleArray, outputNameArray, outputHandleArray} {
+			if ptr != nil {
+				C.free(ptr)
+			}
+		}
+		return nil, fmt.Errorf("allocating handle I/O arrays failed")
+	}
+	defer C.free(inputNameArray)
+	defer C.free(inputHandleArray)
+	defer C.free(outputNameArray)
+	defer C.free(outputHandleArray)
+
+	cInputNames := unsafe.Slice((**C.char)(inputNameArray), len(handleInputs))
+	cInputHandles := unsafe.Slice((*C.int64_t)(inputHandleArray), len(handleInputs))
+	cOutputNames := unsafe.Slice((**C.char)(outputNameArray), len(outputNames))
+	cOutputHandles := unsafe.Slice((*C.int64_t)(outputHandleArray), len(outputNames))
+	defer func() {
+		for _, name := range cInputNames {
+			if name != nil {
+				C.free(unsafe.Pointer(name))
+			}
+		}
+		for _, name := range cOutputNames {
+			if name != nil {
+				C.free(unsafe.Pointer(name))
+			}
+		}
+	}()
+	for i, input := range handleInputs {
+		cInputNames[i] = C.CString(input.Name)
+		cInputHandles[i] = C.int64_t(input.Handle)
+	}
+	for i, name := range outputNames {
+		cOutputNames[i] = C.CString(name)
+	}
+
+	rc := int(C.mlx_ir_eval_program_handle_outputs(
+		C.int64_t(program.handle),
+		(*C.int64_t)(unsafe.Pointer(&cWeights[0])),
+		C.int(len(cWeights)),
+		(*C.mlx_tensor_input)(unsafe.Pointer(&cInputs[0])),
+		C.int(len(cInputs)),
+		(**C.char)(inputNameArray),
+		(*C.int64_t)(inputHandleArray),
+		C.int(len(handleInputs)),
+		(**C.char)(outputNameArray),
+		C.int(len(outputNames)),
+		(*C.int64_t)(outputHandleArray),
+	))
+	if rc != 0 {
+		return nil, fmt.Errorf("mlx_ir_eval_program_handle_outputs failed for %v", outputNames)
+	}
+	out := make([]int64, len(outputNames))
+	for i, handle := range cOutputHandles {
+		out[i] = int64(handle)
+	}
+	return out, nil
+}
+
 func mlxTrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, outputName string, rows, vocab int, temperature float32, seed uint64, allowCompile bool, out []int32) error {
 	if len(out) != rows {
 		return fmt.Errorf("categorical output buffer length=%d, want rows=%d", len(out), rows)

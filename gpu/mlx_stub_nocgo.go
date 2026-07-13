@@ -30,8 +30,9 @@ func FromDataShape(data []float32, shape []int) (int64, error) {
 	return 0, errNotBuilt
 }
 
-func FreeHandle(handle int64)     {}
-func FreeHandles(handles []int64) {}
+func FreeHandle(handle int64)                    {}
+func FreeHandles(handles []int64)                {}
+func ReadHandle(handle int64) ([]float32, error) { return nil, errNotBuilt }
 
 func NewProgram(nWeights int) (*Program, error) {
 	return nil, errNotBuilt
@@ -136,6 +137,9 @@ func EvalProgramOutput(program *Program, weightHandles []int64, inputs []TensorI
 }
 
 func EvalProgramOutputs(program *Program, weightHandles []int64, inputs []TensorInput, outputNames []string, outputSizes []int) (map[string][]float32, error) {
+	return nil, errNotBuilt
+}
+func EvalProgramHandleOutputs(program *Program, weightHandles []int64, inputs []TensorInput, handleInputs []HandleInput, outputNames []string) (map[string]int64, error) {
 	return nil, errNotBuilt
 }
 

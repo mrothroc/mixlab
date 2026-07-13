@@ -630,7 +630,9 @@ V1 supports only normal sequential causal training. It rejects masked,
 hybrid, diffusion, and multihead objectives; recurrence/custom/U-Net execution;
 parallel groups; segment packing; and auxiliary training objectives. Hugging
 Face export is gated until the nonlinear recurrence has PyTorch forward and
-state parity. Native training telemetry reports per-block inner loss before
+state parity. Native batch-one inference supports request-owned cached state
+for stacks composed only from `ttt_mlp` plus pointwise `swiglu`, `geglu`, or
+`mlp` blocks; other mixers continue using replay. Native training telemetry reports per-block inner loss before
 and after update, update norm, state drift, and inner-LR mean/min/max.
 
 Example:
