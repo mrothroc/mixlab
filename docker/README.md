@@ -36,11 +36,33 @@ docker build -f docker/app.Dockerfile \
 ## RunPod Serverless
 
 mixlab ships with a separate RunPod serverless image that adds Python and
-`scripts/handler.py` on top of the CLI image. To deploy on RunPod:
+`scripts/handler.py` on top of the CLI image. Cloud Build publishes it to two
+registries on every push to main:
+
+- Artifact Registry: `us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf/mixlab:runpod`
+- Docker Hub: `michaelrothrock/mixlab:runpod`
+
+To deploy a new endpoint:
 
 1. Create a serverless endpoint at [runpod.io](https://www.runpod.io/)
 2. Set the container image to `michaelrothrock/mixlab:runpod`
 3. The handler starts automatically — it accepts JSON jobs via the RunPod API
+
+### Updating the existing `mixlab` endpoint
+
+The production `mixlab` endpoint pins the **Artifact Registry image by digest**, not
+by tag, so a rebuild alone does not change what workers run. After Cloud Build
+finishes, point the template at the new digest — workers then pull it on next start:
+
+```bash
+DIGEST=$(gcloud artifacts docker images describe \
+    us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf/mixlab:runpod \
+    --format='value(image_summary.digest)')
+```
+
+Then update the template's `imageName` to `...parameter-golf/mixlab@${DIGEST}` and
+cycle `workersMax` to force fresh workers. Because the reference is a digest, a
+stale cached image cannot silently be served.
 
 ### Sending jobs
 
@@ -96,7 +118,8 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT/status/JOB_ID \
 | `checkpoint_dir` | Directory for periodic safetensors checkpoints |
 | `checkpoint_every` | Save a checkpoint every N training steps |
 | `max_tokens` | Maximum generated tokens for `generate` mode |
-| `temperature` | Sampling temperature for `generate` mode |
+| `temperature` | Sampling temperature for `generate` mode. `0` selects deterministic greedy decoding |
+| `env` | Environment variables for the mixlab process and all `setup`/`post` commands, e.g. `{"MIXLAB_TTT_MLP_DISABLE_CUDA_PRIMITIVE": "1"}`. Scoped to the job — it does not leak to later jobs on a warm worker |
 | `timeout` | Max seconds (default 3600) |
 
 Logs stream to the RunPod dashboard in real time.

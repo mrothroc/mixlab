@@ -25,3 +25,6 @@ data/fineweb_sp*/
 
 # Local experiment artifacts
 experiments/leader_hybrid_race_*/
+
+# Local secrets (RunPod API key, etc.)
+.env
