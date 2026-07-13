@@ -291,11 +291,13 @@ func TestFormatCompileStatsLabelsCounters(t *testing.T) {
 	trainer := &compileStatsTestTrainer{stats: gpu.TrainerCompileStats{
 		TrainingStepCacheHits:         24,
 		TrainingStepCacheMisses:       1,
+		NamedEvalCacheHits:            7,
+		NamedEvalCacheMisses:          1,
 		CategoricalSamplerCacheHits:   23,
 		CategoricalSamplerCacheMisses: 1,
 	}}
 	got := formatCompileStats(trainer)
-	want := " compile=train_hits=24 train_misses=1 sampler_hits=23 sampler_misses=1"
+	want := " compile=train_hits=24 train_misses=1 eval_hits=7 eval_misses=1 sampler_hits=23 sampler_misses=1"
 	if got != want {
 		t.Fatalf("formatCompileStats=%q, want %q", got, want)
 	}

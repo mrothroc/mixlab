@@ -55,8 +55,11 @@ func TestTTTMLPConfigDefaultsAndWeights(t *testing.T) {
 		t.Fatalf("parameter counts=(%d,%d) want (4482,4482)", params, expanded)
 	}
 	flops := EstimateFLOPs(cfg)
-	if flops.ForwardFLOPs <= 0 || flops.TrainingFLOPs != 3*flops.ForwardFLOPs {
+	if flops.ForwardFLOPs <= 0 || flops.TrainingFLOPs != 0 || flops.FLOPsPerToken != 0 {
 		t.Fatalf("invalid TTT-MLP FLOP estimate: %+v", flops)
+	}
+	if flops.TrainingFLOPsReliable {
+		t.Fatalf("TTT training FLOPs must be marked unreliable: %+v", flops)
 	}
 	want := map[string][]int{
 		"w_qk":              {16, 16},

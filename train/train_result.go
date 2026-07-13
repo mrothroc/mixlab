@@ -28,6 +28,7 @@ type TrainResult struct {
 	Elapsed          time.Duration
 	StepFLOPs        int64
 	FLOPsPerTok      int64
+	FLOPsReliable    bool
 }
 
 // formatSummary returns a one-line summary of the training result.

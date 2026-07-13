@@ -247,11 +247,13 @@ func mlxTrainerSampleCategoricalOutput(t TrainerHandle, inputs []TensorInput, ou
 }
 
 func mlxTrainerCompileStats(t TrainerHandle) (TrainerCompileStats, error) {
-	var trainHits, trainMisses, samplerHits, samplerMisses C.uint64_t
+	var trainHits, trainMisses, evalHits, evalMisses, samplerHits, samplerMisses C.uint64_t
 	rc := int(C.mlx_ir_trainer_compile_stats(
 		C.int64_t(t),
 		&trainHits,
 		&trainMisses,
+		&evalHits,
+		&evalMisses,
 		&samplerHits,
 		&samplerMisses,
 	))
@@ -261,6 +263,8 @@ func mlxTrainerCompileStats(t TrainerHandle) (TrainerCompileStats, error) {
 	return TrainerCompileStats{
 		TrainingStepCacheHits:         uint64(trainHits),
 		TrainingStepCacheMisses:       uint64(trainMisses),
+		NamedEvalCacheHits:            uint64(evalHits),
+		NamedEvalCacheMisses:          uint64(evalMisses),
 		CategoricalSamplerCacheHits:   uint64(samplerHits),
 		CategoricalSamplerCacheMisses: uint64(samplerMisses),
 	}, nil

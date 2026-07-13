@@ -88,6 +88,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			cfg.Training.EarlyStop.MinSteps, cfg.Training.EarlyStop.ValGT, cfg.Training.EarlyStop.AtStep)
 	}
 	flops := arch.EstimateFLOPs(cfg)
+	if !flops.TrainingFLOPsReliable {
+		fmt.Printf("  [%s] training FLOPs/MFU unavailable: TTT full-meta-gradient backward is not modeled\n", name)
+	}
 	recurrencePhaseStarts := cfg.PhaseStartSteps()
 	recurrencePhasesScheduled := len(recurrencePhaseStarts) > 0
 	if cfg.Training.FirstByteMask {
@@ -284,8 +287,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return TrainResult{}, fmt.Errorf("init GPU trainer: %w", err)
 	}
 	defer trainer.CloseTrainer()
-	tttTelemetryEnabled := len(arch.TTTMLPInnerLRScalesForStep(cfg.Blocks, 0)) > 0
-	if opts.telemetry != nil || tttTelemetryEnabled {
+	tttDiagnosticsEnabled := len(arch.TTTMLPInnerLRScalesForStep(cfg.Blocks, 0)) > 0
+	if opts.telemetry != nil {
 		if err := enableTrainingStepComponentLossCapture(trainer); err != nil {
 			return TrainResult{}, err
 		}
@@ -344,7 +347,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	if telemetry == nil {
 		telemetry = &telemetryRuntime{state: newTelemetryState()}
 	}
-	componentTelemetryEnabled := opts.telemetry != nil || tttTelemetryEnabled
+	componentTelemetryEnabled := opts.telemetry != nil
 	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
 	// steadyStart is set after step 0 completes — excludes one-time
@@ -436,6 +439,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("prepare step 0 data2vec batch: %w", err)
 		}
+		currentDiagnosticBatch := prepared
+		currentDiagnosticBatchSize := currentBatchSize
+		currentDiagnosticSeqLen := currentSeqLen
 		if err := submitPreparedStepGPU(trainer, prepared, currentBatchSize, currentSeqLen, sched.At(0)); err != nil {
 			stopInitialSubmit()
 			return TrainResult{}, fmt.Errorf("submit step 0: %w", err)
@@ -559,6 +565,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				stopSubmit()
 				return 0, fmt.Errorf("submit step %d: %w", nextStep, err)
 			}
+			// Logging steps cannot have a later step pending, so this single slot
+			// always identifies the batch whose loss is collected and sampled.
+			currentDiagnosticBatch = prepared
+			currentDiagnosticBatchSize = nextBatchSize
+			currentDiagnosticSeqLen = nextSeqLen
 			stopSubmit()
 			lastTrainBatch = batch
 			return time.Since(submitStart), nil
@@ -647,10 +658,29 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step, err)
 			}
 			v := float64(lossV)
-			readStepDiagnostics := opts.telemetry != nil || (tttTelemetryEnabled && shouldLogTrainingStep(step, steps, logEvery))
-			componentLosses, err := readTrainingStepComponentLosses(trainer, componentTelemetryEnabled && readStepDiagnostics)
+			componentLosses, err := readTrainingStepComponentLosses(trainer, componentTelemetryEnabled)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("read component losses at step %d: %w", step, err)
+			}
+			if tttDiagnosticsEnabled && shouldLogTrainingStep(step, steps, logEvery) {
+				diagnosticStart := time.Now()
+				tttDiagnostics, err := sampleTTTDiagnostics(
+					trainer,
+					currentDiagnosticBatch,
+					currentDiagnosticBatchSize,
+					currentDiagnosticSeqLen,
+					true,
+				)
+				gpuDuration += time.Since(diagnosticStart)
+				if err != nil {
+					return TrainResult{}, fmt.Errorf("sample TTT diagnostics at step %d: %w", step, err)
+				}
+				if len(tttDiagnostics) > 0 && componentLosses == nil {
+					componentLosses = make(map[string]float64, len(tttDiagnostics))
+				}
+				for diagnostic, value := range tttDiagnostics {
+					componentLosses[diagnostic] = value
+				}
 			}
 			componentLosses, trainingExtra := splitTrainingDiagnostics(componentLosses)
 			optimizerStats, err := readOptimizerStats(trainer)
@@ -764,7 +794,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				// Anchor the rate calculation at steadyStart (set after step 0)
 				// so the one-time compile/warmup cost doesn't skew estimates.
 				mfuStr := ""
-				if cfg.Training.HardwareTFLOPs > 0 && flops.TrainingFLOPs > 0 && steadyElapsed > 0 {
+				if flops.TrainingFLOPsReliable && cfg.Training.HardwareTFLOPs > 0 && flops.TrainingFLOPs > 0 && steadyElapsed > 0 {
 					mfu := (float64(flops.TrainingFLOPs) * float64(stepsForRate) / steadyElapsed.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
 					mfuStr = fmt.Sprintf(" MFU=%.1f%%", mfu*100)
 				}
@@ -956,6 +986,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		Elapsed:          elapsed,
 		StepFLOPs:        flops.TrainingFLOPs,
 		FLOPsPerTok:      flops.FLOPsPerToken,
+		FLOPsReliable:    flops.TrainingFLOPsReliable,
 	}
 	fmt.Println(result.formatSummary())
 

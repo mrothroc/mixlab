@@ -130,6 +130,14 @@ struct IRTrainer {
       compiled_named_step_cache;
   uint64_t compiled_named_step_cache_hits = 0;
   uint64_t compiled_named_step_cache_misses = 0;
+  std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_named_eval;
+  std::string compiled_named_eval_signature;
+  std::unordered_map<
+      std::string,
+      std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)>>
+      compiled_named_eval_cache;
+  uint64_t compiled_named_eval_cache_hits = 0;
+  uint64_t compiled_named_eval_cache_misses = 0;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_categorical_sampler;
   std::string compiled_categorical_sampler_signature;
   std::unordered_map<

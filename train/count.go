@@ -52,8 +52,13 @@ func runCount(configPath string) error {
 	fmt.Printf("Number of IR ops: %d\n", len(prog.Ops))
 	flops := arch.EstimateFLOPs(cfg)
 	fmt.Printf("Forward FLOPs: %s\n", formatFLOPs(flops.ForwardFLOPs))
-	fmt.Printf("Training step FLOPs: %s\n", formatFLOPs(flops.TrainingFLOPs))
-	fmt.Printf("FLOPs per token: %s\n", formatFLOPs(flops.FLOPsPerToken))
+	if flops.TrainingFLOPsReliable {
+		fmt.Printf("Training step FLOPs: %s\n", formatFLOPs(flops.TrainingFLOPs))
+		fmt.Printf("FLOPs per token: %s\n", formatFLOPs(flops.FLOPsPerToken))
+	} else {
+		fmt.Println("Training step FLOPs: unavailable (TTT full-meta-gradient backward is not modeled)")
+		fmt.Println("FLOPs per token: unavailable (TTT full-meta-gradient backward is not modeled)")
+	}
 	return nil
 }
 

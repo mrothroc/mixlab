@@ -8,11 +8,12 @@ import (
 // FLOPsEstimate summarizes analytical floating-point operation counts for an
 // architecture and training batch.
 type FLOPsEstimate struct {
-	ForwardFLOPs       int64 // FLOPs per forward pass
-	TrainingFLOPs      int64 // FLOPs per training step (3x forward)
-	FLOPsPerToken      int64 // TrainingFLOPs / batch_tokens
-	ParamCount         int64 // Unique parameter count after sharing
-	ExpandedParamCount int64 // Parameter count with recurrent/shared blocks expanded
+	ForwardFLOPs          int64 // FLOPs per forward pass
+	TrainingFLOPs         int64 // FLOPs per training step; zero when not reliably modeled
+	FLOPsPerToken         int64 // TrainingFLOPs / batch_tokens; zero when not reliably modeled
+	TrainingFLOPsReliable bool  // False when backward work is not represented by the proxy
+	ParamCount            int64 // Unique parameter count after sharing
+	ExpandedParamCount    int64 // Parameter count with recurrent/shared blocks expanded
 }
 
 // EstimateFLOPs returns an analytical FLOPs estimate for one configured batch.
@@ -71,9 +72,13 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 	ffn := ffnDim(D, cfg.MLPMult)
 
 	forward := int64(0)
+	trainingFLOPsReliable := true
 	if order == nil {
 		for _, block := range cfg.Blocks {
 			forward += estimateBlockFLOPs(block, B, T, D, V, ffn, cfg.MLPMult, cfg.BlockScales, cfg.ResidMix)
+			if blockTypeKey(block) == "ttt_mlp" {
+				trainingFLOPsReliable = false
+			}
 		}
 	} else {
 		for _, idx := range order {
@@ -81,6 +86,9 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 				return FLOPsEstimate{}
 			}
 			forward += estimateBlockFLOPs(cfg.Blocks[idx], B, T, D, V, ffn, cfg.MLPMult, cfg.BlockScales, cfg.ResidMix)
+			if blockTypeKey(cfg.Blocks[idx]) == "ttt_mlp" {
+				trainingFLOPsReliable = false
+			}
 		}
 	}
 
@@ -98,15 +106,19 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 
 	training := 3 * forward
 	perToken := int64(0)
-	if cfg.Training.BatchTokens > 0 {
+	if trainingFLOPsReliable && cfg.Training.BatchTokens > 0 {
 		perToken = training / int64(cfg.Training.BatchTokens)
 	}
+	if !trainingFLOPsReliable {
+		training = 0
+	}
 	return FLOPsEstimate{
-		ForwardFLOPs:       forward,
-		TrainingFLOPs:      training,
-		FLOPsPerToken:      perToken,
-		ParamCount:         paramCount,
-		ExpandedParamCount: expandedParamCount,
+		ForwardFLOPs:          forward,
+		TrainingFLOPs:         training,
+		FLOPsPerToken:         perToken,
+		TrainingFLOPsReliable: trainingFLOPsReliable,
+		ParamCount:            paramCount,
+		ExpandedParamCount:    expandedParamCount,
 	}
 }
 

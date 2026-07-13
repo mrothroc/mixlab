@@ -68,9 +68,14 @@ func runArchRace(configsDir, trainPattern string, opts TrainOptions) error {
 		if !r.HasValLoss {
 			valStr = fmt.Sprintf("%10s", "n/a")
 		}
+		stepFLOPs, flopsPerTok := "n/a", "n/a"
+		if r.FLOPsReliable {
+			stepFLOPs = formatFLOPs(r.StepFLOPs)
+			flopsPerTok = formatFLOPs(r.FLOPsPerTok)
+		}
 		fmt.Printf("%-28s %10.4f %10.4f %s %10.4f %9.1f%% %12s %12s %11s %8s\n",
 			r.Name, r.FirstLoss, r.LastLoss, valStr, r.Delta, pct,
-			formatFLOPs(r.StepFLOPs), formatFLOPs(r.FLOPsPerTok), formatLossPerMFLOP(r),
+			stepFLOPs, flopsPerTok, formatLossPerMFLOP(r),
 			r.Elapsed.Round(time.Millisecond))
 	}
 
@@ -78,7 +83,7 @@ func runArchRace(configsDir, trainPattern string, opts TrainOptions) error {
 }
 
 func formatLossPerMFLOP(r TrainResult) string {
-	if r.FLOPsPerTok <= 0 {
+	if !r.FLOPsReliable || r.FLOPsPerTok <= 0 {
 		return "n/a"
 	}
 	flopsPerTokenMFLOP := float64(r.FLOPsPerTok) / 1e6

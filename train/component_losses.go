@@ -27,6 +27,31 @@ func declaredComponentLossOutputs(prog *arch.Program) []string {
 	return outputs
 }
 
+// declaredTrainingStepComponentLossOutputs excludes TTT scan diagnostics. TTT
+// diagnostics retain the scan-side graph when attached to value_and_grad, so
+// they are sampled through a separate no-gradient evaluation at log cadence.
+func declaredTrainingStepComponentLossOutputs(prog *arch.Program) []string {
+	outputs := declaredComponentLossOutputs(prog)
+	filtered := outputs[:0]
+	for _, name := range outputs {
+		if !strings.Contains(name, "_ttt_") {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered
+}
+
+func declaredTTTDiagnosticOutputs(prog *arch.Program) []string {
+	outputs := declaredComponentLossOutputs(prog)
+	filtered := outputs[:0]
+	for _, name := range outputs {
+		if strings.Contains(name, "_ttt_") {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered
+}
+
 func formatTrainingExtraDiagnostics(values map[string]float64) string {
 	if len(values) == 0 {
 		return ""
@@ -91,4 +116,23 @@ func enableTrainingStepComponentLossCapture(trainer GPUTrainer) error {
 		return fmt.Errorf("enable training-step component loss capture: %w", err)
 	}
 	return nil
+}
+
+func sampleTTTDiagnostics(
+	trainer GPUTrainer,
+	batch objectiveBatch,
+	batchSize, seqLen int,
+	enabled bool,
+) (map[string]float64, error) {
+	if !enabled {
+		return nil, nil
+	}
+	type tttDiagnosticEvaluator interface {
+		EvaluateTTTDiagnosticsGPU(objectiveBatch, int, int) (map[string]float64, error)
+	}
+	evaluator, ok := trainer.(tttDiagnosticEvaluator)
+	if !ok {
+		return nil, nil
+	}
+	return evaluator.EvaluateTTTDiagnosticsGPU(batch, batchSize, seqLen)
 }

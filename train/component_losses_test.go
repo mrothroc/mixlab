@@ -46,3 +46,18 @@ func TestTTTDiagnosticsAreSeparatedAndFormattedDeterministically(t *testing.T) {
 		t.Fatalf("formatted=%q want %q", got, want)
 	}
 }
+
+func TestTTTDiagnosticsAreExcludedFromTrainingStepOutputs(t *testing.T) {
+	prog := arch.NewProgram(1)
+	prog.DeclareOutput("loss", arch.TensorFloat32, []int{1})
+	prog.DeclareOutput("invariance_loss", arch.TensorFloat32, []int{1})
+	prog.DeclareOutput("block_0_ttt_inner_loss_before", arch.TensorFloat32, []int{1})
+	prog.DeclareOutput("block_0_ttt_state_drift", arch.TensorFloat32, []int{1})
+
+	if got, want := declaredTrainingStepComponentLossOutputs(prog), []string{"invariance_loss"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("training-step outputs=%v, want %v", got, want)
+	}
+	if got, want := declaredTTTDiagnosticOutputs(prog), []string{"block_0_ttt_inner_loss_before", "block_0_ttt_state_drift"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("TTT diagnostic outputs=%v, want %v", got, want)
+	}
+}

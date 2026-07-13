@@ -126,6 +126,8 @@ type MemoryStats struct {
 type TrainerCompileStats struct {
 	TrainingStepCacheHits         uint64
 	TrainingStepCacheMisses       uint64
+	NamedEvalCacheHits            uint64
+	NamedEvalCacheMisses          uint64
 	CategoricalSamplerCacheHits   uint64
 	CategoricalSamplerCacheMisses uint64
 }

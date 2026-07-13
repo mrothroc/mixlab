@@ -264,6 +264,8 @@ int mlx_ir_trainer_compile_stats(
     int64_t trainer,
     uint64_t* training_step_hits,
     uint64_t* training_step_misses,
+    uint64_t* named_eval_hits,
+    uint64_t* named_eval_misses,
     uint64_t* categorical_sampler_hits,
     uint64_t* categorical_sampler_misses);
 int mlx_ir_trainer_optimizer_stats(

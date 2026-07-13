@@ -150,7 +150,11 @@ declares active scalar auxiliary losses, it also includes a
 Native `ttt_mlp` runs also publish an `extra` object with block-qualified inner
 loss before/after update, update norm, state drift, and inner-LR mean/min/max.
 The same aggregate values print on a separate `[ttt]` line at normal training
-log cadence; no per-token or per-chunk arrays are read back by default.
+log cadence. These values are sampled after the completed optimizer step by a
+separately compiled no-gradient forward on that step's prepared batch. They are
+not retained as outputs of every optimizer step, and no per-token or per-chunk
+arrays are read back by default. Log steps therefore include one extra forward;
+ordinary steps stay on the loss-only compiled graph.
 Optimizer telemetry includes committed `optimizer_steps`, cumulative
 `skipped_optimizer_steps`, `consecutive_skipped_optimizer_steps`, and
 `optimizer_step_skipped` for the current batch.
@@ -170,6 +174,12 @@ convolution primitive with the same bounded-state recurrence and retain a
 portable MLX fallback. The 512-through-32k Apple benchmark, CUDA benchmark
 command, memory measurements, and reproduction details are in
 [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md).
+
+Mixlab reports analytical forward FLOPs for `ttt_mlp`, but does not report TTT
+training-step FLOPs, FLOPs/token, or MFU as precise metrics. The generic
+three-times-forward training proxy does not model the inner VJP plus full outer
+meta-gradient. Architecture-aware TTT backward accounting is required before
+those metrics can be enabled.
 
 ### Backward non-finite tracing
 

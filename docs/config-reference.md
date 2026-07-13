@@ -635,7 +635,12 @@ the same request-owned MLP, partial-gradient, convolution, and offset cache.
 Native batch-one inference supports request-owned cached state
 for stacks composed only from `ttt_mlp` plus pointwise `swiglu`, `geglu`, or
 `mlp` blocks; other mixers continue using replay. Native training telemetry reports per-block inner loss before
-and after update, update norm, state drift, and inner-LR mean/min/max.
+and after update, update norm, state drift, and inner-LR mean/min/max. These
+diagnostics are sampled with live post-step weights through a separately cached
+no-gradient graph at normal log cadence; they are not retained by every
+optimizer step. Analytical forward FLOPs remain available, but training FLOPs
+and MFU are omitted because the generic backward estimate does not represent
+TTT's inner VJP and full meta-gradient.
 
 Example:
 

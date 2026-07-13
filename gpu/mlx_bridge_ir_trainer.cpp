@@ -645,9 +645,12 @@ int mlx_ir_trainer_compile_stats(
     int64_t trainer,
     uint64_t* training_step_hits,
     uint64_t* training_step_misses,
+    uint64_t* named_eval_hits,
+    uint64_t* named_eval_misses,
     uint64_t* categorical_sampler_hits,
     uint64_t* categorical_sampler_misses) {
   if (!training_step_hits || !training_step_misses ||
+      !named_eval_hits || !named_eval_misses ||
       !categorical_sampler_hits || !categorical_sampler_misses) {
     return -1;
   }
@@ -658,6 +661,8 @@ int mlx_ir_trainer_compile_stats(
     }
     *training_step_hits = t->compiled_named_step_cache_hits;
     *training_step_misses = t->compiled_named_step_cache_misses;
+    *named_eval_hits = t->compiled_named_eval_cache_hits;
+    *named_eval_misses = t->compiled_named_eval_cache_misses;
     *categorical_sampler_hits = t->compiled_categorical_sampler_cache_hits;
     *categorical_sampler_misses = t->compiled_categorical_sampler_cache_misses;
     return 0;

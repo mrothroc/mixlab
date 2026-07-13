@@ -21,6 +21,7 @@ type mlxGPUTrainer struct {
 	baseLR                     float32
 	evalLossOutputName         string
 	componentLossOutputs       []string
+	tttDiagnosticOutputs       []string
 	captureComponentLosses     bool
 	vocabSize                  int
 	charVocabSize              int
@@ -195,7 +196,8 @@ func initMLXGPUTrainer(
 		gpu.FreeHandles(handles)
 		return nil, fmt.Errorf("set GPU trainer QAT mode: %w", err)
 	}
-	componentLossOutputs := declaredComponentLossOutputs(irProg)
+	componentLossOutputs := declaredTrainingStepComponentLossOutputs(irProg)
+	tttDiagnosticOutputs := declaredTTTDiagnosticOutputs(irProg)
 
 	batchElems := cfg.Training.BatchTokens
 	declaredTargetSize := 0
@@ -346,6 +348,7 @@ func initMLXGPUTrainer(
 		baseLR:                     optimizerSpec.DefaultBaseLR,
 		evalLossOutputName:         preferredEvalLossOutputName(irProg),
 		componentLossOutputs:       componentLossOutputs,
+		tttDiagnosticOutputs:       tttDiagnosticOutputs,
 		vocabSize:                  cfg.VocabSize,
 		charVocabSize:              cfg.CharVocabSize,
 		charMaxPerToken:            cfg.CharMaxPerToken,
@@ -603,7 +606,8 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 		}
 		return err
 	}
-	componentLossOutputs := declaredComponentLossOutputs(irProg)
+	componentLossOutputs := declaredTrainingStepComponentLossOutputs(irProg)
+	tttDiagnosticOutputs := declaredTTTDiagnosticOutputs(irProg)
 	if t.captureComponentLosses {
 		if err := gpu.TrainerSetStepOutputNames(t.handle, componentLossOutputs); err != nil {
 			return fmt.Errorf("configure GPU training step outputs: %w", err)
@@ -613,6 +617,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.activeIRProg = irProg
 	t.evalLossOutputName = preferredEvalLossOutputName(irProg)
 	t.componentLossOutputs = componentLossOutputs
+	t.tttDiagnosticOutputs = tttDiagnosticOutputs
 	t.charInput = programDeclaresInput(irProg, "char_ids")
 	t.firstByteMaskInput = programDeclaresInput(irProg, "first_byte_valid")
 	t.lossMaskInput = programDeclaresInput(irProg, "loss_mask")

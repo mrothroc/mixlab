@@ -97,9 +97,11 @@ func formatCompileStats(trainer GPUTrainer) string {
 		return ""
 	}
 	return fmt.Sprintf(
-		" compile=train_hits=%d train_misses=%d sampler_hits=%d sampler_misses=%d",
+		" compile=train_hits=%d train_misses=%d eval_hits=%d eval_misses=%d sampler_hits=%d sampler_misses=%d",
 		stats.TrainingStepCacheHits,
 		stats.TrainingStepCacheMisses,
+		stats.NamedEvalCacheHits,
+		stats.NamedEvalCacheMisses,
 		stats.CategoricalSamplerCacheHits,
 		stats.CategoricalSamplerCacheMisses,
 	)

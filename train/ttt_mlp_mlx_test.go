@@ -41,8 +41,11 @@ func TestTTTMLPTinyTrainingSmokeUsesOneCompiledProgram(t *testing.T) {
 	if !ok {
 		t.Fatalf("trainer type=%T, want *mlxGPUTrainer", trainerIface)
 	}
-	if err := enableTrainingStepComponentLossCapture(trainer); err != nil {
-		t.Fatalf("enable diagnostics: %v", err)
+	if len(trainer.componentLossOutputs) != 0 {
+		t.Fatalf("training-step component outputs=%v, want loss-only TTT step", trainer.componentLossOutputs)
+	}
+	if len(trainer.tttDiagnosticOutputs) != 7 {
+		t.Fatalf("TTT diagnostic outputs=%v, want seven sampled diagnostics", trainer.tttDiagnosticOutputs)
 	}
 	initialWeights, err := readTrainerWeights(trainer)
 	if err != nil {
@@ -76,9 +79,9 @@ func TestTTTMLPTinyTrainingSmokeUsesOneCompiledProgram(t *testing.T) {
 		if !finitePositiveTTT(loss) {
 			t.Fatalf("step %d loss=%g, want finite positive", step, loss)
 		}
-		diagnostics, err := trainer.ReadComponentLossesGPU()
+		diagnostics, err := trainer.EvaluateTTTDiagnosticsGPU(batch, 1, cfg.SeqLen)
 		if err != nil {
-			t.Fatalf("ReadComponentLossesGPU step %d: %v", step, err)
+			t.Fatalf("EvaluateTTTDiagnosticsGPU step %d: %v", step, err)
 		}
 		for _, name := range []string{
 			"block_0_ttt_inner_loss_before", "block_0_ttt_inner_loss_after",
@@ -98,6 +101,9 @@ func TestTTTMLPTinyTrainingSmokeUsesOneCompiledProgram(t *testing.T) {
 	}
 	if stats.TrainingStepCacheMisses != 1 || stats.TrainingStepCacheHits < 2 {
 		t.Fatalf("compile stats=%+v, want one compiled training graph reused across warmup steps", stats)
+	}
+	if stats.NamedEvalCacheMisses != 1 || stats.NamedEvalCacheHits < 2 {
+		t.Fatalf("compile stats=%+v, want one compiled TTT diagnostic graph reused", stats)
 	}
 	optimizerStats, err := trainer.OptimizerStatsGPU()
 	if err != nil {

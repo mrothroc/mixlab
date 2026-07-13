@@ -3087,7 +3087,7 @@ float IRTrainer::evaluate_named_with_outputs(
     throw std::runtime_error("IR trainer has no weights");
   }
   auto loss_name = evaluation_loss_name(program);
-  auto output_names = collect_cached_output_names(program, loss_name);
+  std::vector<std::string> output_names{loss_name};
   for (const auto& name : extra_output_names) {
     if (name.empty()) {
       throw std::runtime_error("requested output name is empty");
@@ -3096,18 +3096,91 @@ float IRTrainer::evaluate_named_with_outputs(
       output_names.push_back(name);
     }
   }
-  auto effective = effective_compute_weights(weights, compute_dtype);
-  last_outputs = ir_interpret_outputs(program, effective, inputs, output_names);
-  auto loss = last_outputs.at(loss_name);
-  std::vector<mx::array> eval_arrays;
-  eval_arrays.reserve(1 + last_outputs.size());
-  eval_arrays.push_back(loss);
-  for (const auto& [_, output] : last_outputs) {
-    eval_arrays.push_back(output);
+
+  const auto input_names = sorted_input_names(inputs);
+  auto input_arrays_by_name = tensor_map_to_arrays(inputs);
+  std::vector<mx::array> args;
+  args.reserve(weights.size() + input_names.size());
+  args.insert(args.end(), weights.begin(), weights.end());
+  for (const auto& name : input_names) {
+    args.push_back(input_arrays_by_name.at(name));
   }
-  mx::eval(eval_arrays);
+  const auto signature =
+      "named_eval|" + named_step_signature(
+          program,
+          QATMode::None,
+          compute_dtype,
+          inputs,
+          input_names,
+          output_names,
+          weights.size());
+
+  if (!compiled_named_eval || compiled_named_eval_signature != signature) {
+    auto cached = compiled_named_eval_cache.find(signature);
+    if (cached != compiled_named_eval_cache.end()) {
+      compiled_named_eval_cache_hits++;
+      compiled_named_eval = cached->second;
+    } else {
+      compiled_named_eval_cache_misses++;
+      const auto local_input_names = input_names;
+      const auto local_output_names = output_names;
+      const auto local_weight_indices = required_weight_indices_for_outputs(
+          program,
+          output_names,
+          weights.size());
+      compiled_named_eval = mx::compile(
+          [this, local_input_names, local_output_names, local_weight_indices](
+              const std::vector<mx::array>& fn_args) {
+            const auto n_weights = weights.size();
+            if (fn_args.size() != n_weights + local_input_names.size()) {
+              throw std::runtime_error("named evaluator argument count mismatch");
+            }
+            std::vector<mx::array> w;
+            w.reserve(n_weights);
+            for (size_t i = 0; i < n_weights; ++i) {
+              w.push_back(fn_args[i]);
+            }
+            ArrayMap input_map;
+            input_map.reserve(local_input_names.size());
+            for (size_t i = 0; i < local_input_names.size(); ++i) {
+              input_map.emplace(local_input_names[i], fn_args[n_weights + i]);
+            }
+            auto effective = effective_compute_weights(
+                w,
+                compute_dtype,
+                local_weight_indices);
+            auto outputs = ir_interpret_outputs(
+                program,
+                effective,
+                input_map,
+                local_output_names,
+                false);
+            std::vector<mx::array> values;
+            values.reserve(local_output_names.size());
+            for (const auto& name : local_output_names) {
+              values.push_back(outputs.at(name));
+            }
+            return values;
+          },
+          false);
+      compiled_named_eval_cache[signature] = compiled_named_eval;
+    }
+    compiled_named_eval_signature = signature;
+  } else {
+    compiled_named_eval_cache_hits++;
+  }
+
+  auto values = compiled_named_eval(args);
+  if (values.size() != output_names.size()) {
+    throw std::runtime_error("compiled named evaluator output count mismatch");
+  }
+  last_outputs.clear();
+  for (size_t i = 0; i < output_names.size(); ++i) {
+    last_outputs.emplace(output_names[i], values[i]);
+  }
+  mx::eval(values);
   report_gated_delta_timing_summary("eval", step_count);
-  return loss.item<float>();
+  return last_outputs.at(loss_name).item<float>();
 }
 
 float IRTrainer::compute_mean_square_grads_named(const TensorMap& inputs, const std::string& output_name) {
@@ -3505,6 +3578,8 @@ void IRTrainer::set_program(const IRProgram& new_program) {
   cached_named_step_signature.clear();
   compiled_named_step = nullptr;
   compiled_named_step_signature.clear();
+  compiled_named_eval = nullptr;
+  compiled_named_eval_signature.clear();
   compiled_categorical_sampler = nullptr;
   compiled_categorical_sampler_signature.clear();
   compiled_named_update_step = nullptr;

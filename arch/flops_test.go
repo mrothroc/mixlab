@@ -35,6 +35,9 @@ func TestEstimateFLOPsPlainBlock(t *testing.T) {
 	if got.FLOPsPerToken != wantPerToken {
 		t.Fatalf("FLOPsPerToken=%d, want %d", got.FLOPsPerToken, wantPerToken)
 	}
+	if !got.TrainingFLOPsReliable {
+		t.Fatal("plain-block training FLOPs should be reliable")
+	}
 }
 
 func TestEstimateFLOPsMoreLayersScaleBlockCost(t *testing.T) {
