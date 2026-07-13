@@ -20,6 +20,13 @@ const (
 	maxMamba3SelectiveScanOpsPerBuffer = 64
 	maxMamba3SelectiveScanMBPerBuffer  = 128
 	mamba3CUDAGraphCacheSize           = 1024
+
+	// TTT-MLP expands each scan into a chunk-local differentiable recurrence.
+	// Bound CUDA graph construction while retaining enough variants for the
+	// stateful decoder's chunk offsets and fragment lengths.
+	maxTTTMLPScanOpsPerBuffer = 128
+	maxTTTMLPScanMBPerBuffer  = 128
+	tttMLPCUDAGraphCacheSize  = 512
 )
 
 type CUDAGraphLimits struct {
@@ -44,6 +51,16 @@ func TuneCUDAGraphLimits(prog *ir.Program) CUDAGraphLimits {
 			MaxOpsPerBuffer: maxOps,
 			MaxMBPerBuffer:  maxMamba3SelectiveScanMBPerBuffer,
 			GraphCacheSize:  mamba3CUDAGraphCacheSize,
+		}
+	}
+	if programHasOp(prog, ir.OpTTTMLPScan) || programHasOp(prog, ir.OpTTTMLPStatefulScan) {
+		if maxOps > maxTTTMLPScanOpsPerBuffer {
+			maxOps = maxTTTMLPScanOpsPerBuffer
+		}
+		return CUDAGraphLimits{
+			MaxOpsPerBuffer: maxOps,
+			MaxMBPerBuffer:  maxTTTMLPScanMBPerBuffer,
+			GraphCacheSize:  tttMLPCUDAGraphCacheSize,
 		}
 	}
 	if programHasOp(prog, ir.OpGatedDeltaScan) && maxOps < minGatedDeltaNetMaxOpsPerBuffer {

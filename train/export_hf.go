@@ -14,7 +14,7 @@ import (
 	"github.com/mrothroc/mixlab/arch"
 )
 
-//go:embed hf_templates/configuration_mixlab.py hf_templates/modeling_mixlab.py
+//go:embed hf_templates/configuration_mixlab.py hf_templates/modeling_mixlab.py hf_templates/ttt_mlp_mixlab.py
 var hfTemplateFS embed.FS
 
 // ExportHFOptions describes a Hugging Face export operation.
@@ -263,7 +263,7 @@ func weightShapeIndex(shapes []WeightShape, name string) int {
 }
 
 func writeHFTemplates(outputDir string) error {
-	for _, name := range []string{"configuration_mixlab.py", "modeling_mixlab.py"} {
+	for _, name := range []string{"configuration_mixlab.py", "modeling_mixlab.py", "ttt_mlp_mixlab.py"} {
 		data, err := hfTemplateFS.ReadFile(filepath.Join("hf_templates", name))
 		if err != nil {
 			return fmt.Errorf("read HF template %s: %w", name, err)
@@ -632,6 +632,38 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 					}
 					wi = firstUnmappedWeight(used, wi+1)
 				}
+			}
+		case "ttt_mlp":
+			names := []hfBlockWeightName{
+				{mixlab: "norm_scale", hf: "norm.weight"},
+				{mixlab: "w_qk", hf: "w_qk.weight"},
+				{mixlab: "q_conv", hf: "q_conv_weight"},
+				{mixlab: "q_conv_bias", hf: "q_conv_bias"},
+				{mixlab: "k_conv", hf: "k_conv_weight"},
+				{mixlab: "k_conv_bias", hf: "k_conv_bias"},
+				{mixlab: "w_v", hf: "w_v.weight"},
+				{mixlab: "inner_lr_w", hf: "inner_lr_w.weight"},
+				{mixlab: "inner_lr_bias", hf: "inner_lr_bias"},
+				{mixlab: "inner_token_coeff", hf: "inner_token_coeff"},
+				{mixlab: "inner_w1", hf: "inner_w1"},
+				{mixlab: "inner_b1", hf: "inner_b1"},
+				{mixlab: "inner_w2", hf: "inner_w2"},
+				{mixlab: "inner_b2", hf: "inner_b2"},
+				{mixlab: "inner_norm_scale", hf: "inner_norm_scale"},
+				{mixlab: "inner_norm_bias", hf: "inner_norm_bias"},
+				{mixlab: "post_norm_scale", hf: "post_norm.weight"},
+				{mixlab: "post_norm_bias", hf: "post_norm.bias"},
+				{mixlab: "w_out_gate", hf: "w_out_gate.weight"},
+				{mixlab: "w_out", hf: "w_out.weight"},
+			}
+			for _, name := range names {
+				if wi >= len(shapes) {
+					return nil, fmt.Errorf("weight map exhausted while mapping ttt_mlp block %d", blockIdx)
+				}
+				if err := addExpected(wi, name.mixlab, prefix+"."+name.hf); err != nil {
+					return nil, err
+				}
+				wi = firstUnmappedWeight(used, wi+1)
 			}
 		default:
 			return nil, fmt.Errorf("unsupported HF export block type %q", block.Type)

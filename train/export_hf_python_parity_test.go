@@ -44,7 +44,23 @@ func TestExportHFNativePythonParity(t *testing.T) {
 		name                string
 		config              string
 		compareMaskedLogits bool
+		compareTTTState     bool
 	}{
+		{
+			// TTT-MLP nonlinear inner recurrence, including a split cached
+			// continuation that crosses a chunk boundary and compares all
+			// persistent state tensors against native MLX.
+			name: "ttt_mlp_forward_and_cached_state",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "ttt_mlp", "heads": 2, "chunk_size": 4, "inner_hidden_mult": 2, "inner_lr_base": 0.05},
+					{"type": "swiglu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 10091}
+			}`,
+			compareTTTState: true,
+		},
 		{
 			// DIFF Transformer two-softmax plain attention in the normal causal
 			// export path.
@@ -510,12 +526,12 @@ func TestExportHFNativePythonParity(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			runNativePythonParityCase(t, python, script, tc.config, tc.compareMaskedLogits)
+			runNativePythonParityCase(t, python, script, tc.config, tc.compareMaskedLogits, tc.compareTTTState)
 		})
 	}
 }
 
-func runNativePythonParityCase(t *testing.T, python, script, config string, compareMaskedLogits bool) {
+func runNativePythonParityCase(t *testing.T, python, script, config string, compareMaskedLogits, compareTTTState bool) {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, config, scaleHFExportWeightsToTrainedMagnitude)
@@ -573,6 +589,9 @@ func runNativePythonParityCase(t *testing.T, python, script, config string, comp
 		}); err != nil {
 			t.Fatalf("write parity native masked logits: %v", err)
 		}
+	}
+	if compareTTTState {
+		writeTTTMLPCachedParityFixture(t, cfgPath, weightsPath, outDir, inputIDs, seqLen/2)
 	}
 
 	cmd := exec.Command(python, script, "--dir", outDir)

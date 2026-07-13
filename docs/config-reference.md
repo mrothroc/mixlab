@@ -19,7 +19,7 @@ For a shorter path through the schema, start with:
 
 These fields live at the root of the config object.
 
-For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal and masked-LM heads for supported sequential `plain` attention stacks plus `swiglu`/`geglu`/`mlp`/`moe` blocks, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, DeBERTa relative attention, `plain` gated FFN tails, configurable RMSNorm/LayerNorm for core GPT-style blocks, and embedding feature channels; unsupported blocks or config features fail explicitly.
+For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal and masked-LM heads for supported sequential `plain` attention stacks plus `swiglu`/`geglu`/`mlp`/`moe` blocks, cache-safe causal `ttt_mlp` stacks, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, DeBERTa relative attention, `plain` gated FFN tails, configurable RMSNorm/LayerNorm for core GPT-style blocks, and embedding feature channels; unsupported blocks or config features fail explicitly.
 
 | Field | Type | Required | Default | Notes |
 |------|------|----------|---------|-------|
@@ -629,8 +629,10 @@ so pair it with `swiglu` or `geglu` for channel mixing.
 V1 supports only normal sequential causal training. It rejects masked,
 hybrid, diffusion, and multihead objectives; recurrence/custom/U-Net execution;
 parallel groups; segment packing; and auxiliary training objectives. Hugging
-Face export is gated until the nonlinear recurrence has PyTorch forward and
-state parity. Native batch-one inference supports request-owned cached state
+Face export supports cache-safe causal stacks composed only from `ttt_mlp`
+plus pointwise `swiglu`, `geglu`, or `mlp`; the generated PyTorch model exposes
+the same request-owned MLP, partial-gradient, convolution, and offset cache.
+Native batch-one inference supports request-owned cached state
 for stacks composed only from `ttt_mlp` plus pointwise `swiglu`, `geglu`, or
 `mlp` blocks; other mixers continue using replay. Native training telemetry reports per-block inner loss before
 and after update, update norm, state drift, and inner-LR mean/min/max.

@@ -23,7 +23,7 @@ mixlab -mode export-hf \
 The exported directory contains:
 
 - `config.json` with `auto_map` entries for `AutoConfig`, `AutoModel`, and `AutoModelForCausalLM`; masked-capable exports also include `AutoModelForMaskedLM`
-- `configuration_mixlab.py` and `modeling_mixlab.py` static maintained templates
+- `configuration_mixlab.py`, `modeling_mixlab.py`, and `ttt_mlp_mixlab.py` static maintained templates
 - `model.safetensors` with Hugging Face state-dict keys
 - `weight_map.json` mapping Mixlab `w{index}_{name}` tensors to Hugging Face tensor names
 - `tokenizer.json`, plus `tokenizer_config.json` and `special_tokens_map.json`
@@ -102,6 +102,7 @@ HF export supports next-token and masked-LM checkpoints using sequential blocks:
 - `mlm_head: "bert"` for `AutoModelForMaskedLM`; the masked head exports the BERT transform stack with tied embedding output weight and separate output bias while the causal class still loads the materialized `lm_head_weight`
 - `swiglu`, `geglu`, and `mlp` FFN blocks, including MLP activation variants `silu`, `gelu`, `relu`, and `leaky_relu_sq`
 - sequential `moe` blocks with a linear router, top-k token routing, and `swiglu`, `geglu`, or `mlp` experts
+- causal `ttt_mlp` stacks composed only with pointwise `swiglu`, `geglu`, or `mlp`; the exported model carries request-owned recurrent state through `past_key_values`
 - embedding-time `char`, `bigram`, and `trigram` feature channels
 - tied embeddings; the exporter materializes `lm_head_weight = embed_tokens.weight.T` for Hugging Face consumers
 - data2vec-trained checkpoints; the training-only predictor weights and `training.data2vec` spec are stripped, exporting the student/base inference model
@@ -120,7 +121,7 @@ When `char_vocab_size > 0`, `export-hf` also requires `char_features.bin` next t
 
 The detailed support matrix is maintained in [hf-export-support-matrix.md](hf-export-support-matrix.md). It distinguishes supported, gated, unsupported, and training-only features.
 
-Unsupported features fail fast with an error naming the field or block type. The current advanced export path intentionally gates HGRN2, mLSTM, Mamba-family blocks, RetNet/RWKV, `gated_deltanet`, `custom` blocks, `kv_source`, recurrence, U-Net, parallel residual, backout, MTP, block diffusion, and first-byte masked loss.
+Unsupported features fail fast with an error naming the field or block type. The current advanced export path intentionally gates HGRN2, mLSTM, Mamba-family blocks, RetNet/RWKV, `gated_deltanet`, `custom` blocks, `kv_source`, recurrence, U-Net, parallel residual, backout, MTP, block diffusion, and first-byte masked loss. TTT-MLP export rejects mixed attention/SSM trunks because those branches do not yet have a cache contract that composes with TTT continuation.
 
 These guards are part of the export contract: a missing feature should be visible as an actionable error, not as a Hugging Face model that loads but computes different logits.
 
@@ -130,7 +131,7 @@ Two layers of parity coverage exist:
 
 1. **Go oracle parity** (default suite, no extra deps). Verifies metadata, tokenizer handling, weight mapping, unsupported-feature errors, and deterministic native-vs-HF fixtures by comparing a native-forward oracle against an HF-forward oracle. Coverage includes GEGLU/MLP, `plain` gated FFN tails, configurable LayerNorm/no-affine export metadata, BERT-style masked-LM heads, GQA, attention post-norm placement, `qk_norm`, `qk_gain`, XSA, sparse attention gates, masks, causal windowing, DeBERTa relative attention, shared relative embedding LayerNorm, MoE routing and expert variants, feature channels, hybrid causal export semantics, gated recurrent policies, and a deterministically scaled trained-magnitude fixture with RMS assertions.
 
-2. **Native-vs-Python parity** (`TestExportHFNativePythonParity`, gated on `HF_PARITY=1` + MLX + the Python toolchain). This is the load-bearing FR-1 check: it exports deterministic trained-magnitude fixtures, loads each through `AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True)` and `AutoModel.from_pretrained(..., trust_remote_code=True)`, runs the *actual* embedded `modeling_mixlab.py` forward, checks padded-tokenizer batching, and asserts the CausalLM logits agree with the *actual* native MLX forward (max per-logit abs diff < 1e-3, mean next-token loss diff < 1e-4). Because nothing in this path re-implements the HF math, a future drift between the kernels and the shipped Python template fails by construction. Cases cover partial/full RoPE, `qk_norm`, sigmoid SwiGLU, tanh-approx GELU, `plain` gated FFN tails, GQA + `qk_gain` + sliding window, DeBERTa relative attention, XSA + sparse attention gates, top-k MoE (geglu/mlp experts), and bigram/trigram/char feature channels.
+2. **Native-vs-Python parity** (`TestExportHFNativePythonParity`, gated on `HF_PARITY=1` + MLX + the Python toolchain). This is the load-bearing FR-1 check: it exports deterministic trained-magnitude fixtures, loads each through `AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True)` and `AutoModel.from_pretrained(..., trust_remote_code=True)`, runs the *actual* embedded Python forward, checks padded-tokenizer batching where supported, and asserts the CausalLM logits agree with the *actual* native MLX forward (max per-logit abs diff < 1e-3, mean next-token loss diff < 1e-4). Because nothing in this path re-implements the HF math, a future drift between the kernels and the shipped Python template fails by construction. Cases cover partial/full RoPE, `qk_norm`, sigmoid SwiGLU, tanh-approx GELU, `plain` gated FFN tails, GQA + `qk_gain` + sliding window, DeBERTa relative attention, XSA + sparse attention gates, top-k MoE (geglu/mlp experts), bigram/trigram/char feature channels, and TTT-MLP full-forward plus split recurrent-state parity.
 
 Python/HF parity dependencies are declared in `requirements-hf.txt` (verified against torch 2.12 / transformers 5.10). The gated `.github/workflows/hf-parity.yml` workflow installs those dependencies and uses `macos-latest` with Homebrew MLX so the native-vs-Python check runs on an MLX-capable runner, keeping the default Linux CI lightweight.
 

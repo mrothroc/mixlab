@@ -134,7 +134,7 @@ func TestTTTMLPInferenceSessionReplayContinuationResetAndIsolation(t *testing.T)
 
 func TestTTTMLPInferenceLongContextBenchmark(t *testing.T) {
 	if os.Getenv("MIXLAB_TTT_MLP_LONG_BENCH") != "1" {
-		t.Skip("set MIXLAB_TTT_MLP_LONG_BENCH=1 to run the 32k Apple runtime benchmark")
+		t.Skip("set MIXLAB_TTT_MLP_LONG_BENCH=1 to run the 32k backend benchmark")
 	}
 	if !mlxAvailable() {
 		t.Skip("MLX backend not available")

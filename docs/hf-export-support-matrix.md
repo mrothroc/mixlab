@@ -1,6 +1,6 @@
 # Hugging Face Export Support Matrix
 
-This matrix is the source of truth for `mixlab -mode export-hf` support. Exported models are standard Hugging Face custom-code `AutoModel` and `AutoModelForCausalLM` directories, with `AutoModelForMaskedLM` added for MLM/MNTP/hybrid checkpoints. Supported features must preserve backbone hidden states, causal next-token inference logits, and masked-LM logits when that head is exported. Features that only affect training loss or require native recurrent scan state are rejected with explicit errors.
+This matrix is the source of truth for `mixlab -mode export-hf` support. Exported models are standard Hugging Face custom-code `AutoModel` and `AutoModelForCausalLM` directories, with `AutoModelForMaskedLM` added for MLM/MNTP/hybrid checkpoints. Supported features must preserve backbone hidden states, causal next-token inference logits, masked-LM logits when that head is exported, and recurrent cache state where an exported block exposes it. Features that only affect training loss or lack complete exported state semantics are rejected with explicit errors.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -38,7 +38,7 @@ This matrix is the source of truth for `mixlab -mode export-hf` support. Exporte
 | `hgrn2` | Gated | Matrix-state scan export is deferred until the PyTorch template has explicit recurrent-state parity coverage. |
 | `mlstm` | Gated | Stabilized matrix-memory scan export is deferred until the PyTorch template has explicit recurrent-state parity coverage. |
 | `gated_deltanet` | Gated | Chunked delta-rule recurrence uses native scan semantics not yet mirrored by the HF template. |
-| `ttt_mlp` | Gated | The nonlinear inner-loop recurrence and per-sequence MLP state are native-only until the PyTorch template has forward and recurrent-state parity coverage. |
+| `ttt_mlp` | Supported for cache-safe causal stacks | The generated PyTorch module mirrors the nonlinear inner recurrence, chunk-relative RoPE, causal Q/K convolutions, and request-owned MLP/partial-gradient/convolution/offset state. Export accepts `ttt_mlp` composed with pointwise `swiglu`/`geglu`/`mlp`; other token mixers remain gated until their cache state composes correctly. Native-vs-Python full-forward and split cached-state parity are required. |
 | `mamba`, `gated_linear_ssm`, `mamba3`, `mamba3-canonical` | Gated | Selective-scan and canonical Mamba-3 paths rely on native scan and backend-specific execution details. |
 | `retnet` and `rwkv` | Gated | Recurrent/retention semantics need dedicated exported-state parity fixtures before support is enabled. |
 | `custom` blocks | Unsupported | Arbitrary JSON custom op graphs cannot be safely converted into one static generated template. |

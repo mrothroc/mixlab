@@ -121,6 +121,25 @@ func TestTuneCUDAGraphLimits_CapsCanonicalMamba3Scan(t *testing.T) {
 	}
 }
 
+func TestTuneCUDAGraphLimits_TTTMLPBoundsGraphMemory(t *testing.T) {
+	prog := &arch.Program{}
+	for i := 0; i < 100; i++ {
+		prog.Ops = append(prog.Ops, arch.Op{Code: arch.OpAdd})
+	}
+	prog.Ops = append(prog.Ops, arch.Op{Code: arch.OpTTTMLPScan})
+
+	got := TuneCUDAGraphLimits(prog)
+	if got.MaxOpsPerBuffer != maxTTTMLPScanOpsPerBuffer {
+		t.Fatalf("MaxOpsPerBuffer=%d, want %d", got.MaxOpsPerBuffer, maxTTTMLPScanOpsPerBuffer)
+	}
+	if got.MaxMBPerBuffer != maxTTTMLPScanMBPerBuffer {
+		t.Fatalf("MaxMBPerBuffer=%d, want %d", got.MaxMBPerBuffer, maxTTTMLPScanMBPerBuffer)
+	}
+	if got.GraphCacheSize != tttMLPCUDAGraphCacheSize {
+		t.Fatalf("GraphCacheSize=%d, want %d", got.GraphCacheSize, tttMLPCUDAGraphCacheSize)
+	}
+}
+
 func TestApplyCUDAGraphLimits_PreservesUserEnv(t *testing.T) {
 	t.Setenv(MLXMaxOpsPerBufferEnv, "999")
 	t.Setenv(MLXCUDAGraphCacheEnv, "777")

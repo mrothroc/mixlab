@@ -115,9 +115,39 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 			if err := validateHFExportMoEBlock(field, block); err != nil {
 				return err
 			}
+		case "ttt_mlp":
+			if err := validateHFTTTMLPComposition(cfg, field, block); err != nil {
+				return err
+			}
 		default:
 			capability := hfExportBlockCapability(block)
 			return unsupportedHFExport(field+".type", fmt.Sprintf("%s: %s", capability.Feature, capability.Reason))
+		}
+	}
+	return nil
+}
+
+func validateHFTTTMLPComposition(cfg *ArchConfig, field string, block BlockSpec) error {
+	if cfg.Training.EffectiveObjective() != arch.ObjectiveCausal {
+		return unsupportedHFExport(field+".type", "ttt_mlp export requires a causal objective")
+	}
+	if cfg.EffectivePositionalEmbedding() != arch.PositionalEmbeddingRope {
+		return unsupportedHFExport(field+".type", "ttt_mlp export requires positional_embedding=rope")
+	}
+	if block.Heads <= 0 || cfg.ModelDim%block.Heads != 0 || (cfg.ModelDim/block.Heads)%2 != 0 {
+		return unsupportedHFExport(field+".heads", "ttt_mlp requires model_dim divisible by heads with an even head_dim")
+	}
+	if cfg.CharVocabSize > 0 || cfg.BigramVocabSize > 0 || cfg.TrigramVocabSize > 0 || cfg.SmearEmbeddings {
+		return unsupportedHFExport("feature_embeddings", "ttt_mlp cached export does not support embedding feature channels")
+	}
+	for i, candidate := range cfg.Blocks {
+		switch strings.ToLower(strings.TrimSpace(candidate.Type)) {
+		case "ttt_mlp", "swiglu", "geglu", "mlp":
+		default:
+			return unsupportedHFExport(
+				fmt.Sprintf("blocks[%d].type", i),
+				"ttt_mlp cached export supports only ttt_mlp plus pointwise swiglu/geglu/mlp blocks",
+			)
 		}
 	}
 	return nil

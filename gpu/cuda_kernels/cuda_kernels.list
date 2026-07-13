@@ -1,5 +1,6 @@
 # Relative paths from repository root.
 gpu/cuda_kernels/gated_delta_chunk_solve.cu
+gpu/cuda_kernels/ttt_mlp_causal_conv.cu
 gpu/cuda_kernels/mamba3_selective_scan_zero.cu
 gpu/cuda_kernels/mamba3_selective_scan_fwd_v3_phi_chunks.cu
 gpu/cuda_kernels/mamba3_selective_scan_fwd_v3_phi_prefix.cu

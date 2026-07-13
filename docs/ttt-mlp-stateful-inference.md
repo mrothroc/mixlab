@@ -53,6 +53,47 @@ different session, using it after close, or continuing after its session is
 closed returns an error. State replacement is transactional: failed forwards
 leave the previous handles active.
 
+## Hugging Face Cache
+
+`export-hf` supports the same cache-safe causal composition: one or more
+`ttt_mlp` blocks plus pointwise `swiglu`, `geglu`, or `mlp` blocks. The
+generated `MixlabForCausalLM` returns the request state in `past_key_values`:
+
+```python
+prefix = model(input_ids=prompt_ids, use_cache=True)
+continued = model(
+    input_ids=next_ids,
+    past_key_values=prefix.past_key_values,
+    use_cache=True,
+)
+```
+
+Each cache entry contains the packed inner MLP, partial chunk gradient,
+three-token Q/K convolution history, and chunk offset. Do not share one cache
+between independent requests. Mixed attention or SSM trunks fail export until
+their own cache states can be composed without replay.
+
+## CUDA Runtime
+
+Linux CUDA builds use a precompiled causal depthwise-convolution primitive for
+stateful Q/K history and retain the differentiable MLX recurrence for the
+nonlinear update. Set `MIXLAB_TTT_MLP_DISABLE_CUDA_PRIMITIVE=1` only to debug
+the portable fallback. The Docker build requires the TTT kernel in the
+embedded CUDA registry.
+
+Run CUDA correctness and long-context performance coverage on an NVIDIA host:
+
+```bash
+go test -tags mlx ./gpu ./train -run 'TTTMLP|CUDAGraph' -count=1 -v
+MIXLAB_TTT_MLP_LONG_BENCH=1 \
+go test -tags mlx ./train \
+  -run TestTTTMLPInferenceLongContextBenchmark -count=1 -v
+```
+
+CUDA performance numbers are intentionally not inferred from the Apple run;
+record them from the target GPU before making backend-specific throughput
+claims.
+
 ## Apple Runtime Verification
 
 The gated benchmark is reproducible with:

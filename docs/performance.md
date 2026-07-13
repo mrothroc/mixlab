@@ -165,8 +165,10 @@ the last committed state. GPU utilization is omitted when the platform does
 not expose a no-sudo sampler.
 
 Stateful TTT-MLP inference keeps recurrent arrays on the GPU and compiles graph
-variants by chunk fragment and offset. Its 512-through-32k Apple benchmark,
-memory measurements, and reproduction command are in
+variants by chunk fragment and offset. CUDA builds use a fused causal Q/K
+convolution primitive with the same bounded-state recurrence and retain a
+portable MLX fallback. The 512-through-32k Apple benchmark, CUDA benchmark
+command, memory measurements, and reproduction details are in
 [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md).
 
 ### Backward non-finite tracing

@@ -74,6 +74,69 @@ def is_native_gpt2_export(config_doc) -> bool:
     return config_doc.get("model_type") == "gpt2" or "GPT2LMHeadModel" in architectures
 
 
+def has_ttt_mlp(config_doc) -> bool:
+    return any(str(block.get("type", "")).lower() == "ttt_mlp" for block in config_doc.get("blocks", []))
+
+
+def compare_ttt_cached_state(args, model, input_ids, vocab, path) -> int:
+    with open(path) as f:
+        expected = json.load(f)
+    split = int(expected["split"])
+    with torch.no_grad():
+        prefix = model(input_ids=input_ids[:, :split], use_cache=True)
+        continuation = model(
+            input_ids=input_ids[:, split:],
+            past_key_values=prefix.past_key_values,
+            use_cache=True,
+        )
+    expected_logits = torch.tensor(
+        expected["continuation_logits"], dtype=torch.float64
+    ).view(1, input_ids.shape[1] - split, vocab)
+    actual_logits = continuation.logits.to(torch.float64)
+    max_logit_diff = (actual_logits - expected_logits).abs().max().item()
+    if max_logit_diff >= args.max_logit_diff:
+        print(
+            f"FAIL: TTT cached max_logit_diff {max_logit_diff:.3e} >= {args.max_logit_diff:.3e}",
+            file=sys.stderr,
+        )
+        return 1
+
+    states = continuation.past_key_values
+    if states is None or len(states) != len(expected["blocks"]):
+        print("FAIL: TTT cached state block count mismatch", file=sys.stderr)
+        return 2
+    max_state_diff = 0.0
+    for idx, (state, want) in enumerate(zip(states, expected["blocks"])):
+        if int(state.offset) != int(want["offset"]):
+            print(
+                f"FAIL: TTT block {idx} offset={state.offset} want={want['offset']}",
+                file=sys.stderr,
+            )
+            return 1
+        for field in ("mlp", "gradient", "conv"):
+            actual = getattr(state, field).detach().to(torch.float64).reshape(-1)
+            target = torch.tensor(want[field], dtype=torch.float64)
+            if actual.numel() != target.numel():
+                print(
+                    f"FAIL: TTT block {idx} {field} size={actual.numel()} want={target.numel()}",
+                    file=sys.stderr,
+                )
+                return 2
+            if actual.numel() > 0:
+                max_state_diff = max(max_state_diff, (actual - target).abs().max().item())
+    print(
+        f"ttt_cached_parity: max_logit_diff={max_logit_diff:.3e} "
+        f"max_state_diff={max_state_diff:.3e}"
+    )
+    if max_state_diff >= args.max_logit_diff:
+        print(
+            f"FAIL: TTT cached max_state_diff {max_state_diff:.3e} >= {args.max_logit_diff:.3e}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Mixlab native-vs-HF logits parity check")
     parser.add_argument("--dir", required=True, help="exported HF directory")
@@ -132,6 +195,12 @@ def main() -> int:
     with torch.no_grad():
         hf_logits = model(input_ids=input_ids).logits.to(torch.float64)
 
+    ttt_state_path = os.path.join(args.dir, "parity_ttt_state.json")
+    if os.path.exists(ttt_state_path):
+        status = compare_ttt_cached_state(args, model, input_ids, vocab, ttt_state_path)
+        if status != 0:
+            return status
+
     backbone = AutoModel.from_pretrained(args.dir, trust_remote_code=True)
     backbone.eval()
     encoded = tok(["a b c", "a b"], return_tensors="pt", padding=True)
@@ -152,7 +221,7 @@ def main() -> int:
     if not torch.isfinite(hidden).all() or not torch.isfinite(batched_lm).all():
         print("batched AutoModel/AutoModelForCausalLM outputs contain non-finite values", file=sys.stderr)
         return 2
-    if (encoded["attention_mask"] == 0).any():
+    if (encoded["attention_mask"] == 0).any() and not has_ttt_mlp(config_doc):
         mask_diff = (hidden - unmasked_hidden).abs().max().item()
         if mask_diff <= 1e-8:
             print("FAIL: AutoModel hidden states are unchanged when attention_mask hides padding", file=sys.stderr)

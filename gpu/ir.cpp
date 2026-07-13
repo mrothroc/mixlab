@@ -3,6 +3,7 @@
 #include "gated_delta_cuda_primitive.h"
 #include "gated_delta_metal_primitive.h"
 #include "mamba3_cuda_primitive.h"
+#include "ttt_mlp_cuda_primitive.h"
 
 #include <mlx/device.h>
 #include <mlx/random.h>
@@ -2808,6 +2809,15 @@ mx::array ttt_stateful_causal_conv(
     int T,
     int width) {
   constexpr int K = 4;
+  if (mlx_ir::ttt_mlp_causal_conv_cuda_primitive_available()) {
+    return mlx_ir::ttt_mlp_causal_conv_cuda(
+        mx::astype(x, mx::float32),
+        mx::astype(history, mx::float32),
+        mx::astype(weight, mx::float32),
+        B,
+        T,
+        width);
+  }
   auto combined = mx::concatenate({history, x}, 1);
   auto out = mx::zeros({B, T, width}, mx::float32);
   for (int lag = 0; lag < K; ++lag) {

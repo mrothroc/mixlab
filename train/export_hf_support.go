@@ -49,7 +49,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "hgrn2", Status: hfExportGated, Reason: "Matrix-state scan export is intentionally gated until the PyTorch template has explicit recurrent-state parity coverage."},
 		{Feature: "mlstm", Status: hfExportGated, Reason: "Stabilized matrix-memory scan export is intentionally gated until the PyTorch template has explicit recurrent-state parity coverage."},
 		{Feature: "gated_deltanet", Status: hfExportGated, Reason: "Chunked delta-rule recurrence uses native scan semantics that are not yet mirrored in the HF template."},
-		{Feature: "ttt_mlp", Status: hfExportGated, Reason: "The nonlinear inner-loop recurrence and recurrent MLP state are native-only until a PyTorch implementation has forward and state parity coverage."},
+		{Feature: "ttt_mlp", Status: hfExportSupported, Reason: "The nonlinear inner-loop recurrence and request-owned recurrent cache are mirrored with native forward/state parity coverage."},
 		{Feature: "mamba", Status: hfExportGated, Reason: "Mamba-family selective scans and short-conv variants are not yet represented in the HF template."},
 		{Feature: "mamba3-canonical", Status: hfExportGated, Reason: "Canonical Mamba-3 relies on specialized native scan semantics and CUDA/MLX execution paths."},
 		{Feature: "retnet", Status: hfExportGated, Reason: "Retention recurrence export needs dedicated parity fixtures before it can be enabled."},

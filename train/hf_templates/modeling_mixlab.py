@@ -5,9 +5,10 @@ import struct
 import torch
 from torch import nn
 from transformers import PreTrainedModel
-from transformers.modeling_outputs import BaseModelOutput, CausalLMOutput, MaskedLMOutput
+from transformers.modeling_outputs import BaseModelOutput, CausalLMOutputWithPast, MaskedLMOutput
 
 from .configuration_mixlab import MixlabConfig
+from .ttt_mlp_mixlab import MixlabTTTMLPBlock, MixlabTTTMLPState
 
 
 class MixlabRMSNorm(nn.Module):
@@ -915,6 +916,8 @@ class MixlabModel(PreTrainedModel):
                 modules.append(MixlabMLPBlock(config, block))
             elif block_type == "moe":
                 modules.append(MixlabMoEBlock(config, block))
+            elif block_type == "ttt_mlp":
+                modules.append(MixlabTTTMLPBlock(config, block))
             else:
                 raise ValueError(f"unsupported exported Mixlab block type {block_type!r}")
         self.blocks = nn.ModuleList(modules)
@@ -994,7 +997,13 @@ class MixlabModel(PreTrainedModel):
         masked_blocks = getattr(config, "masked_blocks", None) or []
         return masked_blocks if masked_blocks else config.blocks
 
-    def forward_hidden(self, input_ids=None, attention_mask=None):
+    def forward_hidden_with_state(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        ttt_state=None,
+        use_cache=False,
+    ):
         if input_ids is None:
             raise ValueError("input_ids is required")
         x = self._embed_features(input_ids)
@@ -1007,9 +1016,26 @@ class MixlabModel(PreTrainedModel):
         relative_embeddings = self.relative_embeddings
         if relative_embeddings is not None and self.relative_layer_norm is not None:
             relative_embeddings = self.relative_layer_norm(relative_embeddings)
+        ttt_blocks = sum(isinstance(block, MixlabTTTMLPBlock) for block in self.blocks)
+        if ttt_state is None:
+            ttt_state = (None,) * ttt_blocks
+        elif len(ttt_state) != ttt_blocks:
+            raise ValueError(f"ttt_state has {len(ttt_state)} blocks, expected {ttt_blocks}")
+        next_ttt_state = []
+        ttt_index = 0
         for block in self.blocks:
             if isinstance(block, MixlabPlainBlock):
                 x = block(x, relative_embeddings, dwa, attention_mask)
+            elif isinstance(block, MixlabTTTMLPBlock):
+                x, block_state = block(
+                    x,
+                    dwa=dwa,
+                    state=ttt_state[ttt_index],
+                    use_cache=use_cache,
+                )
+                if use_cache:
+                    next_ttt_state.append(block_state)
+                ttt_index += 1
             else:
                 x = block(x, dwa)
         if dwa is not None:
@@ -1017,7 +1043,11 @@ class MixlabModel(PreTrainedModel):
                 x = dwa.finish()
             else:
                 dwa.finish()
-        return self.final_norm(x)
+        return self.final_norm(x), tuple(next_ttt_state) if use_cache else None
+
+    def forward_hidden(self, input_ids=None, attention_mask=None):
+        hidden, _ = self.forward_hidden_with_state(input_ids, attention_mask)
+        return hidden
 
     def forward(self, input_ids=None, attention_mask=None, **kwargs):
         return BaseModelOutput(last_hidden_state=self.forward_hidden(input_ids, attention_mask))
@@ -1041,8 +1071,27 @@ class MixlabForCausalLM(MixlabModel):
         self.lm_head_weight = nn.Parameter(torch.empty(config.model_dim, config.vocab_size))
         nn.init.xavier_uniform_(self.lm_head_weight)
 
-    def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
-        x = self.forward_hidden(input_ids, attention_mask)
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        labels=None,
+        past_key_values=None,
+        ttt_state=None,
+        use_cache=None,
+        **kwargs,
+    ):
+        if ttt_state is not None and past_key_values is not None:
+            raise ValueError("pass only one of ttt_state or past_key_values")
+        if ttt_state is None:
+            ttt_state = past_key_values
+        use_cache = bool(use_cache) or ttt_state is not None
+        x, next_ttt_state = self.forward_hidden_with_state(
+            input_ids,
+            attention_mask,
+            ttt_state=ttt_state,
+            use_cache=use_cache,
+        )
         logits = torch.matmul(x, self.lm_head_weight)
         if getattr(self.config, "logit_softcap", 0.0):
             cap = float(self.config.logit_softcap)
@@ -1056,7 +1105,33 @@ class MixlabForCausalLM(MixlabModel):
                 shift_logits.view(-1, shift_logits.size(-1)),
                 shift_labels.view(-1),
             )
-        return CausalLMOutput(loss=loss, logits=logits)
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=next_ttt_state,
+        )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        if past_key_values is not None:
+            input_ids = input_ids[:, -1:]
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "past_key_values": past_key_values,
+            "use_cache": True,
+        }
+
+    @staticmethod
+    def _reorder_cache(past_key_values, beam_idx):
+        if past_key_values is None:
+            return None
+        return tuple(state.index_select(beam_idx) for state in past_key_values)
 
 
 class MixlabForMaskedLM(MixlabModel):
