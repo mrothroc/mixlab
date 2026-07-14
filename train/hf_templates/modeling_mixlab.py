@@ -791,7 +791,7 @@ def load_char_lookup(config):
 class MixlabModel(PreTrainedModel):
     config_class = MixlabConfig
     base_model_prefix = "mixlab"
-    supports_gradient_checkpointing = False
+    supports_gradient_checkpointing = True
 
     def __init__(self, config, blocks=None):
         super().__init__(config)

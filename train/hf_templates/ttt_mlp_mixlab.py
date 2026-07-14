@@ -1,7 +1,10 @@
 from dataclasses import dataclass
+import math
 
 import torch
 from torch import nn
+from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 
 class TTTMLPLinear(nn.Module):
@@ -81,14 +84,16 @@ def _layer_norm_l2_vjp(x, target, scale, bias, eps=1e-6):
     ) / (dim * std)
 
 
-def _adjacent_rope_at(x, position):
+def _adjacent_rope(x, offset=0):
     dim = x.shape[-1]
     pair_count = dim // 2
+    token_count = x.shape[-2]
     dim_idx = torch.arange(pair_count, device=x.device, dtype=x.dtype)
-    freqs = torch.exp(dim_idx * (-torch.log(torch.tensor(10000.0, device=x.device, dtype=x.dtype)) * 2.0 / dim))
-    angles = float(position) * freqs
-    cos_t = torch.cos(angles).view(1, 1, 1, pair_count)
-    sin_t = torch.sin(angles).view(1, 1, 1, pair_count)
+    freqs = torch.exp(dim_idx * (-math.log(10000.0) * 2.0 / dim))
+    positions = torch.arange(offset, offset + token_count, device=x.device, dtype=x.dtype)
+    angles = positions.view(token_count, 1) * freqs.view(1, pair_count)
+    cos_t = torch.cos(angles).view(1, 1, token_count, pair_count)
+    sin_t = torch.sin(angles).view(1, 1, token_count, pair_count)
     pairs = x.view(*x.shape[:-1], pair_count, 2)
     even = pairs[..., 0]
     odd = pairs[..., 1]
@@ -96,14 +101,15 @@ def _adjacent_rope_at(x, position):
 
 
 def _causal_depthwise_conv(x, history, weight):
-    # Mixlab stores taps in convolution order, so the newest sample uses the
-    # final column and the oldest retained sample uses column zero.
-    token_count = x.shape[1]
     combined = torch.cat((history, x), dim=1)
-    out = torch.zeros_like(x)
-    for lag in range(4):
-        shifted = combined[:, 3 - lag : 3 - lag + token_count, :]
-        out = out + shifted * weight[:, 3 - lag].view(1, 1, -1)
+    # conv1d is cross-correlation: weight[:, 0] consumes the oldest retained
+    # sample and weight[:, 3] consumes the current token, matching Mixlab's
+    # stored convolution order.
+    out = F.conv1d(
+        combined.transpose(1, 2),
+        weight.unsqueeze(1),
+        groups=x.shape[-1],
+    ).transpose(1, 2)
     return out, combined[:, -3:, :]
 
 
@@ -124,6 +130,10 @@ class MixlabTTTMLPBlock(nn.Module):
         hidden_mult = float(block_config.get("inner_hidden_mult", 0.0) or 4.0)
         self.hidden_dim = int(round(self.head_dim * hidden_mult))
         self.inner_lr_base = float(block_config.get("inner_lr_base", 0.0) or 0.1)
+        # Full-meta-gradient fine-tuning is memory intensive. Checkpoint the
+        # stateless scan by default and let Hugging Face's standard model-level
+        # controls disable it when a caller explicitly prefers backward speed.
+        self.gradient_checkpointing = True
 
         self.norm = TTTMLPRMSNorm(dim, eps=1e-6)
         self.w_qk = TTTMLPLinear(dim, dim)
@@ -190,7 +200,7 @@ class MixlabTTTMLPBlock(nn.Module):
         batch = parts[0].shape[0]
         return torch.cat(tuple(part.reshape(batch, -1) for part in parts), dim=1)
 
-    def _segment(self, qk, value, lr_logits, state):
+    def _online_segment(self, qk, value, lr_logits, state):
         batch, token_count, _ = qk.shape
         if state.offset < 0 or state.offset + token_count > self.chunk_size:
             raise ValueError("ttt_mlp cached segment crosses a chunk boundary")
@@ -217,8 +227,8 @@ class MixlabTTTMLPBlock(nn.Module):
         outputs = []
         for token_idx in range(token_count):
             position = state.offset + token_idx
-            qt = _adjacent_rope_at(q[:, :, token_idx : token_idx + 1], position)
-            kt = _adjacent_rope_at(k[:, :, token_idx : token_idx + 1], position)
+            qt = _adjacent_rope(q[:, :, token_idx : token_idx + 1], position)
+            kt = _adjacent_rope(k[:, :, token_idx : token_idx + 1], position)
             vt = v[:, :, token_idx : token_idx + 1]
             z1 = torch.matmul(kt, w1) + b1
             x2 = _gelu_tanh(z1)
@@ -263,6 +273,124 @@ class MixlabTTTMLPBlock(nn.Module):
         )
         return scan, next_state
 
+    def _stateless_online_scan(self, qk, value, lr_logits):
+        state = self.initial_state(qk.shape[0], qk.device)
+        outputs = []
+        start = 0
+        while start < qk.shape[1]:
+            segment_len = min(qk.shape[1] - start, self.chunk_size - state.offset)
+            scan, state = self._online_segment(
+                qk[:, start : start + segment_len],
+                value[:, start : start + segment_len],
+                lr_logits[:, start : start + segment_len],
+                state,
+            )
+            outputs.append(scan)
+            start += segment_len
+        return torch.cat(outputs, dim=1)
+
+    def _stateless_dual_scan(self, qk, value, lr_logits):
+        """Vectorized full-sequence scan equivalent to the online recurrence."""
+        batch, token_count, _ = qk.shape
+        work_dtype = torch.float32
+        qk = qk.to(work_dtype)
+        value = value.to(work_dtype)
+        lr_logits = lr_logits.to(work_dtype)
+        history = torch.zeros(batch, 3, self.dim, device=qk.device, dtype=work_dtype)
+        q_seq, _ = _causal_depthwise_conv(
+            qk, history, self.q_conv_weight.to(work_dtype)
+        )
+        k_seq, _ = _causal_depthwise_conv(
+            qk, history, self.k_conv_weight.to(work_dtype)
+        )
+        q_seq = q_seq + self.q_conv_bias.to(work_dtype).view(1, 1, -1)
+        k_seq = k_seq + self.k_conv_bias.to(work_dtype).view(1, 1, -1)
+
+        q_all = q_seq.view(batch, token_count, self.heads, self.head_dim).transpose(1, 2)
+        k_all = k_seq.view(batch, token_count, self.heads, self.head_dim).transpose(1, 2)
+        v_all = value.view(batch, token_count, self.heads, self.head_dim).transpose(1, 2)
+        lr_all = lr_logits.view(batch, token_count, self.heads).transpose(1, 2)
+        w1 = self.inner_w1.to(work_dtype).reshape(
+            self.heads, self.head_dim, self.hidden_dim
+        ).unsqueeze(0).expand(batch, -1, -1, -1)
+        b1 = self.inner_b1.to(work_dtype).reshape(
+            1, self.heads, 1, self.hidden_dim
+        ).expand(batch, -1, -1, -1)
+        w2 = self.inner_w2.to(work_dtype).reshape(
+            self.heads, self.hidden_dim, self.head_dim
+        ).unsqueeze(0).expand(batch, -1, -1, -1)
+        b2 = self.inner_b2.to(work_dtype).reshape(
+            1, self.heads, 1, self.head_dim
+        ).expand(batch, -1, -1, -1)
+        norm_scale = self.inner_norm_scale.to(work_dtype).view(
+            1, self.heads, 1, self.head_dim
+        )
+        norm_bias = self.inner_norm_bias.to(work_dtype).view(
+            1, self.heads, 1, self.head_dim
+        )
+
+        outputs = []
+        for start in range(0, token_count, self.chunk_size):
+            end = min(token_count, start + self.chunk_size)
+            chunk_tokens = end - start
+            q = _adjacent_rope(q_all[:, :, start:end])
+            k = _adjacent_rope(k_all[:, :, start:end])
+            v = v_all[:, :, start:end]
+            lr_gate = torch.sigmoid(lr_all[:, :, start:end])
+            positions = torch.arange(
+                1, chunk_tokens + 1, device=q.device, dtype=work_dtype
+            )
+            token_coeff = torch.clamp(
+                positions.reciprocal()
+                + self.inner_token_coeff[:chunk_tokens].to(work_dtype),
+                min=0.0,
+            )
+            eta = (
+                token_coeff.view(1, 1, chunk_tokens, 1)
+                * lr_gate.view(batch, self.heads, 1, chunk_tokens)
+                * (self.inner_lr_base / self.head_dim)
+            )
+            eta_lower = torch.tril(eta)
+
+            z1 = torch.matmul(k, w1) + b1
+            x2 = _gelu_tanh(z1)
+            z2 = torch.matmul(x2, w2) + b2
+            target = v - k
+            grad_z2 = _layer_norm_l2_vjp(
+                z2, target, norm_scale, norm_bias
+            )
+            grad_z1 = (
+                torch.matmul(grad_z2, w2.transpose(-2, -1))
+                * _gelu_tanh_derivative(z1)
+            )
+
+            attn1 = torch.tril(torch.matmul(q, k.transpose(-2, -1)))
+            b1_bar = b1 - torch.matmul(eta_lower, grad_z1)
+            z1_bar = (
+                torch.matmul(q, w1)
+                - torch.matmul(eta * attn1, grad_z1)
+                + b1_bar
+            )
+            x2_bar = _gelu_tanh(z1_bar)
+            attn2 = torch.tril(torch.matmul(x2_bar, x2.transpose(-2, -1)))
+            b2_bar = b2 - torch.matmul(eta_lower, grad_z2)
+            z2_bar = (
+                torch.matmul(x2_bar, w2)
+                - torch.matmul(eta * attn2, grad_z2)
+                + b2_bar
+            )
+            outputs.append(q + _layer_norm(z2_bar, norm_scale, norm_bias))
+
+            last_eta = eta[:, :, -1, :].unsqueeze(-1)
+            w1 = w1 - torch.matmul((last_eta * k).transpose(-2, -1), grad_z1)
+            b1 = b1 - torch.sum(last_eta * grad_z1, dim=2, keepdim=True)
+            w2 = w2 - torch.matmul((last_eta * x2).transpose(-2, -1), grad_z2)
+            b2 = b2 - torch.sum(last_eta * grad_z2, dim=2, keepdim=True)
+
+        return torch.cat(outputs, dim=2).transpose(1, 2).reshape(
+            batch, token_count, self.dim
+        )
+
     def forward(self, x, dwa=None, state=None, use_cache=False):
         batch, token_count, _ = x.shape
         if token_count <= 0:
@@ -271,30 +399,54 @@ class MixlabTTTMLPBlock(nn.Module):
         qk = self.w_qk(x_norm)
         value = self.w_v(x_norm)
         lr_logits = self.inner_lr_w(x_norm) + self.inner_lr_bias
-        if state is None:
-            state = self.initial_state(batch, x.device)
-        elif state.mlp.shape != (batch, self.state_size):
+        if state is not None and state.mlp.shape != (batch, self.state_size):
             raise ValueError(
                 f"ttt_mlp state shape {tuple(state.mlp.shape)} != ({batch}, {self.state_size})"
             )
 
-        outputs = []
-        start = 0
-        while start < token_count:
-            segment_len = min(token_count - start, self.chunk_size - state.offset)
-            scan, state = self._segment(
-                qk[:, start : start + segment_len],
-                value[:, start : start + segment_len],
-                lr_logits[:, start : start + segment_len],
-                state,
-            )
-            outputs.append(scan)
-            start += segment_len
-        scan = torch.cat(outputs, dim=1).to(dtype=x.dtype)
+        if state is None and not use_cache:
+            if self.training and self.gradient_checkpointing and torch.is_grad_enabled():
+                checkpoint_fn = getattr(self, "_gradient_checkpointing_func", None)
+                if checkpoint_fn is None:
+                    scan = torch_checkpoint(
+                        self._stateless_dual_scan,
+                        qk,
+                        value,
+                        lr_logits,
+                        use_reentrant=False,
+                    )
+                else:
+                    scan = checkpoint_fn(
+                        self._stateless_dual_scan,
+                        qk,
+                        value,
+                        lr_logits,
+                    )
+            else:
+                scan = self._stateless_dual_scan(qk, value, lr_logits)
+            next_state = None
+        else:
+            if state is None:
+                state = self.initial_state(batch, x.device)
+            outputs = []
+            start = 0
+            while start < token_count:
+                segment_len = min(token_count - start, self.chunk_size - state.offset)
+                segment, state = self._online_segment(
+                    qk[:, start : start + segment_len],
+                    value[:, start : start + segment_len],
+                    lr_logits[:, start : start + segment_len],
+                    state,
+                )
+                outputs.append(segment)
+                start += segment_len
+            scan = torch.cat(outputs, dim=1)
+            next_state = state
+        scan = scan.to(dtype=x.dtype)
         post_norm = self.post_norm(scan)
         gate = _gelu_tanh(self.w_out_gate(x_norm))
         delta = self.w_out(post_norm * gate)
         x = x + delta
         if dwa is not None:
             x = dwa.apply(x)
-        return x, state if use_cache else None
+        return x, next_state if use_cache else None

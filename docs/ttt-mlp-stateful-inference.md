@@ -73,6 +73,31 @@ three-token Q/K convolution history, and chunk offset. Do not share one cache
 between independent requests. Mixed attention or SSM trunks fail export until
 their own cache states can be composed without replay.
 
+When no cache is requested, the exported module uses the same chunk-level dual
+form as native full-sequence execution instead of replaying the online update
+one token at a time. This is the normal path for zero-shot scoring, `AutoModel`
+feature extraction, and Hugging Face fine-tuning. Cached prefill and decode keep
+the online path above so split continuation remains exactly state-compatible.
+
+Right-padded stateless batches are supported and parity-tested. Left-padded
+batches are not: padding before a sequence would otherwise update the TTT state
+and shift chunk-relative positions. Bucket by length or configure the tokenizer
+for right padding.
+
+For short CPU evaluation workloads, use a small PyTorch intra-op thread count.
+On the M1 Max release fixture, `OMP_NUM_THREADS=1` reduced a D384, 14-mixer,
+43-token stateless forward from 412 ms with eight threads to 63.9 ms. The module
+does not set this globally because doing so from library code would affect the
+host application's unrelated PyTorch work.
+
+During downstream fine-tuning, exported TTT blocks checkpoint the complete
+stateless dual scan by default. Backward recomputes that scan one block at a
+time, preserving full meta-gradients while avoiding retention of every inner
+update across all layers. `gradient_checkpointing_disable()` opts out when
+backward speed matters more than memory; `gradient_checkpointing_enable()`
+restores the default. Cache-bearing inference never uses activation
+checkpointing.
+
 ## CUDA Runtime
 
 Linux CUDA builds use a precompiled causal depthwise-convolution primitive for

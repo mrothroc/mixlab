@@ -113,6 +113,49 @@ HF export supports next-token and masked-LM checkpoints using sequential blocks:
 
 The generated `modeling_mixlab.py` consumes Hugging Face `attention_mask` in `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForMaskedLM`, so padded batches mask pad-token keys instead of letting padding leak into hidden states.
 
+### TTT-MLP execution paths
+
+Exported TTT-MLP blocks use a vectorized chunk dual form for ordinary
+stateless `AutoModel` and `AutoModelForCausalLM` calls, including downstream
+fine-tuning. Calls that request or provide `past_key_values` retain the exact
+online recurrence because the cache includes partial-chunk gradients and
+convolution history.
+
+Variable-length TTT batches must be right padded. Real-token prefix logits are
+then identical to scoring each row separately; left padding would advance the
+recurrent state before the first real token and is not supported. This is
+stricter than attention-only exports, where `attention_mask` removes padding
+keys directly.
+
+Short TTT sequences contain many small grouped matrix operations. On CPU,
+large default PyTorch thread pools can cost more than the operations themselves.
+For zero-shot scoring of short examples, start the evaluator with one intra-op
+thread and tune upward only for longer sequences or larger batches:
+
+```bash
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python evaluate.py ...
+```
+
+The exported model does not change PyTorch's process-global thread settings.
+MPS uses standard supported PyTorch operations in the stateless path, but CPU
+is often faster for short batch-one scoring because MPS launch overhead is not
+amortized.
+
+TTT blocks activation-checkpoint the entire stateless dual scan by default in
+training mode when gradients are enabled. This preserves the exact full
+meta-gradient while recomputing one block's scan during backward instead of
+retaining every inner-update activation across the trunk. Evaluation,
+`torch.no_grad()`, and cached generation do not enter the checkpoint path.
+
+The standard Hugging Face controls are supported. The memory-bounded default is
+recommended for downstream fine-tuning; callers with sufficient device memory
+can trade memory for backward speed explicitly:
+
+```python
+model.gradient_checkpointing_disable()  # faster backward, higher peak memory
+model.gradient_checkpointing_enable()   # restore memory-bounded backward
+```
+
 Tokenizer artifacts must come from an explicit `-tokenizer-path`, or from `tokenizer.json` next to the config/checkpoint. If the tokenizer source is missing or unreachable, export fails before writing an incomplete Hugging Face directory. Mixlab writes `tokenizer_config.json` and `special_tokens_map.json` by merging any source sidecars with special-token metadata derived from `tokenizer.json`, and writes matching `pad/eos/bos/unk_token_id` fields to `config.json` when the tokens are present. For masked-capable checkpoints (`mlm`/`mntp`, or `hybrid` with `hybrid_clm_fraction < 1`), it also sets the tokenizer `mask_token`/`mask_token_id` — resolved from `training.mlm_mask_token_id` against the tokenizer vocab — so masked/MNTP eval works without manually patching the tokenizer.
 
 When `char_vocab_size > 0`, `export-hf` also requires `char_features.bin` next to the config, checkpoint, or tokenizer source. The file is copied into the HF directory and loaded by the exported Python model so generated token IDs use the same token-id lookup as Mixlab inference.

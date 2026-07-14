@@ -1,9 +1,42 @@
 package train
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestExportHFTTTMLPTemplateHasStatelessDualFastPath(t *testing.T) {
+	sourceBytes, err := os.ReadFile(filepath.Join("hf_templates", "ttt_mlp_mixlab.py"))
+	if err != nil {
+		t.Fatalf("read TTT HF template: %v", err)
+	}
+	source := string(sourceBytes)
+	for _, want := range []string{
+		"def _stateless_dual_scan",
+		"if state is None and not use_cache:",
+		"scan = self._stateless_dual_scan(qk, value, lr_logits)",
+		"F.conv1d(",
+		"eta_lower = torch.tril(eta)",
+		"self.gradient_checkpointing = True",
+		"scan = torch_checkpoint(",
+	} {
+		if !strings.Contains(source, want) {
+			t.Fatalf("TTT HF template missing %q", want)
+		}
+	}
+	if !strings.Contains(source, "def _online_segment") {
+		t.Fatal("TTT HF template no longer retains the cached online recurrence")
+	}
+	modelingBytes, err := os.ReadFile(filepath.Join("hf_templates", "modeling_mixlab.py"))
+	if err != nil {
+		t.Fatalf("read HF modeling template: %v", err)
+	}
+	if !strings.Contains(string(modelingBytes), "supports_gradient_checkpointing = True") {
+		t.Fatal("HF modeling template does not expose standard gradient-checkpointing controls")
+	}
+}
 
 func TestExportHFTTTMLPConfigAndWeightMap(t *testing.T) {
 	cfg, err := ParseArchConfig([]byte(`{

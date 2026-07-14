@@ -175,6 +175,19 @@ portable MLX fallback. The 512-through-32k Apple benchmark, CUDA benchmark
 command, memory measurements, and reproduction details are in
 [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md).
 
+Hugging Face TTT-MLP exports use a vectorized chunk dual form for stateless
+forward and fine-tuning, while cached continuation retains the online scan.
+For short CPU scoring, PyTorch thread-pool overhead can dominate; use
+`OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` as the starting point for batch-one
+evaluation. The exported module does not mutate the application's global
+thread settings. Right-padded variable-length batches are supported; left
+padding is not compatible with the recurrent position/state contract.
+
+HF TTT fine-tuning uses whole-scan activation checkpointing by default. This is
+an exact recomputation strategy, not a detached or first-order inner update.
+Use Hugging Face's `gradient_checkpointing_disable()` only when sufficient
+device memory is available and faster backward execution is more important.
+
 Mixlab reports analytical forward FLOPs for `ttt_mlp`, but does not report TTT
 training-step FLOPs, FLOPs/token, or MFU as precise metrics. The generic
 three-times-forward training proxy does not model the inner VJP plus full outer

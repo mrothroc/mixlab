@@ -137,6 +137,152 @@ def compare_ttt_cached_state(args, model, input_ids, vocab, path) -> int:
     return 0
 
 
+def compare_ttt_dual_online(args, model) -> int:
+    """Check stateless dual-form output and outer gradients against online TTT."""
+    torch.manual_seed(271828)
+    model.gradient_checkpointing_disable()
+    if any(
+        block.gradient_checkpointing
+        for block in model.blocks
+        if block.__class__.__name__ == "MixlabTTTMLPBlock"
+    ):
+        print("FAIL: gradient_checkpointing_disable did not reach TTT blocks", file=sys.stderr)
+        return 2
+    model.gradient_checkpointing_enable()
+    max_output_diff = 0.0
+    max_gradient_diff = 0.0
+    direct_saved_bytes = 0
+    checkpoint_saved_bytes = 0
+    checked = 0
+    for block in model.blocks:
+        if block.__class__.__name__ != "MixlabTTTMLPBlock":
+            continue
+        block.train()
+        token_count = 2 * int(block.chunk_size) + 1
+        base = torch.randn(2, token_count, int(block.dim), dtype=torch.float32) * 0.2
+        probe = torch.randn_like(base)
+        parameters = [parameter for parameter in block.parameters() if parameter.requires_grad]
+
+        dual_input = base.clone().requires_grad_(True)
+        dual_output, _ = block(dual_input, use_cache=False)
+        dual_gradients = torch.autograd.grad(
+            (dual_output * probe).sum(),
+            [dual_input] + parameters,
+            allow_unused=True,
+        )
+
+        online_input = base.clone().requires_grad_(True)
+        online_output, _ = block(online_input, use_cache=True)
+        online_gradients = torch.autograd.grad(
+            (online_output * probe).sum(),
+            [online_input] + parameters,
+            allow_unused=True,
+        )
+
+        max_output_diff = max(
+            max_output_diff,
+            (dual_output.detach() - online_output.detach()).abs().max().item(),
+        )
+        for dual_gradient, online_gradient in zip(dual_gradients, online_gradients):
+            if dual_gradient is None or online_gradient is None:
+                if dual_gradient is not None or online_gradient is not None:
+                    print("FAIL: TTT dual/online gradient presence mismatch", file=sys.stderr)
+                    return 1
+                continue
+            max_gradient_diff = max(
+                max_gradient_diff,
+                (dual_gradient.detach() - online_gradient.detach()).abs().max().item(),
+            )
+        if checked == 0:
+            def saved_tensor_bytes(checkpoint_enabled):
+                saved = 0
+
+                def pack(tensor):
+                    nonlocal saved
+                    saved += tensor.numel() * tensor.element_size()
+                    return tensor
+
+                block.gradient_checkpointing = checkpoint_enabled
+                measured_input = base.clone().requires_grad_(True)
+                with torch.autograd.graph.saved_tensors_hooks(pack, lambda tensor: tensor):
+                    measured_output, _ = block(measured_input, use_cache=False)
+                    measured_loss = (measured_output * probe).sum()
+                gradients = torch.autograd.grad(
+                    measured_loss,
+                    [measured_input] + parameters,
+                    allow_unused=True,
+                )
+                if any(
+                    gradient is not None and not torch.isfinite(gradient).all()
+                    for gradient in gradients
+                ):
+                    raise RuntimeError("TTT checkpoint memory probe produced non-finite gradients")
+                return saved
+
+            direct_saved_bytes = saved_tensor_bytes(False)
+            checkpoint_saved_bytes = saved_tensor_bytes(True)
+        block.gradient_checkpointing = True
+        block.eval()
+        checked += 1
+
+    if checked == 0:
+        print("FAIL: TTT config contains no exported TTT blocks", file=sys.stderr)
+        return 2
+    print(
+        f"ttt_dual_online_parity: blocks={checked} "
+        f"max_output_diff={max_output_diff:.3e} max_gradient_diff={max_gradient_diff:.3e} "
+        f"saved_bytes={direct_saved_bytes} checkpoint_saved_bytes={checkpoint_saved_bytes}"
+    )
+    if max_output_diff >= args.max_logit_diff:
+        print(
+            f"FAIL: TTT dual/online output diff {max_output_diff:.3e} "
+            f">= {args.max_logit_diff:.3e}",
+            file=sys.stderr,
+        )
+        return 1
+    if max_gradient_diff >= 5e-3:
+        print(
+            f"FAIL: TTT dual/online gradient diff {max_gradient_diff:.3e} >= 5.000e-03",
+            file=sys.stderr,
+        )
+        return 1
+    if checkpoint_saved_bytes >= direct_saved_bytes:
+        print(
+            "FAIL: TTT checkpointing did not reduce saved forward tensors "
+            f"({checkpoint_saved_bytes} >= {direct_saved_bytes})",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def compare_ttt_right_padded_batch(model, encoded, batched_logits) -> int:
+    if encoded["input_ids"].shape[0] < 2 or not (encoded["attention_mask"] == 0).any():
+        print("FAIL: TTT padded-batch parity fixture has no padded row", file=sys.stderr)
+        return 2
+    if not torch.all(encoded["attention_mask"][:, 1:] <= encoded["attention_mask"][:, :-1]):
+        print("FAIL: TTT export supports right-padded batches; fixture is not right padded", file=sys.stderr)
+        return 2
+    max_diff = 0.0
+    with torch.no_grad():
+        for row in range(encoded["input_ids"].shape[0]):
+            length = int(encoded["attention_mask"][row].sum().item())
+            single_ids = encoded["input_ids"][row : row + 1, :length]
+            single = model(
+                input_ids=single_ids,
+                attention_mask=torch.ones_like(single_ids),
+            ).logits
+            max_diff = max(
+                max_diff,
+                (batched_logits[row : row + 1, :length] - single).abs().max().item(),
+            )
+    print(f"ttt_right_padded_batch_parity: max_logit_diff={max_diff:.3e}")
+    if max_diff >= 1e-5:
+        print(f"FAIL: TTT right-padded batch diff {max_diff:.3e} >= 1.000e-05", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Mixlab native-vs-HF logits parity check")
     parser.add_argument("--dir", required=True, help="exported HF directory")
@@ -200,6 +346,9 @@ def main() -> int:
         status = compare_ttt_cached_state(args, model, input_ids, vocab, ttt_state_path)
         if status != 0:
             return status
+        status = compare_ttt_dual_online(args, model)
+        if status != 0:
+            return status
 
     backbone = AutoModel.from_pretrained(args.dir, trust_remote_code=True)
     backbone.eval()
@@ -221,6 +370,10 @@ def main() -> int:
     if not torch.isfinite(hidden).all() or not torch.isfinite(batched_lm).all():
         print("batched AutoModel/AutoModelForCausalLM outputs contain non-finite values", file=sys.stderr)
         return 2
+    if has_ttt_mlp(config_doc):
+        status = compare_ttt_right_padded_batch(model, encoded, batched_lm)
+        if status != 0:
+            return status
     if (encoded["attention_mask"] == 0).any() and not has_ttt_mlp(config_doc):
         mask_diff = (hidden - unmasked_hidden).abs().max().item()
         if mask_diff <= 1e-8:
