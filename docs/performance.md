@@ -180,8 +180,9 @@ forward and fine-tuning, while cached continuation retains the online scan.
 For short CPU scoring, PyTorch thread-pool overhead can dominate; use
 `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1` as the starting point for batch-one
 evaluation. The exported module does not mutate the application's global
-thread settings. Right-padded variable-length batches are supported; left
-padding is not compatible with the recurrent position/state contract.
+thread settings. Right-padded variable-length batches are supported; left padding
+is not compatible with the recurrent position/state contract and is rejected with
+`ValueError` rather than scored incorrectly.
 
 HF TTT fine-tuning uses whole-scan activation checkpointing by default. This is
 an exact recomputation strategy, not a detached or first-order inner update.

@@ -123,9 +123,15 @@ convolution history.
 
 Variable-length TTT batches must be right padded. Real-token prefix logits are
 then identical to scoring each row separately; left padding would advance the
-recurrent state before the first real token and is not supported. This is
-stricter than attention-only exports, where `attention_mask` removes padding
-keys directly.
+recurrent state before the first real token. This is stricter than attention-only
+exports, where `attention_mask` removes padding keys directly.
+
+A left- or interior-padded `attention_mask` raises `ValueError` rather than
+returning plausible but wrong logits — note that Hugging Face's batched
+`generate()` convention for decoder-only models is `padding_side="left"`, so an
+eval harness carrying that default will fail loudly here instead of silently
+scoring against a corrupted recurrent state. Set `padding_side="right"` or bucket
+sequences by length.
 
 Short TTT sequences contain many small grouped matrix operations. On CPU,
 large default PyTorch thread pools can cost more than the operations themselves.

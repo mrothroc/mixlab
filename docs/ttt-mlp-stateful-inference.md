@@ -80,8 +80,9 @@ feature extraction, and Hugging Face fine-tuning. Cached prefill and decode keep
 the online path above so split continuation remains exactly state-compatible.
 
 Right-padded stateless batches are supported and parity-tested. Left-padded
-batches are not: padding before a sequence would otherwise update the TTT state
-and shift chunk-relative positions. Bucket by length or configure the tokenizer
+batches are rejected with `ValueError`: padding before a sequence would otherwise
+update the TTT state and shift chunk-relative positions, so the export fails loudly
+rather than returning wrong logits. Bucket by length or configure the tokenizer
 for right padding.
 
 For short CPU evaluation workloads, use a small PyTorch intra-op thread count.

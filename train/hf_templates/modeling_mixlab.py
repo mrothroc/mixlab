@@ -8,7 +8,11 @@ from transformers import PreTrainedModel
 from transformers.modeling_outputs import BaseModelOutput, CausalLMOutputWithPast, MaskedLMOutput
 
 from .configuration_mixlab import MixlabConfig
-from .ttt_mlp_mixlab import MixlabTTTMLPBlock, MixlabTTTMLPState
+from .ttt_mlp_mixlab import (
+    MixlabTTTMLPBlock,
+    MixlabTTTMLPState,
+    require_right_padded_ttt_batch,
+)
 
 
 class MixlabRMSNorm(nn.Module):
@@ -1017,6 +1021,8 @@ class MixlabModel(PreTrainedModel):
         if relative_embeddings is not None and self.relative_layer_norm is not None:
             relative_embeddings = self.relative_layer_norm(relative_embeddings)
         ttt_blocks = sum(isinstance(block, MixlabTTTMLPBlock) for block in self.blocks)
+        if ttt_blocks:
+            require_right_padded_ttt_batch(attention_mask)
         if ttt_state is None:
             ttt_state = (None,) * ttt_blocks
         elif len(ttt_state) != ttt_blocks:

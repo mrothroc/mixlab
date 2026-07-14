@@ -29,6 +29,9 @@ func TestExportHFTTTMLPTemplateHasStatelessDualFastPath(t *testing.T) {
 	if !strings.Contains(source, "def _online_segment") {
 		t.Fatal("TTT HF template no longer retains the cached online recurrence")
 	}
+	if !strings.Contains(source, "def require_right_padded_ttt_batch") {
+		t.Fatal("TTT HF template does not reject left-padded batches")
+	}
 	modelingBytes, err := os.ReadFile(filepath.Join("hf_templates", "modeling_mixlab.py"))
 	if err != nil {
 		t.Fatalf("read HF modeling template: %v", err)

@@ -100,6 +100,26 @@ def _adjacent_rope(x, offset=0):
     return torch.stack((even * cos_t - odd * sin_t, even * sin_t + odd * cos_t), dim=-1).reshape_as(x)
 
 
+def require_right_padded_ttt_batch(attention_mask):
+    """Reject padding that a TTT recurrence cannot honor.
+
+    TTT consumes every token into the inner MLP state, so a leading or interior pad
+    would perform inner updates and shift chunk-relative positions before the first
+    real token. Trailing pads are safe: causality keeps them out of earlier positions.
+    Attention-style rank-3/4 masks are not padding masks and are left alone.
+    """
+    if attention_mask is None or attention_mask.dim() != 2:
+        return
+    mask = attention_mask.to(torch.bool)
+    if bool(torch.all(mask[:, 1:] <= mask[:, :-1])):
+        return
+    raise ValueError(
+        "ttt_mlp requires right-padded batches: a pad before a real token would "
+        "advance the recurrent state and shift chunk-relative positions. Set the "
+        "tokenizer to padding_side='right', or bucket sequences by length."
+    )
+
+
 def _causal_depthwise_conv(x, history, weight):
     combined = torch.cat((history, x), dim=1)
     # conv1d is cross-correlation: weight[:, 0] consumes the oldest retained

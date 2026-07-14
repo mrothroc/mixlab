@@ -283,6 +283,25 @@ def compare_ttt_right_padded_batch(model, encoded, batched_logits) -> int:
     return 0
 
 
+def check_ttt_left_padding_rejected(model, encoded) -> int:
+    """A left-padded batch must fail loudly: TTT consumes pads into the recurrent
+    state, so silently computing it would return plausible but wrong logits."""
+    input_ids = encoded["input_ids"][:1]
+    if input_ids.shape[1] < 2:
+        print("FAIL: TTT left-padding fixture needs at least two tokens", file=sys.stderr)
+        return 2
+    left_padded = torch.ones_like(input_ids)
+    left_padded[0, 0] = 0
+    try:
+        with torch.no_grad():
+            model(input_ids=input_ids, attention_mask=left_padded)
+    except ValueError:
+        print("ttt_left_padding_rejected: raised ValueError as required")
+        return 0
+    print("FAIL: TTT export silently accepted a left-padded batch", file=sys.stderr)
+    return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Mixlab native-vs-HF logits parity check")
     parser.add_argument("--dir", required=True, help="exported HF directory")
@@ -372,6 +391,9 @@ def main() -> int:
         return 2
     if has_ttt_mlp(config_doc):
         status = compare_ttt_right_padded_batch(model, encoded, batched_lm)
+        if status != 0:
+            return status
+        status = check_ttt_left_padding_rejected(model, encoded)
         if status != 0:
             return status
     if (encoded["attention_mask"] == 0).any() and not has_ttt_mlp(config_doc):
