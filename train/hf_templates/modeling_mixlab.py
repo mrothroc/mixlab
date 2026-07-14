@@ -5,9 +5,15 @@ import struct
 import torch
 from torch import nn
 from transformers import PreTrainedModel
-from transformers.modeling_outputs import BaseModelOutput, CausalLMOutputWithPast, MaskedLMOutput
+from transformers.modeling_outputs import (
+    BaseModelOutput,
+    CausalLMOutputWithPast,
+    MaskedLMOutput,
+    SequenceClassifierOutput,
+)
 
 from .configuration_mixlab import MixlabConfig
+from .pooling_mixlab import pool_sequence
 from .ttt_mlp_mixlab import (
     MixlabTTTMLPBlock,
     MixlabTTTMLPState,
@@ -1167,3 +1173,63 @@ class MixlabForMaskedLM(MixlabModel):
                 ignore_index=-100,
             )
         return MaskedLMOutput(loss=loss, logits=logits)
+
+
+class MixlabForSequenceClassification(MixlabModel):
+    _tied_weights_keys = []
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.num_labels = int(config.num_labels)
+        self.sequence_classification_pooling = str(
+            getattr(config, "sequence_classification_pooling", "") or ""
+        ).lower()
+        if self.sequence_classification_pooling not in ("last", "mean"):
+            raise ValueError(
+                "sequence_classification_pooling must be 'last' or 'mean'; "
+                "pass an explicit value when loading an ambiguous exported backbone"
+            )
+        classifier_dropout = getattr(config, "classifier_dropout", None)
+        if classifier_dropout is None:
+            classifier_dropout = float(getattr(config, "hidden_dropout", 0.0) or 0.0)
+        self.classifier_dropout = nn.Dropout(float(classifier_dropout))
+        # This task head is intentionally absent from the Mixlab checkpoint and
+        # receives PyTorch's standard fresh Linear initialization for fine-tuning.
+        self.classifier = nn.Linear(config.model_dim, self.num_labels)
+
+    def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
+        hidden = self.forward_hidden(input_ids, attention_mask)
+        pooled = pool_sequence(
+            hidden,
+            attention_mask,
+            self.sequence_classification_pooling,
+        )
+        logits = self.classifier(self.classifier_dropout(pooled))
+
+        loss = None
+        if labels is not None:
+            problem_type = getattr(self.config, "problem_type", None)
+            if problem_type is None:
+                if self.num_labels == 1:
+                    problem_type = "regression"
+                elif self.num_labels > 1 and labels.dtype in (torch.long, torch.int):
+                    problem_type = "single_label_classification"
+                else:
+                    problem_type = "multi_label_classification"
+                self.config.problem_type = problem_type
+
+            if problem_type == "regression":
+                if self.num_labels == 1:
+                    loss = torch.nn.functional.mse_loss(logits.squeeze(-1), labels.squeeze(-1))
+                else:
+                    loss = torch.nn.functional.mse_loss(logits, labels)
+            elif problem_type == "single_label_classification":
+                loss = torch.nn.functional.cross_entropy(
+                    logits.view(-1, self.num_labels), labels.view(-1)
+                )
+            elif problem_type == "multi_label_classification":
+                loss = torch.nn.functional.binary_cross_entropy_with_logits(logits, labels)
+            else:
+                raise ValueError(f"unsupported problem_type {problem_type!r}")
+
+        return SequenceClassifierOutput(loss=loss, logits=logits)

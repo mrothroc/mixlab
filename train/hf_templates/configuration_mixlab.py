@@ -22,6 +22,8 @@ class MixlabConfig(PretrainedConfig):
         mlm_head="linear",
         layer_aggregation="none",
         layer_aggregation_scope="",
+        sequence_classification_pooling="",
+        classifier_dropout=None,
         hidden_dropout=0.0,
         embedding_dropout=0.0,
         positional_embedding="rope",
@@ -56,6 +58,8 @@ class MixlabConfig(PretrainedConfig):
         self.mlm_head = mlm_head
         self.layer_aggregation = layer_aggregation
         self.layer_aggregation_scope = layer_aggregation_scope
+        self.sequence_classification_pooling = sequence_classification_pooling
+        self.classifier_dropout = classifier_dropout
         self.hidden_dropout = hidden_dropout
         self.embedding_dropout = embedding_dropout
         self.positional_embedding = positional_embedding

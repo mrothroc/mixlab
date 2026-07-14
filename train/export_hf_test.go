@@ -39,6 +39,7 @@ func TestExportHFWeightMapAndDirectoryMetadata(t *testing.T) {
 		"config.json",
 		"configuration_mixlab.py",
 		"modeling_mixlab.py",
+		"pooling_mixlab.py",
 		"ttt_mlp_mixlab.py",
 		"model.safetensors",
 		"weight_map.json",
@@ -62,6 +63,9 @@ func TestExportHFWeightMapAndDirectoryMetadata(t *testing.T) {
 	}
 	if got := autoMap["AutoModel"]; got != "modeling_mixlab.MixlabModel" {
 		t.Fatalf("AutoModel auto_map=%v", got)
+	}
+	if got := autoMap["AutoModelForSequenceClassification"]; got != "modeling_mixlab.MixlabForSequenceClassification" {
+		t.Fatalf("AutoModelForSequenceClassification auto_map=%v", got)
 	}
 	if _, ok := autoMap["AutoModelForMaskedLM"]; ok {
 		t.Fatalf("causal-only export unexpectedly registered AutoModelForMaskedLM: %#v", autoMap)

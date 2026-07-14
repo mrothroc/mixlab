@@ -524,14 +524,14 @@ func TestExportHFNativePythonParity(t *testing.T) {
 		},
 	}
 
-	for _, tc := range cases {
+	for caseIndex, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			runNativePythonParityCase(t, python, script, tc.config, tc.compareMaskedLogits, tc.compareTTTState)
+			runNativePythonParityCase(t, python, script, tc.config, tc.compareMaskedLogits, tc.compareTTTState, caseIndex == 0)
 		})
 	}
 }
 
-func runNativePythonParityCase(t *testing.T, python, script, config string, compareMaskedLogits, compareTTTState bool) {
+func runNativePythonParityCase(t *testing.T, python, script, config string, compareMaskedLogits, compareTTTState, classificationRoundtrip bool) {
 	t.Helper()
 	dir := t.TempDir()
 	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, config, scaleHFExportWeightsToTrainedMagnitude)
@@ -594,7 +594,11 @@ func runNativePythonParityCase(t *testing.T, python, script, config string, comp
 		writeTTTMLPCachedParityFixture(t, cfgPath, weightsPath, outDir, inputIDs, seqLen/2)
 	}
 
-	cmd := exec.Command(python, script, "--dir", outDir)
+	args := []string{script, "--dir", outDir}
+	if classificationRoundtrip {
+		args = append(args, "--classification-roundtrip")
+	}
+	cmd := exec.Command(python, args...)
 	out, err := cmd.CombinedOutput()
 	t.Logf("hf_parity_check.py output:\n%s", out)
 	if err != nil {

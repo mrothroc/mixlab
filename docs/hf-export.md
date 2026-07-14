@@ -1,6 +1,6 @@
 # Hugging Face Export
 
-`export-hf` writes a Hugging Face custom-code directory from a Mixlab JSON config and a Mixlab safetensors checkpoint. Causal checkpoints export `AutoModel` and `AutoModelForCausalLM`; masked and hybrid checkpoints also export `AutoModelForMaskedLM`. For masked-capable exports, `AutoModel` is the bidirectional encoder backbone while `AutoModelForCausalLM` stays causal.
+`export-hf` writes a Hugging Face custom-code directory from a Mixlab JSON config and a Mixlab safetensors checkpoint. Custom Mixlab checkpoints export `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForSequenceClassification`; masked and hybrid checkpoints also export `AutoModelForMaskedLM`. For masked-capable exports, `AutoModel` and sequence classification use the bidirectional encoder backbone while `AutoModelForCausalLM` stays causal.
 
 ```bash
 mixlab -mode export-hf \
@@ -22,8 +22,8 @@ mixlab -mode export-hf \
 
 The exported directory contains:
 
-- `config.json` with `auto_map` entries for `AutoConfig`, `AutoModel`, and `AutoModelForCausalLM`; masked-capable exports also include `AutoModelForMaskedLM`
-- `configuration_mixlab.py`, `modeling_mixlab.py`, and `ttt_mlp_mixlab.py` static maintained templates
+- `config.json` with `auto_map` entries for `AutoConfig`, `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForSequenceClassification`; masked-capable exports also include `AutoModelForMaskedLM`
+- `configuration_mixlab.py`, `modeling_mixlab.py`, `pooling_mixlab.py`, and `ttt_mlp_mixlab.py` static maintained templates
 - `model.safetensors` with Hugging Face state-dict keys
 - `weight_map.json` mapping Mixlab `w{index}_{name}` tensors to Hugging Face tensor names
 - `tokenizer.json`, plus `tokenizer_config.json` and `special_tokens_map.json`
@@ -32,7 +32,13 @@ The exported directory contains:
 Load it with:
 
 ```python
-from transformers import AutoModel, AutoModelForCausalLM, AutoModelForMaskedLM, AutoTokenizer
+from transformers import (
+    AutoModel,
+    AutoModelForCausalLM,
+    AutoModelForMaskedLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+)
 
 model = AutoModelForCausalLM.from_pretrained("runs/plain_3L/hf", trust_remote_code=True)
 backbone = AutoModel.from_pretrained("runs/plain_3L/hf", trust_remote_code=True)
@@ -40,9 +46,52 @@ tokenizer = AutoTokenizer.from_pretrained("runs/plain_3L/hf", trust_remote_code=
 
 # Present for MLM/MNTP/hybrid exports.
 masked = AutoModelForMaskedLM.from_pretrained("runs/masked_model/hf", trust_remote_code=True)
+
+# The classification weights are freshly initialized for downstream fine-tuning.
+classifier = AutoModelForSequenceClassification.from_pretrained(
+    "runs/plain_3L/hf",
+    trust_remote_code=True,
+    num_labels=3,
+)
 ```
 
 `trust_remote_code=True` executes the Python modeling files from the export directory. Only use it for directories you created or reviewed.
+
+## Sequence Classification
+
+`MixlabForSequenceClassification` owns padding-aware pooling and a freshly initialized
+linear classifier. The task head is intentionally not present in the Mixlab
+pretraining checkpoint; Hugging Face reports its weights as newly initialized, and
+downstream fine-tuning trains and saves them normally. Standard Hugging Face
+single-label, multi-label, and regression losses are selected from `num_labels`, label
+dtype, and `problem_type`. `classifier_dropout` defaults to the exported
+`hidden_dropout` when it is not supplied.
+
+The exporter derives `sequence_classification_pooling` from the concrete `AutoModel`
+backbone:
+
+- `last` for causal and TTT-MLP backbones, gathering the final non-padding token in each row;
+- `mean` for masked/bidirectional backbones, averaging only non-padding tokens.
+
+Mixed causal/bidirectional graphs are ambiguous. They continue to export normally,
+but loading the classification class requires an explicit policy:
+
+```python
+classifier = AutoModelForSequenceClassification.from_pretrained(
+    "runs/mixed/hf",
+    trust_remote_code=True,
+    num_labels=2,
+    sequence_classification_pooling="mean",
+)
+```
+
+For a batch with more than one row, pass a two-dimensional `attention_mask`; the head
+raises instead of guessing sequence lengths. Rows containing no real tokens also
+raise. `last` and `mean` select the correct positions for left- or right-padded masks,
+but this does not make every backbone invariant to changing padding side. TTT-MLP
+still requires right padding because padding affects its recurrent state, and learned
+absolute positions or token-neighbor feature channels retain their documented input
+semantics.
 
 ## Native GPT-2 Export
 
@@ -195,7 +244,7 @@ Two layers of parity coverage exist:
 
 1. **Go oracle parity** (default suite, no extra deps). Verifies metadata, tokenizer handling, weight mapping, unsupported-feature errors, and deterministic native-vs-HF fixtures by comparing a native-forward oracle against an HF-forward oracle. Coverage includes GEGLU/MLP, `plain` gated FFN tails, configurable LayerNorm/no-affine export metadata, BERT-style masked-LM heads, GQA, attention post-norm placement, `qk_norm`, `qk_gain`, XSA, sparse attention gates, masks, causal windowing, DeBERTa relative attention, shared relative embedding LayerNorm, MoE routing and expert variants, feature channels, hybrid causal export semantics, gated recurrent policies, and a deterministically scaled trained-magnitude fixture with RMS assertions.
 
-2. **Native-vs-Python parity** (`TestExportHFNativePythonParity`, gated on `HF_PARITY=1` + MLX + the Python toolchain). This is the load-bearing FR-1 check: it exports deterministic trained-magnitude fixtures, loads each through `AutoModelForCausalLM.from_pretrained(..., trust_remote_code=True)` and `AutoModel.from_pretrained(..., trust_remote_code=True)`, runs the *actual* embedded Python forward, checks padded-tokenizer batching where supported, and asserts the CausalLM logits agree with the *actual* native MLX forward (max per-logit abs diff < 1e-3, mean next-token loss diff < 1e-4). Because nothing in this path re-implements the HF math, a future drift between the kernels and the shipped Python template fails by construction. Cases cover partial/full RoPE, `qk_norm`, sigmoid SwiGLU, tanh-approx GELU, `plain` gated FFN tails, GQA + `qk_gain` + sliding window, DeBERTa relative attention, XSA + sparse attention gates, top-k MoE (geglu/mlp experts), bigram/trigram/char feature channels, and TTT-MLP full-forward plus split recurrent-state parity.
+2. **Native-vs-Python parity** (`TestExportHFNativePythonParity`, gated on `HF_PARITY=1` + MLX + the Python toolchain). This is the load-bearing FR-1 check: it exports deterministic trained-magnitude fixtures, loads each through the real Hugging Face auto classes, runs the *actual* embedded Python forward, checks padded-tokenizer batching where supported, and asserts the CausalLM logits agree with the *actual* native MLX forward (max per-logit abs diff < 1e-3, mean next-token loss diff < 1e-4). Every custom export case also loads `AutoModelForSequenceClassification`, compares its result with an identity-head pooling oracle, checks padded-batch versus independent-row behavior where the backbone is row-independent, and exercises missing-mask/empty-row failures. One case covers classification fine-tune loss, save, and reload. Cases include partial/full RoPE, `qk_norm`, sigmoid SwiGLU, tanh-approx GELU, `plain` gated FFN tails, GQA + `qk_gain` + sliding window, DeBERTa relative attention, XSA + sparse attention gates, top-k MoE (geglu/mlp experts), bigram/trigram/char feature channels, and TTT-MLP full-forward plus split recurrent-state parity.
 
 Python/HF parity dependencies are declared in `requirements-hf.txt` (verified against torch 2.12 / transformers 5.10). The gated `.github/workflows/hf-parity.yml` workflow installs those dependencies and uses `macos-latest` with Homebrew MLX so the native-vs-Python check runs on an MLX-capable runner, keeping the default Linux CI lightweight.
 

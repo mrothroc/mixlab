@@ -24,9 +24,17 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 
 import torch
-from transformers import AutoModel, AutoModelForCausalLM, AutoModelForMaskedLM, AutoTokenizer, GPT2LMHeadModel
+from transformers import (
+    AutoModel,
+    AutoModelForCausalLM,
+    AutoModelForMaskedLM,
+    AutoModelForSequenceClassification,
+    AutoTokenizer,
+    GPT2LMHeadModel,
+)
 
 
 def compare_logits(args, input_ids, native_logits, hf_logits, batch, seq_len, vocab) -> int:
@@ -313,11 +321,225 @@ def check_ttt_left_padding_rejected(model, encoded) -> int:
     return 1
 
 
+def compare_sequence_classification(config_doc, export_dir, encoded, roundtrip=False) -> int:
+    auto_map = config_doc.get("auto_map", {})
+    if "AutoModelForSequenceClassification" not in auto_map:
+        print("FAIL: custom Mixlab export has no sequence-classification auto_map entry", file=sys.stderr)
+        return 2
+    pooling = str(config_doc.get("sequence_classification_pooling", "") or "")
+    if pooling not in ("last", "mean"):
+        print(f"FAIL: parity fixture has unresolved classification pooling {pooling!r}", file=sys.stderr)
+        return 2
+
+    hidden_size = int(config_doc.get("hidden_size", config_doc.get("model_dim", 0)))
+    torch.manual_seed(424242)
+    classifier = AutoModelForSequenceClassification.from_pretrained(
+        export_dir,
+        trust_remote_code=True,
+        num_labels=hidden_size,
+    )
+    classifier.eval()
+    with torch.no_grad():
+        classifier.classifier.weight.copy_(torch.eye(hidden_size))
+        classifier.classifier.bias.zero_()
+        hidden = classifier.forward_hidden(
+            encoded["input_ids"], encoded["attention_mask"]
+        )
+        batched = classifier(**encoded).logits
+
+    mask = encoded["attention_mask"].ne(0)
+    if pooling == "last":
+        indices = mask.shape[-1] - 1 - mask.flip(-1).to(torch.long).argmax(dim=-1)
+        manual = hidden[torch.arange(hidden.shape[0]), indices]
+        naive = hidden[:, -1]
+    else:
+        weights = mask.to(hidden.dtype).unsqueeze(-1)
+        manual = (hidden * weights).sum(dim=1) / weights.sum(dim=1)
+        naive = hidden.mean(dim=1)
+    manual_diff = (batched - manual).abs().max().item()
+    if manual_diff >= 1e-6:
+        print(
+            f"FAIL: classification {pooling} pooling differs from its oracle by {manual_diff:.3e}",
+            file=sys.stderr,
+        )
+        return 1
+    if (mask == 0).any() and torch.allclose(batched, naive, atol=1e-8, rtol=0.0):
+        print(
+            f"FAIL: classification {pooling} regression fixture does not distinguish unsafe pooling",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Compare the public class across a padded batch and independently scored
+    # unpadded rows. Hashed n-gram channels intentionally use flattened stream
+    # neighbors and therefore have a separate batching contract; their pooling
+    # implementation is still checked against the direct oracle above.
+    row_diff = 0.0
+    has_stream_features = bool(config_doc.get("bigram_vocab_size", 0)) or bool(
+        config_doc.get("trigram_vocab_size", 0)
+    )
+    if not has_stream_features:
+        with torch.no_grad():
+            for row in range(encoded["input_ids"].shape[0]):
+                row_ids = encoded["input_ids"][row][mask[row]].unsqueeze(0)
+                single = classifier(
+                    input_ids=row_ids,
+                    attention_mask=torch.ones_like(row_ids),
+                ).logits
+                row_diff = max(row_diff, (batched[row : row + 1] - single).abs().max().item())
+        if row_diff >= 1e-5:
+            print(
+                f"FAIL: classification padded-batch/single-row diff {row_diff:.3e} >= 1.000e-05",
+                file=sys.stderr,
+            )
+            return 1
+
+    if not has_ttt_mlp(config_doc):
+        left_ids = torch.full_like(encoded["input_ids"], int(config_doc["pad_token_id"]))
+        left_mask = torch.zeros_like(encoded["attention_mask"])
+        for row in range(encoded["input_ids"].shape[0]):
+            row_ids = encoded["input_ids"][row][mask[row]]
+            left_ids[row, -row_ids.numel() :] = row_ids
+            left_mask[row, -row_ids.numel() :] = 1
+        with torch.no_grad():
+            left_hidden = classifier.forward_hidden(left_ids, left_mask)
+            left_logits = classifier(input_ids=left_ids, attention_mask=left_mask).logits
+        left_valid = left_mask.ne(0)
+        if pooling == "last":
+            left_indices = (
+                left_valid.shape[-1]
+                - 1
+                - left_valid.flip(-1).to(torch.long).argmax(dim=-1)
+            )
+            left_manual = left_hidden[torch.arange(left_hidden.shape[0]), left_indices]
+        else:
+            left_weights = left_valid.to(left_hidden.dtype).unsqueeze(-1)
+            left_manual = (left_hidden * left_weights).sum(dim=1) / left_weights.sum(dim=1)
+        left_diff = (left_logits - left_manual).abs().max().item()
+        if left_diff >= 1e-6:
+            print(
+                f"FAIL: left-padded classification pooling oracle diff {left_diff:.3e}",
+                file=sys.stderr,
+            )
+            return 1
+
+    try:
+        with torch.no_grad():
+            classifier(input_ids=encoded["input_ids"])
+    except ValueError as error:
+        if "attention_mask" not in str(error):
+            print(f"FAIL: missing-mask error is unclear: {error}", file=sys.stderr)
+            return 1
+    else:
+        print("FAIL: classification accepted batch_size > 1 without attention_mask", file=sys.stderr)
+        return 1
+
+    empty_mask = encoded["attention_mask"].clone()
+    empty_mask[0].zero_()
+    try:
+        with torch.no_grad():
+            classifier(input_ids=encoded["input_ids"], attention_mask=empty_mask)
+    except ValueError as error:
+        if "no real tokens" not in str(error):
+            print(f"FAIL: empty-row error is unclear: {error}", file=sys.stderr)
+            return 1
+    else:
+        print("FAIL: classification accepted an attention-mask row with no real tokens", file=sys.stderr)
+        return 1
+
+    labels = torch.arange(encoded["input_ids"].shape[0], dtype=torch.long) % hidden_size
+    classifier.config.problem_type = None
+    with torch.no_grad():
+        classified = classifier(**encoded, labels=labels)
+    if classified.loss is None or not torch.isfinite(classified.loss):
+        print("FAIL: sequence-classification loss is missing or non-finite", file=sys.stderr)
+        return 1
+
+    if roundtrip:
+        try:
+            AutoModelForSequenceClassification.from_pretrained(
+                export_dir,
+                trust_remote_code=True,
+                num_labels=2,
+                sequence_classification_pooling="",
+            )
+        except ValueError as error:
+            if "sequence_classification_pooling" not in str(error):
+                print(f"FAIL: unresolved-pooling error is unclear: {error}", file=sys.stderr)
+                return 1
+        else:
+            print("FAIL: classification accepted unresolved pooling", file=sys.stderr)
+            return 1
+
+        explicit_pooling = AutoModelForSequenceClassification.from_pretrained(
+            export_dir,
+            trust_remote_code=True,
+            num_labels=2,
+            sequence_classification_pooling="mean",
+        )
+        explicit_pooling.eval()
+        with torch.no_grad():
+            explicit_logits = explicit_pooling(**encoded).logits
+        if not torch.isfinite(explicit_logits).all():
+            print("FAIL: explicit classification pooling override returned non-finite logits", file=sys.stderr)
+            return 1
+
+        classifier.config.problem_type = None
+        multi_labels = torch.zeros(
+            (encoded["input_ids"].shape[0], hidden_size), dtype=torch.float32
+        )
+        multi_labels[:, 0] = 1.0
+        with torch.no_grad():
+            multi_out = classifier(**encoded, labels=multi_labels)
+        if multi_out.loss is None or not torch.isfinite(multi_out.loss):
+            print("FAIL: multi-label classification loss is missing or non-finite", file=sys.stderr)
+            return 1
+
+    if roundtrip:
+        classifier.config.problem_type = None
+        with tempfile.TemporaryDirectory(prefix="mixlab-sequence-classifier-") as saved_dir:
+            classifier.save_pretrained(saved_dir)
+            reloaded = AutoModelForSequenceClassification.from_pretrained(
+                saved_dir, trust_remote_code=True
+            )
+            reloaded.eval()
+            with torch.no_grad():
+                reloaded_logits = reloaded(**encoded).logits
+            roundtrip_diff = (batched - reloaded_logits).abs().max().item()
+            if roundtrip_diff >= 1e-7:
+                print(
+                    f"FAIL: saved/reloaded classification logits differ by {roundtrip_diff:.3e}",
+                    file=sys.stderr,
+                )
+                return 1
+
+        regression = AutoModelForSequenceClassification.from_pretrained(
+            export_dir,
+            trust_remote_code=True,
+            num_labels=1,
+        )
+        regression.eval()
+        regression.config.problem_type = None
+        regression_labels = torch.tensor([0.25, -0.5], dtype=torch.float32)
+        with torch.no_grad():
+            regression_out = regression(**encoded, labels=regression_labels)
+        if regression_out.loss is None or not torch.isfinite(regression_out.loss):
+            print("FAIL: sequence-regression loss is missing or non-finite", file=sys.stderr)
+            return 1
+
+    print(
+        f"sequence_classification_parity: pooling={pooling} "
+        f"oracle_diff={manual_diff:.3e} row_diff={row_diff:.3e}"
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Mixlab native-vs-HF logits parity check")
     parser.add_argument("--dir", required=True, help="exported HF directory")
     parser.add_argument("--max-logit-diff", type=float, default=1e-3)
     parser.add_argument("--max-loss-diff", type=float, default=1e-4)
+    parser.add_argument("--classification-roundtrip", action="store_true")
     args = parser.parse_args()
 
     with open(os.path.join(args.dir, "parity_tokens.json")) as f:
@@ -412,6 +634,15 @@ def main() -> int:
         if mask_diff <= 1e-8:
             print("FAIL: AutoModel hidden states are unchanged when attention_mask hides padding", file=sys.stderr)
             return 2
+
+    classification_status = compare_sequence_classification(
+        config_doc,
+        args.dir,
+        encoded,
+        roundtrip=args.classification_roundtrip,
+    )
+    if classification_status != 0:
+        return classification_status
 
     if "AutoModelForMaskedLM" in config_doc.get("auto_map", {}):
         if getattr(backbone.blocks[0], "attention_mask", "") == "causal":

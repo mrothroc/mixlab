@@ -26,7 +26,7 @@ Export a supported Mixlab checkpoint:
 The default export format is Mixlab custom-code Hugging Face export. Configs
 with `hf_export_format: "gpt2"` export as native `GPT2LMHeadModel` when they
 meet the strict GPT-2 compatibility rules. See [hf-export.md](hf-export.md)
-for supported features and load examples.
+for supported features, sequence-classification pooling, and load examples.
 
 ## `parity`
 

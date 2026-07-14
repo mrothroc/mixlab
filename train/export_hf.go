@@ -14,7 +14,7 @@ import (
 	"github.com/mrothroc/mixlab/arch"
 )
 
-//go:embed hf_templates/configuration_mixlab.py hf_templates/modeling_mixlab.py hf_templates/ttt_mlp_mixlab.py
+//go:embed hf_templates/configuration_mixlab.py hf_templates/modeling_mixlab.py hf_templates/pooling_mixlab.py hf_templates/ttt_mlp_mixlab.py
 var hfTemplateFS embed.FS
 
 // ExportHFOptions describes a Hugging Face export operation.
@@ -26,43 +26,44 @@ type ExportHFOptions struct {
 }
 
 type hfConfigJSON struct {
-	ModelType             string            `json:"model_type"`
-	Architectures         []string          `json:"architectures"`
-	AutoMap               map[string]string `json:"auto_map"`
-	Name                  string            `json:"name,omitempty"`
-	ModelDim              int               `json:"model_dim"`
-	HiddenSize            int               `json:"hidden_size"`
-	VocabSize             int               `json:"vocab_size"`
-	SeqLen                int               `json:"seq_len"`
-	MaxPositionEmbeddings int               `json:"max_position_embeddings"`
-	MLPMult               float64           `json:"mlp_mult"`
-	NormType              string            `json:"norm_type,omitempty"`
-	NormEps               float32           `json:"norm_eps,omitempty"`
-	NormAffine            bool              `json:"norm_affine"`
-	NormPlacement         string            `json:"norm_placement,omitempty"`
-	FFNInternalNorm       bool              `json:"ffn_internal_norm,omitempty"`
-	LogitSoftcap          float32           `json:"logit_softcap,omitempty"`
-	MLMHead               string            `json:"mlm_head,omitempty"`
-	LayerAggregation      string            `json:"layer_aggregation,omitempty"`
-	LayerAggregationScope string            `json:"layer_aggregation_scope,omitempty"`
-	HiddenDropout         float32           `json:"hidden_dropout,omitempty"`
-	EmbeddingDropout      float32           `json:"embedding_dropout,omitempty"`
-	PositionalEmbedding   string            `json:"positional_embedding,omitempty"`
-	CharVocabSize         int               `json:"char_vocab_size,omitempty"`
-	CharDim               int               `json:"char_dim,omitempty"`
-	CharMaxPerToken       int               `json:"char_max_per_token,omitempty"`
-	CharFeaturesFile      string            `json:"char_features_file,omitempty"`
-	BigramVocabSize       int               `json:"bigram_vocab_size,omitempty"`
-	BigramDim             int               `json:"bigram_dim,omitempty"`
-	TrigramVocabSize      int               `json:"trigram_vocab_size,omitempty"`
-	TrigramDim            int               `json:"trigram_dim,omitempty"`
-	PadTokenID            *int              `json:"pad_token_id,omitempty"`
-	EOSTokenID            *int              `json:"eos_token_id,omitempty"`
-	BOSTokenID            *int              `json:"bos_token_id,omitempty"`
-	UNKTokenID            *int              `json:"unk_token_id,omitempty"`
-	Blocks                []map[string]any  `json:"blocks"`
-	MaskedBlocks          []map[string]any  `json:"masked_blocks,omitempty"`
-	Mixlab                map[string]any    `json:"mixlab"`
+	ModelType                     string            `json:"model_type"`
+	Architectures                 []string          `json:"architectures"`
+	AutoMap                       map[string]string `json:"auto_map"`
+	Name                          string            `json:"name,omitempty"`
+	ModelDim                      int               `json:"model_dim"`
+	HiddenSize                    int               `json:"hidden_size"`
+	VocabSize                     int               `json:"vocab_size"`
+	SeqLen                        int               `json:"seq_len"`
+	MaxPositionEmbeddings         int               `json:"max_position_embeddings"`
+	MLPMult                       float64           `json:"mlp_mult"`
+	NormType                      string            `json:"norm_type,omitempty"`
+	NormEps                       float32           `json:"norm_eps,omitempty"`
+	NormAffine                    bool              `json:"norm_affine"`
+	NormPlacement                 string            `json:"norm_placement,omitempty"`
+	FFNInternalNorm               bool              `json:"ffn_internal_norm,omitempty"`
+	LogitSoftcap                  float32           `json:"logit_softcap,omitempty"`
+	MLMHead                       string            `json:"mlm_head,omitempty"`
+	LayerAggregation              string            `json:"layer_aggregation,omitempty"`
+	LayerAggregationScope         string            `json:"layer_aggregation_scope,omitempty"`
+	SequenceClassificationPooling string            `json:"sequence_classification_pooling,omitempty"`
+	HiddenDropout                 float32           `json:"hidden_dropout,omitempty"`
+	EmbeddingDropout              float32           `json:"embedding_dropout,omitempty"`
+	PositionalEmbedding           string            `json:"positional_embedding,omitempty"`
+	CharVocabSize                 int               `json:"char_vocab_size,omitempty"`
+	CharDim                       int               `json:"char_dim,omitempty"`
+	CharMaxPerToken               int               `json:"char_max_per_token,omitempty"`
+	CharFeaturesFile              string            `json:"char_features_file,omitempty"`
+	BigramVocabSize               int               `json:"bigram_vocab_size,omitempty"`
+	BigramDim                     int               `json:"bigram_dim,omitempty"`
+	TrigramVocabSize              int               `json:"trigram_vocab_size,omitempty"`
+	TrigramDim                    int               `json:"trigram_dim,omitempty"`
+	PadTokenID                    *int              `json:"pad_token_id,omitempty"`
+	EOSTokenID                    *int              `json:"eos_token_id,omitempty"`
+	BOSTokenID                    *int              `json:"bos_token_id,omitempty"`
+	UNKTokenID                    *int              `json:"unk_token_id,omitempty"`
+	Blocks                        []map[string]any  `json:"blocks"`
+	MaskedBlocks                  []map[string]any  `json:"masked_blocks,omitempty"`
+	Mixlab                        map[string]any    `json:"mixlab"`
 }
 
 type hfWeightMapping struct {
@@ -263,7 +264,7 @@ func weightShapeIndex(shapes []WeightShape, name string) int {
 }
 
 func writeHFTemplates(outputDir string) error {
-	for _, name := range []string{"configuration_mixlab.py", "modeling_mixlab.py", "ttt_mlp_mixlab.py"} {
+	for _, name := range []string{"configuration_mixlab.py", "modeling_mixlab.py", "pooling_mixlab.py", "ttt_mlp_mixlab.py"} {
 		data, err := hfTemplateFS.ReadFile(filepath.Join("hf_templates", name))
 		if err != nil {
 			return fmt.Errorf("read HF template %s: %w", name, err)

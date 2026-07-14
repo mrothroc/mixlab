@@ -19,9 +19,10 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 	maskedBlocks := []map[string]any(nil)
 	architectures := []string{"MixlabForCausalLM"}
 	autoMap := map[string]string{
-		"AutoConfig":           "configuration_mixlab.MixlabConfig",
-		"AutoModel":            "modeling_mixlab.MixlabModel",
-		"AutoModelForCausalLM": "modeling_mixlab.MixlabForCausalLM",
+		"AutoConfig":                         "configuration_mixlab.MixlabConfig",
+		"AutoModel":                          "modeling_mixlab.MixlabModel",
+		"AutoModelForCausalLM":               "modeling_mixlab.MixlabForCausalLM",
+		"AutoModelForSequenceClassification": "modeling_mixlab.MixlabForSequenceClassification",
 	}
 	if hfExportSupportsMaskedLM(cfg) {
 		maskedBlocks = hfBlockEntries(cfg, true)
@@ -29,42 +30,43 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 		autoMap["AutoModelForMaskedLM"] = "modeling_mixlab.MixlabForMaskedLM"
 	}
 	doc := hfConfigJSON{
-		ModelType:             "mixlab",
-		Architectures:         architectures,
-		AutoMap:               autoMap,
-		Name:                  cfg.Name,
-		ModelDim:              cfg.ModelDim,
-		HiddenSize:            cfg.ModelDim,
-		VocabSize:             cfg.VocabSize,
-		SeqLen:                cfg.SeqLen,
-		MaxPositionEmbeddings: cfg.EffectiveMaxPositions(),
-		MLPMult:               cfg.EffectiveMLPMult(),
-		NormType:              cfg.EffectiveNormSpec().Type,
-		NormEps:               cfg.EffectiveNormSpec().Eps,
-		NormAffine:            cfg.EffectiveNormSpec().Affine,
-		NormPlacement:         cfg.EffectiveNormPlacement(),
-		FFNInternalNorm:       cfg.FFNInternalNorm,
-		LogitSoftcap:          cfg.LogitSoftcap,
-		MLMHead:               hfExportMLMHead(cfg),
-		LayerAggregation:      hfExportLayerAggregation(cfg),
-		LayerAggregationScope: normalizeHFLayerAggregationScope(opts.LayerAggregationScope),
-		HiddenDropout:         cfg.EffectiveHiddenDropout(),
-		EmbeddingDropout:      cfg.EffectiveEmbeddingDropout(),
-		PositionalEmbedding:   cfg.EffectivePositionalEmbedding(),
-		CharVocabSize:         cfg.CharVocabSize,
-		CharDim:               cfg.EffectiveCharDim(),
-		CharMaxPerToken:       cfg.EffectiveCharMaxPerToken(),
-		CharFeaturesFile:      charFeaturesFileForHFConfig(cfg),
-		BigramVocabSize:       cfg.BigramVocabSize,
-		BigramDim:             cfg.EffectiveBigramDim(),
-		TrigramVocabSize:      cfg.TrigramVocabSize,
-		TrigramDim:            cfg.EffectiveTrigramDim(),
-		PadTokenID:            specialTokenIDPtr(specials.Pad),
-		EOSTokenID:            specialTokenIDPtr(specials.EOS),
-		BOSTokenID:            specialTokenIDPtr(specials.BOS),
-		UNKTokenID:            specialTokenIDPtr(specials.UNK),
-		Blocks:                blocks,
-		MaskedBlocks:          maskedBlocks,
+		ModelType:                     "mixlab",
+		Architectures:                 architectures,
+		AutoMap:                       autoMap,
+		Name:                          cfg.Name,
+		ModelDim:                      cfg.ModelDim,
+		HiddenSize:                    cfg.ModelDim,
+		VocabSize:                     cfg.VocabSize,
+		SeqLen:                        cfg.SeqLen,
+		MaxPositionEmbeddings:         cfg.EffectiveMaxPositions(),
+		MLPMult:                       cfg.EffectiveMLPMult(),
+		NormType:                      cfg.EffectiveNormSpec().Type,
+		NormEps:                       cfg.EffectiveNormSpec().Eps,
+		NormAffine:                    cfg.EffectiveNormSpec().Affine,
+		NormPlacement:                 cfg.EffectiveNormPlacement(),
+		FFNInternalNorm:               cfg.FFNInternalNorm,
+		LogitSoftcap:                  cfg.LogitSoftcap,
+		MLMHead:                       hfExportMLMHead(cfg),
+		LayerAggregation:              hfExportLayerAggregation(cfg),
+		LayerAggregationScope:         normalizeHFLayerAggregationScope(opts.LayerAggregationScope),
+		SequenceClassificationPooling: hfSequenceClassificationPooling(cfg, maskedBlocks),
+		HiddenDropout:                 cfg.EffectiveHiddenDropout(),
+		EmbeddingDropout:              cfg.EffectiveEmbeddingDropout(),
+		PositionalEmbedding:           cfg.EffectivePositionalEmbedding(),
+		CharVocabSize:                 cfg.CharVocabSize,
+		CharDim:                       cfg.EffectiveCharDim(),
+		CharMaxPerToken:               cfg.EffectiveCharMaxPerToken(),
+		CharFeaturesFile:              charFeaturesFileForHFConfig(cfg),
+		BigramVocabSize:               cfg.BigramVocabSize,
+		BigramDim:                     cfg.EffectiveBigramDim(),
+		TrigramVocabSize:              cfg.TrigramVocabSize,
+		TrigramDim:                    cfg.EffectiveTrigramDim(),
+		PadTokenID:                    specialTokenIDPtr(specials.Pad),
+		EOSTokenID:                    specialTokenIDPtr(specials.EOS),
+		BOSTokenID:                    specialTokenIDPtr(specials.BOS),
+		UNKTokenID:                    specialTokenIDPtr(specials.UNK),
+		Blocks:                        blocks,
+		MaskedBlocks:                  maskedBlocks,
 		Mixlab: map[string]any{
 			"format":            "mixlab_hf_export_v1",
 			"source":            "mixlab",
@@ -75,6 +77,42 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 		},
 	}
 	return writeJSONFile(path, doc)
+}
+
+func hfSequenceClassificationPooling(cfg *ArchConfig, maskedBlocks []map[string]any) string {
+	if cfg == nil {
+		return ""
+	}
+	// AutoModel and the classification head use masked_blocks when they are
+	// exported, so derive the default from that concrete backbone view.
+	if len(maskedBlocks) > 0 {
+		return "mean"
+	}
+
+	seenCausal := false
+	seenBidirectional := false
+	for _, block := range cfg.Blocks {
+		switch strings.ToLower(strings.TrimSpace(block.Type)) {
+		case "plain":
+			switch hfExportAttentionMask(cfg, block, false) {
+			case "causal":
+				seenCausal = true
+			case "bidirectional", "none":
+				seenBidirectional = true
+			default:
+				return ""
+			}
+		case "ttt_mlp":
+			seenCausal = true
+		}
+	}
+	if seenCausal && seenBidirectional {
+		return ""
+	}
+	if seenBidirectional {
+		return "mean"
+	}
+	return "last"
 }
 
 func normalizeHFLayerAggregationScope(raw string) string {

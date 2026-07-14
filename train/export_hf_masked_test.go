@@ -45,6 +45,9 @@ func TestExportHFMaskedLMMetadataAndBidirectionalBlocks(t *testing.T) {
 	if got := doc.AutoMap["AutoModelForMaskedLM"]; got != "modeling_mixlab.MixlabForMaskedLM" {
 		t.Fatalf("AutoModelForMaskedLM auto_map=%v", got)
 	}
+	if got := doc.SequenceClassificationPooling; got != "mean" {
+		t.Fatalf("sequence_classification_pooling=%q, want mean", got)
+	}
 	if !containsString(doc.Architectures, "MixlabForMaskedLM") {
 		t.Fatalf("architectures=%v missing MixlabForMaskedLM", doc.Architectures)
 	}
