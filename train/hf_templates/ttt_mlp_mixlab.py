@@ -113,10 +113,19 @@ def require_right_padded_ttt_batch(attention_mask):
     mask = attention_mask.to(torch.bool)
     if bool(torch.all(mask[:, 1:] <= mask[:, :-1])):
         return
+    offending = torch.nonzero(
+        ~torch.all(mask[:, 1:] <= mask[:, :-1], dim=1), as_tuple=False
+    ).flatten()
     raise ValueError(
-        "ttt_mlp requires right-padded batches: a pad before a real token would "
-        "advance the recurrent state and shift chunk-relative positions. Set the "
-        "tokenizer to padding_side='right', or bucket sequences by length."
+        "ttt_mlp requires right-padded batches: "
+        f"{offending.numel()} of {mask.shape[0]} rows (e.g. row {int(offending[0])}) "
+        "pad before a real token, which would advance the recurrent state and shift "
+        "chunk-relative positions. Set the tokenizer to padding_side='right', or "
+        "bucket sequences by length.\n"
+        "If you left-pad so that the final position is the last real token (e.g. "
+        "final-token pooling or take_final), switching to right padding is not "
+        "sufficient on its own: hidden[:, -1] would then be a pad. Gather per row "
+        "instead, with lengths = attention_mask.sum(-1) - 1."
     )
 
 

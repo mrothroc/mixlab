@@ -133,6 +133,21 @@ eval harness carrying that default will fail loudly here instead of silently
 scoring against a corrupted recurrent state. Set `padding_side="right"` or bucket
 sequences by length.
 
+**Final-token pooling needs a second change.** Downstream heads (GLUE-style
+sequence classification, `take_final` pooling) commonly left-pad precisely so that
+`hidden[:, -1]` is the last real token. Switching such a pipeline to right padding
+is necessary but *not sufficient*: `hidden[:, -1]` then lands on a pad for every
+row shorter than the longest, which degrades accuracy silently. Gather the last
+real position per row instead:
+
+```python
+lengths = attention_mask.sum(-1) - 1                     # index of last real token
+pooled = hidden[torch.arange(hidden.size(0)), lengths]
+```
+
+Mean pooling has the same requirement — weight by `attention_mask` so pads do not
+enter the average.
+
 Short TTT sequences contain many small grouped matrix operations. On CPU,
 large default PyTorch thread pools can cost more than the operations themselves.
 For zero-shot scoring of short examples, start the evaluator with one intra-op

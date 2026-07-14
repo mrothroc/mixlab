@@ -295,8 +295,19 @@ def check_ttt_left_padding_rejected(model, encoded) -> int:
     try:
         with torch.no_grad():
             model(input_ids=input_ids, attention_mask=left_padded)
-    except ValueError:
-        print("ttt_left_padding_rejected: raised ValueError as required")
+    except ValueError as error:
+        message = str(error)
+        # Callers usually left-pad so that hidden[:, -1] is the last real token.
+        # Telling them only to right-pad would trade this loud failure for a silent
+        # one, so the message must also name the per-row gather.
+        for required in ("padding_side='right'", "attention_mask.sum(-1) - 1"):
+            if required not in message:
+                print(
+                    f"FAIL: TTT left-padding error omits {required!r}: {message}",
+                    file=sys.stderr,
+                )
+                return 1
+        print("ttt_left_padding_rejected: raised ValueError with pooling guidance")
         return 0
     print("FAIL: TTT export silently accepted a left-padded batch", file=sys.stderr)
     return 1
