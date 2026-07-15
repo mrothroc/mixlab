@@ -69,6 +69,13 @@ func TestExportHFSequenceClassificationMetadata(t *testing.T) {
 	if strings.Contains(classSource, "[:, -1]") {
 		t.Fatal("sequence-classification head contains unsafe bare final-position pooling")
 	}
+	pooling, err := os.ReadFile(filepath.Join(outDir, "pooling_mixlab.py"))
+	if err != nil {
+		t.Fatalf("read pooling template: %v", err)
+	}
+	if !strings.Contains(string(pooling), "torch._assert_async(") {
+		t.Fatal("sequence-classification pooling guards are not compile-safe")
+	}
 }
 
 func TestHFSequenceClassificationPoolingInference(t *testing.T) {

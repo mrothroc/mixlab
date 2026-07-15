@@ -1,6 +1,16 @@
 import torch
 
 
+def _require_nonempty_rows(mask, message):
+    valid_rows = mask.any(dim=-1)
+    compiler = getattr(torch, "compiler", None)
+    if compiler is not None and compiler.is_compiling():
+        torch._assert_async(torch.all(valid_rows), message)
+        return
+    if not bool(torch.all(valid_rows)):
+        raise ValueError(message)
+
+
 def token_validity_mask(hidden, attention_mask):
     if hidden.ndim != 3:
         raise ValueError(
@@ -19,24 +29,30 @@ def token_validity_mask(hidden, attention_mask):
             f"got {tuple(attention_mask.shape)} for hidden states {tuple(hidden.shape)}"
         )
     mask = attention_mask.to(device=hidden.device).ne(0)
-    if not torch.all(mask.any(dim=-1)):
-        raise ValueError("sequence pooling received a row with no real tokens")
+    _require_nonempty_rows(mask, "sequence pooling received a row with no real tokens")
     return mask
+
+
+def _last_index_of_valid_mask(mask):
+    # Padding-side agnostic: works for right padding (final real token before
+    # trailing pads) and left padding alike, with no branch on padding side.
+    seq_len = mask.shape[-1]
+    return seq_len - 1 - mask.flip(-1).to(torch.long).argmax(dim=-1)
 
 
 def last_real_index(attention_mask):
     if attention_mask.ndim != 2:
         raise ValueError("last_real_index requires a 2D attention_mask")
     mask = attention_mask.ne(0)
-    if not torch.all(mask.any(dim=-1)):
-        raise ValueError("last_real_index received a row with no real tokens")
-    seq_len = mask.shape[-1]
-    return seq_len - 1 - mask.flip(-1).to(torch.long).argmax(dim=-1)
+    _require_nonempty_rows(mask, "last_real_index received a row with no real tokens")
+    return _last_index_of_valid_mask(mask)
 
 
 def pool_last(hidden, attention_mask=None):
+    # token_validity_mask already asserts non-empty rows, so index the validated
+    # mask directly rather than re-running last_real_index's guard.
     mask = token_validity_mask(hidden, attention_mask)
-    indices = last_real_index(mask)
+    indices = _last_index_of_valid_mask(mask)
     rows = torch.arange(hidden.shape[0], device=hidden.device)
     return hidden[rows, indices]
 

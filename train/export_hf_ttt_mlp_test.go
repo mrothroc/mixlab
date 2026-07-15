@@ -21,6 +21,7 @@ func TestExportHFTTTMLPTemplateHasStatelessDualFastPath(t *testing.T) {
 		"eta_lower = torch.tril(eta)",
 		"self.gradient_checkpointing = True",
 		"scan = torch_checkpoint(",
+		"torch._assert_async(",
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("TTT HF template missing %q", want)

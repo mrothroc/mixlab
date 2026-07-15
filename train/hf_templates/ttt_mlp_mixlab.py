@@ -111,11 +111,20 @@ def require_right_padded_ttt_batch(attention_mask):
     if attention_mask is None or attention_mask.dim() != 2:
         return
     mask = attention_mask.to(torch.bool)
-    if bool(torch.all(mask[:, 1:] <= mask[:, :-1])):
+    valid_rows = torch.all(mask[:, 1:] <= mask[:, :-1], dim=1)
+    compiler = getattr(torch, "compiler", None)
+    if compiler is not None and compiler.is_compiling():
+        # Keep the recurrence-safety check inside the compiled graph. A Python
+        # bool here would synchronize the device and split every compiled
+        # forward into multiple graphs.
+        torch._assert_async(
+            torch.all(valid_rows),
+            "ttt_mlp requires right-padded batches",
+        )
         return
-    offending = torch.nonzero(
-        ~torch.all(mask[:, 1:] <= mask[:, :-1], dim=1), as_tuple=False
-    ).flatten()
+    if bool(torch.all(valid_rows)):
+        return
+    offending = torch.nonzero(~valid_rows, as_tuple=False).flatten()
     raise ValueError(
         "ttt_mlp requires right-padded batches: "
         f"{offending.numel()} of {mask.shape[0]} rows (e.g. row {int(offending[0])}) "

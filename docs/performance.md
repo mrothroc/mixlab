@@ -188,6 +188,14 @@ HF TTT fine-tuning uses whole-scan activation checkpointing by default. This is
 an exact recomputation strategy, not a detached or first-order inner update.
 Use Hugging Face's `gradient_checkpointing_disable()` only when sufficient
 device memory is available and faster backward execution is more important.
+The stateless training path supports `torch.compile(model,
+mode="reduce-overhead", fullgraph=True)`. Use fixed-shape batches after the
+initial compile and exclude the first forward/backward from timing. The
+compile contract checks eager/compiled loss and gradients; the opt-in CUDA
+gate compares complete optimizer-step throughput at sequence length 512 and
+reports compile latency, peak memory, and best-effort GPU utilization. See
+[Hugging Face Export](hf-export.md#ttt-mlp-execution-paths) for the command and
+padding constraints.
 
 Mixlab reports analytical forward FLOPs for `ttt_mlp`, but does not report TTT
 training-step FLOPs, FLOPs/token, or MFU as precise metrics. The generic

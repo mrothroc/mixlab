@@ -170,6 +170,26 @@ fine-tuning. Calls that request or provide `past_key_values` retain the exact
 online recurrence because the cache includes partial-chunk gradients and
 convolution history.
 
+The stateless fine-tuning path is compatible with a full-graph PyTorch compile.
+Compile the complete downstream model, not each TTT block separately:
+
+```python
+model = AutoModelForSequenceClassification.from_pretrained(
+    export_dir,
+    trust_remote_code=True,
+    num_labels=num_labels,
+)
+model = torch.compile(model, mode="reduce-overhead", fullgraph=True)
+```
+
+The first forward/backward compiles the graph and must be excluded from
+throughput measurements. Keep batch shapes stable after warm-up; bucketing and
+padding sequence lengths to a `chunk_size` multiple reduce recompilation and
+avoid a separate partial-chunk graph shape. Padding must still be on the right.
+The exported runtime keeps both the TTT recurrence check and sequence-pooling
+empty-row check inside compiled graphs, so compilation does not weaken those
+correctness guards.
+
 Variable-length TTT batches must be right padded. Real-token prefix logits are
 then identical to scoring each row separately; left padding would advance the
 recurrent state before the first real token. This is stricter than attention-only
@@ -225,6 +245,22 @@ can trade memory for backward speed explicitly:
 model.gradient_checkpointing_disable()  # faster backward, higher peak memory
 model.gradient_checkpointing_enable()   # restore memory-bounded backward
 ```
+
+The opt-in CUDA release gate measures complete classifier optimizer steps,
+including forward, checkpointed backward, and AdamW update. It reports eager
+and compiled tokens/second, compilation time, peak allocated memory, and
+best-effort GPU utilization:
+
+```bash
+HF_TTT_MLP_TRAIN_PERF=1 \
+HF_PARITY_PYTHON=/path/to/hf-venv/bin/python \
+go test ./train -run TestExportHFTTTMLPTrainingPerformance -count=1 -v -timeout=30m
+```
+
+The default gate requires compiled steady-state throughput to be no slower
+than eager. Set `HF_TTT_MLP_MIN_COMPILE_SPEEDUP` to a hardware-specific ratio
+for release infrastructure. GPU utilization is diagnostic rather than a hard
+cross-hardware threshold.
 
 Tokenizer artifacts must come from an explicit `-tokenizer-path`, or from `tokenizer.json` next to the config/checkpoint. If the tokenizer source is missing or unreachable, export fails before writing an incomplete Hugging Face directory. Mixlab writes `tokenizer_config.json` and `special_tokens_map.json` by merging any source sidecars with special-token metadata derived from `tokenizer.json`, and writes matching `pad/eos/bos/unk_token_id` fields to `config.json` when the tokens are present. For masked-capable checkpoints (`mlm`/`mntp`, or `hybrid` with `hybrid_clm_fraction < 1`), it also sets the tokenizer `mask_token`/`mask_token_id` — resolved from `training.mlm_mask_token_id` against the tokenizer vocab — so masked/MNTP eval works without manually patching the tokenizer.
 
