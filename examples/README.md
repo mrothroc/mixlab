@@ -60,6 +60,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [layernorm_sandwich_tiny.json](layernorm_sandwich_tiny.json) | LayerNorm sandwich stack | HF-exportable GPT-BERT-style norms and GEGLU |
 | [gpt2_strict_small_2026.json](gpt2_strict_small_2026.json) | GPT-2 strict-small baseline | Learned absolute positions, GPT-2 FFN/norm/bias layout, native GPT-2 HF export |
 | [mlm_tiny.json](mlm_tiny.json) | Bidirectional transformer | Masked language modeling objective |
+| [mlm_wwm_curriculum_tiny.json](mlm_wwm_curriculum_tiny.json) | MLM masking curriculum | Whole-word masking followed by token masking |
 | [word_structural_mlm_tiny.json](word_structural_mlm_tiny.json) | MLM + word-structural auxiliary | Local shuffle reconstruction on unmasked spans |
 | [hybrid_tiny.json](hybrid_tiny.json) | Hybrid transformer | Causal plus masked-objective training, with per-batch default mixing and optional per-example mixing |
 | [block_diffusion_tiny.json](block_diffusion_tiny.json) | Block diffusion | Block-wise masked-diffusion objective (`training.objective: "block_diffusion"`); train, then sample with `-mode generate-diffusion` |
@@ -95,6 +96,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 
 - **Learning mixlab**: Start with `plain_3L.json` — it trains in seconds.
 - **Masked objectives**: Use `mlm_tiny.json` as the smallest bidirectional MLM starting point.
+- **Whole-word MLM**: Use `mlm_wwm_curriculum_tiny.json` with shards prepared using `-wwm-compatible-tokenizer`. Mixlab derives word starts from the shard-adjacent `tokenizer.json` and changes only host-side mask selection.
 - **Word-structural auxiliary**: Use `word_structural_mlm_tiny.json` when you want MLM training with local shuffled-span reconstruction through the same vocab head.
 - **Hybrid objectives**: Use `hybrid_tiny.json` for GPT-BERT-style causal plus masked-objective training. Set `training.hybrid_mix_granularity: "example"` when you want mixed causal and masked sequences in the same batch.
 - **Block diffusion**: Use `block_diffusion_tiny.json` for the v1 block-wise masked-diffusion objective. Use `hybrid_block_diffusion_tiny.json` to mix causal and block-diffusion batches, and `block_diffusion_sampler_sweep.json` for a sampler-settings variant. Train them like any other config, then sample with `-mode generate-diffusion`. Compare diffusion runs against causal and MLM baselines on the same backbone, using causal validation loss for apples-to-apples model comparison.

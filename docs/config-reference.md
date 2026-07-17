@@ -966,6 +966,8 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `mlm_mask_prob` | number | No | `0.15` | Probability of selecting each eligible token for masked-objective loss. Must be in `[0,1]`. |
 | `mlm_mask_prob_schedule` | array | No | Disabled | Stepwise mask-probability schedule as `[[step, probability], ...]`. Entries must start at step `0`, use strictly increasing integer steps, and probabilities in `[0,1]`. Overrides `mlm_mask_prob` on MLM/MNTP/hybrid masked steps. |
 | `mlm_mask_prob_schedule_mode` | string | No | `"step"` | Schedule interpolation mode: `"step"` holds each entry until the next step, while `"linear"` linearly interpolates between adjacent entries and holds the final probability afterward. |
+| `mlm_mask_unit` | string | No | `"token"` | MLM position-selection unit: independent `"token"` sampling or tokenizer-derived `"whole_word"` groups. Whole-word mode requires supported `tokenizer.json` metadata next to the shards. |
+| `mlm_mask_unit_schedule` | object array | No | Disabled | Stepwise categorical schedule such as `[{"step":0,"unit":"whole_word"},{"step":5000,"unit":"token"}]`. The first entry must start at step `0`. |
 | `mlm_mask_token_id` | integer | Required for `mlm`, `mntp`, `hybrid`, `block_diffusion`, `multihead` masked heads | None | Token id used as the mask replacement. For `block_diffusion`, v1 temporarily reuses this field as the mask token source until an objective-neutral `mask_token_id` alias exists. Must be in `[0, vocab_size)`. |
 | `mlm_mask_token_prob` | number | No | `0.8` | Probability that a selected MLM token is replaced with `mlm_mask_token_id`. |
 | `mlm_random_token_prob` | number | No | `0.1` | Probability that a selected MLM token is replaced with a random token id. |
@@ -1099,6 +1101,23 @@ For diffusion experiments, compare against causal and MLM baselines that keep th
 ```
 
 `mlm_mask_prob_schedule` changes the mask ratio deterministically. With the default `"step"` mode, `[[0, 0.30], [5000, 0.15]]` uses a 30% mask rate until step 5000, then 15%. With `"linear"` mode, Mixlab interpolates between adjacent entries, so the same schedule gradually decays from 30% to 15% over the first 5000 steps. It applies to MLM, MNTP, and masked hybrid batches; causal hybrid batches ignore it because they do not use masked-objective rows.
+
+`mlm_mask_unit_schedule` independently selects the masking unit. Whole-word
+mode groups eligible pieces per sequence row using tokenizer vocabulary
+markers, samples complete groups under a per-row token budget, and keeps the
+existing 80/10/10 replacement decision per selected token. The realized rate
+can be below the target when no remaining whole group fits the budget; training
+telemetry reports the target, realized rate, group sizes, and underfilled rows.
+Supported metadata conventions are Metaspace with an always-prepended marker,
+ByteLevel BPE with prefix-space behavior, and WordPiece continuation prefixes.
+Special tokens and `mlm_mask_token_id` are ineligible. V1 applies the unit only
+to MLM paths, including MLM hybrid steps/rows, multihead MLM heads, and tied RTD
+generator probes; MNTP, diffusion, and word-structural selection are unchanged.
+To convert a corpus-pass curriculum into zero-based steps, let `T` be the sum of
+training-shard token counts and `B` be `batch_tokens`. For ten passes with a
+WWM-to-token transition after seven passes, use
+`steps = floor(10*T/B)` and transition step `ceil(7*T/B)`. An independent
+sequence-length transition after two passes uses `ceil(2*T/B)`.
 
 `hybrid_clm_fraction_schedule` changes the probability of selecting causal hybrid batches over time. With `"step"` mode, `[[0, 0.75], [10000, 0.25]]` uses mostly causal batches before step 10000 and more masked/diffusion batches afterward. With `"linear"` mode, Mixlab interpolates the causal fraction between entries. This schedule is useful for hybrid block-diffusion runs that warm up with causal next-token training before increasing denoising exposure.
 

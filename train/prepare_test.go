@@ -61,6 +61,7 @@ func TestPrepareScript(t *testing.T) {
 		"--input", inputFile,
 		"--output", outputDir,
 		"--vocab-size", "256",
+		"--wwm-compatible-tokenizer",
 		"--val-split", "0.1",
 		"--tokens-per-shard", "500",
 		"--char-vocab-size", "257",
@@ -138,6 +139,50 @@ func TestPrepareScript(t *testing.T) {
 	tokenizerPath := filepath.Join(outputDir, "tokenizer.json")
 	if _, err := os.Stat(tokenizerPath); err != nil {
 		t.Errorf("tokenizer.json not found: %v", err)
+	}
+	tokenizerBlob, err := os.ReadFile(tokenizerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tokenizerDoc struct {
+		Model struct {
+			Vocab map[string]int `json:"vocab"`
+		} `json:"model"`
+	}
+	if err := json.Unmarshal(tokenizerBlob, &tokenizerDoc); err != nil {
+		t.Fatal(err)
+	}
+	actualVocab := 0
+	for _, id := range tokenizerDoc.Model.Vocab {
+		if id+1 > actualVocab {
+			actualVocab = id + 1
+		}
+	}
+	wordStart, eligible, scheme, err := mlmWordBoundaryLUTFromTokenizer(tokenizerPath, actualVocab, 4)
+	if err != nil {
+		t.Fatalf("prepared tokenizer is not WWM-compatible: %v", err)
+	}
+	if scheme != "bytelevel" || len(wordStart) != actualVocab || eligible[4] != 0 {
+		t.Fatalf("prepared WWM metadata scheme=%q starts=%d mask_eligible=%d", scheme, len(wordStart), eligible[4])
+	}
+	externalOutputDir := filepath.Join(tmpDir, "external-tokenizer-shards")
+	externalPrepCmd := exec.Command("python3", scriptPath,
+		"--input", inputFile,
+		"--output", externalOutputDir,
+		"--tokenizer-path", tokenizerPath,
+		"--wwm-compatible-tokenizer",
+		"--val-split", "0.1",
+		"--tokens-per-shard", "10000",
+	)
+	if output, err := externalPrepCmd.CombinedOutput(); err != nil {
+		t.Fatalf("prepare.py with external tokenizer failed: %v\n%s", err, output)
+	}
+	copiedTokenizerBlob, err := os.ReadFile(filepath.Join(externalOutputDir, "tokenizer.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(copiedTokenizerBlob, tokenizerBlob) {
+		t.Fatal("prepare did not preserve the external tokenizer.json byte-for-byte")
 	}
 	charPath := filepath.Join(outputDir, "char_features.bin")
 	charBlob, err := os.ReadFile(charPath)

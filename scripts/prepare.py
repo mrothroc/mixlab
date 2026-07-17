@@ -19,6 +19,7 @@ import math
 import os
 import random
 import re
+import shutil
 import struct
 import sys
 from pathlib import Path
@@ -68,16 +69,17 @@ def _read_jsonl(path: Path, text_field: str) -> list[str]:
     return texts
 
 
-def train_bpe_tokenizer(texts: list[str], vocab_size: int, output_dir: str):
+def train_bpe_tokenizer(texts: list[str], vocab_size: int, output_dir: str, wwm_compatible: bool = False):
     """Train a BPE tokenizer using the HuggingFace tokenizers library."""
     from tokenizers import Tokenizer, models, pre_tokenizers, trainers
 
     tokenizer = Tokenizer(models.BPE())
-    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=wwm_compatible)
 
+    special_tokens = ["[PAD]", "[CLS]", "[SEP]", "[UNK]", "[MASK]"] if wwm_compatible else ["<|pad|>"]
     trainer = trainers.BpeTrainer(
         vocab_size=vocab_size,
-        special_tokens=["<|pad|>"],
+        special_tokens=special_tokens,
         show_progress=True,
     )
 
@@ -97,6 +99,58 @@ def load_tokenizer(tokenizer_path: str):
     tokenizer = Tokenizer.from_file(tokenizer_path)
     print(f"Loaded tokenizer from {tokenizer_path} (vocab_size={tokenizer.get_vocab_size()})")
     return tokenizer
+
+
+def copy_tokenizer_json(tokenizer_path: str, output_dir: str) -> str:
+    """Keep the exact external tokenizer artifact next to generated shards."""
+    destination = os.path.join(output_dir, "tokenizer.json")
+    if os.path.abspath(tokenizer_path) != os.path.abspath(destination):
+        shutil.copyfile(tokenizer_path, destination)
+    return destination
+
+
+def _find_tokenizer_node(value, node_type: str):
+    if isinstance(value, dict):
+        if value.get("type") == node_type:
+            return value
+        for child in value.values():
+            found = _find_tokenizer_node(child, node_type)
+            if found is not None:
+                return found
+    elif isinstance(value, list):
+        for child in value:
+            found = _find_tokenizer_node(child, node_type)
+            if found is not None:
+                return found
+    return None
+
+
+def detect_wwm_boundary_scheme(tokenizer) -> str:
+    """Validate tokenizer-level word starts used by Mixlab whole-word masking."""
+    doc = json.loads(tokenizer.to_str())
+    model = doc.get("model") or {}
+    model_type = str(model.get("type", "")).lower()
+    pre = doc.get("pre_tokenizer")
+    metaspace = _find_tokenizer_node(pre, "Metaspace")
+    if metaspace is not None:
+        legacy_prefix = bool(metaspace.get("add_prefix_space", False))
+        if str(metaspace.get("prepend_scheme", "")).lower() != "always" and not legacy_prefix:
+            raise ValueError("WWM Metaspace tokenizer requires prepend_scheme='always'")
+        if model_type not in {"bpe", "unigram"}:
+            raise ValueError(f"WWM Metaspace tokenizer has unsupported model.type={model_type!r}")
+        return "sentencepiece"
+    bytelevel = _find_tokenizer_node(pre, "ByteLevel")
+    if bytelevel is not None:
+        if model_type != "bpe":
+            raise ValueError(f"WWM ByteLevel tokenizer has unsupported model.type={model_type!r}")
+        prepend = _find_tokenizer_node(doc.get("normalizer"), "Prepend")
+        prepends_space = bool(prepend and str(prepend.get("prepend", prepend.get("content", ""))).startswith(" "))
+        if not bool(bytelevel.get("add_prefix_space", False)) and not prepends_space:
+            raise ValueError("WWM ByteLevel tokenizer requires add_prefix_space=true")
+        return "bytelevel"
+    if model_type == "wordpiece":
+        return "wordpiece"
+    raise ValueError("tokenizer has no supported whole-word boundary convention")
 
 
 def tokenize_texts(tokenizer, texts: list[str]) -> np.ndarray:
@@ -585,6 +639,7 @@ def main():
     parser.add_argument("--vocab-size", type=int, default=1024, help="BPE vocabulary size (default: 1024)")
     parser.add_argument("--val-split", type=float, default=0.1, help="Fraction of tokens for validation (default: 0.1)")
     parser.add_argument("--tokenizer-path", default="", help="Path to pre-trained tokenizer.json (skip training)")
+    parser.add_argument("--wwm-compatible-tokenizer", action="store_true", help="Train or validate tokenizer metadata for whole-word masking")
     parser.add_argument("--text-field", default="text", help="JSON field name for text in JSONL files (default: text)")
     parser.add_argument("--tokens-per-shard", type=int, default=TOKENS_PER_SHARD, help="Tokens per shard (default: 1000000)")
     parser.add_argument("--no-shuffle", action="store_true", help="Disable token shuffling within shards")
@@ -625,9 +680,15 @@ def main():
 
     if args.tokenizer_path:
         tokenizer = load_tokenizer(args.tokenizer_path)
+        copied_path = copy_tokenizer_json(args.tokenizer_path, args.output)
+        print(f"Saved tokenizer artifact to {copied_path}")
     else:
         print(f"Training BPE tokenizer with vocab_size={args.vocab_size}...")
-        tokenizer = train_bpe_tokenizer(texts, args.vocab_size, args.output)
+        tokenizer = train_bpe_tokenizer(texts, args.vocab_size, args.output, args.wwm_compatible_tokenizer)
+
+    if args.wwm_compatible_tokenizer:
+        scheme = detect_wwm_boundary_scheme(tokenizer)
+        print(f"Whole-word masking boundary scheme: {scheme}")
 
     write_char_features(tokenizer, args.output, args.char_vocab_size, args.char_max_per_token)
     write_minimal_pairs(

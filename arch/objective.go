@@ -28,6 +28,9 @@ const (
 	HybridMixGranularityBatch   = "batch"
 	HybridMixGranularityExample = "example"
 
+	MLMMaskUnitToken     = "token"
+	MLMMaskUnitWholeWord = "whole_word"
+
 	AttentionSegmentMaskNone          = "none"
 	AttentionSegmentMaskBoundaryToken = "boundary_token"
 )
@@ -38,6 +41,14 @@ func normalizeTrainingObjective(raw string) string {
 		return ObjectiveCausal
 	}
 	return obj
+}
+
+func normalizeMLMMaskUnit(raw string) string {
+	unit := strings.ToLower(strings.TrimSpace(raw))
+	if unit == "" {
+		return MLMMaskUnitToken
+	}
+	return unit
 }
 
 func normalizeAttentionMask(raw string) string {

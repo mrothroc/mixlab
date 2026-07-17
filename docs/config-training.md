@@ -91,6 +91,7 @@ you are trying to measure.
 | `invariance` | Structured two-view symmetric-KL consistency loss for masked vocab predictions. |
 | `pll_margin` | Directional paired annotated-span PLL margin auxiliary for masked vocab predictions. |
 | `word_structural_objective` | StructBERT-style local shuffle reconstruction for MLM/MNTP vocab heads. |
+| `mlm_mask_unit`, `mlm_mask_unit_schedule` | Token or tokenizer-derived whole-word MLM selection, optionally changed at fixed steps. |
 | `mtp` | Parameter-free multi-token prediction auxiliary loss. |
 | `first_byte_mask` | First-byte masked loss path. |
 | `attention_segment_mask` | Block-diagonal segment attention for packed training sequences. |
@@ -114,6 +115,14 @@ regularizer that ranks clean/corrupt pairs by masked-span pseudo-log-likelihood.
 HF export/scoring. Omit it or set `enabled:false` for exact disabled parity.
 `loss_weight:0` keeps the input shuffle active and only removes the auxiliary
 loss contribution, which is useful as a corruption-only ablation.
+
+Whole-word MLM masking changes host-side position selection, not replacement
+probabilities or model weights. `mlm_mask_unit: "whole_word"` requires a
+supported SentencePiece/Metaspace, ByteLevel BPE, or WordPiece
+`tokenizer.json` next to the training shards. A categorical
+`mlm_mask_unit_schedule` can switch between `whole_word` and `token` at fixed
+zero-based steps. It applies only to MLM paths; MNTP and diffusion masking keep
+their existing semantics.
 
 `training.invariance` is a training-only, corpus-owned consistency objective for
 MLM/MNTP models and multihead configs whose export head is MLM/MNTP. It samples

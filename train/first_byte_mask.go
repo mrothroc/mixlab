@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"sort"
 	"unicode/utf8"
 )
 
@@ -54,25 +52,6 @@ func loadFirstByteMaskValid(trainPattern string, vocab int) ([]int32, string, er
 		return nil, "", fmt.Errorf("training.first_byte_mask requires tokenizer.json next to training shards when vocab_size=%d exceeds byte ids", vocab)
 	}
 	return identityFirstByteMaskValid(vocab), "byte-id fallback", nil
-}
-
-func tokenizerPathForTrainPattern(trainPattern string) (string, bool, error) {
-	matches, err := filepath.Glob(trainPattern)
-	if err != nil {
-		return "", false, err
-	}
-	sort.Strings(matches)
-	if len(matches) > 0 {
-		path := filepath.Join(filepath.Dir(matches[0]), "tokenizer.json")
-		if _, err := os.Stat(path); err == nil {
-			return path, true, nil
-		}
-	}
-	path := filepath.Join(filepath.Dir(trainPattern), "tokenizer.json")
-	if _, err := os.Stat(path); err == nil {
-		return path, true, nil
-	}
-	return "", false, nil
 }
 
 func firstByteMaskValidFromTokenizer(path string, vocab int) ([]int32, error) {

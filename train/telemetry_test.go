@@ -56,6 +56,7 @@ func TestParseIORegGPUUtilPercent(t *testing.T) {
 func TestTelemetrySnapshotJSONShape(t *testing.T) {
 	state := newTelemetryState()
 	componentLosses := map[string]float64{"invariance_loss": 0.25}
+	masking := &telemetryMasking{Unit: "whole_word", TargetProb: 0.15, EligibleTokens: 100, BudgetTokens: 15, SelectedTokens: 14, RealizedRate: 0.14, CandidateGroups: 70, SelectedGroups: 10, MeanSelectedGroupSize: 1.4, MaxSelectedGroupSize: 3, UnderfilledRows: 1}
 	state.update(telemetryUpdate{
 		Model:         "tiny",
 		Step:          7,
@@ -83,10 +84,12 @@ func TestTelemetrySnapshotJSONShape(t *testing.T) {
 		SkippedOptimizerSteps: 1,
 		ConsecutiveSkipped:    1,
 		OptimizerStepSkipped:  true,
+		Masking:               masking,
 	})
 	// telemetry state owns the serialized snapshot rather than retaining a
 	// caller-owned map that training code can mutate on the next step.
 	componentLosses["invariance_loss"] = 999
+	masking.Unit = "mutated"
 	snap := state.snapshot(false)
 	if snap.Model != "tiny" || snap.Step != 7 || snap.TotalSteps != 100 {
 		t.Fatalf("bad run fields: %+v", snap.telemetryRunState)
@@ -106,11 +109,14 @@ func TestTelemetrySnapshotJSONShape(t *testing.T) {
 	if snap.OptimizerSteps != 7 || snap.SkippedOptimizerSteps != 1 || snap.ConsecutiveSkipped != 1 || !snap.OptimizerStepSkipped {
 		t.Fatalf("optimizer telemetry=%+v", snap.telemetryRunState)
 	}
+	if snap.Masking == nil || snap.Masking.Unit != "whole_word" || snap.Masking.RealizedRate != 0.14 || snap.Masking.MeanSelectedGroupSize != 1.4 {
+		t.Fatalf("masking telemetry=%+v", snap.Masking)
+	}
 	raw, err := json.Marshal(snap)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	for _, want := range []string{`"model":"tiny"`, `"tokens_per_sec":128`, `"component_losses":{"invariance_loss":0.25}`, `"optimizer_steps":7`, `"skipped_optimizer_steps":1`, `"consecutive_skipped_optimizer_steps":1`, `"optimizer_step_skipped":true`, `"mlx":`, `"host":`, `"rss_bytes":`} {
+	for _, want := range []string{`"model":"tiny"`, `"tokens_per_sec":128`, `"component_losses":{"invariance_loss":0.25}`, `"masking":{"unit":"whole_word"`, `"realized_rate":0.14`, `"optimizer_steps":7`, `"skipped_optimizer_steps":1`, `"consecutive_skipped_optimizer_steps":1`, `"optimizer_step_skipped":true`, `"mlx":`, `"host":`, `"rss_bytes":`} {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("snapshot JSON missing %s: %s", want, raw)
 		}
@@ -126,6 +132,16 @@ func TestTelemetryOmitsInactiveComponentLosses(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "component_losses") {
 		t.Fatalf("inactive component losses serialized: %s", raw)
+	}
+	if strings.Contains(string(raw), "masking") {
+		t.Fatalf("inactive masking telemetry serialized: %s", raw)
+	}
+}
+
+func TestMLMMaskStatsTelemetryDerivedValues(t *testing.T) {
+	masking := (mlmMaskStats{Unit: "whole_word", TargetProb: 0.15, EligibleTokens: 20, SelectedTokens: 3, SelectedGroups: 2, SelectedGroupTokenTotal: 3}).telemetry()
+	if masking == nil || masking.RealizedRate != 0.15 || masking.MeanSelectedGroupSize != 1.5 {
+		t.Fatalf("masking=%+v", masking)
 	}
 }
 

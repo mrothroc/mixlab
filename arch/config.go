@@ -276,6 +276,10 @@ type TrainingSpec struct {
 	MLMKeptUnchangedProb              float64                      `json:"mlm_kept_unchanged_prob,omitempty"`
 	MLMMaskProbSchedule               [][]float64                  `json:"mlm_mask_prob_schedule,omitempty"`
 	MLMMaskProbScheduleMode           string                       `json:"mlm_mask_prob_schedule_mode,omitempty"`
+	MLMMaskUnit                       string                       `json:"mlm_mask_unit,omitempty"`
+	MLMMaskUnitSchedule               []MLMMaskUnitScheduleEntry   `json:"mlm_mask_unit_schedule,omitempty"`
+	MLMWordStart                      []uint8                      `json:"-"`
+	MLMMaskEligible                   []uint8                      `json:"-"`
 	HybridCLMFraction                 float64                      `json:"hybrid_clm_fraction,omitempty"`
 	HybridCLMFractionSchedule         [][]float64                  `json:"hybrid_clm_fraction_schedule,omitempty"`
 	HybridCLMFractionScheduleMode     string                       `json:"hybrid_clm_fraction_schedule_mode,omitempty"`
@@ -437,6 +441,7 @@ func DefaultTrainingSpec() TrainingSpec {
 		LAMBTrustRatioCap: 10,
 		Seed:              42,
 		BatchTokens:       1024,
+		MLMMaskUnit:       MLMMaskUnitToken,
 		TTTMode:           "full",
 		TTTLR:             1e-5,
 		TTTRank:           4,
@@ -473,6 +478,10 @@ func (t *TrainingSpec) ApplyDefaults() {
 		t.BatchTokens = d.BatchTokens
 	}
 	t.Objective = normalizeTrainingObjective(t.Objective)
+	t.MLMMaskUnit = normalizeMLMMaskUnit(t.MLMMaskUnit)
+	for i := range t.MLMMaskUnitSchedule {
+		t.MLMMaskUnitSchedule[i].Unit = strings.ToLower(strings.TrimSpace(t.MLMMaskUnitSchedule[i].Unit))
+	}
 	if !t.mlmMaskProbSet && t.MLMMaskProb == 0 {
 		t.MLMMaskProb = 0.15
 	}

@@ -35,6 +35,37 @@ type objectiveBatch struct {
 	rtdGeneratorY         []int
 	rtdGeneratorLossMask  []float32
 	tttInnerLRScale       []float32
+	mlmMaskStats          mlmMaskStats
+}
+
+type mlmMaskStats struct {
+	Unit                    string
+	TargetProb              float64
+	EligibleTokens          int
+	BudgetTokens            int
+	SelectedTokens          int
+	CandidateGroups         int
+	SelectedGroups          int
+	SelectedGroupTokenTotal int
+	MaxSelectedGroupSize    int
+	UnderfilledRows         int
+}
+
+func (s *mlmMaskStats) add(other mlmMaskStats) {
+	if s.Unit == "" {
+		s.Unit = other.Unit
+		s.TargetProb = other.TargetProb
+	}
+	s.EligibleTokens += other.EligibleTokens
+	s.BudgetTokens += other.BudgetTokens
+	s.SelectedTokens += other.SelectedTokens
+	s.CandidateGroups += other.CandidateGroups
+	s.SelectedGroups += other.SelectedGroups
+	s.SelectedGroupTokenTotal += other.SelectedGroupTokenTotal
+	if other.MaxSelectedGroupSize > s.MaxSelectedGroupSize {
+		s.MaxSelectedGroupSize = other.MaxSelectedGroupSize
+	}
+	s.UnderfilledRows += other.UnderfilledRows
 }
 
 func objectiveForStep(spec TrainingSpec, step int) string {
@@ -91,7 +122,7 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 	var err error
 	switch canonicalObjective(objective) {
 	case arch.ObjectiveMLM:
-		prepared, err = prepareMLMBatch(cfg, batch, step, need)
+		prepared, err = prepareMLMBatch(cfg, batch, step, need, seqLen)
 	case arch.ObjectiveMNTP:
 		prepared, err = prepareMNTPBatch(cfg, batch, step, need, seqLen)
 	case arch.ObjectiveBlockDiffusion:
@@ -140,7 +171,7 @@ func canonicalObjective(objective string) string {
 	}
 }
 
-func prepareMLMBatch(cfg *ArchConfig, batch trainBatch, step, need int) (objectiveBatch, error) {
+func prepareMLMBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int) (objectiveBatch, error) {
 	if cfg.VocabSize <= 0 {
 		return objectiveBatch{}, fmt.Errorf("invalid vocab_size=%d", cfg.VocabSize)
 	}
@@ -150,16 +181,30 @@ func prepareMLMBatch(cfg *ArchConfig, batch trainBatch, step, need int) (objecti
 	lossMask := make([]float32, need)
 	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0x243f6a8885a308d3)
 	maskProb := cfg.Training.EffectiveMLMMaskProbForStep(step)
-	selected := selectMaskPositions(rng, lossMask, maskProb, need)
-	if selected == 0 && maskProb > 0 && need > 0 {
-		pos := rng.Intn(need)
-		lossMask[pos] = 1
-		selected = 1
+	unit := cfg.Training.EffectiveMLMMaskUnitForStep(step)
+	selected := 0
+	stats := mlmMaskStats{Unit: unit, TargetProb: maskProb}
+	if unit == arch.MLMMaskUnitWholeWord {
+		var err error
+		stats, err = selectWholeWordMaskPositions(rng, batch.x[:need], lossMask, maskProb, seqLen, cfg.Training.MLMWordStart, cfg.Training.MLMMaskEligible)
+		if err != nil {
+			return objectiveBatch{}, err
+		}
+		selected = stats.SelectedTokens
+	} else {
+		// Keep the legacy token selector and fallback in exactly this order.
+		selected = selectMaskPositions(rng, lossMask, maskProb, need)
+		if selected == 0 && maskProb > 0 && need > 0 {
+			pos := rng.Intn(need)
+			lossMask[pos] = 1
+			selected = 1
+		}
+		stats = tokenMLMMaskStats(maskProb, need, selected)
 	}
 	if selected > 0 {
 		replaceSelectedMLMTokens(cfg, rng, x, y, lossMask)
 	}
-	return objectiveBatch{x: x, y: y, lossMask: lossMask, unmaskedX: unmasked}, nil
+	return objectiveBatch{x: x, y: y, lossMask: lossMask, unmaskedX: unmasked, mlmMaskStats: stats}, nil
 }
 
 func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int) (objectiveBatch, error) {
@@ -333,6 +378,8 @@ func prepareHybridExampleBatch(cfg *ArchConfig, batch trainBatch, step, need, se
 	maskProb := cfg.Training.EffectiveMLMMaskProbForStep(step)
 	causalFraction := cfg.Training.EffectiveHybridCLMFractionForStep(step)
 	secondary := cfg.Training.EffectiveHybridSecondaryObjective()
+	unit := cfg.Training.EffectiveMLMMaskUnitForStep(step)
+	maskStats := mlmMaskStats{Unit: unit, TargetProb: maskProb}
 	for b := 0; b < batchSize; b++ {
 		start := b * seqLen
 		end := start + seqLen
@@ -348,11 +395,22 @@ func prepareHybridExampleBatch(cfg *ArchConfig, batch trainBatch, step, need, se
 			for i := start; i < end; i++ {
 				y[i] = batch.x[i]
 			}
-			selected := selectMaskPositions(rng, maskedLossMask[start:end], maskProb, seqLen)
-			if selected == 0 && maskProb > 0 {
-				pos := start + rng.Intn(seqLen)
-				maskedLossMask[pos] = 1
-				selected = 1
+			selected := 0
+			if unit == arch.MLMMaskUnitWholeWord {
+				rowStats, err := selectWholeWordMaskPositions(rng, batch.x[start:end], maskedLossMask[start:end], maskProb, seqLen, cfg.Training.MLMWordStart, cfg.Training.MLMMaskEligible)
+				if err != nil {
+					return objectiveBatch{}, err
+				}
+				selected = rowStats.SelectedTokens
+				maskStats.add(rowStats)
+			} else {
+				selected = selectMaskPositions(rng, maskedLossMask[start:end], maskProb, seqLen)
+				if selected == 0 && maskProb > 0 {
+					pos := start + rng.Intn(seqLen)
+					maskedLossMask[pos] = 1
+					selected = 1
+				}
+				maskStats.add(tokenMLMMaskStats(maskProb, seqLen, selected))
 			}
 			if selected > 0 {
 				copy(lossMask[start:end], maskedLossMask[start:end])
@@ -388,7 +446,107 @@ func prepareHybridExampleBatch(cfg *ArchConfig, batch trainBatch, step, need, se
 		attentionCausal: attentionCausal,
 		maskedLossMask:  maskedLossMask,
 		unmaskedX:       unmasked,
+		mlmMaskStats:    maskStats,
 	}, nil
+}
+
+type mlmWordGroup struct {
+	positions []int
+}
+
+func selectWholeWordMaskPositions(rng *rand.Rand, tokens []int, lossMask []float32, prob float64, seqLen int, wordStart, eligible []uint8) (mlmMaskStats, error) {
+	stats := mlmMaskStats{Unit: arch.MLMMaskUnitWholeWord, TargetProb: prob}
+	if seqLen <= 0 || len(tokens)%seqLen != 0 || len(lossMask) < len(tokens) {
+		return stats, fmt.Errorf("invalid whole-word MLM batch shape: tokens=%d mask=%d seq_len=%d", len(tokens), len(lossMask), seqLen)
+	}
+	if len(wordStart) == 0 || len(wordStart) != len(eligible) {
+		return stats, fmt.Errorf("whole-word MLM tokenizer metadata is not configured")
+	}
+	for rowStart := 0; rowStart < len(tokens); rowStart += seqLen {
+		groups := make([]mlmWordGroup, 0, seqLen)
+		active := -1
+		for pos := 0; pos < seqLen; pos++ {
+			idx := rowStart + pos
+			token := tokens[idx]
+			if token < 0 || token >= len(eligible) {
+				return stats, fmt.Errorf("whole-word MLM token id %d at position %d is outside tokenizer metadata [0,%d)", token, idx, len(eligible))
+			}
+			if eligible[token] == 0 {
+				active = -1
+				continue
+			}
+			stats.EligibleTokens++
+			if active < 0 || wordStart[token] != 0 {
+				groups = append(groups, mlmWordGroup{})
+				active = len(groups) - 1
+			}
+			groups[active].positions = append(groups[active].positions, idx)
+		}
+		stats.CandidateGroups += len(groups)
+		eligibleCount := 0
+		for _, group := range groups {
+			eligibleCount += len(group.positions)
+		}
+		budget := int(math.Round(prob * float64(eligibleCount)))
+		if prob > 0 && eligibleCount > 0 && budget < 1 {
+			budget = 1
+		}
+		if budget > eligibleCount {
+			budget = eligibleCount
+		}
+		stats.BudgetTokens += budget
+		order := make([]int, len(groups))
+		for i := range order {
+			order[i] = i
+		}
+		rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+		rowSelected := 0
+		for _, groupIdx := range order {
+			group := groups[groupIdx]
+			groupSize := len(group.positions)
+			if rowSelected+groupSize > budget {
+				continue
+			}
+			for _, idx := range group.positions {
+				lossMask[idx] = 1
+			}
+			rowSelected += groupSize
+			stats.SelectedGroups++
+			stats.SelectedGroupTokenTotal += groupSize
+			if groupSize > stats.MaxSelectedGroupSize {
+				stats.MaxSelectedGroupSize = groupSize
+			}
+			if rowSelected == budget {
+				break
+			}
+		}
+		stats.SelectedTokens += rowSelected
+		if rowSelected < budget {
+			stats.UnderfilledRows++
+		}
+	}
+	return stats, nil
+}
+
+func tokenMLMMaskStats(prob float64, considered, selected int) mlmMaskStats {
+	return mlmMaskStats{
+		Unit:                    arch.MLMMaskUnitToken,
+		TargetProb:              prob,
+		EligibleTokens:          considered,
+		BudgetTokens:            int(math.Round(prob * float64(considered))),
+		SelectedTokens:          selected,
+		CandidateGroups:         considered,
+		SelectedGroups:          selected,
+		SelectedGroupTokenTotal: selected,
+		MaxSelectedGroupSize:    boolInt(selected > 0),
+	}
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func selectMaskPositions(rng *rand.Rand, lossMask []float32, prob float64, n int) int {

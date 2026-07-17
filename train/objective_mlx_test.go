@@ -94,6 +94,60 @@ func TestMLMObjectiveLearnsMaskedTokenAboveChance(t *testing.T) {
 	}
 }
 
+func TestMLMWholeWordCurriculumMLXSmoke(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	cfg, err := LoadArchConfig("examples/mlm_wwm_curriculum_tiny.json")
+	if err != nil {
+		t.Fatalf("LoadArchConfig: %v", err)
+	}
+	cfg.Training.MLMWordStart = make([]uint8, cfg.VocabSize)
+	cfg.Training.MLMMaskEligible = make([]uint8, cfg.VocabSize)
+	for id := 5; id < cfg.VocabSize; id++ {
+		cfg.Training.MLMMaskEligible[id] = 1
+		cfg.Training.MLMWordStart[id] = 1
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	trainerIface, err := initGPUTrainer(prog, cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("initGPUTrainer: %v", err)
+	}
+	trainer, ok := trainerIface.(*mlxGPUTrainer)
+	if !ok {
+		t.Fatalf("trainer type=%T, want *mlxGPUTrainer", trainerIface)
+	}
+	defer trainer.CloseTrainer()
+	raw := trainBatch{x: make([]int, cfg.Training.BatchTokens), y: make([]int, cfg.Training.BatchTokens)}
+	for i := range raw.x {
+		raw.x[i] = 5 + i%8
+		raw.y[i] = 5 + (i+1)%8
+	}
+	for step := 0; step < cfg.Training.Steps; step++ {
+		prepared, err := prepareObjectiveBatch(cfg, raw, step, arch.ObjectiveMLM)
+		if err != nil {
+			t.Fatalf("prepare step %d: %v", step, err)
+		}
+		wantUnit := arch.MLMMaskUnitWholeWord
+		if step >= 2 {
+			wantUnit = arch.MLMMaskUnitToken
+		}
+		if prepared.mlmMaskStats.Unit != wantUnit {
+			t.Fatalf("step %d unit=%q, want %q", step, prepared.mlmMaskStats.Unit, wantUnit)
+		}
+		loss, err := trainer.TrainObjectiveStepGPU(prepared, cfg.Training.BatchTokens/cfg.SeqLen, cfg.SeqLen, float32(cfg.Training.LR))
+		if err != nil {
+			t.Fatalf("step %d: %v", step, err)
+		}
+		if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
+			t.Fatalf("step %d non-finite loss %g", step, loss)
+		}
+	}
+}
+
 func TestWordStructuralMLXSmoke(t *testing.T) {
 	if !mlxAvailable() {
 		t.Skip("MLX backend not available")

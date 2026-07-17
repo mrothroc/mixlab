@@ -93,6 +93,172 @@ func TestPrepareObjectiveBatchUsesMLMMaskProbSchedule(t *testing.T) {
 	}
 }
 
+func TestPrepareMLMTokenUnitPreservesLegacyPath(t *testing.T) {
+	base := objectiveTestConfig()
+	base.SeqLen = 4
+	base.Training.BatchTokens = 8
+	base.Training.MLMMaskProb = 0.35
+	batch := trainBatch{x: []int{1, 2, 3, 4, 5, 6, 7, 8}, y: []int{2, 3, 4, 5, 6, 7, 8, 9}}
+	omitted, err := prepareObjectiveBatch(base, batch, 17, arch.ObjectiveMLM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	explicitCfg := *base
+	explicitCfg.Training.MLMMaskUnit = arch.MLMMaskUnitToken
+	explicit, err := prepareObjectiveBatch(&explicitCfg, batch, 17, arch.ObjectiveMLM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(omitted.x, explicit.x) || !reflect.DeepEqual(omitted.y, explicit.y) || !reflect.DeepEqual(omitted.lossMask, explicit.lossMask) {
+		t.Fatalf("explicit token mode changed legacy output: omitted=%+v explicit=%+v", omitted, explicit)
+	}
+	if explicit.mlmMaskStats.Unit != arch.MLMMaskUnitToken || explicit.mlmMaskStats.MaxSelectedGroupSize > 1 {
+		t.Fatalf("token stats=%+v", explicit.mlmMaskStats)
+	}
+}
+
+func TestPrepareMLMTokenUnitMatchesLegacyGoldenMatrix(t *testing.T) {
+	batch := trainBatch{
+		x: []int{1, 2, 3, 4, 5, 6, 7, 8},
+		y: []int{2, 3, 4, 5, 6, 7, 8, 9},
+	}
+	for _, objective := range []string{arch.ObjectiveMLM, arch.ObjectiveHybrid} {
+		for _, seed := range []int64{1, 42, 999} {
+			for _, step := range []int{0, 1, 17} {
+				for _, prob := range []float64{0, 0.15, 1} {
+					cfg := objectiveTestConfig()
+					cfg.SeqLen = 4
+					cfg.Training.BatchTokens = len(batch.x)
+					cfg.Training.Objective = objective
+					cfg.Training.Seed = seed
+					cfg.Training.MLMMaskProb = prob
+					got, err := prepareObjectiveBatch(cfg, batch, step, arch.ObjectiveMLM)
+					if err != nil {
+						t.Fatalf("objective=%s seed=%d step=%d prob=%g: %v", objective, seed, step, prob, err)
+					}
+					want := legacyTokenMLMBatchForTest(cfg, batch, step, len(batch.x))
+					if !reflect.DeepEqual(got.x, want.x) || !reflect.DeepEqual(got.y, want.y) || !reflect.DeepEqual(got.lossMask, want.lossMask) {
+						t.Fatalf("legacy token mismatch objective=%s seed=%d step=%d prob=%g:\ngot=%+v\nwant=%+v", objective, seed, step, prob, got, want)
+					}
+				}
+			}
+		}
+	}
+}
+
+func legacyTokenMLMBatchForTest(cfg *ArchConfig, batch trainBatch, step, need int) objectiveBatch {
+	x := append([]int(nil), batch.x[:need]...)
+	y := append([]int(nil), batch.x[:need]...)
+	unmasked := append([]int(nil), batch.x[:need]...)
+	lossMask := make([]float32, need)
+	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0x243f6a8885a308d3)
+	maskProb := cfg.Training.EffectiveMLMMaskProbForStep(step)
+	selected := selectMaskPositions(rng, lossMask, maskProb, need)
+	if selected == 0 && maskProb > 0 && need > 0 {
+		lossMask[rng.Intn(need)] = 1
+		selected = 1
+	}
+	if selected > 0 {
+		replaceSelectedMLMTokens(cfg, rng, x, y, lossMask)
+	}
+	return objectiveBatch{x: x, y: y, lossMask: lossMask, unmaskedX: unmasked}
+}
+
+func TestSelectWholeWordMaskPositionsAllOrNoneAndBudget(t *testing.T) {
+	wordStart := make([]uint8, 10)
+	eligible := make([]uint8, 10)
+	for _, id := range []int{1, 2, 3, 4, 5} {
+		eligible[id] = 1
+	}
+	wordStart[1], wordStart[3], wordStart[4] = 1, 1, 1
+	tokens := []int{1, 2, 2, 3, 4, 5}
+	groups := [][]int{{0, 1, 2}, {3}, {4, 5}}
+	for step := 0; step < 50; step++ {
+		mask := make([]float32, len(tokens))
+		stats, err := selectWholeWordMaskPositions(deterministicObjectiveRNG(42, step, 7), tokens, mask, 0.5, len(tokens), wordStart, eligible)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stats.SelectedTokens > stats.BudgetTokens || stats.BudgetTokens != 3 {
+			t.Fatalf("step %d stats=%+v", step, stats)
+		}
+		for _, group := range groups {
+			first := mask[group[0]]
+			for _, pos := range group[1:] {
+				if mask[pos] != first {
+					t.Fatalf("step %d split group %v: mask=%v", step, group, mask)
+				}
+			}
+		}
+	}
+}
+
+func TestSelectWholeWordMaskPositionsUnderfillRowsAndBoundaries(t *testing.T) {
+	wordStart := make([]uint8, 10)
+	eligible := make([]uint8, 10)
+	wordStart[1] = 1
+	eligible[1], eligible[2] = 1, 1
+	mask := make([]float32, 2)
+	stats, err := selectWholeWordMaskPositions(deterministicObjectiveRNG(1, 0, 9), []int{1, 2}, mask, 0.25, 2, wordStart, eligible)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.BudgetTokens != 1 || stats.SelectedTokens != 0 || stats.UnderfilledRows != 1 || !reflect.DeepEqual(mask, []float32{0, 0}) {
+		t.Fatalf("underfill stats=%+v mask=%v", stats, mask)
+	}
+
+	// A continuation token starts a local group at each row boundary, while an
+	// ineligible special token splits groups and is never selected.
+	eligible[9] = 0
+	mask = make([]float32, 8)
+	tokens := []int{2, 2, 2, 2, 1, 2, 9, 2}
+	stats, err = selectWholeWordMaskPositions(deterministicObjectiveRNG(1, 0, 10), tokens, mask, 1, 4, wordStart, eligible)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mask[6] != 0 {
+		t.Fatalf("special token selected: mask=%v", mask)
+	}
+	for i, value := range mask {
+		if i != 6 && value != 1 {
+			t.Fatalf("eligible position %d not selected: mask=%v stats=%+v", i, mask, stats)
+		}
+	}
+}
+
+func TestPrepareMLMWholeWordScheduleTransitionAndDeterminism(t *testing.T) {
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 4
+	cfg.Training.BatchTokens = 8
+	cfg.Training.MLMMaskProb = 0.5
+	cfg.Training.MLMMaskUnitSchedule = []arch.MLMMaskUnitScheduleEntry{{Step: 0, Unit: arch.MLMMaskUnitWholeWord}, {Step: 2, Unit: arch.MLMMaskUnitToken}}
+	cfg.Training.MLMWordStart = make([]uint8, cfg.VocabSize)
+	cfg.Training.MLMMaskEligible = make([]uint8, cfg.VocabSize)
+	for id := 1; id < cfg.VocabSize; id++ {
+		cfg.Training.MLMMaskEligible[id] = 1
+	}
+	cfg.Training.MLMWordStart[1], cfg.Training.MLMWordStart[3], cfg.Training.MLMWordStart[5], cfg.Training.MLMWordStart[7] = 1, 1, 1, 1
+	batch := trainBatch{x: []int{1, 2, 3, 4, 5, 6, 7, 8}, y: []int{2, 3, 4, 5, 6, 7, 8, 9}}
+	before, err := prepareObjectiveBatch(cfg, batch, 1, arch.ObjectiveMLM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeat, err := prepareObjectiveBatch(cfg, batch, 1, arch.ObjectiveMLM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := prepareObjectiveBatch(cfg, batch, 2, arch.ObjectiveMLM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, repeat) {
+		t.Fatalf("WWM preparation is not deterministic: first=%+v repeat=%+v", before, repeat)
+	}
+	if before.mlmMaskStats.Unit != arch.MLMMaskUnitWholeWord || after.mlmMaskStats.Unit != arch.MLMMaskUnitToken {
+		t.Fatalf("units before/after=%q/%q", before.mlmMaskStats.Unit, after.mlmMaskStats.Unit)
+	}
+}
+
 func TestPrepareObjectiveBatchMNTPMasksNextInputWithoutLeakage(t *testing.T) {
 	cfg := objectiveTestConfig()
 	cfg.SeqLen = 4
@@ -426,6 +592,38 @@ func TestPrepareObjectiveBatchHybridExampleMaskedRows(t *testing.T) {
 	}
 	if want := []int32{0, 0}; !reflect.DeepEqual(got.attentionCausal, want) {
 		t.Fatalf("hybrid MNTP attention mask = %v, want %v", got.attentionCausal, want)
+	}
+}
+
+func TestPrepareHybridExampleWholeWordMasksOnlyMLMRows(t *testing.T) {
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 4
+	cfg.Training.BatchTokens = 8
+	cfg.Training.Objective = arch.ObjectiveHybrid
+	cfg.Training.HybridSecondaryObjective = arch.ObjectiveMLM
+	cfg.Training.HybridMixGranularity = arch.HybridMixGranularityExample
+	cfg.Training.HybridCLMFraction = 0
+	cfg.Training.MLMMaskProb = 1
+	cfg.Training.MLMMaskTokenProb = 1
+	cfg.Training.MLMRandomTokenProb = 0
+	cfg.Training.MLMKeptUnchangedProb = 0
+	cfg.Training.MLMMaskUnit = arch.MLMMaskUnitWholeWord
+	cfg.Training.MLMWordStart = make([]uint8, cfg.VocabSize)
+	cfg.Training.MLMMaskEligible = make([]uint8, cfg.VocabSize)
+	for id := 1; id < cfg.VocabSize; id++ {
+		cfg.Training.MLMMaskEligible[id] = 1
+		cfg.Training.MLMWordStart[id] = 1
+	}
+	batch := trainBatch{x: []int{1, 2, 3, 4, 5, 6, 7, 8}, y: []int{2, 3, 4, 5, 6, 7, 8, 9}}
+	got, err := prepareObjectiveBatch(cfg, batch, 0, arch.ObjectiveHybridExample)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.mlmMaskStats.Unit != arch.MLMMaskUnitWholeWord || got.mlmMaskStats.EligibleTokens != 8 || got.mlmMaskStats.SelectedTokens != 8 {
+		t.Fatalf("mask stats=%+v", got.mlmMaskStats)
+	}
+	if want := []int{9, 9, 9, 9, 9, 9, 9, 9}; !reflect.DeepEqual(got.x, want) {
+		t.Fatalf("x=%v, want %v", got.x, want)
 	}
 }
 

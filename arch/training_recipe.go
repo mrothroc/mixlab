@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+// MLMMaskUnitScheduleEntry changes the MLM masking unit at a zero-based step.
+type MLMMaskUnitScheduleEntry struct {
+	Step int    `json:"step"`
+	Unit string `json:"unit"`
+}
+
 // EffectiveSeqLenForStep returns the sequence length active for a training
 // step. The top-level seq_len remains the maximum/eval length; schedule entries
 // choose smaller or equal training shapes until a later entry supersedes them.
@@ -49,6 +55,42 @@ func (t TrainingSpec) EffectiveMLMMaskProbForStep(step int) float64 {
 		out = pair[1]
 	}
 	return out
+}
+
+// EffectiveMLMMaskUnit returns the fixed MLM masking unit when no schedule is
+// configured. A blank value is the backward-compatible token default.
+func (t TrainingSpec) EffectiveMLMMaskUnit() string {
+	return normalizeMLMMaskUnit(t.MLMMaskUnit)
+}
+
+// EffectiveMLMMaskUnitForStep returns the categorical MLM masking unit active
+// at a zero-based training step.
+func (t TrainingSpec) EffectiveMLMMaskUnitForStep(step int) string {
+	if len(t.MLMMaskUnitSchedule) == 0 {
+		return t.EffectiveMLMMaskUnit()
+	}
+	out := MLMMaskUnitToken
+	for _, entry := range t.MLMMaskUnitSchedule {
+		if entry.Step > step {
+			break
+		}
+		out = normalizeMLMMaskUnit(entry.Unit)
+	}
+	return out
+}
+
+// UsesWholeWordMasking reports whether any configured training step can use
+// whole-word MLM position selection.
+func (t TrainingSpec) UsesWholeWordMasking() bool {
+	if len(t.MLMMaskUnitSchedule) == 0 {
+		return t.EffectiveMLMMaskUnit() == MLMMaskUnitWholeWord
+	}
+	for _, entry := range t.MLMMaskUnitSchedule {
+		if normalizeMLMMaskUnit(entry.Unit) == MLMMaskUnitWholeWord {
+			return true
+		}
+	}
+	return false
 }
 
 func (t TrainingSpec) effectiveLinearMLMMaskProbForStep(step int) float64 {
@@ -148,6 +190,9 @@ func validateTrainingRecipeKnobs(cfg *ArchConfig, source string) error {
 	if err := validateMLMMaskProbSchedule(cfg, source); err != nil {
 		return err
 	}
+	if err := validateMLMMaskUnitSchedule(cfg, source); err != nil {
+		return err
+	}
 	if err := validateHybridCLMFractionSchedule(cfg, source); err != nil {
 		return err
 	}
@@ -161,6 +206,59 @@ func validateTrainingRecipeKnobs(cfg *ArchConfig, source string) error {
 		if cfg.Training.Data2VecActive() {
 			return fmt.Errorf("config %q has training.seq_len_schedule but training.data2vec teacher runtimes use fixed seq_len in v1", source)
 		}
+	}
+	return nil
+}
+
+func validateMLMMaskUnitSchedule(cfg *ArchConfig, source string) error {
+	t := &cfg.Training
+	t.MLMMaskUnit = normalizeMLMMaskUnit(t.MLMMaskUnit)
+	if t.MLMMaskUnit != MLMMaskUnitToken && t.MLMMaskUnit != MLMMaskUnitWholeWord {
+		return fmt.Errorf("config %q has invalid training.mlm_mask_unit=%q (must be %q or %q)", source, t.MLMMaskUnit, MLMMaskUnitToken, MLMMaskUnitWholeWord)
+	}
+	totalSteps := t.TotalSteps()
+	prevStep := -1
+	prevUnit := ""
+	for i := range t.MLMMaskUnitSchedule {
+		entry := &t.MLMMaskUnitSchedule[i]
+		entry.Unit = strings.ToLower(strings.TrimSpace(entry.Unit))
+		if entry.Unit != MLMMaskUnitToken && entry.Unit != MLMMaskUnitWholeWord {
+			return fmt.Errorf("config %q has invalid training.mlm_mask_unit_schedule[%d].unit=%q (must be %q or %q)", source, i, entry.Unit, MLMMaskUnitToken, MLMMaskUnitWholeWord)
+		}
+		if i == 0 && entry.Step != 0 {
+			return fmt.Errorf("config %q has invalid training.mlm_mask_unit_schedule[0].step=%d (first step must be 0)", source, entry.Step)
+		}
+		if entry.Step < 0 || entry.Step <= prevStep {
+			return fmt.Errorf("config %q has invalid training.mlm_mask_unit_schedule[%d].step=%d (steps must be non-negative and strictly increasing)", source, i, entry.Step)
+		}
+		if entry.Step >= totalSteps {
+			return fmt.Errorf("config %q has invalid training.mlm_mask_unit_schedule[%d].step=%d (must be < total training steps %d)", source, i, entry.Step, totalSteps)
+		}
+		if entry.Unit == prevUnit {
+			return fmt.Errorf("config %q training.mlm_mask_unit_schedule[%d] redundantly repeats unit %q", source, i, entry.Unit)
+		}
+		prevStep = entry.Step
+		prevUnit = entry.Unit
+	}
+	if !t.UsesWholeWordMasking() {
+		return nil
+	}
+	hasMLMPath := false
+	switch t.EffectiveObjective() {
+	case ObjectiveMLM:
+		hasMLMPath = true
+	case ObjectiveHybrid:
+		hasMLMPath = t.EffectiveHybridSecondaryObjective() == ObjectiveMLM
+	case ObjectiveMultihead:
+		for _, head := range t.Heads {
+			if normalizeTrainingObjective(head.Objective) == ObjectiveMLM {
+				hasMLMPath = true
+				break
+			}
+		}
+	}
+	if !hasMLMPath {
+		return fmt.Errorf("config %q training.mlm_mask_unit uses %q, but v1 supports whole-word masking only on MLM objective paths", source, MLMMaskUnitWholeWord)
 	}
 	return nil
 }

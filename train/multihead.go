@@ -59,6 +59,9 @@ func prepareMultiheadBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen
 		fillHeadLossMask(out.lossMask[tokenOffset:tokenOffset+need], prepared.lossMask, head.Objective)
 		fillHeadDiffusionBoundaries(out.diffusionBlockStart[rowOffset:rowOffset+rawBatchSize], out.diffusionBlockEnd[rowOffset:rowOffset+rawBatchSize], prepared, head.Objective, seqLen)
 		fillHeadDiffusionTimestep(out.diffusionTimestep[rowOffset:rowOffset+rawBatchSize], prepared, head.Objective, seqLen)
+		if head.Objective == arch.ObjectiveMLM {
+			out.mlmMaskStats.add(prepared.mlmMaskStats)
+		}
 	}
 	if err := maybeApplyWordStructuralMultihead(cfg, &out, step, rawBatchSize, seqLen); err != nil {
 		return objectiveBatch{}, err
@@ -69,7 +72,7 @@ func prepareMultiheadBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen
 func prepareSingleMultiheadView(cfg *ArchConfig, batch trainBatch, step, need, seqLen int, objective string) (objectiveBatch, error) {
 	switch objective {
 	case arch.ObjectiveMLM:
-		return prepareMLMBatch(cfg, batch, step, need)
+		return prepareMLMBatch(cfg, batch, step, need, seqLen)
 	case arch.ObjectiveMNTP:
 		return prepareMNTPBatch(cfg, batch, step, need, seqLen)
 	case arch.ObjectiveBlockDiffusion:

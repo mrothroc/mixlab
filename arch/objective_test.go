@@ -24,6 +24,9 @@ func TestTrainingObjectiveDefaultsCausal(t *testing.T) {
 	if cfg.Training.HybridSecondaryObjective != ObjectiveMNTP {
 		t.Fatalf("hybrid_secondary_objective = %q, want %q", cfg.Training.HybridSecondaryObjective, ObjectiveMNTP)
 	}
+	if got := cfg.Training.EffectiveMLMMaskUnit(); got != MLMMaskUnitToken {
+		t.Fatalf("mlm_mask_unit = %q, want %q", got, MLMMaskUnitToken)
+	}
 }
 
 func TestTrainingObjectiveValidation(t *testing.T) {

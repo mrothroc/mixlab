@@ -51,6 +51,21 @@ type telemetryRunState struct {
 	SkippedOptimizerSteps uint64             `json:"skipped_optimizer_steps"`
 	ConsecutiveSkipped    uint64             `json:"consecutive_skipped_optimizer_steps"`
 	OptimizerStepSkipped  bool               `json:"optimizer_step_skipped,omitempty"`
+	Masking               *telemetryMasking  `json:"masking,omitempty"`
+}
+
+type telemetryMasking struct {
+	Unit                  string  `json:"unit"`
+	TargetProb            float64 `json:"target_prob"`
+	EligibleTokens        int     `json:"eligible_tokens"`
+	BudgetTokens          int     `json:"budget_tokens"`
+	SelectedTokens        int     `json:"selected_tokens"`
+	RealizedRate          float64 `json:"realized_rate"`
+	CandidateGroups       int     `json:"candidate_groups"`
+	SelectedGroups        int     `json:"selected_groups"`
+	MeanSelectedGroupSize float64 `json:"mean_selected_group_size"`
+	MaxSelectedGroupSize  int     `json:"max_selected_group_size"`
+	UnderfilledRows       int     `json:"underfilled_rows"`
 }
 
 type telemetryTiming struct {
@@ -83,6 +98,7 @@ type telemetryUpdate struct {
 	SkippedOptimizerSteps uint64
 	ConsecutiveSkipped    uint64
 	OptimizerStepSkipped  bool
+	Masking               *telemetryMasking
 }
 
 type telemetrySnapshot struct {
@@ -245,6 +261,7 @@ func (s *telemetryState) update(u telemetryUpdate) {
 		SkippedOptimizerSteps: u.SkippedOptimizerSteps,
 		ConsecutiveSkipped:    u.ConsecutiveSkipped,
 		OptimizerStepSkipped:  u.OptimizerStepSkipped,
+		Masking:               cloneTelemetryMasking(u.Masking),
 	}
 	if u.HasLoss {
 		loss := u.Loss
@@ -261,6 +278,14 @@ func (s *telemetryState) update(u telemetryUpdate) {
 	s.mu.Lock()
 	s.s = next
 	s.mu.Unlock()
+}
+
+func cloneTelemetryMasking(masking *telemetryMasking) *telemetryMasking {
+	if masking == nil {
+		return nil
+	}
+	cloned := *masking
+	return &cloned
 }
 
 func cloneTelemetryValues(values map[string]float64) map[string]float64 {
@@ -314,5 +339,45 @@ func formatTelemetryLine(s telemetrySnapshot) string {
 			line += " optimizer_step_skipped=true"
 		}
 	}
+	if s.Masking != nil {
+		line += fmt.Sprintf(" mask_unit=%s mask_target=%.3f mask_actual=%.3f", s.Masking.Unit, s.Masking.TargetProb, s.Masking.RealizedRate)
+	}
 	return line
+}
+
+func (s mlmMaskStats) telemetry() *telemetryMasking {
+	if s.Unit == "" {
+		return nil
+	}
+	realized := 0.0
+	if s.EligibleTokens > 0 {
+		realized = float64(s.SelectedTokens) / float64(s.EligibleTokens)
+	}
+	meanGroup := 0.0
+	if s.SelectedGroups > 0 {
+		meanGroup = float64(s.SelectedGroupTokenTotal) / float64(s.SelectedGroups)
+	}
+	return &telemetryMasking{
+		Unit:                  s.Unit,
+		TargetProb:            s.TargetProb,
+		EligibleTokens:        s.EligibleTokens,
+		BudgetTokens:          s.BudgetTokens,
+		SelectedTokens:        s.SelectedTokens,
+		RealizedRate:          realized,
+		CandidateGroups:       s.CandidateGroups,
+		SelectedGroups:        s.SelectedGroups,
+		MeanSelectedGroupSize: meanGroup,
+		MaxSelectedGroupSize:  s.MaxSelectedGroupSize,
+		UnderfilledRows:       s.UnderfilledRows,
+	}
+}
+
+func formatMLMMaskStatsForLog(stats mlmMaskStats) string {
+	masking := stats.telemetry()
+	if masking == nil {
+		return ""
+	}
+	return fmt.Sprintf("mask_unit=%s mask_target=%.3f mask_actual=%.3f groups=%d/%d mean_group=%.2f max_group=%d underfilled_rows=%d",
+		masking.Unit, masking.TargetProb, masking.RealizedRate, masking.SelectedGroups, masking.CandidateGroups,
+		masking.MeanSelectedGroupSize, masking.MaxSelectedGroupSize, masking.UnderfilledRows)
 }

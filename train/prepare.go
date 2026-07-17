@@ -15,6 +15,7 @@ type PrepareOptions struct {
 	VocabSize              int
 	ValSplit               float64
 	TokenizerPath          string
+	WWMCompatibleTokenizer bool
 	TextFieldName          string
 	CharVocabSize          int
 	CharMaxPerToken        int
@@ -52,6 +53,9 @@ func runPrepare(opts PrepareOptions) error {
 	}
 	if opts.TokenizerPath != "" {
 		args = append(args, "--tokenizer-path", opts.TokenizerPath)
+	}
+	if opts.WWMCompatibleTokenizer {
+		args = append(args, "--wwm-compatible-tokenizer")
 	}
 	if opts.TextFieldName != "" && opts.TextFieldName != "text" {
 		args = append(args, "--text-field", opts.TextFieldName)

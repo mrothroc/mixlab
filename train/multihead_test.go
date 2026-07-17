@@ -57,6 +57,41 @@ func TestPrepareMultiheadBatchExpandsRowsAndBoundaries(t *testing.T) {
 	}
 }
 
+func TestPrepareMultiheadWholeWordStatsOnlyMLMViewsAndRTDProbe(t *testing.T) {
+	cfg := parseTrainMultiheadConfig(t, `"training": {
+		"objective": "multihead", "steps": 2, "lr": 0.001, "batch_tokens": 8,
+		"mlm_mask_prob": 1.0, "mlm_mask_token_id": 31,
+		"mlm_mask_unit": "whole_word",
+		"mlm_mask_token_prob": 1.0, "mlm_random_token_prob": 0.0, "mlm_kept_unchanged_prob": 0.0,
+		"rtd": {"generator":"tied","generator_head":"scorer","mask_prob":1.0},
+		"heads": [
+			{"name":"scorer","objective":"mlm"},
+			{"name":"detector","objective":"rtd"}
+		]
+	}`)
+	cfg.Training.MLMWordStart = make([]uint8, cfg.VocabSize)
+	cfg.Training.MLMMaskEligible = make([]uint8, cfg.VocabSize)
+	for id := 1; id < cfg.VocabSize; id++ {
+		cfg.Training.MLMWordStart[id] = 1
+		cfg.Training.MLMMaskEligible[id] = 1
+	}
+	raw := trainBatch{x: []int{1, 2, 3, 4, 5, 6, 7, 8}, y: []int{2, 3, 4, 9, 6, 7, 8, 9}}
+	prepared, err := prepareMultiheadBatch(cfg, raw, 0, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prepared.mlmMaskStats.EligibleTokens != 8 || prepared.mlmMaskStats.SelectedTokens != 8 {
+		t.Fatalf("multihead MLM stats include non-MLM rows: %+v", prepared.mlmMaskStats)
+	}
+	probe, err := prepareRTDGeneratorProbeBatch(cfg, raw, 0, cfg.Training.BatchTokens, cfg.SeqLen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probe.mlmMaskStats.Unit != arch.MLMMaskUnitWholeWord || probe.mlmMaskStats.SelectedTokens != 8 {
+		t.Fatalf("RTD tied-generator probe did not inherit WWM: %+v", probe.mlmMaskStats)
+	}
+}
+
 func TestExpandBatchForMultiheadDiffusionUsesDenoiserRows(t *testing.T) {
 	cfg := parseTrainMultiheadConfig(t, `"training": {
 		"objective": "multihead",

@@ -1,0 +1,23 @@
+{
+  "name": "mlm-wwm-curriculum-tiny",
+  "model_dim": 32,
+  "vocab_size": 256,
+  "seq_len": 16,
+  "tie_embeddings": true,
+  "mlm_head": "bert",
+  "blocks": [
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional"}
+  ],
+  "training": {
+    "steps": 4,
+    "lr": 0.001,
+    "batch_tokens": 32,
+    "objective": "mlm",
+    "mlm_mask_prob": 0.25,
+    "mlm_mask_token_id": 4,
+    "mlm_mask_unit_schedule": [
+      {"step": 0, "unit": "whole_word"},
+      {"step": 2, "unit": "token"}
+    ]
+  }
+}

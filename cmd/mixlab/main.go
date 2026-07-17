@@ -84,6 +84,7 @@ func main() {
 	prepVocabSize := flag.Int("vocab-size", 1024, "BPE vocabulary size (prepare mode)")
 	prepValSplit := flag.Float64("val-split", 0.1, "fraction of tokens for validation (prepare mode)")
 	prepTokenizerPath := flag.String("tokenizer-path", "", "path to tokenizer.json for prepare reuse or export-hf bundling")
+	prepWWMCompatibleTokenizer := flag.Bool("wwm-compatible-tokenizer", false, "train or validate a tokenizer with reliable whole-word boundaries (prepare mode)")
 	prepTextField := flag.String("text-field", "text", "JSON field for text in JSONL (prepare mode)")
 	prepCharVocabSize := flag.Int("char-vocab-size", 0, "write tokenizer-level char_features.bin with this char vocab size; 0 disables (prepare mode)")
 	prepCharMaxPerToken := flag.Int("char-max-per-token", 16, "fixed char feature slots per token when -char-vocab-size is enabled (prepare mode)")
@@ -172,6 +173,7 @@ func main() {
 			VocabSize:              *prepVocabSize,
 			ValSplit:               *prepValSplit,
 			TokenizerPath:          *prepTokenizerPath,
+			WWMCompatibleTokenizer: *prepWWMCompatibleTokenizer,
 			TextFieldName:          *prepTextField,
 			CharVocabSize:          *prepCharVocabSize,
 			CharMaxPerToken:        *prepCharMaxPerToken,
@@ -373,7 +375,7 @@ var modeFlagGroups = map[string][]flagGroup{
 	"prepare": {
 		{"Required", []string{"input"}},
 		{"Output", []string{"prepare-output-dir", "output"}},
-		{"Tokenizer/data", []string{"vocab-size", "val-split", "tokenizer-path", "text-field"}},
+		{"Tokenizer/data", []string{"vocab-size", "val-split", "tokenizer-path", "wwm-compatible-tokenizer", "text-field"}},
 		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},
 		{"Minimal pair artifact", []string{"minimal-pair-out", "minimal-pair-corruptions", "minimal-pair-weights", "minimal-pair-morphology", "minimal-pair-max-pairs", "minimal-pair-seed", "minimal-pair-report-out", "minimal-pair-sample-out", "minimal-pair-sample-count"}},
 	},

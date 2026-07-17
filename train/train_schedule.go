@@ -1,10 +1,32 @@
 package train
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/mrothroc/mixlab/arch"
 )
+
+func formatMLMMaskUnitSchedule(schedule []arch.MLMMaskUnitScheduleEntry) string {
+	parts := make([]string, 0, len(schedule))
+	for _, entry := range schedule {
+		parts = append(parts, fmt.Sprintf("step%d=%s", entry.Step, entry.Unit))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func qatModeForStep(spec TrainingSpec, step int) string {
+	mode := strings.TrimSpace(strings.ToLower(spec.QAT))
+	if mode == "" {
+		mode = "none"
+	}
+	if spec.QATStart > 0 && step < spec.QATStart {
+		return "none"
+	}
+	return mode
+}
 
 func shouldWriteCheckpoint(step, every int) bool {
 	return every > 0 && (step+1)%every == 0

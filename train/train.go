@@ -17,26 +17,6 @@ type trainBatch struct {
 	err  error
 }
 
-type trainingProgramCacheKey struct {
-	recurrencePhase int
-	recurrenceOn    bool
-	headUntied      bool
-	mtpAuxOn        bool
-	objective       string
-	seqLen          int
-}
-
-func qatModeForStep(spec TrainingSpec, step int) string {
-	mode := strings.TrimSpace(strings.ToLower(spec.QAT))
-	if mode == "" {
-		mode = "none"
-	}
-	if spec.QATStart > 0 && step < spec.QATStart {
-		return "none"
-	}
-	return mode
-}
-
 // runTrain is the core training loop. It:
 // 1. Builds the IR program from the config
 // 2. Initializes the GPU trainer
@@ -99,6 +79,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			return TrainResult{}, err
 		}
 		fmt.Printf("  [%s] first-byte mask enabled (%s)\n", name, source)
+	}
+	if cfg.Training.UsesWholeWordMasking() {
+		source, err := configureMLMWordBoundariesForTraining(cfg, trainPattern)
+		if err != nil {
+			return TrainResult{}, err
+		}
+		fmt.Printf("  [%s] MLM whole-word boundaries enabled (%s)\n", name, source)
 	}
 	if cfg.CharVocabSize > 0 {
 		source, err := configureCharFeaturesForTraining(cfg, trainPattern)
@@ -239,6 +226,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 	if len(cfg.Training.MLMMaskProbSchedule) > 0 {
 		fmt.Printf("  [%s] MLM mask probability schedule enabled: step0=%.3f\n", name, cfg.Training.EffectiveMLMMaskProbForStep(0))
+	}
+	if len(cfg.Training.MLMMaskUnitSchedule) > 0 {
+		fmt.Printf("  [%s] MLM mask unit schedule: %s\n", name, formatMLMMaskUnitSchedule(cfg.Training.MLMMaskUnitSchedule))
+	} else if cfg.Training.EffectiveMLMMaskUnit() != arch.MLMMaskUnitToken {
+		fmt.Printf("  [%s] MLM mask unit: %s\n", name, cfg.Training.EffectiveMLMMaskUnit())
 	}
 
 	var shapes []WeightShape
@@ -449,6 +441,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		stopInitialSubmit()
 		currentSubmitDuration := time.Since(initialSubmitStart)
 		currentPhaseIdx := -1
+		currentMLMMaskUnit := cfg.Training.EffectiveMLMMaskUnitForStep(0)
 		submitStepWithScheduledState := func(nextStep int, batch trainBatch) (time.Duration, error) {
 			if nextMode := qatModeForStep(cfg.Training, nextStep); nextMode != qatModeForStep(cfg.Training, nextStep-1) {
 				if err := trainer.SetQATGPU(nextMode); err != nil {
@@ -457,6 +450,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				if nextMode != "none" {
 					fmt.Printf("  [%s] QAT enabled at step %d\n", name, nextStep)
 				}
+			}
+			nextMLMMaskUnit := cfg.Training.EffectiveMLMMaskUnitForStep(nextStep)
+			if nextMLMMaskUnit != currentMLMMaskUnit {
+				fmt.Printf("  [%s] MLM mask unit changed at step %d: %s -> %s\n", name, nextStep, currentMLMMaskUnit, nextMLMMaskUnit)
+				currentMLMMaskUnit = nextMLMMaskUnit
 			}
 			nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)
 			nextRecurrencePhase := currentRecurrencePhase
@@ -732,6 +730,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				SkippedOptimizerSteps: optimizerStats.SkippedSteps,
 				ConsecutiveSkipped:    optimizerStats.ConsecutiveSkipped,
 				OptimizerStepSkipped:  optimizerStats.LastStepSkipped,
+				Masking:               currentDiagnosticBatch.mlmMaskStats.telemetry(),
 			})
 			handleMLXMemoryControls(name, step, mlxMemLogEvery, mlxClearCacheEvery, telemetry)
 
@@ -805,6 +804,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 				fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f%s tok/s=%.0f%s %s\n",
 					name, step, steps, v, valStr, sched.At(step), phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), steadyElapsed, stepsForRate, step, steps))
+				if masking := formatMLMMaskStatsForLog(currentDiagnosticBatch.mlmMaskStats); masking != "" {
+					fmt.Printf("  [%s] [masking] %s\n", name, masking)
+				}
 				if extra := formatTrainingExtraDiagnostics(trainingExtra); extra != "" {
 					fmt.Printf("  [%s] [ttt] %s\n", name, extra)
 				}
@@ -847,6 +849,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					SkippedOptimizerSteps: optimizerStats.SkippedSteps,
 					ConsecutiveSkipped:    optimizerStats.ConsecutiveSkipped,
 					OptimizerStepSkipped:  optimizerStats.LastStepSkipped,
+					Masking:               currentDiagnosticBatch.mlmMaskStats.telemetry(),
 				})
 				if err := telemetry.writeSnapshot(true); err != nil {
 					return TrainResult{}, err

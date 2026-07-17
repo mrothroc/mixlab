@@ -168,6 +168,11 @@ var exampleConfigs = []exampleConfigCase{
 		minOps:      10,
 	},
 	{
+		filename:    "mlm_wwm_curriculum_tiny.json",
+		wantWeights: 12,
+		minOps:      10,
+	},
+	{
 		filename:    "deberta_relative_tiny.json",
 		wantWeights: 31, // 3 base + 2*(10 relative plain + 4 swiglu)
 		minOps:      10,
@@ -274,6 +279,9 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 
 			// Check inputs: feature configs append their runtime feature ids.
 			wantInputs := 2
+			if cfg.Training.NeedsMaskedLoss() {
+				wantInputs++
+			}
 			if cfg.Training.Distillation != nil {
 				wantInputs++
 			}
@@ -303,6 +311,12 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 				t.Errorf("input[1].Name = %q, want \"targets\"", prog.Inputs[1].Name)
 			}
 			inputIdx := 2
+			if cfg.Training.NeedsMaskedLoss() {
+				if prog.Inputs[inputIdx].Name != "loss_mask" {
+					t.Errorf("input[%d].Name = %q, want \"loss_mask\"", inputIdx, prog.Inputs[inputIdx].Name)
+				}
+				inputIdx++
+			}
 			if cfg.Training.AttentionSegmentMaskEnabled() {
 				if prog.Inputs[inputIdx].Name != "segment_ids" {
 					t.Errorf("input[%d].Name = %q, want \"segment_ids\"", inputIdx, prog.Inputs[inputIdx].Name)
@@ -358,7 +372,7 @@ func TestSmokeExampleConfigs_BuildIR(t *testing.T) {
 				}
 			}
 			wantOutputs = append(wantOutputs, "loss", "per_token_nll", "x_hidden", "logits")
-			if cfg.Training.Distillation != nil {
+			if cfg.Training.Distillation != nil || cfg.Training.NeedsMaskedLoss() {
 				wantOutputs = append(wantOutputs[:len(wantOutputs)-4], "loss", "eval_loss", "per_token_nll", "x_hidden", "logits")
 			}
 			if len(prog.Outputs) != len(wantOutputs) {

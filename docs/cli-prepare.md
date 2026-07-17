@@ -20,6 +20,7 @@ tokenizer compatibility notes.
 | `-vocab-size` | BPE vocabulary size when training a tokenizer. Default: `1024`. |
 | `-val-split` | Fraction of tokens reserved for validation. Default: `0.1`. |
 | `-tokenizer-path` | Existing `tokenizer.json` to reuse instead of training a tokenizer. |
+| `-wwm-compatible-tokenizer` | Train or validate tokenizer metadata suitable for whole-word MLM. The built-in path uses prefix-space ByteLevel BPE and reserves `[PAD]`, `[CLS]`, `[SEP]`, `[UNK]`, and `[MASK]` as ids `0..4`. |
 | `-text-field` | JSONL field that contains text. Default: `text`. |
 | `-char-vocab-size` | Write tokenizer-level `char_features.bin` with this char vocab size. `0` disables. |
 | `-char-max-per-token` | Fixed char feature slots per token when char features are enabled. Default: `16`. |
@@ -37,6 +38,12 @@ When `-char-vocab-size` is enabled, `prepare` writes a reusable
 tokenizer-level `char_features.bin` next to `tokenizer.json`. Configs with
 `char_vocab_size > 0` expect that artifact during training, eval, and
 generation.
+
+When `-tokenizer-path` is used, prepare writes an exact copy of the supplied
+`tokenizer.json` next to the generated shards. Add
+`-wwm-compatible-tokenizer` to validate that it exposes a supported word-start
+convention. Native SentencePiece `.model` files must first be converted to a
+Hugging Face fast `tokenizer.json`.
 
 When `-minimal-pair-out` is set, `prepare` writes JSONL records shaped as
 `{"id":"...","clean":[...],"corrupt":[...],"family":"..."}`. The generator

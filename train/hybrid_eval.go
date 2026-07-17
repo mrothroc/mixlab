@@ -7,6 +7,17 @@ import (
 	"github.com/mrothroc/mixlab/data"
 )
 
+// trainingProgramCacheKey identifies a built IR program variant so the training
+// loop can cache and reuse programs across steps that share schedule state.
+type trainingProgramCacheKey struct {
+	recurrencePhase int
+	recurrenceOn    bool
+	headUntied      bool
+	mtpAuxOn        bool
+	objective       string
+	seqLen          int
+}
+
 // gpuProgramSwitcher is implemented by trainers that can swap their active
 // compiled program in place — used for per-step objective/phase switching in
 // the training loop and for causal-program evaluation under hybrid training.
