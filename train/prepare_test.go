@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/mrothroc/mixlab/data"
@@ -264,6 +265,83 @@ func TestPrepareScript(t *testing.T) {
 	}
 	if len(x) != 128 || len(y) != 128 {
 		t.Errorf("batch size mismatch: got x=%d y=%d, want 128", len(x), len(y))
+	}
+}
+
+func TestPrepareFASTAProducesInspectableBoundarySafeDataset(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	if err := exec.Command("python3", "-c", "import numpy").Run(); err != nil {
+		t.Skip("python3 numpy library not available")
+	}
+	scriptPath := filepath.Join("..", "scripts", "prepare.py")
+	if _, err := os.Stat(scriptPath); err != nil {
+		scriptPath = filepath.Join("scripts", "prepare.py")
+	}
+	dir := t.TempDir()
+	fasta := filepath.Join(dir, "tiny.fasta")
+	outDir := filepath.Join(dir, "prepared")
+	input := ">contig_a first\nACGTN\n>contig_b\nRYYA\n>contig_c\nGGTT\n"
+	if err := os.WriteFile(fasta, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("python3", scriptPath,
+		"--input", fasta, "--output", outDir, "--input-format", "fasta",
+		"--nucleotide-alphabet", "dna", "--nucleotide-ambiguous-symbols", "N,R",
+		"--nucleotide-invalid-symbol-policy", "error", "--val-split", "0.34",
+		"--tokens-per-shard", "6")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("prepare FASTA: %v\n%s", err, output)
+	}
+	manifest, err := data.LoadDatasetManifest(filepath.Join(outDir, data.DatasetManifestFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Modality != "nucleotide" || manifest.ShardFormat != data.DatasetShardFormatSequenceV1 || manifest.VocabSize != 11 {
+		t.Fatalf("manifest=%+v", manifest)
+	}
+	if manifest.Splits["train"].Sequences != 2 || manifest.Splits["val"].Sequences != 1 {
+		t.Fatalf("split metadata=%+v", manifest.Splits)
+	}
+	vocab, err := data.LoadNucleotideVocabulary(filepath.Join(outDir, manifest.Artifacts.Vocabulary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainFiles, _ := filepath.Glob(filepath.Join(outDir, "train_*.bin"))
+	var decoded []string
+	for _, path := range trainFiles {
+		records, err := data.LoadSequenceShard(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, record := range records {
+			ids := make([]int, len(record))
+			for i, id := range record {
+				ids[i] = int(id)
+			}
+			sequence, err := vocab.Decode(ids)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded = append(decoded, sequence)
+		}
+	}
+	if !reflect.DeepEqual(decoded, []string{"ACGTN", "RYYA"}) {
+		t.Fatalf("decoded FASTA train records=%v", decoded)
+	}
+	loader, err := data.NewLoaderWithOptions(filepath.Join(outDir, "train_*.bin"), 1, data.LoaderOptions{NoShardShuffle: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := loader.NextBatchDetailed(8, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < len(batch.X)-1; i++ {
+		if batch.SegmentIDs[i] != batch.SegmentIDs[i+1] && batch.LossMask[i] != 0 {
+			t.Fatalf("cross-contig target at position %d: x=%v y=%v mask=%v segments=%v", i, batch.X, batch.Y, batch.LossMask, batch.SegmentIDs)
+		}
 	}
 }
 

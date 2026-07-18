@@ -12,24 +12,28 @@ import (
 
 // PrepareOptions holds flags for the prepare command.
 type PrepareOptions struct {
-	Input                  string
-	Output                 string
-	VocabSize              int
-	ValSplit               float64
-	TokenizerPath          string
-	WWMCompatibleTokenizer bool
-	TextFieldName          string
-	CharVocabSize          int
-	CharMaxPerToken        int
-	MinimalPairOut         string
-	MinimalPairCorruptions string
-	MinimalPairWeights     string
-	MinimalPairMorphology  string
-	MinimalPairMaxPairs    int
-	MinimalPairSeed        int
-	MinimalPairReportOut   string
-	MinimalPairSampleOut   string
-	MinimalPairSampleCount int
+	Input                   string
+	Output                  string
+	InputFormat             string
+	VocabSize               int
+	ValSplit                float64
+	TokenizerPath           string
+	WWMCompatibleTokenizer  bool
+	TextFieldName           string
+	CharVocabSize           int
+	CharMaxPerToken         int
+	MinimalPairOut          string
+	MinimalPairCorruptions  string
+	MinimalPairWeights      string
+	MinimalPairMorphology   string
+	MinimalPairMaxPairs     int
+	MinimalPairSeed         int
+	MinimalPairReportOut    string
+	MinimalPairSampleOut    string
+	MinimalPairSampleCount  int
+	NucleotideAlphabet      string
+	NucleotideAmbiguous     string
+	NucleotideInvalidPolicy string
 }
 
 // runPrepare shells out to scripts/prepare.py to tokenize raw text into binary shards.
@@ -52,6 +56,18 @@ func runPrepare(opts PrepareOptions) error {
 		"--output", opts.Output,
 		"--vocab-size", fmt.Sprintf("%d", opts.VocabSize),
 		"--val-split", fmt.Sprintf("%g", opts.ValSplit),
+	}
+	if opts.InputFormat != "" {
+		args = append(args, "--input-format", opts.InputFormat)
+	}
+	if opts.NucleotideAlphabet != "" {
+		args = append(args, "--nucleotide-alphabet", opts.NucleotideAlphabet)
+	}
+	if opts.NucleotideAmbiguous != "" {
+		args = append(args, "--nucleotide-ambiguous-symbols", opts.NucleotideAmbiguous)
+	}
+	if opts.NucleotideInvalidPolicy != "" {
+		args = append(args, "--nucleotide-invalid-symbol-policy", opts.NucleotideInvalidPolicy)
 	}
 	if opts.TokenizerPath != "" {
 		args = append(args, "--tokenizer-path", opts.TokenizerPath)

@@ -118,8 +118,12 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 	if len(batch.x) < need || len(batch.y) < need {
 		return objectiveBatch{}, fmt.Errorf("input size mismatch: tokens=%d targets=%d need=%d", len(batch.x), len(batch.y), need)
 	}
-	var prepared objectiveBatch
 	var err error
+	batch, err = maybeApplyReverseComplement(cfg, batch, step, need)
+	if err != nil {
+		return objectiveBatch{}, err
+	}
+	var prepared objectiveBatch
 	switch canonicalObjective(objective) {
 	case arch.ObjectiveMLM:
 		prepared, err = prepareMLMBatch(cfg, batch, step, need, seqLen)
@@ -133,6 +137,9 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 		prepared, err = prepareHybridExampleBatch(cfg, batch, step, need, seqLen)
 	default:
 		prepared = objectiveBatch{x: batch.x, y: batch.y, unmaskedX: batch.x[:need]}
+		if len(batch.lossMask) >= need {
+			prepared.lossMask = append([]float32(nil), batch.lossMask[:need]...)
+		}
 	}
 	if err != nil {
 		return objectiveBatch{}, err
@@ -142,6 +149,9 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 	}
 	if cfg.Training.ExampleFramingEnabled() && canonicalObjective(objective) == arch.ObjectiveCausal {
 		prepared.lossMask = data.FramedCausalLossMask(need, seqLen)
+	}
+	if len(batch.segmentIDs) >= need {
+		prepared.segmentIDs = append([]int32(nil), batch.segmentIDs[:need]...)
 	}
 	if cfg.Training.AttentionSegmentMaskEnabled() {
 		if err := attachSegmentIDs(cfg, &prepared, need, seqLen); err != nil {
@@ -193,13 +203,35 @@ func prepareMLMBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int) 
 		selected = stats.SelectedTokens
 	} else {
 		// Keep the legacy token selector and fallback in exactly this order.
-		selected = selectMaskPositions(rng, lossMask, maskProb, need)
+		selected = selectMaskPositionsForBatch(rng, lossMask, maskProb, need, batch.maskEligible)
 		if selected == 0 && maskProb > 0 && need > 0 {
-			pos := rng.Intn(need)
-			lossMask[pos] = 1
-			selected = 1
+			if len(batch.maskEligible) >= need {
+				candidates := make([]int, 0, need)
+				for i, active := range batch.maskEligible[:need] {
+					if active != 0 {
+						candidates = append(candidates, i)
+					}
+				}
+				if len(candidates) > 0 {
+					lossMask[candidates[rng.Intn(len(candidates))]] = 1
+					selected = 1
+				}
+			} else {
+				pos := rng.Intn(need)
+				lossMask[pos] = 1
+				selected = 1
+			}
 		}
-		stats = tokenMLMMaskStats(maskProb, need, selected)
+		eligibleCount := need
+		if len(batch.maskEligible) >= need {
+			eligibleCount = 0
+			for _, active := range batch.maskEligible[:need] {
+				if active != 0 {
+					eligibleCount++
+				}
+			}
+		}
+		stats = tokenMLMMaskStats(maskProb, eligibleCount, selected)
 	}
 	if selected > 0 {
 		replaceSelectedMLMTokens(cfg, rng, x, y, lossMask)
@@ -226,6 +258,12 @@ func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int)
 		if i%seqLen == seqLen-1 {
 			continue
 		}
+		if len(batch.maskEligible) >= need && batch.maskEligible[i+1] == 0 {
+			continue
+		}
+		if len(batch.lossMask) >= need && batch.lossMask[i] <= 0 {
+			continue
+		}
 		eligible++
 		if rng.Float64() >= maskProb {
 			continue
@@ -238,6 +276,12 @@ func prepareMNTPBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int)
 		slot := rng.Intn(eligible)
 		for i := 0; i < need; i++ {
 			if i%seqLen == seqLen-1 {
+				continue
+			}
+			if len(batch.maskEligible) >= need && batch.maskEligible[i+1] == 0 {
+				continue
+			}
+			if len(batch.lossMask) >= need && batch.lossMask[i] <= 0 {
 				continue
 			}
 			if slot == 0 {
@@ -572,7 +616,7 @@ func replaceSelectedMLMTokens(cfg *ArchConfig, rng *rand.Rand, x, originals []in
 		case r < maskProb:
 			x[i] = cfg.Training.MLMMaskTokenID
 		case r < maskProb+randomProb:
-			x[i] = rng.Intn(cfg.VocabSize)
+			x[i] = randomEligibleToken(cfg, rng)
 		default:
 			x[i] = originals[i]
 		}
@@ -585,6 +629,9 @@ func attachSegmentIDs(cfg *ArchConfig, batch *objectiveBatch, need, seqLen int) 
 	}
 	if seqLen <= 0 || need%seqLen != 0 {
 		return fmt.Errorf("invalid segment id batch shape: tokens=%d seq_len=%d", need, seqLen)
+	}
+	if len(batch.segmentIDs) >= need {
+		return nil
 	}
 	source := batch.unmaskedX
 	if len(source) < need {

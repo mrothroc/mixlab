@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/mrothroc/mixlab/arch"
+	"github.com/mrothroc/mixlab/data"
 )
 
 const scoreEBMDefaultBatch = 64
@@ -41,6 +42,7 @@ type ScoreEBMOptions struct {
 	PLLSkipTokenIDs    string
 	PLLAttributionDump string
 	EmitTokenEnergy    bool
+	SequenceVocabulary string
 }
 
 type scoreEBMRuntimeOptions struct {
@@ -51,17 +53,21 @@ type scoreEBMRuntimeOptions struct {
 	pllSkipTokenIDs    map[int]bool
 	pllAttributionEnc  *json.Encoder
 	emitTokenEnergy    bool
+	sequenceVocab      *data.NucleotideVocabulary
 }
 
 type scoreEBMInputRecord struct {
-	ID          string `json:"id"`
-	Tokens      []int  `json:"tokens,omitempty"`
-	Span        []int  `json:"span,omitempty"`
-	Clean       []int  `json:"clean,omitempty"`
-	Corrupt     []int  `json:"corrupt,omitempty"`
-	CleanSpan   []int  `json:"clean_span,omitempty"`
-	CorruptSpan []int  `json:"corrupt_span,omitempty"`
-	Family      string `json:"family,omitempty"`
+	ID              string `json:"id"`
+	Tokens          []int  `json:"tokens,omitempty"`
+	Span            []int  `json:"span,omitempty"`
+	Clean           []int  `json:"clean,omitempty"`
+	Corrupt         []int  `json:"corrupt,omitempty"`
+	CleanSpan       []int  `json:"clean_span,omitempty"`
+	CorruptSpan     []int  `json:"corrupt_span,omitempty"`
+	Family          string `json:"family,omitempty"`
+	Sequence        string `json:"sequence,omitempty"`
+	CleanSequence   string `json:"clean_sequence,omitempty"`
+	CorruptSequence string `json:"corrupt_sequence,omitempty"`
 }
 
 type scoreEBMOutputRecord struct {
@@ -79,6 +85,9 @@ type scoreEBMOutputRecord struct {
 	CorruptTokenEnergy []float64 `json:"corrupt_token_energy,omitempty"`
 	Margin             *float64  `json:"margin,omitempty"`
 	Correct            *bool     `json:"correct,omitempty"`
+	Sequence           string    `json:"sequence,omitempty"`
+	CleanSequence      string    `json:"clean_sequence,omitempty"`
+	CorruptSequence    string    `json:"corrupt_sequence,omitempty"`
 }
 
 func runScoreEBMWithOptions(opts ScoreEBMOptions) error {
@@ -102,6 +111,10 @@ func runScoreEBMWithOptions(opts ScoreEBMOptions) error {
 	}
 
 	cfg, err := LoadArchConfig(opts.ConfigPath)
+	if err != nil {
+		return err
+	}
+	sequenceVocab, err := loadSequenceVocabularyForConfig(opts.SequenceVocabulary, cfg)
 	if err != nil {
 		return err
 	}
@@ -233,6 +246,7 @@ func runScoreEBMWithOptions(opts ScoreEBMOptions) error {
 		pllSkipTokenIDs:    skipIDs,
 		pllAttributionEnc:  attrEnc,
 		emitTokenEnergy:    opts.EmitTokenEnergy,
+		sequenceVocab:      sequenceVocab,
 	}
 	if err := scoreEBMJSONLWithOptions(in, out, &scoreCfg, evaluator, runtimeOpts); err != nil {
 		return err
@@ -354,66 +368,6 @@ func scoreEBMMode(cfg *ArchConfig) (string, error) {
 	default:
 		return "", fmt.Errorf("score-ebm requires training.objective=%q with an energy or mlm_span_pll scorer, or single-objective %q/%q for full-sequence PLL", arch.ObjectiveMultihead, arch.ObjectiveMLM, arch.ObjectiveMNTP)
 	}
-}
-
-func energyHeadLogitsOutputName(cfg *ArchConfig) (string, error) {
-	if cfg == nil {
-		return "", fmt.Errorf("nil config")
-	}
-	for _, head := range cfg.Training.Heads {
-		if head.Objective == arch.ObjectiveEnergy {
-			return "head_" + head.Name + "_logits", nil
-		}
-	}
-	return "", fmt.Errorf("score-ebm requires a multihead objective=%q head", arch.ObjectiveEnergy)
-}
-
-func energyHeadTokenOutputName(cfg *ArchConfig) string {
-	if cfg == nil {
-		return ""
-	}
-	for _, head := range cfg.Training.Heads {
-		if head.Objective == arch.ObjectiveEnergy {
-			return "head_" + head.Name + "_token_energy"
-		}
-	}
-	return ""
-}
-
-func mlmSpanPLLScoreOutputName(cfg *ArchConfig) (string, error) {
-	headName, err := mlmSpanPLLScoreHeadName(cfg)
-	if err != nil {
-		return "", err
-	}
-	return "head_" + headName + "_minimal_pair_scores", nil
-}
-
-func mlmSpanPLLScoreLogitsOutputName(cfg *ArchConfig) (string, error) {
-	headName, err := mlmSpanPLLScoreHeadName(cfg)
-	if err != nil {
-		return "", err
-	}
-	return "head_" + headName + "_logits", nil
-}
-
-func mlmSpanPLLScoreHeadName(cfg *ArchConfig) (string, error) {
-	if cfg == nil || cfg.Training.MinimalPair == nil || !cfg.Training.MinimalPair.UsesMLMSpanPLL() {
-		return "", fmt.Errorf("score-ebm requires training.minimal_pair.score_source=%q or a native energy head", arch.MinimalPairScoreMLMPLL)
-	}
-	headName := strings.TrimSpace(cfg.Training.MinimalPair.ScoreHead)
-	if headName == "" {
-		headName = strings.TrimSpace(cfg.Training.ExportHead)
-	}
-	for _, head := range cfg.Training.Heads {
-		if head.Name != headName {
-			continue
-		}
-		if head.Objective != arch.ObjectiveMLM && head.Objective != arch.ObjectiveMNTP {
-			return "", fmt.Errorf("score-ebm training.minimal_pair.score_head=%q must select an mlm or mntp head", headName)
-		}
-		return head.Name, nil
-	}
-	return "", fmt.Errorf("score-ebm training.minimal_pair.score_head=%q does not match any training head", headName)
 }
 
 func buildScoreEBMIRProgram(cfg *ArchConfig, scoreMode, pllAggregation string) (*arch.Program, error) {
@@ -596,6 +550,11 @@ func scoreEBMRecordWithOptions(cfg *ArchConfig, evaluator diffusionGenerationEva
 	if strings.TrimSpace(rec.ID) == "" {
 		return scoreEBMOutputRecord{}, fmt.Errorf("id must be non-empty")
 	}
+	var err error
+	rec, err = encodeScoreEBMSequenceFields(rec, opts.sequenceVocab)
+	if err != nil {
+		return scoreEBMOutputRecord{}, err
+	}
 	mode, err := scoreEBMMode(cfg)
 	if err != nil {
 		return scoreEBMOutputRecord{}, err
@@ -643,7 +602,7 @@ func scoreEBMRecordWithOptions(cfg *ArchConfig, evaluator diffusionGenerationEva
 			return scoreEBMOutputRecord{}, err
 		}
 		v := float64(energy[0])
-		out := scoreEBMOutputRecord{ID: rec.ID, NTokens: len(rec.Tokens)}
+		out := scoreEBMOutputRecord{ID: rec.ID, NTokens: len(rec.Tokens), Sequence: rec.Sequence}
 		if mode == scoreEBMModeEnergy {
 			out.Energy = &v
 		} else {
@@ -668,8 +627,8 @@ func scoreEBMRecordWithOptions(cfg *ArchConfig, evaluator diffusionGenerationEva
 	clean := float64(energies[0])
 	corrupt := float64(energies[1])
 	out := scoreEBMOutputRecord{
-		ID:     rec.ID,
-		Family: rec.Family,
+		ID: rec.ID, Family: rec.Family,
+		CleanSequence: rec.CleanSequence, CorruptSequence: rec.CorruptSequence,
 	}
 	if mode == scoreEBMModeEnergy {
 		margin := corrupt - clean

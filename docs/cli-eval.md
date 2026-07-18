@@ -209,6 +209,10 @@ or pair rows:
 {"id":"pair_0","clean":[1,10,11,2],"corrupt":[1,10,19,2],"family":"agreement"}
 ```
 
+With `-sequence-vocab data/genome/nucleotide_vocab.json`, nucleotide records
+may use `sequence`, or `clean_sequence` and `corrupt_sequence`, instead of token
+arrays. Output repeats the canonical decoded strings alongside native scores.
+
 For configs with `training.minimal_pair.energy_aggregation: "differing_span"`,
 single-sequence rows may include `span:[start,end]`, and pair rows may include
 `clean_span:[start,end]` and `corrupt_span:[start,end]`. When pair spans are
@@ -251,6 +255,7 @@ same aggregate scores/margin/correct fields written to `-score-out`.
 | `-score-pll-attribution-dump` | Optional JSONL path for per-pair PLL attribution records. |
 | `-score-pll-skip-token-ids` | Comma-separated token IDs to skip in PLL aggregation, in addition to the mask token. |
 | `-score-emit-token-energy` | Include per-token energy arrays for differing-span native energy configs. Not supported for scorer span-PLL mode. |
+| `-sequence-vocab` | Optional versioned nucleotide vocabulary enabling sequence-string input/output. |
 
 ## `hiddenstats`
 

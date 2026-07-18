@@ -56,6 +56,7 @@ func main() {
 	scorePLLAttributionDump := flag.String("score-pll-attribution-dump", "", "write score-ebm PLL per-token attribution JSONL for pair records")
 	scorePLLSkipTokenIDs := flag.String("score-pll-skip-token-ids", "", "comma-separated token IDs to skip for score-ebm PLL; mlm_mask_token_id is always skipped")
 	prompt := flag.String("prompt", "", "prompt for generate mode, e.g. token_ids:0,1,2")
+	sequenceVocab := flag.String("sequence-vocab", "", "versioned nucleotide vocabulary artifact for native sequence string I/O")
 	logprobsOut := flag.String("logprobs-out", "", "write per-token eval NLLs to a binary file (eval mode)")
 	ranksOut := flag.String("ranks-out", "", "write per-token target ranks to a binary file (eval mode); can be combined with -logprobs-out for a single eval pass")
 	uncertaintyOut := flag.String("uncertainty-out", "", "write per-token uncertainty metrics (top-1 prob, entropy, margin) to a binary file (eval mode); can be combined with -logprobs-out and -ranks-out for a single eval pass")
@@ -77,6 +78,7 @@ func main() {
 
 	// prepare mode flags
 	prepInput := flag.String("input", "", "input text file, JSONL, or directory (prepare mode)")
+	prepInputFormat := flag.String("input-format", "text", "prepare input representation: text or fasta")
 	prepOutput := flag.String("output", "", "legacy output path for prepare, export-hf, or hiddenstats; prefer mode-specific output aliases in new scripts")
 	prepareOutputDir := flag.String("prepare-output-dir", "", "output directory for shards; clearer alias for -output in prepare mode")
 	exportDir := flag.String("export-dir", "", "Hugging Face output directory; clearer alias for -output in export-hf mode")
@@ -100,6 +102,9 @@ func main() {
 	pairIn := flag.String("pair-in", "", "minimal-pair or invariance-pair JSONL input for prepare-pairs mode")
 	pairOut := flag.String("pair-out", "", "compiled pair binary output for prepare-pairs mode; omit to validate only")
 	pairMaxLen := flag.Int("pair-max-len", 0, "maximum clean/corrupt token length for prepare-pairs; 0 uses config seq_len when -config is provided")
+	prepNucleotideAlphabet := flag.String("nucleotide-alphabet", "dna", "FASTA alphabet: dna or rna (prepare mode)")
+	prepNucleotideAmbiguous := flag.String("nucleotide-ambiguous-symbols", "N", "IUPAC ambiguity symbols included in the FASTA vocabulary")
+	prepNucleotideInvalidPolicy := flag.String("nucleotide-invalid-symbol-policy", "error", "FASTA invalid-symbol policy: error, map_to_n, or skip")
 
 	flag.Usage = func() {
 		printUsage(os.Stderr, requestedHelpMode(os.Args[1:]))
@@ -168,24 +173,28 @@ func main() {
 		prepareOutput, err := aliasedStringFlagValue(*prepOutput, "prepare-output-dir", *prepareOutputDir, providedFlags)
 		must(err)
 		must(train.RunPrepare(train.PrepareOptions{
-			Input:                  *prepInput,
-			Output:                 prepareOutput,
-			VocabSize:              *prepVocabSize,
-			ValSplit:               *prepValSplit,
-			TokenizerPath:          *prepTokenizerPath,
-			WWMCompatibleTokenizer: *prepWWMCompatibleTokenizer,
-			TextFieldName:          *prepTextField,
-			CharVocabSize:          *prepCharVocabSize,
-			CharMaxPerToken:        *prepCharMaxPerToken,
-			MinimalPairOut:         *prepMinimalPairOut,
-			MinimalPairCorruptions: *prepMinimalPairCorruptions,
-			MinimalPairWeights:     *prepMinimalPairWeights,
-			MinimalPairMorphology:  *prepMinimalPairMorphology,
-			MinimalPairMaxPairs:    *prepMinimalPairMaxPairs,
-			MinimalPairSeed:        *prepMinimalPairSeed,
-			MinimalPairReportOut:   *prepMinimalPairReportOut,
-			MinimalPairSampleOut:   *prepMinimalPairSampleOut,
-			MinimalPairSampleCount: *prepMinimalPairSampleCount,
+			Input:                   *prepInput,
+			Output:                  prepareOutput,
+			InputFormat:             *prepInputFormat,
+			VocabSize:               *prepVocabSize,
+			ValSplit:                *prepValSplit,
+			TokenizerPath:           *prepTokenizerPath,
+			WWMCompatibleTokenizer:  *prepWWMCompatibleTokenizer,
+			TextFieldName:           *prepTextField,
+			CharVocabSize:           *prepCharVocabSize,
+			CharMaxPerToken:         *prepCharMaxPerToken,
+			MinimalPairOut:          *prepMinimalPairOut,
+			MinimalPairCorruptions:  *prepMinimalPairCorruptions,
+			MinimalPairWeights:      *prepMinimalPairWeights,
+			MinimalPairMorphology:   *prepMinimalPairMorphology,
+			MinimalPairMaxPairs:     *prepMinimalPairMaxPairs,
+			MinimalPairSeed:         *prepMinimalPairSeed,
+			MinimalPairReportOut:    *prepMinimalPairReportOut,
+			MinimalPairSampleOut:    *prepMinimalPairSampleOut,
+			MinimalPairSampleCount:  *prepMinimalPairSampleCount,
+			NucleotideAlphabet:      *prepNucleotideAlphabet,
+			NucleotideAmbiguous:     *prepNucleotideAmbiguous,
+			NucleotideInvalidPolicy: *prepNucleotideInvalidPolicy,
 		}))
 		return
 	}
@@ -282,7 +291,10 @@ func main() {
 		must(err)
 		must(train.RunHiddenstats(*configPath, *trainPattern, *safetensorsLoad, hiddenstatsOutput))
 	case "generate":
-		must(train.RunGenerate(*configPath, *safetensorsLoad, *maxTokens, float32(*temperature), *topK, *prompt))
+		must(train.RunGenerateWithOptions(train.GenerateOptions{
+			ConfigPath: *configPath, SafetensorsLoad: *safetensorsLoad, MaxTokens: *maxTokens,
+			Temperature: float32(*temperature), TopK: *topK, Prompt: *prompt, SequenceVocabulary: *sequenceVocab,
+		}))
 	case "generate-diffusion":
 		var confidenceOverride *float64
 		if providedFlags["diffusion-confidence-threshold"] {
@@ -333,6 +345,7 @@ func main() {
 			PLLSkipTokenIDs:    *scorePLLSkipTokenIDs,
 			PLLAttributionDump: *scorePLLAttributionDump,
 			EmitTokenEnergy:    *scoreEmitTokenEnergy,
+			SequenceVocabulary: *sequenceVocab,
 		}))
 	case "parity":
 		must(train.RunParity(train.ParityOptions{
@@ -375,7 +388,9 @@ var modeFlagGroups = map[string][]flagGroup{
 	"prepare": {
 		{"Required", []string{"input"}},
 		{"Output", []string{"prepare-output-dir", "output"}},
-		{"Tokenizer/data", []string{"vocab-size", "val-split", "tokenizer-path", "wwm-compatible-tokenizer", "text-field"}},
+		{"Input and split", []string{"input-format", "val-split"}},
+		{"Text tokenizer/data", []string{"vocab-size", "tokenizer-path", "wwm-compatible-tokenizer", "text-field"}},
+		{"FASTA nucleotide data", []string{"nucleotide-alphabet", "nucleotide-ambiguous-symbols", "nucleotide-invalid-symbol-policy"}},
 		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},
 		{"Minimal pair artifact", []string{"minimal-pair-out", "minimal-pair-corruptions", "minimal-pair-weights", "minimal-pair-morphology", "minimal-pair-max-pairs", "minimal-pair-seed", "minimal-pair-report-out", "minimal-pair-sample-out", "minimal-pair-sample-count"}},
 	},
@@ -399,6 +414,7 @@ var modeFlagGroups = map[string][]flagGroup{
 	"generate": {
 		{"Required", []string{"config", "safetensors-load", "prompt"}},
 		{"Sampling", []string{"max-tokens", "temperature", "top-k"}},
+		{"Sequence strings", []string{"sequence-vocab"}},
 	},
 	"generate-diffusion": {
 		{"Required", []string{"config", "safetensors-load", "prompt"}},
@@ -415,6 +431,7 @@ var modeFlagGroups = map[string][]flagGroup{
 	"score-ebm": {
 		{"Required", []string{"config", "safetensors-load", "score-in", "score-out"}},
 		{"Scoring", []string{"score-batch", "score-position-batch", "score-pll-aggregation", "score-pll-window", "score-pll-attribution-dump", "score-pll-skip-token-ids", "score-emit-token-energy"}},
+		{"Sequence strings", []string{"sequence-vocab"}},
 	},
 	"export-hf": {
 		{"Required", []string{"config", "safetensors-load"}},

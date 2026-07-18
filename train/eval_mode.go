@@ -27,7 +27,7 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error
 	if err != nil {
 		return err
 	}
-	if _, _, err := validateDatasetManifestForConfig(cfg, trainPattern); err != nil {
+	if err := configureDatasetForTraining(cfg, trainPattern, cfg.Name); err != nil {
 		return err
 	}
 	if cfg.Training.ExampleFramingEnabled() {
@@ -36,7 +36,16 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error
 	if _, err := configureCharFeaturesForTraining(cfg, trainPattern); err != nil {
 		return err
 	}
-	prog, err := BuildEvalIRProgramFromConfig(cfg)
+	var prog *Program
+	if cfg.Training.DatasetSequencePacking {
+		prog, err = BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+			RecurrenceActive: true, HeadUntied: cfg.MTPUntieEnabled(), Objective: "causal",
+			MTPAuxInactive: true, DistillationInactive: true, Data2VecInactive: true,
+			InvarianceInactive: true, PLLMarginInactive: true, ZLossInactive: true, DropoutInactive: true,
+		})
+	} else {
+		prog, err = BuildEvalIRProgramFromConfig(cfg)
+	}
 	if err != nil {
 		return fmt.Errorf("build IR program: %w", err)
 	}

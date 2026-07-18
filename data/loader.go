@@ -153,8 +153,26 @@ func (s *tokenStream) TakeAlignedChunk(n int) ([]uint16, error) {
 
 // Loader wraps a TokenStream to produce batches for training.
 type Loader struct {
-	stream  *tokenStream
-	framing ExampleFraming
+	stream    *tokenStream
+	sequences *sequenceStream
+	framing   ExampleFraming
+	packing   *sequencePacking
+}
+
+type sequencePacking struct {
+	padID int
+	bosID int
+	eosID int
+}
+
+// Batch is a fixed-shape loader result. Optional masks are nil for legacy flat
+// token streams, preserving the historical data path exactly.
+type Batch struct {
+	X            []int
+	Y            []int
+	LossMask     []float32
+	SegmentIDs   []int32
+	MaskEligible []uint8
 }
 
 // NewLoader creates a Loader from a glob pattern for binary shard files.
@@ -186,6 +204,23 @@ func normalizeLoaderOptions(opts LoaderOptions, defaultChunkSize int) LoaderOpti
 // NewLoaderWithOptions creates a Loader from a glob pattern for binary shard
 // files with explicit data-loader options.
 func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Loader, error) {
+	manifest, _, found, err := FindDatasetManifest(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if found && manifest.ShardFormat == DatasetShardFormatSequenceV1 {
+		pad, padOK := manifest.SpecialTokenIDs["pad"]
+		bos, bosOK := manifest.SpecialTokenIDs["bos"]
+		eos, eosOK := manifest.SpecialTokenIDs["eos"]
+		if !padOK || !bosOK || !eosOK {
+			return nil, fmt.Errorf("sequence dataset manifest requires semantic special_token_ids pad, bos, and eos")
+		}
+		sequences, err := newSequenceStream(pattern, seed, opts.NoShardShuffle)
+		if err != nil {
+			return nil, err
+		}
+		return &Loader{sequences: sequences, packing: &sequencePacking{padID: pad, bosID: bos, eosID: eos}}, nil
+	}
 	s, err := newTokenStreamWithOptions(pattern, seed, opts)
 	if err != nil {
 		return nil, err
@@ -196,23 +231,87 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 // NextBatch returns x (input tokens) and y (target tokens, shifted by 1).
 // batchTokens must be positive and divisible by seqLen.
 func (l *Loader) NextBatch(batchTokens, seqLen int) (x []int, y []int, err error) {
-	if batchTokens <= 0 || seqLen <= 0 || batchTokens%seqLen != 0 {
-		return nil, nil, fmt.Errorf("invalid batch shape: batchTokens=%d seqLen=%d; pass positive values with batchTokens divisible by seqLen", batchTokens, seqLen)
-	}
-	if l.framing.Enabled() {
-		return l.nextFramedBatch(batchTokens, seqLen)
-	}
-	tok, err := l.stream.Take(batchTokens + 1)
+	batch, err := l.NextBatchDetailed(batchTokens, seqLen)
 	if err != nil {
 		return nil, nil, err
 	}
-	x = make([]int, batchTokens)
-	y = make([]int, batchTokens)
+	return batch.X, batch.Y, nil
+}
+
+// NextBatchDetailed returns token rows plus optional representation metadata.
+func (l *Loader) NextBatchDetailed(batchTokens, seqLen int) (Batch, error) {
+	if batchTokens <= 0 || seqLen <= 0 || batchTokens%seqLen != 0 {
+		return Batch{}, fmt.Errorf("invalid batch shape: batchTokens=%d seqLen=%d; pass positive values with batchTokens divisible by seqLen", batchTokens, seqLen)
+	}
+	if l.sequences != nil {
+		return l.nextSequenceBatch(batchTokens, seqLen)
+	}
+	if l.framing.Enabled() {
+		x, y, err := l.nextFramedBatch(batchTokens, seqLen)
+		return Batch{X: x, Y: y, LossMask: FramedCausalLossMask(batchTokens, seqLen)}, err
+	}
+	tok, err := l.stream.Take(batchTokens + 1)
+	if err != nil {
+		return Batch{}, err
+	}
+	x := make([]int, batchTokens)
+	y := make([]int, batchTokens)
 	for i := 0; i < batchTokens; i++ {
 		x[i] = int(tok[i])
 		y[i] = int(tok[i+1])
 	}
-	return x, y, nil
+	return Batch{X: x, Y: y}, nil
+}
+
+func (l *Loader) nextSequenceBatch(batchTokens, seqLen int) (Batch, error) {
+	if seqLen < 3 {
+		return Batch{}, fmt.Errorf("record-oriented sequence datasets require seq_len >= 3 for BOS/base/EOS framing")
+	}
+	x := make([]int, batchTokens)
+	y := make([]int, batchTokens)
+	lossMask := make([]float32, batchTokens)
+	segmentIDs := make([]int32, batchTokens)
+	maskEligible := make([]uint8, batchTokens)
+	for rowStart := 0; rowStart < batchTokens; rowStart += seqLen {
+		cursor := rowStart
+		rowEnd := rowStart + seqLen
+		segment := int32(0)
+		for cursor < rowEnd {
+			remaining := rowEnd - cursor
+			if remaining == 1 {
+				x[cursor], y[cursor] = l.packing.padID, l.packing.padID
+				segmentIDs[cursor] = segment
+				cursor++
+				continue
+			}
+			content, err := l.sequences.takeChunk(remaining - 2)
+			if err != nil {
+				return Batch{}, err
+			}
+			start := cursor
+			x[cursor] = l.packing.bosID
+			segmentIDs[cursor] = segment
+			cursor++
+			for _, token := range content {
+				x[cursor] = int(token)
+				segmentIDs[cursor] = segment
+				maskEligible[cursor] = 1
+				cursor++
+			}
+			x[cursor] = l.packing.eosID
+			segmentIDs[cursor] = segment
+			cursor++
+			if len(content) > 0 {
+				for i := start; i < cursor-1; i++ {
+					y[i] = x[i+1]
+					lossMask[i] = 1
+				}
+			}
+			y[cursor-1] = l.packing.eosID
+			segment++
+		}
+	}
+	return Batch{X: x, Y: y, LossMask: lossMask, SegmentIDs: segmentIDs, MaskEligible: maskEligible}, nil
 }
 
 func (l *Loader) nextFramedBatch(batchTokens, seqLen int) (x []int, y []int, err error) {
@@ -247,9 +346,11 @@ func (l *Loader) nextFramedBatch(batchTokens, seqLen int) (x []int, y []int, err
 
 // ValBatch holds a single validation batch.
 type ValBatch struct {
-	X        []int
-	Y        []int
-	LossMask []float32
+	X            []int
+	Y            []int
+	LossMask     []float32
+	SegmentIDs   []int32
+	MaskEligible []uint8
 }
 
 // ValSet holds fixed batches for repeatable evaluation.
@@ -276,15 +377,11 @@ func NewValSetWithOptions(pattern string, seed int64, nBatches, batchTokens, seq
 	}
 	vs := &ValSet{Batches: make([]ValBatch, 0, nBatches)}
 	for i := 0; i < nBatches; i++ {
-		x, y, err := loader.NextBatch(batchTokens, seqLen)
+		batch, err := loader.NextBatchDetailed(batchTokens, seqLen)
 		if err != nil {
 			break
 		}
-		var lossMask []float32
-		if opts.Framing.Enabled() {
-			lossMask = FramedCausalLossMask(batchTokens, seqLen)
-		}
-		vs.Batches = append(vs.Batches, ValBatch{X: x, Y: y, LossMask: lossMask})
+		vs.Batches = append(vs.Batches, ValBatch(batch))
 	}
 	if len(vs.Batches) == 0 {
 		return nil, fmt.Errorf("no validation batches loaded from %q; check the validation glob or reduce seq_len/batch_tokens", pattern)

@@ -326,6 +326,7 @@ type TrainingSpec struct {
 	Seed                              int64                        `json:"seed"`
 	BatchTokens                       int                          `json:"batch_tokens"`
 	ShuffleChunkTokens                int                          `json:"shuffle_chunk_tokens,omitempty"`
+	ReverseComplementProb             float64                      `json:"reverse_complement_prob,omitempty"`
 	EmbedLR                           float32                      `json:"embed_lr,omitempty"`
 	MatrixLR                          float32                      `json:"matrix_lr,omitempty"`
 	ScalarLR                          float32                      `json:"scalar_lr,omitempty"`
@@ -356,6 +357,17 @@ type TrainingSpec struct {
 	SWAStart      int     `json:"swa_start,omitempty"`
 	SWADecay      float32 `json:"swa_decay,omitempty"`
 	SWAInterval   int     `json:"swa_interval,omitempty"`
+
+	// Dataset runtime fields are populated from mixlab.dataset.json after JSON
+	// validation. They do not alter checkpoint or marshaled config shape.
+	DatasetSequencePacking       bool    `json:"-"`
+	DatasetBOSID                 int     `json:"-"`
+	DatasetEOSID                 int     `json:"-"`
+	DatasetPADID                 int     `json:"-"`
+	DatasetNucleotideAlphabet    string  `json:"-"`
+	DatasetNucleotideComplement  []int   `json:"-"`
+	DatasetTokenEligible         []uint8 `json:"-"`
+	DatasetNucleotideVocabSource string  `json:"-"`
 
 	mlmMaskProbSet                     bool
 	mlmMaskTokenIDSet                  bool

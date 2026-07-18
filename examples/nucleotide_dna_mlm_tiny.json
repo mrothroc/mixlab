@@ -1,0 +1,25 @@
+{
+  "name": "nucleotide_dna_mlm_tiny",
+  "model_dim": 32,
+  "vocab_size": 9,
+  "seq_len": 64,
+  "mlp_mult": 2.0,
+  "tie_embeddings": true,
+  "mlm_head": "bert",
+  "blocks": [
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional"},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional"},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "mlm",
+    "steps": 100,
+    "lr": 0.0003,
+    "batch_tokens": 256,
+    "seed": 42,
+    "mlm_mask_prob": 0.15,
+    "mlm_mask_token_id": 3,
+    "reverse_complement_prob": 0.5
+  }
+}

@@ -1017,6 +1017,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `batch_tokens` | integer | No | `1024` | Tokens per optimization step. Must be divisible by `seq_len`. |
 | `seq_len_schedule` | array | No | Disabled | Stepwise training sequence-length schedule as `[[step, seq_len], ...]`. The top-level `seq_len` remains the maximum/eval/inference length. Scheduled lengths must start at step `0`, be strictly increasing by step, stay in `[1, seq_len]`, and divide `batch_tokens`. V1 rejects this with distillation or active data2vec. |
 | `shuffle_chunk_tokens` | integer | No | `seq_len` | Token-block shuffle granularity for train/validation loaders. Values `<= 0` inherit `seq_len`; set to `2048` to reproduce the previous fixed-block behavior. |
+| `reverse_complement_prob` | number | No | `0` | Deterministic per-segment DNA reverse-complement augmentation probability in `[0,1]`. Requires a manifest-backed FASTA DNA dataset; RNA and legacy/text shards reject nonzero values. Randomness is derived from `training.seed` and step, independent of loader prefetch. |
 | `embed_lr` | number | No | `lr` | Learning rate for embedding-class weights. |
 | `matrix_lr` | number | No | `lr` | Learning rate for matrix weights. Used with Muon. |
 | `scalar_lr` | number | No | `lr` | Learning rate for scalar and vector weights. |
@@ -1087,6 +1088,12 @@ The default `score_source: "energy_scalar"` preserves the native energy-head pat
 For diffusion experiments, compare against causal and MLM baselines that keep the same supported Transformer backbone, vocabulary, context length, optimizer settings, data, and training-token budget. Use causal validation BPB/per-token NLL for apples-to-apples model comparison, and report diffusion masked training loss separately because it is not the same metric as next-token validation loss.
 
 `attention_segment_mask: "boundary_token"` is for packed training streams that already contain a reliable document/segment marker. Mixlab derives `segment_ids` from the unmasked input tokens, then masks `plain` self-attention so tokens attend only within their segment. Causal, bidirectional, and per-example hybrid masks still apply inside each segment. V1 supports `plain` self-attention stacks with position-wise FFN/MoE blocks; fixed-teacher distillation, recurrent blocks, cross-attention, custom token mixers, and inference/generation segmentation are out of scope.
+
+Manifest-backed `mixlab_sequence_shard_v1` nucleotide datasets enable the same
+segment-attention machinery automatically and provide exact segment IDs from
+the record packer. Their fixed vocabulary uses `<MASK>=3`, so MLM configs must
+set `training.mlm_mask_token_id: 3`. Causal and MLM/MNTP objectives are
+supported; full continuous-stream BPB evaluation is intentionally disabled.
 
 `example_framing` is for raw continuous token shards that should train as independent fixed examples. It shuffles `content_len` raw-token chunks, drops ragged shard tails, prepends `bos_id`, appends `eos_id`, and masks the final EOS input position so it never predicts the next example. V1 is causal-training-only and rejects masked objectives, hybrid, block diffusion, MTP, first-byte masked loss, distillation, data2vec, attention segment masking, TTT eval settings, and `seq_len_schedule`.
 

@@ -90,6 +90,23 @@ func TestMinimalPairFactoryFlagsInPrepareHelpGroup(t *testing.T) {
 	}
 }
 
+func TestFASTAFlagsInPrepareHelpGroup(t *testing.T) {
+	groups := modeFlagGroups["prepare"]
+	for _, flagName := range []string{"input-format", "nucleotide-alphabet", "nucleotide-ambiguous-symbols", "nucleotide-invalid-symbol-policy"} {
+		if !flagGroupContains(groups, flagName) {
+			t.Fatalf("prepare help groups missing %s", flagName)
+		}
+	}
+}
+
+func TestSequenceVocabularyFlagsInNativeIOHelpGroups(t *testing.T) {
+	for _, mode := range []string{"generate", "score-ebm"} {
+		if !flagGroupContains(modeFlagGroups[mode], "sequence-vocab") {
+			t.Fatalf("%s help groups missing sequence-vocab", mode)
+		}
+	}
+}
+
 func TestScoreEBMPLLFlagsInHelpGroup(t *testing.T) {
 	groups := modeFlagGroups["score-ebm"]
 	for _, flagName := range []string{"score-pll-aggregation", "score-pll-window", "score-pll-attribution-dump", "score-pll-skip-token-ids", "score-position-batch", "score-emit-token-energy"} {

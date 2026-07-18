@@ -11,40 +11,62 @@ import (
 	"strings"
 
 	"github.com/mrothroc/mixlab/arch"
+	"github.com/mrothroc/mixlab/data"
 )
 
+type GenerateOptions struct {
+	ConfigPath         string
+	SafetensorsLoad    string
+	MaxTokens          int
+	Temperature        float32
+	TopK               int
+	Prompt             string
+	SequenceVocabulary string
+}
+
 func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature float32, topK int, prompt string) error {
+	return runGenerateWithOptions(GenerateOptions{
+		ConfigPath: configPath, SafetensorsLoad: safetensorsLoad, MaxTokens: maxTokens,
+		Temperature: temperature, TopK: topK, Prompt: prompt,
+	})
+}
+
+func runGenerateWithOptions(opts GenerateOptions) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	if configPath == "" {
+	if opts.ConfigPath == "" {
 		return fmt.Errorf("-config is required for generate mode")
 	}
-	if safetensorsLoad == "" {
+	if opts.SafetensorsLoad == "" {
 		return fmt.Errorf("-safetensors-load is required for generate mode")
 	}
-	if maxTokens < 0 {
+	if opts.MaxTokens < 0 {
 		return fmt.Errorf("-max-tokens must be >= 0")
 	}
-	if temperature <= 0 {
+	if opts.Temperature <= 0 {
 		return fmt.Errorf("-temperature must be > 0")
 	}
-	if topK < 0 {
+	if opts.TopK < 0 {
 		return fmt.Errorf("-top-k must be >= 0")
 	}
 
-	cfg, err := LoadArchConfig(configPath)
+	cfg, err := LoadArchConfig(opts.ConfigPath)
+	if err != nil {
+		return err
+	}
+	vocab, err := loadSequenceVocabularyForConfig(opts.SequenceVocabulary, cfg)
 	if err != nil {
 		return err
 	}
 	if countTTTMLPBlocks(cfg.Blocks) > 0 {
 		if _, _, statefulErr := arch.BuildTTTMLPStatefulInferenceIRProgram(cfg, 1, make([]int, countTTTMLPBlocks(cfg.Blocks))); statefulErr == nil {
-			return runGenerateTTTMLPStateful(configPath, safetensorsLoad, cfg, maxTokens, temperature, topK, prompt)
+			return runGenerateTTTMLPStateful(opts.ConfigPath, opts.SafetensorsLoad, cfg, opts.MaxTokens, opts.Temperature, opts.TopK, opts.Prompt, vocab)
 		}
 	}
 	genCfg := *cfg
 	genCfg.Training.BatchTokens = genCfg.SeqLen
-	if err := configureCharFeaturesForConfigPath(&genCfg, configPath, safetensorsLoad); err != nil {
+	if err := configureCharFeaturesForConfigPath(&genCfg, opts.ConfigPath, opts.SafetensorsLoad); err != nil {
 		return err
 	}
 
@@ -56,9 +78,9 @@ func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 	if err != nil {
 		return fmt.Errorf("compute weight shapes: %w", err)
 	}
-	loadedWeights, err := loadSafetensorsWeights(safetensorsLoad, shapes)
+	loadedWeights, err := loadSafetensorsWeights(opts.SafetensorsLoad, shapes)
 	if err != nil {
-		return fmt.Errorf("load safetensors %q: %w", safetensorsLoad, err)
+		return fmt.Errorf("load safetensors %q: %w", opts.SafetensorsLoad, err)
 	}
 	trainer, err := initGPUTrainer(prog, &genCfg, loadedWeights, nil)
 	if err != nil {
@@ -67,7 +89,7 @@ func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 	defer trainer.CloseTrainer()
 
 	rng := rand.New(rand.NewSource(cfg.Training.Seed))
-	context, err := generationPromptTokens(prompt, cfg.VocabSize, rng)
+	context, err := generationPromptTokensWithVocabulary(opts.Prompt, cfg.VocabSize, rng, vocab)
 	if err != nil {
 		return err
 	}
@@ -75,7 +97,7 @@ func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 		return fmt.Errorf("prompt length %d exceeds seq_len %d", len(context), cfg.SeqLen)
 	}
 
-	for i := 0; i < maxTokens; i++ {
+	for i := 0; i < opts.MaxTokens; i++ {
 		if len(context) >= cfg.SeqLen {
 			fmt.Printf("stopped at seq_len limit (%d tokens)\n", cfg.SeqLen)
 			break
@@ -88,7 +110,7 @@ func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 		if err != nil {
 			return fmt.Errorf("read logits: %w", err)
 		}
-		next, err := sampleNextToken(logits[lastPos*cfg.VocabSize:(lastPos+1)*cfg.VocabSize], temperature, topK, rng)
+		next, err := sampleNextToken(logits[lastPos*cfg.VocabSize:(lastPos+1)*cfg.VocabSize], opts.Temperature, opts.TopK, rng)
 		if err != nil {
 			return fmt.Errorf("sample token at step %d: %w", i, err)
 		}
@@ -96,12 +118,19 @@ func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 	}
 
 	fmt.Printf("generated token_ids:%s\n", formatTokenIDs(context))
+	if vocab != nil {
+		sequence, err := vocab.Decode(context)
+		if err != nil {
+			return fmt.Errorf("decode generated nucleotide sequence: %w", err)
+		}
+		fmt.Printf("generated sequence:%s\n", sequence)
+	}
 	return nil
 }
 
-func runGenerateTTTMLPStateful(configPath, safetensorsLoad string, cfg *ArchConfig, maxTokens int, temperature float32, topK int, prompt string) error {
+func runGenerateTTTMLPStateful(configPath, safetensorsLoad string, cfg *ArchConfig, maxTokens int, temperature float32, topK int, prompt string, vocab *data.NucleotideVocabulary) error {
 	rng := rand.New(rand.NewSource(cfg.Training.Seed))
-	context, err := generationPromptTokens(prompt, cfg.VocabSize, rng)
+	context, err := generationPromptTokensWithVocabulary(prompt, cfg.VocabSize, rng, vocab)
 	if err != nil {
 		return err
 	}
@@ -133,10 +162,36 @@ func runGenerateTTTMLPStateful(configPath, safetensorsLoad string, cfg *ArchConf
 		}
 	}
 	fmt.Printf("generated token_ids:%s\n", formatTokenIDs(context))
+	if vocab != nil {
+		sequence, err := vocab.Decode(context)
+		if err != nil {
+			return fmt.Errorf("decode generated nucleotide sequence: %w", err)
+		}
+		fmt.Printf("generated sequence:%s\n", sequence)
+	}
 	return nil
 }
 
 func generationPromptTokens(prompt string, vocabSize int, rng *rand.Rand) ([]int, error) {
+	return generationPromptTokensWithVocabulary(prompt, vocabSize, rng, nil)
+}
+
+func generationPromptTokensWithVocabulary(prompt string, vocabSize int, rng *rand.Rand, vocab *data.NucleotideVocabulary) ([]int, error) {
+	if vocab != nil {
+		if prompt == "" {
+			bos, _ := vocab.SpecialTokenID("bos")
+			return []int{bos}, nil
+		}
+		const sequencePrefix = "sequence:"
+		if strings.HasPrefix(prompt, sequencePrefix) {
+			ids, err := vocab.Encode(strings.TrimSpace(strings.TrimPrefix(prompt, sequencePrefix)))
+			if err != nil {
+				return nil, err
+			}
+			bos, _ := vocab.SpecialTokenID("bos")
+			return append([]int{bos}, ids...), nil
+		}
+	}
 	if prompt == "" {
 		return []int{rng.Intn(vocabSize)}, nil
 	}

@@ -17,6 +17,7 @@ const (
 	DatasetRepresentationDiscreteTokens = "discrete_tokens"
 	DatasetTokenDTypeUint16             = "uint16"
 	DatasetShardFormatTokenStreamV1     = "mixlab_token_shard_v1"
+	DatasetShardFormatSequenceV1        = "mixlab_sequence_shard_v1"
 )
 
 // DatasetManifest describes the representation shared by a set of Mixlab
@@ -44,9 +45,10 @@ type DatasetManifestArtifacts struct {
 // DatasetSplit records the shard pattern and exact token/shard counts emitted
 // by preparation. Patterns are relative to the manifest directory.
 type DatasetSplit struct {
-	Pattern string `json:"pattern"`
-	Tokens  int64  `json:"tokens"`
-	Shards  int    `json:"shards"`
+	Pattern   string `json:"pattern"`
+	Tokens    int64  `json:"tokens"`
+	Shards    int    `json:"shards"`
+	Sequences int64  `json:"sequences,omitempty"`
 }
 
 // LoadDatasetManifest parses and validates a manifest from disk.
@@ -123,8 +125,8 @@ func (m *DatasetManifest) Validate() error {
 	if m.TokenDType != DatasetTokenDTypeUint16 {
 		return fmt.Errorf("token_dtype=%q is unsupported; want %q", m.TokenDType, DatasetTokenDTypeUint16)
 	}
-	if m.ShardFormat != DatasetShardFormatTokenStreamV1 {
-		return fmt.Errorf("shard_format=%q is unsupported; want %q", m.ShardFormat, DatasetShardFormatTokenStreamV1)
+	if m.ShardFormat != DatasetShardFormatTokenStreamV1 && m.ShardFormat != DatasetShardFormatSequenceV1 {
+		return fmt.Errorf("shard_format=%q is unsupported; want %q or %q", m.ShardFormat, DatasetShardFormatTokenStreamV1, DatasetShardFormatSequenceV1)
 	}
 	seenSpecialIDs := make(map[int]string, len(m.SpecialTokenIDs))
 	for name, id := range m.SpecialTokenIDs {
@@ -161,8 +163,14 @@ func (m *DatasetManifest) Validate() error {
 		if split.Shards < 0 {
 			return fmt.Errorf("splits.%s.shards=%d must be >= 0", name, split.Shards)
 		}
+		if split.Sequences < 0 {
+			return fmt.Errorf("splits.%s.sequences=%d must be >= 0", name, split.Sequences)
+		}
 		if split.Tokens > 0 && split.Shards == 0 {
 			return fmt.Errorf("splits.%s has %d tokens but zero shards", name, split.Tokens)
+		}
+		if m.ShardFormat == DatasetShardFormatSequenceV1 && split.Tokens > 0 && split.Sequences == 0 {
+			return fmt.Errorf("splits.%s has %d sequence tokens but zero sequences", name, split.Tokens)
 		}
 	}
 	return nil

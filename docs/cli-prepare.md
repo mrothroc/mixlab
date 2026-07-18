@@ -15,6 +15,7 @@ tokenizer compatibility notes.
 | Flag | Description |
 |------|-------------|
 | `-input` | Required. Input text file, JSONL file, or directory. |
+| `-input-format` | Input representation: `text` (default) or `fasta`. |
 | `-prepare-output-dir` | Output directory for shards and tokenizer artifacts. Preferred alias for legacy `-output`. |
 | `-output` | Legacy output directory. |
 | `-vocab-size` | BPE vocabulary size when training a tokenizer. Default: `1024`. |
@@ -33,6 +34,34 @@ tokenizer compatibility notes.
 | `-minimal-pair-report-out` | Optional JSON report with accepted/rejected counts, rejection reasons, weights, attempts, and seed. |
 | `-minimal-pair-sample-out` | Optional audit JSONL containing clean/corrupt text and token IDs for a bounded sample of accepted pairs. |
 | `-minimal-pair-sample-count` | Maximum audit samples to write. Default: `20`. |
+| `-nucleotide-alphabet` | FASTA alphabet: `dna` (default) or `rna`. |
+| `-nucleotide-ambiguous-symbols` | Comma-separated IUPAC ambiguity symbols to include. Default: `N`; complementary partners are added automatically. |
+| `-nucleotide-invalid-symbol-policy` | FASTA invalid-symbol handling: `error` (default), `map_to_n`, or `skip`. `map_to_n` requires `N` in the vocabulary. |
+
+## FASTA nucleotide data
+
+FASTA preparation uses a fixed base-level vocabulary instead of training a
+text tokenizer:
+
+```bash
+./mixlab -mode prepare \
+  -input reference.fasta \
+  -input-format fasta \
+  -prepare-output-dir data/reference-dna \
+  -nucleotide-alphabet dna \
+  -nucleotide-ambiguous-symbols N,R,Y
+```
+
+The first IDs are always `<PAD>=0`, `<BOS>=1`, `<EOS>=2`, and `<MASK>=3`,
+followed by `A,C,G,T` for DNA or `A,C,G,U` for RNA and then enabled ambiguity
+symbols in canonical IUPAC order. Preparation writes `nucleotide_vocab.json`
+and record-oriented `mixlab_sequence_shard_v1` shards. Contigs remain separate
+records; the runtime packs framed contig chunks into fixed rows and supplies
+block-diagonal segment IDs and loss masks automatically. Do not also set
+`training.attention_segment_mask` for these datasets.
+
+Text tokenizer, whole-word, char-feature, and minimal-pair preparation flags
+are rejected with `-input-format fasta` rather than being silently ignored.
 
 When `-char-vocab-size` is enabled, `prepare` writes a reusable
 tokenizer-level `char_features.bin` next to `tokenizer.json`. Configs with

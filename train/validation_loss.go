@@ -37,7 +37,7 @@ func meanMultiheadValidationLoss(cfg *ArchConfig, valSet *data.ValSet, trainer G
 	count := 0
 	failures := 0
 	for _, vb := range valSet.Batches {
-		batch, err := prepareObjectiveBatchWithSeqLen(cfg, trainBatch{x: vb.X, y: vb.Y}, step, arch.ObjectiveMultihead, seqLen)
+		batch, err := prepareObjectiveBatchWithSeqLen(cfg, trainBatchFromValBatch(vb), step, arch.ObjectiveMultihead, seqLen)
 		if err != nil {
 			return 0, err
 		}
@@ -114,7 +114,7 @@ func meanValidationLossWithTTT(
 			if tttSteps > 0 {
 				return 0, fmt.Errorf("masked validation batches do not support score-first TTT")
 			}
-			loss, err = evaluateObjectiveTrainingLossGPU(trainer, objectiveBatch{x: vb.X, y: vb.Y, lossMask: vb.LossMask}, batchSize, seqLen)
+			loss, err = evaluateObjectiveTrainingLossGPU(trainer, objectiveBatch{x: vb.X, y: vb.Y, lossMask: vb.LossMask, segmentIDs: vb.SegmentIDs}, batchSize, seqLen)
 		default:
 			loss, err = trainer.EvaluateGPU(vb.X, vb.Y, batchSize, seqLen)
 		}

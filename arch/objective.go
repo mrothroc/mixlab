@@ -144,7 +144,7 @@ func (t TrainingSpec) EffectiveAttentionSegmentMask() string {
 }
 
 func (t TrainingSpec) AttentionSegmentMaskEnabled() bool {
-	return t.EffectiveAttentionSegmentMask() == AttentionSegmentMaskBoundaryToken
+	return t.DatasetSequencePacking || t.EffectiveAttentionSegmentMask() == AttentionSegmentMaskBoundaryToken
 }
 
 func (t TrainingSpec) ExampleFramingEnabled() bool {
@@ -160,11 +160,14 @@ func (t TrainingSpec) DefaultConcreteObjective() string {
 }
 
 func (t TrainingSpec) NeedsMaskedLoss() bool {
-	return isMaskedTrainingObjective(t.DefaultConcreteObjective()) || t.ExampleFramingEnabled()
+	return isMaskedTrainingObjective(t.DefaultConcreteObjective()) || t.ExampleFramingEnabled() || t.DatasetSequencePacking
 }
 
 func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	t := &cfg.Training
+	if math.IsNaN(t.ReverseComplementProb) || math.IsInf(t.ReverseComplementProb, 0) || t.ReverseComplementProb < 0 || t.ReverseComplementProb > 1 {
+		return fmt.Errorf("config %q has invalid training.reverse_complement_prob=%g (must be finite and in [0,1])", source, t.ReverseComplementProb)
+	}
 	t.Objective = normalizeTrainingObjective(t.Objective)
 	switch t.Objective {
 	case ObjectiveCausal, ObjectiveMLM, ObjectiveHybrid, ObjectiveMNTP, ObjectiveBlockDiffusion, ObjectiveMultihead:
@@ -292,11 +295,23 @@ func validateTrainingAttentionSegmentMask(cfg *ArchConfig, source string) error 
 	if t.AttentionSegmentBoundaryTokenID < 0 || t.AttentionSegmentBoundaryTokenID >= cfg.VocabSize {
 		return fmt.Errorf("config %q has invalid training.attention_segment_boundary_token_id=%d (must be in [0,%d))", source, t.AttentionSegmentBoundaryTokenID, cfg.VocabSize)
 	}
+	return ValidateSegmentAttentionCompatibility(cfg, source)
+}
+
+// ValidateSegmentAttentionCompatibility applies the model/objective policy
+// shared by explicit boundary masks and manifest-backed packed sequences.
+func ValidateSegmentAttentionCompatibility(cfg *ArchConfig, source string) error {
+	if cfg == nil {
+		return fmt.Errorf("config %q is nil", source)
+	}
 	if cfg.Training.UsesBlockDiffusionObjective() {
 		return fmt.Errorf("config %q training.attention_segment_mask cannot be combined with block_diffusion objective paths in v1", source)
 	}
 	if cfg.Training.DistillationKLEffectiveActive() {
 		return fmt.Errorf("config %q training.attention_segment_mask cannot be combined with training.distillation in v1; teacher programs do not consume segment_ids", source)
+	}
+	if cfg.Training.MultiheadEnabled() {
+		return fmt.Errorf("config %q training.objective=multihead cannot be combined with packed sequence segment attention in v1", source)
 	}
 	hasPlain := false
 	for i, block := range cfg.Blocks {

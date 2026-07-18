@@ -96,6 +96,10 @@ func RunGenerate(configPath, safetensorsLoad string, maxTokens int, temperature 
 	return runGenerate(configPath, safetensorsLoad, maxTokens, temperature, topK, prompt)
 }
 
+func RunGenerateWithOptions(opts GenerateOptions) error {
+	return runGenerateWithOptions(opts)
+}
+
 func RunGenerateDiffusion(configPath, safetensorsLoad string, maxTokens int, prompt string) error {
 	return runGenerateDiffusion(configPath, safetensorsLoad, maxTokens, prompt)
 }

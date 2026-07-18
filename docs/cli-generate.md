@@ -22,6 +22,19 @@ Generate causal next-token samples:
 | `-max-tokens` | Maximum generated tokens. Default: `256`. |
 | `-temperature` | Sampling temperature. Default: `0.8`. |
 | `-top-k` | Top-k sampling cutoff. `0` disables the cutoff. |
+| `-sequence-vocab` | Optional `nucleotide_vocab.json`. Enables `sequence:ACGT...` prompts and decoded nucleotide output. |
+
+For a nucleotide checkpoint, pass the preparation artifact and a raw sequence
+prompt. Mixlab still prints token IDs and additionally prints the decoded
+sequence:
+
+```bash
+./mixlab -mode generate \
+  -config examples/nucleotide_dna_causal_tiny.json \
+  -safetensors-load weights.safetensors \
+  -sequence-vocab data/reference-dna/nucleotide_vocab.json \
+  -prompt sequence:ACGTN
+```
 
 `generate` is causal next-token generation. It does not consume
 `training.diffusion.steps_per_block`, `confidence_threshold`, or `commit_floor`;

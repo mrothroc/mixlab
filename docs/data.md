@@ -82,6 +82,22 @@ pip install numpy tokenizers
 
 Tokens are stored as uint16, so `vocab-size` must be 65,535 or less.
 
+## Nucleotide FASTA
+
+Base-level DNA and RNA data use the same discrete embedding/model path as text,
+but preparation preserves each FASTA contig as a record:
+
+```bash
+mixlab -mode prepare -input genome.fasta -input-format fasta \
+  -prepare-output-dir data/genome -nucleotide-alphabet dna \
+  -nucleotide-ambiguous-symbols N,R,Y
+```
+
+The emitted `nucleotide_vocab.json` records every symbol, ID, complement, and
+invalid-symbol decision. The record-oriented loader frames and packs contig
+chunks at runtime. Causal targets at EOS and all cross-contig attention are
+masked, while MLM position selection considers biological symbols only.
+
 Common flags:
 
 | Flag | Description |
@@ -124,10 +140,12 @@ present, Mixlab validates its schema and requires its `vocab_size` to match the
 model before constructing a trainer. Existing shard directories without a
 manifest remain supported for backward compatibility.
 
-Release 1 supports only `representation: "discrete_tokens"`, `token_dtype:
-"uint16"`, and `shard_format: "mixlab_token_shard_v1"`. The `modality` field
-describes the sequence domain without changing model behavior; future releases
-will use the same contract for nucleotide sequences and introduce separate
+Discrete datasets support `shard_format: "mixlab_token_shard_v1"` for flat
+token streams and `"mixlab_sequence_shard_v1"` for record-oriented sequences.
+Nucleotide split entries additionally report `sequences`, and the manifest
+points to `artifacts.vocabulary: "nucleotide_vocab.json"`. The `modality` field
+describes the sequence domain without changing the backbone; later releases
+will introduce separate
 versioned representations for continuous features.
 
 ## Data/config compatibility

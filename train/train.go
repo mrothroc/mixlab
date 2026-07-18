@@ -12,11 +12,6 @@ import (
 	"github.com/mrothroc/mixlab/data"
 )
 
-type trainBatch struct {
-	x, y []int
-	err  error
-}
-
 // runTrain is the core training loop. It:
 // 1. Builds the IR program from the config
 // 2. Initializes the GPU trainer
@@ -54,7 +49,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	batchSize := batchTokens / seqLen
 	seed := cfg.Training.Seed
 	name := cfg.Name
-	if err := logValidatedDatasetManifestForConfig(cfg, trainPattern, name); err != nil {
+	if err := configureDatasetForTraining(cfg, trainPattern, name); err != nil {
 		return TrainResult{}, err
 	}
 	for _, msg := range swaOverrideLogs {
@@ -365,8 +360,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		defer loadWG.Done()
 		defer close(batchCh)
 		for {
-			x, y, err := loader.NextBatch(batchTokens, seqLen)
-			batch := trainBatch{x: x, y: y, err: err}
+			loaded, err := loader.NextBatchDetailed(batchTokens, seqLen)
+			batch := trainBatchFromDataBatch(loaded, err)
 			select {
 			case <-done:
 				return
@@ -915,7 +910,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("prepare final PLL margin training loss batch: %w", err)
 			}
-		} else if cfg.Training.ExampleFramingEnabled() {
+		} else if cfg.Training.ExampleFramingEnabled() || cfg.Training.DatasetSequencePacking {
 			var err error
 			finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveCausal, seqLen)
 			if err != nil {
@@ -930,7 +925,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				evalLoss, evalErr = evaluateObjectiveTrainingLossGPU(trainer, finalEvalBatch, batchSize, seqLen)
 				return evalErr
 			})
-		case cfg.Training.ExampleFramingEnabled():
+		case cfg.Training.ExampleFramingEnabled() || cfg.Training.DatasetSequencePacking:
 			evalLoss, err = causalEval.evaluateCausalObjectiveTrainingLossGPU(currentProgramKey, finalEvalBatch)
 		default:
 			evalLoss, err = causalEval.evaluateCausalObjectiveGPU(currentProgramKey, finalEvalBatch)
@@ -958,6 +953,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			fmt.Printf("  [%s] full validation BPB failed: training.objective=multihead is not supported by continuous-stream full eval in v1\n", name)
 		case cfg.Training.ExampleFramingEnabled():
 			fmt.Printf("  [%s] full validation BPB failed: training.example_framing is not supported by continuous-stream full eval in v1\n", name)
+		case cfg.Training.DatasetSequencePacking:
+			fmt.Printf("  [%s] full validation BPB failed: record-oriented sequence datasets require packed evaluation; use validation loss or native scoring\n", name)
 		default:
 			if cfg.Training.TTTSteps > 0 {
 				if cfg.Training.TTTMode == "lora" {

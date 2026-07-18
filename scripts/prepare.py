@@ -28,12 +28,23 @@ import numpy as np
 
 SHARD_MAGIC = 20240520
 SHARD_VERSION = 1
+SEQUENCE_SHARD_MAGIC = 20260718
+SEQUENCE_SHARD_VERSION = 1
 CHAR_FEATURE_MAGIC = 20260526
 CHAR_FEATURE_VERSION = 1
 CHAR_FEATURE_ENCODING_BYTELEVEL = 1
 HEADER_INTS = 256
 TOKENS_PER_SHARD = 1_000_000
 WORD_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+NUCLEOTIDE_SPECIAL_TOKENS = ["<PAD>", "<BOS>", "<EOS>", "<MASK>"]
+IUPAC_AMBIGUOUS_ORDER = "NRYWSKMBDHV"
+DNA_COMPLEMENTS = {
+    "A": "T", "C": "G", "G": "C", "T": "A", "N": "N",
+    "R": "Y", "Y": "R", "W": "W", "S": "S", "K": "M", "M": "K",
+    "B": "V", "V": "B", "D": "H", "H": "D",
+}
+RNA_COMPLEMENTS = {**DNA_COMPLEMENTS, "A": "U", "U": "A"}
+RNA_COMPLEMENTS.pop("T", None)
 
 
 def read_input_texts(input_path: str, text_field: str) -> list[str]:
@@ -185,6 +196,200 @@ def write_dataset_manifest(tokenizer, output_dir: str, n_train: int, n_val: int,
         json.dump(manifest, f, indent=2, sort_keys=True)
         f.write("\n")
     print(f"Saved dataset manifest to {path}")
+
+
+def parse_nucleotide_ambiguous_symbols(value: str, alphabet: str) -> list[str]:
+    requested = {symbol for symbol in re.split(r"[\s,]+", value.upper()) if symbol}
+    if len(requested) == 1 and len(next(iter(requested), "")) > 1:
+        requested = set(next(iter(requested)))
+    invalid = sorted(requested - set(IUPAC_AMBIGUOUS_ORDER))
+    if invalid:
+        raise ValueError(f"unsupported ambiguous nucleotide symbols: {','.join(invalid)}")
+    complements = DNA_COMPLEMENTS if alphabet == "dna" else RNA_COMPLEMENTS
+    # Complement closure keeps reverse-complement behavior total and auditable.
+    requested |= {complements[symbol] for symbol in requested}
+    return [symbol for symbol in IUPAC_AMBIGUOUS_ORDER if symbol in requested]
+
+
+def build_nucleotide_vocabulary(alphabet: str, ambiguous_value: str, invalid_policy: str) -> dict:
+    alphabet = alphabet.lower().strip()
+    if alphabet not in {"dna", "rna"}:
+        raise ValueError("--nucleotide-alphabet must be dna or rna")
+    invalid_policy = invalid_policy.lower().strip()
+    if invalid_policy not in {"error", "map_to_n", "skip"}:
+        raise ValueError("--nucleotide-invalid-symbol-policy must be error, map_to_n, or skip")
+    ambiguous = parse_nucleotide_ambiguous_symbols(ambiguous_value, alphabet)
+    if invalid_policy == "map_to_n" and "N" not in ambiguous:
+        raise ValueError("--nucleotide-invalid-symbol-policy=map_to_n requires N in --nucleotide-ambiguous-symbols")
+    symbols = ["A", "C", "G", "T" if alphabet == "dna" else "U"] + ambiguous
+    tokens = {token: idx for idx, token in enumerate(NUCLEOTIDE_SPECIAL_TOKENS + symbols)}
+    complements_all = DNA_COMPLEMENTS if alphabet == "dna" else RNA_COMPLEMENTS
+    complements = {symbol: complements_all[symbol] for symbol in symbols}
+    return {
+        "format": "mixlab.nucleotide_vocabulary",
+        "version": 1,
+        "alphabet": alphabet,
+        "invalid_symbol_policy": invalid_policy,
+        "ambiguous_symbols": ambiguous,
+        "tokens": tokens,
+        "complements": complements,
+    }
+
+
+def write_nucleotide_vocabulary(vocabulary: dict, output_dir: str) -> str:
+    path = os.path.join(output_dir, "nucleotide_vocab.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(vocabulary, f, indent=2, sort_keys=True)
+        f.write("\n")
+    print(f"Saved nucleotide vocabulary to {path} (vocab_size={len(vocabulary['tokens'])})")
+    return path
+
+
+def read_fasta_records(input_path: str) -> list[tuple[str, str]]:
+    path = Path(input_path)
+    files = sorted(path.rglob("*.fa")) + sorted(path.rglob("*.fasta")) + sorted(path.rglob("*.fna")) if path.is_dir() else [path]
+    if not files:
+        raise ValueError(f"No .fa, .fasta, or .fna files found in {input_path}")
+    records: list[tuple[str, str]] = []
+    for fasta_path in files:
+        name = ""
+        chunks: list[str] = []
+        with open(fasta_path, "r", encoding="utf-8", errors="strict") as f:
+            for line_no, raw in enumerate(f, 1):
+                line = raw.strip()
+                if not line or line.startswith(";"):
+                    continue
+                if line.startswith(">"):
+                    if name:
+                        records.append((name, "".join(chunks)))
+                    name = line[1:].strip().split(maxsplit=1)[0]
+                    if not name:
+                        raise ValueError(f"{fasta_path}:{line_no}: FASTA header has no identifier")
+                    chunks = []
+                else:
+                    if not name:
+                        raise ValueError(f"{fasta_path}:{line_no}: sequence data appears before a FASTA header")
+                    chunks.append("".join(line.split()))
+        if name:
+            records.append((name, "".join(chunks)))
+    if not records:
+        raise ValueError(f"No FASTA records found in {input_path}")
+    return records
+
+
+def encode_fasta_records(records: list[tuple[str, str]], vocabulary: dict) -> list[tuple[str, np.ndarray]]:
+    tokens = vocabulary["tokens"]
+    policy = vocabulary["invalid_symbol_policy"]
+    encoded: list[tuple[str, np.ndarray]] = []
+    for name, raw_sequence in records:
+        ids = []
+        for pos, symbol in enumerate(raw_sequence.upper()):
+            token_id = tokens.get(symbol)
+            if token_id is not None and not symbol.startswith("<"):
+                ids.append(token_id)
+            elif policy == "map_to_n":
+                ids.append(tokens["N"])
+            elif policy == "skip":
+                continue
+            else:
+                raise ValueError(f"FASTA record {name!r} has invalid symbol {symbol!r} at offset {pos}")
+        if not ids:
+            raise ValueError(f"FASTA record {name!r} contains no encodable nucleotide symbols")
+        encoded.append((name, np.asarray(ids, dtype=np.uint16)))
+    return encoded
+
+
+def write_sequence_shard(path: str, records: list[np.ndarray]):
+    n_tokens = sum(len(record) for record in records)
+    header = np.zeros(HEADER_INTS, dtype=np.int32)
+    header[0] = SEQUENCE_SHARD_MAGIC
+    header[1] = SEQUENCE_SHARD_VERSION
+    header[2] = n_tokens
+    header[3] = len(records)
+    offsets = np.zeros(len(records) + 1, dtype=np.uint64)
+    for i, record in enumerate(records):
+        offsets[i + 1] = offsets[i] + len(record)
+    with open(path, "wb") as f:
+        f.write(header.tobytes())
+        f.write(offsets.tobytes())
+        for record in records:
+            f.write(record.tobytes())
+
+
+def write_sequence_shards(records: list[tuple[str, np.ndarray]], output_dir: str, prefix: str, tokens_per_shard: int) -> int:
+    if not records:
+        return 0
+    shards: list[list[np.ndarray]] = []
+    current: list[np.ndarray] = []
+    current_tokens = 0
+    for _, record in records:
+        if current and current_tokens + len(record) > tokens_per_shard:
+            shards.append(current)
+            current = []
+            current_tokens = 0
+        current.append(record)
+        current_tokens += len(record)
+    if current:
+        shards.append(current)
+    for i, shard_records in enumerate(shards):
+        shard_path = os.path.join(output_dir, f"{prefix}_{i:05d}.bin")
+        write_sequence_shard(shard_path, shard_records)
+        print(f"  {shard_path}: {sum(len(r) for r in shard_records):,} tokens, {len(shard_records):,} sequences")
+    return len(shards)
+
+
+def write_nucleotide_manifest(vocabulary: dict, output_dir: str, train_records, val_records, n_train_shards: int, n_val_shards: int):
+    tokens = vocabulary["tokens"]
+    manifest = {
+        "format": "mixlab.dataset",
+        "version": 1,
+        "representation": "discrete_tokens",
+        "modality": "nucleotide",
+        "vocab_size": len(tokens),
+        "token_dtype": "uint16",
+        "shard_format": "mixlab_sequence_shard_v1",
+        "special_token_ids": {
+            "pad": tokens["<PAD>"], "bos": tokens["<BOS>"],
+            "eos": tokens["<EOS>"], "mask": tokens["<MASK>"],
+        },
+        "artifacts": {"vocabulary": "nucleotide_vocab.json"},
+        "splits": {
+            "train": {
+                "pattern": "train_*.bin", "tokens": sum(len(r) for _, r in train_records),
+                "shards": n_train_shards, "sequences": len(train_records),
+            },
+            "val": {
+                "pattern": "val_*.bin", "tokens": sum(len(r) for _, r in val_records),
+                "shards": n_val_shards, "sequences": len(val_records),
+            },
+        },
+    }
+    path = os.path.join(output_dir, "mixlab.dataset.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
+    print(f"Saved dataset manifest to {path}")
+
+
+def prepare_fasta(args):
+    if args.tokenizer_path or args.wwm_compatible_tokenizer or args.char_vocab_size > 0 or args.minimal_pair_out:
+        raise ValueError("FASTA preparation does not accept text tokenizer, whole-word, char-feature, or minimal-pair flags")
+    os.makedirs(args.output, exist_ok=True)
+    vocabulary = build_nucleotide_vocabulary(args.nucleotide_alphabet, args.nucleotide_ambiguous_symbols, args.nucleotide_invalid_symbol_policy)
+    write_nucleotide_vocabulary(vocabulary, args.output)
+    records = encode_fasta_records(read_fasta_records(args.input), vocabulary)
+    if args.val_split < 0 or args.val_split >= 1:
+        raise ValueError("--val-split must be in [0,1) for FASTA preparation")
+    if args.val_split > 0 and len(records) < 2:
+        raise ValueError("FASTA preparation with --val-split > 0 requires at least two contigs")
+    n_val = 0 if args.val_split == 0 else min(len(records) - 1, max(1, int(len(records) * args.val_split)))
+    split = len(records) - n_val
+    train_records, val_records = records[:split], records[split:]
+    print(f"Read {len(records):,} FASTA contigs; split {len(train_records):,} train / {len(val_records):,} val")
+    n_train_shards = write_sequence_shards(train_records, args.output, "train", args.tokens_per_shard)
+    n_val_shards = write_sequence_shards(val_records, args.output, "val", args.tokens_per_shard)
+    write_nucleotide_manifest(vocabulary, args.output, train_records, val_records, n_train_shards, n_val_shards)
+    print(f"Done! Train pattern: {args.output}/train_*.bin")
 
 
 def tokenize_texts(tokenizer, texts: list[str]) -> np.ndarray:
@@ -670,6 +875,7 @@ def main():
     parser = argparse.ArgumentParser(description="Prepare binary shards for mixlab training")
     parser.add_argument("--input", required=True, help="Input text file, JSONL, or directory")
     parser.add_argument("--output", required=True, help="Output directory for shards")
+    parser.add_argument("--input-format", choices=["text", "fasta"], default="text", help="Input representation (default: text)")
     parser.add_argument("--vocab-size", type=int, default=1024, help="BPE vocabulary size (default: 1024)")
     parser.add_argument("--val-split", type=float, default=0.1, help="Fraction of tokens for validation (default: 0.1)")
     parser.add_argument("--tokenizer-path", default="", help="Path to pre-trained tokenizer.json (skip training)")
@@ -700,9 +906,16 @@ def main():
     parser.add_argument("--minimal-pair-report-out", default="", help="Write minimal-pair generation report JSON")
     parser.add_argument("--minimal-pair-sample-out", default="", help="Write auditable minimal-pair sample JSONL")
     parser.add_argument("--minimal-pair-sample-count", type=int, default=20, help="Maximum audit samples to write")
+    parser.add_argument("--nucleotide-alphabet", choices=["dna", "rna"], default="dna", help="FASTA nucleotide alphabet")
+    parser.add_argument("--nucleotide-ambiguous-symbols", default="N", help="Comma-separated IUPAC ambiguity symbols to include")
+    parser.add_argument("--nucleotide-invalid-symbol-policy", choices=["error", "map_to_n", "skip"], default="error", help="FASTA invalid-symbol policy")
     args = parser.parse_args()
 
     tokens_per_shard = args.tokens_per_shard
+
+    if args.input_format == "fasta":
+        prepare_fasta(args)
+        return
 
     # Read input
     print(f"Reading input from {args.input}...")
