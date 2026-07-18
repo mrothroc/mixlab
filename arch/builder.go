@@ -647,42 +647,26 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		prog.DeclareInput("first_byte_valid", TensorInt32, []int{V})
 	}
 
-	// Embedding lookup
-	wi := 0
-	prog.Embed(weightName(wi), "tokens", "x_embed")
-	wi = fixedWeightCountWithHeadAndNorm(reserveHead, norm)
-	embedState := "x_embed"
-	if positionalEmbedding == PositionalEmbeddingLearnedAbsolute {
-		embedState, wi, err = emitLearnedPositionEmbeddingIR(prog, embedState, B, T, D, wi, maxPositions)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if smearOpts.Enabled {
-		embedState, wi, err = emitSmearEmbeddingIR(prog, embedState, T, D, wi, smearOpts)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// Flatten to [B*T, D], leaving room to inject optional model-level feature embeddings.
-	xState := "x"
-	if charVocabSize > 0 || bigramVocabSize > 0 || trigramVocabSize > 0 {
-		xState = "x_tok"
-	}
-	prog.Reshape(embedState, []int{B * T, D}, xState)
-	featureBase := xState
-	wi = emitCharIR(prog, featureBase, B, T, D, wi, charVocabSize, charDim, charMaxPerToken)
-	if charVocabSize > 0 {
-		featureBase = "x"
-	}
-	wi = emitBigramIR(prog, featureBase, B, T, D, wi, bigramVocabSize, bigramDim)
-	if bigramVocabSize > 0 {
-		featureBase = "x"
-	}
-	wi = emitTrigramIR(prog, featureBase, B, T, D, wi, trigramVocabSize, trigramDim)
-	if embeddingDropout > 0 {
-		prog.Dropout("x", embeddingDropout, "x")
+	wi, err := emitDiscreteTokenInputIR(prog, discreteTokenInputOptions{
+		BatchSize:           B,
+		SeqLen:              T,
+		ModelDim:            D,
+		TokenWeightIndex:    0,
+		NextWeightIndex:     fixedWeightCountWithHeadAndNorm(reserveHead, norm),
+		PositionalEmbedding: positionalEmbedding,
+		MaxPositions:        maxPositions,
+		Smear:               smearOpts,
+		CharVocabSize:       charVocabSize,
+		CharDim:             charDim,
+		CharMaxPerToken:     charMaxPerToken,
+		BigramVocabSize:     bigramVocabSize,
+		BigramDim:           bigramDim,
+		TrigramVocabSize:    trigramVocabSize,
+		TrigramDim:          trigramDim,
+		EmbeddingDropout:    embeddingDropout,
+	})
+	if err != nil {
+		return nil, err
 	}
 	sharedRel, err := newSharedRelativeAttentionPlan(blocks)
 	if err != nil {

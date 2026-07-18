@@ -45,6 +45,12 @@ When `-tokenizer-path` is used, prepare writes an exact copy of the supplied
 convention. Native SentencePiece `.model` files must first be converted to a
 Hugging Face fast `tokenizer.json`.
 
+Every successful text preparation also writes `mixlab.dataset.json`. The
+manifest declares the discrete-token representation, text modality, actual
+tokenizer vocabulary size, special tokens, tokenizer artifact, and exact split
+token/shard counts. It is additive: older shard directories without a manifest
+remain readable. See [data.md](data.md#dataset-manifest) for the schema.
+
 When `-minimal-pair-out` is set, `prepare` writes JSONL records shaped as
 `{"id":"...","clean":[...],"corrupt":[...],"family":"..."}`. The generator
 uses only the input corpus text and tokenizer, applies broad stochastic

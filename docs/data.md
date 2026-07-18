@@ -95,10 +95,47 @@ Common flags:
 | `-char-vocab-size` | Generate tokenizer-level byte/character feature lookup when enabled. |
 | `-char-max-per-token` | Maximum byte/character slots per token for char features. |
 
+## Dataset manifest
+
+`prepare` writes `mixlab.dataset.json` beside the generated shards. This is a
+versioned description of the sequence representation; it does not replace or
+modify the binary shard format. A prepared text dataset currently looks like:
+
+```json
+{
+  "format": "mixlab.dataset",
+  "version": 1,
+  "representation": "discrete_tokens",
+  "modality": "text",
+  "vocab_size": 16384,
+  "token_dtype": "uint16",
+  "shard_format": "mixlab_token_shard_v1",
+  "special_token_ids": {"[PAD]": 0, "[MASK]": 4},
+  "artifacts": {"tokenizer": "tokenizer.json"},
+  "splits": {
+    "train": {"pattern": "train_*.bin", "tokens": 1000000, "shards": 1},
+    "val": {"pattern": "val_*.bin", "tokens": 100000, "shards": 1}
+  }
+}
+```
+
+Paths and patterns are relative to the manifest directory. When a manifest is
+present, Mixlab validates its schema and requires its `vocab_size` to match the
+model before constructing a trainer. Existing shard directories without a
+manifest remain supported for backward compatibility.
+
+Release 1 supports only `representation: "discrete_tokens"`, `token_dtype:
+"uint16"`, and `shard_format: "mixlab_token_shard_v1"`. The `modality` field
+describes the sequence domain without changing model behavior; future releases
+will use the same contract for nucleotide sequences and introduce separate
+versioned representations for continuous features.
+
 ## Data/config compatibility
 
 The `vocab_size` in your JSON config must match the tokenizer used to create
-the `.bin` shards. This is the most common source of bad training behavior.
+the `.bin` shards. Prepared datasets record the tokenizer's actual emitted
+vocabulary size in `mixlab.dataset.json`, which can be lower than a requested
+maximum when a small corpus does not contain enough merge candidates.
 
 ```jsonc
 // Config says vocab_size: 1024 -> train on SP-1024 shards

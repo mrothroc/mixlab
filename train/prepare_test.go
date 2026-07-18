@@ -134,6 +134,19 @@ func TestPrepareScript(t *testing.T) {
 	if totalValTokens == 0 {
 		t.Fatal("no validation tokens produced")
 	}
+	manifest, err := data.LoadDatasetManifest(filepath.Join(outputDir, data.DatasetManifestFilename))
+	if err != nil {
+		t.Fatalf("load prepared dataset manifest: %v", err)
+	}
+	if manifest.Modality != "text" || manifest.Representation != data.DatasetRepresentationDiscreteTokens || manifest.TokenDType != data.DatasetTokenDTypeUint16 {
+		t.Fatalf("prepared manifest representation fields=%+v", manifest)
+	}
+	if trainSplit := manifest.Splits["train"]; trainSplit.Tokens != int64(totalTrainTokens) || trainSplit.Shards != len(trainFiles) {
+		t.Fatalf("manifest train split=%+v, want tokens=%d shards=%d", trainSplit, totalTrainTokens, len(trainFiles))
+	}
+	if valSplit := manifest.Splits["val"]; valSplit.Tokens != int64(totalValTokens) || valSplit.Shards != len(valFiles) {
+		t.Fatalf("manifest val split=%+v, want tokens=%d shards=%d", valSplit, totalValTokens, len(valFiles))
+	}
 
 	// Verify tokenizer.json was saved.
 	tokenizerPath := filepath.Join(outputDir, "tokenizer.json")
@@ -164,6 +177,9 @@ func TestPrepareScript(t *testing.T) {
 	}
 	if scheme != "bytelevel" || len(wordStart) != actualVocab || eligible[4] != 0 {
 		t.Fatalf("prepared WWM metadata scheme=%q starts=%d mask_eligible=%d", scheme, len(wordStart), eligible[4])
+	}
+	if manifest.VocabSize != actualVocab || manifest.Artifacts.Tokenizer != "tokenizer.json" || manifest.SpecialTokenIDs["[MASK]"] != 4 {
+		t.Fatalf("prepared manifest tokenizer fields=%+v actual_vocab=%d", manifest, actualVocab)
 	}
 	externalOutputDir := filepath.Join(tmpDir, "external-tokenizer-shards")
 	externalPrepCmd := exec.Command("python3", scriptPath,

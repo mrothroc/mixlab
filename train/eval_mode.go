@@ -27,6 +27,9 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error
 	if err != nil {
 		return err
 	}
+	if _, _, err := validateDatasetManifestForConfig(cfg, trainPattern); err != nil {
+		return err
+	}
 	if cfg.Training.ExampleFramingEnabled() {
 		return fmt.Errorf("training.example_framing is not supported by standalone eval mode in v1")
 	}

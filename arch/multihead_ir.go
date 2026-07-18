@@ -58,34 +58,8 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		prog.DeclareInput("diffusion_timestep", TensorFloat32, []int{B})
 	}
 
-	wi := 0
-	prog.Embed(weightName(wi), "tokens", "x_embed")
-	wi++
-	embedState := "x_embed"
 	positionalEmbedding := cfg.EffectivePositionalEmbedding()
 	maxPositions := cfg.EffectiveMaxPositions()
-	var emitErr error
-	if positionalEmbedding == PositionalEmbeddingLearnedAbsolute {
-		embedState, wi, emitErr = emitLearnedPositionEmbeddingIR(prog, embedState, B, T, D, wi, maxPositions)
-		if emitErr != nil {
-			return nil, emitErr
-		}
-	}
-	xState := "x"
-	if cfg.CharVocabSize > 0 || cfg.BigramVocabSize > 0 || cfg.TrigramVocabSize > 0 {
-		xState = "x_tok"
-	}
-	prog.Reshape(embedState, []int{B * T, D}, xState)
-	featureBase := xState
-	wi = emitCharIR(prog, featureBase, B, T, D, wi, cfg.CharVocabSize, cfg.EffectiveCharDim(), cfg.EffectiveCharMaxPerToken())
-	if cfg.CharVocabSize > 0 {
-		featureBase = "x"
-	}
-	wi = emitBigramIR(prog, featureBase, B, T, D, wi, cfg.BigramVocabSize, cfg.EffectiveBigramDim())
-	if cfg.BigramVocabSize > 0 {
-		featureBase = "x"
-	}
-	wi = emitTrigramIR(prog, featureBase, B, T, D, wi, cfg.TrigramVocabSize, cfg.EffectiveTrigramDim())
 	embeddingDropout := cfg.EffectiveEmbeddingDropout()
 	hiddenDropout := cfg.EffectiveHiddenDropout()
 	attnDropout := cfg.EffectiveAttnDropout()
@@ -94,8 +68,26 @@ func buildMultiheadTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingPr
 		hiddenDropout = 0
 		attnDropout = 0
 	}
-	if embeddingDropout > 0 {
-		prog.Dropout("x", embeddingDropout, "x")
+	wi, err := emitDiscreteTokenInputIR(prog, discreteTokenInputOptions{
+		BatchSize:           B,
+		SeqLen:              T,
+		ModelDim:            D,
+		TokenWeightIndex:    0,
+		NextWeightIndex:     1,
+		PositionalEmbedding: positionalEmbedding,
+		MaxPositions:        maxPositions,
+		Smear:               disabledSmearEmbeddingOptions(),
+		CharVocabSize:       cfg.CharVocabSize,
+		CharDim:             cfg.EffectiveCharDim(),
+		CharMaxPerToken:     cfg.EffectiveCharMaxPerToken(),
+		BigramVocabSize:     cfg.BigramVocabSize,
+		BigramDim:           cfg.EffectiveBigramDim(),
+		TrigramVocabSize:    cfg.TrigramVocabSize,
+		TrigramDim:          cfg.EffectiveTrigramDim(),
+		EmbeddingDropout:    embeddingDropout,
+	})
+	if err != nil {
+		return nil, err
 	}
 	sharedRel, err := newSharedRelativeAttentionPlan(cfg.Blocks)
 	if err != nil {

@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/mrothroc/mixlab/data"
 )
 
 // PrepareOptions holds flags for the prepare command.
@@ -114,6 +116,14 @@ func runPrepare(opts PrepareOptions) error {
 	valPattern := filepath.Join(opts.Output, "val_*.bin")
 	valMatches, _ := filepath.Glob(valPattern)
 	fmt.Printf("Validation: found %d validation shard(s)\n", len(valMatches))
+
+	manifestPath := filepath.Join(opts.Output, data.DatasetManifestFilename)
+	manifest, err := data.LoadDatasetManifest(manifestPath)
+	if err != nil {
+		return fmt.Errorf("validate prepared dataset manifest: %w", err)
+	}
+	fmt.Printf("Validation: dataset modality=%s representation=%s vocab_size=%d\n",
+		manifest.Modality, manifest.Representation, manifest.VocabSize)
 
 	return nil
 }

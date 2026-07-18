@@ -28,6 +28,20 @@ To try a different block family, change the `"type"` field in `blocks`. See
 [config-reference.md](config-reference.md) for every field and
 [../examples/README.md](../examples/README.md) for runnable configs.
 
+## Model input boundary
+
+Current models use the discrete-token input adapter: integer token IDs are
+looked up in the model embedding table, optional learned positions and sparse
+feature channels are applied, and the result is flattened to `[B*T, model_dim]`
+before block 0. Single-head and multihead builders share this adapter emitter,
+so their input weight ordering and feature composition cannot drift.
+
+There is intentionally no public `input_adapter` config field yet because this
+release has only one useful runtime implementation. The adapter becomes a
+public choice when continuous frame projection is added. Dataset representation
+and modality are recorded independently in the optional
+[`mixlab.dataset.json`](data.md#dataset-manifest) artifact.
+
 ## Block families
 
 Built-in blocks include:

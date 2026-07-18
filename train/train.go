@@ -54,6 +54,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	batchSize := batchTokens / seqLen
 	seed := cfg.Training.Seed
 	name := cfg.Name
+	if err := logValidatedDatasetManifestForConfig(cfg, trainPattern, name); err != nil {
+		return TrainResult{}, err
+	}
 	for _, msg := range swaOverrideLogs {
 		fmt.Printf("  [%s] %s\n", name, msg)
 	}

@@ -32,6 +32,9 @@ func runHiddenstats(configPath, trainPattern, safetensorsLoad, outputPath string
 	if err != nil {
 		return err
 	}
+	if _, _, err := validateDatasetManifestForConfig(cfg, trainPattern); err != nil {
+		return err
+	}
 	if _, err := configureCharFeaturesForTraining(cfg, trainPattern); err != nil {
 		return err
 	}

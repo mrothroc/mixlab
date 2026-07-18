@@ -153,6 +153,40 @@ def detect_wwm_boundary_scheme(tokenizer) -> str:
     raise ValueError("tokenizer has no supported whole-word boundary convention")
 
 
+def write_dataset_manifest(tokenizer, output_dir: str, n_train: int, n_val: int, n_train_shards: int, n_val_shards: int):
+    """Write the versioned discrete-sequence contract consumed by Mixlab."""
+    tokenizer_doc = json.loads(tokenizer.to_str())
+    special_token_ids = {}
+    for entry in tokenizer_doc.get("added_tokens") or []:
+        if not entry.get("special", False):
+            continue
+        token = str(entry.get("content", ""))
+        token_id = entry.get("id")
+        if token and isinstance(token_id, int):
+            special_token_ids[token] = token_id
+
+    manifest = {
+        "format": "mixlab.dataset",
+        "version": 1,
+        "representation": "discrete_tokens",
+        "modality": "text",
+        "vocab_size": tokenizer.get_vocab_size(with_added_tokens=True),
+        "token_dtype": "uint16",
+        "shard_format": "mixlab_token_shard_v1",
+        "special_token_ids": special_token_ids,
+        "artifacts": {"tokenizer": "tokenizer.json"},
+        "splits": {
+            "train": {"pattern": "train_*.bin", "tokens": n_train, "shards": n_train_shards},
+            "val": {"pattern": "val_*.bin", "tokens": n_val, "shards": n_val_shards},
+        },
+    }
+    path = os.path.join(output_dir, "mixlab.dataset.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
+    print(f"Saved dataset manifest to {path}")
+
+
 def tokenize_texts(tokenizer, texts: list[str]) -> np.ndarray:
     """Tokenize all texts and concatenate into a single uint16 array."""
     all_ids = []
@@ -733,6 +767,8 @@ def main():
 
     print("\nWriting validation shards...")
     n_val_shards = write_shards(val_tokens, args.output, "val", shuffle=False, tokens_per_shard=tokens_per_shard)
+
+    write_dataset_manifest(tokenizer, args.output, n_train, n_val, n_train_shards, n_val_shards)
 
     print(f"\nDone! {n_train_shards} train shard(s), {n_val_shards} val shard(s) in {args.output}")
     print(f"Train pattern: {args.output}/train_*.bin")

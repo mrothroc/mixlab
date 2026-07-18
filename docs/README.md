@@ -27,6 +27,8 @@ This directory holds focused guides for using and extending mixlab.
 | [block-diffusion-design.md](block-diffusion-design.md) | Technical design for the block-diffusion walking skeleton. |
 | [block-diffusion-release-verification.md](block-diffusion-release-verification.md) | Release verification notes for the block-diffusion walking skeleton. |
 | [reference-parity-audit-2026-06.md](reference-parity-audit-2026-06.md) | Reference parity audit notes. |
+| [sequence-modality-release-train.md](sequence-modality-release-train.md) | Review-gated roadmap from discrete sequences through encoder-free media inputs and codec-token generation. |
+| [sequence-modality-r1-verification.md](sequence-modality-r1-verification.md) | Release 1 compatibility evidence and review gate. |
 | [releasing.md](releasing.md) | Release process notes. |
 
 Start with the root [README](../README.md) for installation and a quickstart,

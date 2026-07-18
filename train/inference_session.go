@@ -55,6 +55,10 @@ func newInferenceSession(configPath, safetensorsLoad, trainPattern string) (*Inf
 		return nil, err
 	}
 	if trainPattern != "" {
+		if _, _, err = validateDatasetManifestForConfig(cfg, trainPattern); err != nil {
+			runtime.UnlockOSThread()
+			return nil, err
+		}
 		_, err = configureCharFeaturesForTraining(cfg, trainPattern)
 	} else {
 		err = configureCharFeaturesForConfigPath(cfg, configPath, safetensorsLoad)
