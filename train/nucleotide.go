@@ -6,7 +6,7 @@ import (
 	"github.com/mrothroc/mixlab/arch"
 )
 
-const reverseComplementRNGSalt uint64 = 0x6a09e667f3bcc909
+const reverseComplementRNGSalt uint64 = 0xbb67ae8584caa73b
 
 func maybeApplyReverseComplement(cfg *ArchConfig, batch trainBatch, step, need int) (trainBatch, error) {
 	if cfg == nil || !cfg.Training.DatasetSequencePacking || cfg.Training.ReverseComplementProb == 0 || batch.disableAugmentation {

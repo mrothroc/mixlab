@@ -12,6 +12,8 @@ type wordStructuralSpan struct {
 	start int
 }
 
+const wordStructuralRNGSalt uint64 = 0x6a09e667f3bcc909
+
 func maybeApplyWordStructuralObjective(cfg *ArchConfig, batch *objectiveBatch, step int, objective string, need, seqLen int) error {
 	if cfg == nil || batch == nil || !cfg.Training.WordStructuralActiveForConcreteObjective(objective) {
 		return nil
@@ -27,7 +29,7 @@ func maybeApplyWordStructuralObjective(cfg *ArchConfig, batch *objectiveBatch, s
 	if cfg.Training.AttentionSegmentMaskEnabled() {
 		segmentIDs = deriveSegmentIDs(source[:need], need, seqLen, cfg.Training.AttentionSegmentBoundaryTokenID)
 	}
-	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0x6a09e667f3bcc909)
+	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, wordStructuralRNGSalt)
 	mode := canonicalObjective(objective)
 	if mode == arch.ObjectiveHybridExample {
 		mode = cfg.Training.EffectiveHybridSecondaryObjective()
@@ -57,7 +59,7 @@ func maybeApplyWordStructuralMultihead(cfg *ArchConfig, batch *objectiveBatch, s
 	source := wordStructuralSource(batch, need)
 	copy(batch.wordStructTargets[:need], source[:need])
 	clear(batch.wordStructLossMask[:need])
-	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, 0x6a09e667f3bcc909)
+	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, wordStructuralRNGSalt)
 	for headIdx, head := range cfg.Training.Heads {
 		if !cfg.Training.WordStructuralHeadSelected(head.Name) {
 			continue

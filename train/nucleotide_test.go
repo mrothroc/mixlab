@@ -32,6 +32,9 @@ func nucleotideTrainBatch() trainBatch {
 }
 
 func TestReverseComplementAugmentationGoldenAndDeterministic(t *testing.T) {
+	if reverseComplementRNGSalt == wordStructuralRNGSalt {
+		t.Fatal("reverse-complement and word-structural objectives must use independent RNG domains")
+	}
 	cfg := nucleotideObjectiveConfig(arch.ObjectiveCausal, 1)
 	first, err := prepareObjectiveBatch(cfg, nucleotideTrainBatch(), 9, arch.ObjectiveCausal)
 	if err != nil {
