@@ -38,6 +38,10 @@ func main() {
 	maxTokens := flag.Int("max-tokens", 256, "maximum number of tokens to generate (generate mode)")
 	temperature := flag.Float64("temperature", 0.8, "sampling temperature (generate mode)")
 	topK := flag.Int("top-k", 40, "top-k sampling cutoff (generate mode)")
+	numSamples := flag.Int("num-samples", 1, "number of causal sequences to generate in one process")
+	genSeed := flag.Int64("gen-seed", 0, "generation RNG seed; 0 uses training.seed")
+	eosTokenID := flag.Int("eos-token-id", -1, "causal generation EOS token id; -1 disables when no sequence vocabulary is supplied")
+	generateOut := flag.String("generate-out", "", "write causal generation records, one sample per line")
 	diffusionStepsPerBlock := flag.Int("diffusion-steps-per-block", 0, "override training.diffusion.steps_per_block for generate-diffusion (0 uses config)")
 	diffusionConfidenceThreshold := flag.Float64("diffusion-confidence-threshold", 0, "override training.diffusion.confidence_threshold for generate-diffusion when explicitly set")
 	diffusionCommitFloor := flag.Int("diffusion-commit-floor", 0, "override training.diffusion.commit_floor for generate-diffusion (0 uses config)")
@@ -291,9 +295,11 @@ func main() {
 		must(err)
 		must(train.RunHiddenstats(*configPath, *trainPattern, *safetensorsLoad, hiddenstatsOutput))
 	case "generate":
+		eosID := *eosTokenID
 		must(train.RunGenerateWithOptions(train.GenerateOptions{
 			ConfigPath: *configPath, SafetensorsLoad: *safetensorsLoad, MaxTokens: *maxTokens,
 			Temperature: float32(*temperature), TopK: *topK, Prompt: *prompt, SequenceVocabulary: *sequenceVocab,
+			NumSamples: *numSamples, GenerationSeed: *genSeed, EOSTokenID: &eosID, OutputPath: *generateOut,
 		}))
 	case "generate-diffusion":
 		var confidenceOverride *float64
@@ -413,7 +419,8 @@ var modeFlagGroups = map[string][]flagGroup{
 	},
 	"generate": {
 		{"Required", []string{"config", "safetensors-load", "prompt"}},
-		{"Sampling", []string{"max-tokens", "temperature", "top-k"}},
+		{"Sampling", []string{"max-tokens", "temperature", "top-k", "num-samples", "gen-seed", "eos-token-id"}},
+		{"Output", []string{"generate-out"}},
 		{"Sequence strings", []string{"sequence-vocab"}},
 	},
 	"generate-diffusion": {

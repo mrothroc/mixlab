@@ -3,8 +3,10 @@
 package train
 
 import (
+	"bytes"
 	"encoding/json"
 	"math"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,6 +239,33 @@ func TestGenerateUsesTTTMLPStateBeyondConfiguredSeqLen(t *testing.T) {
 	configPath, weightsPath, _ := newTTTMLPInferenceFixture(t)
 	if err := runGenerate(configPath, weightsPath, 1, 1, 0, "token_ids:1,2,3,4,5"); err != nil {
 		t.Fatalf("stateful generate beyond seq_len: %v", err)
+	}
+}
+
+func TestTTTMLPBulkGenerationClosesEachSampleState(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	configPath, weightsPath, cfg := newTTTMLPInferenceFixture(t)
+	session, err := NewTTTMLPInferenceSession(configPath, weightsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	plan := generationPlan{numSamples: 3, baseSeed: 23, eosTokenID: -1}
+	opts := GenerateOptions{MaxTokens: 2, Temperature: 1, Prompt: "token_ids:1,2"}
+	var output bytes.Buffer
+	err = runGenerationSamples(plan, nil, &output, func(_ int, rng *rand.Rand) (generationSample, error) {
+		return generateTTTMLPStatefulSample(session, cfg, opts, plan.eosTokenID, rng, nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := session.Stats().LiveStates; got != 0 {
+		t.Fatalf("live TTT states after bulk generation=%d want=0", got)
+	}
+	if got := len(strings.Split(strings.TrimSpace(output.String()), "\n")); got != plan.numSamples {
+		t.Fatalf("output lines=%d want=%d", got, plan.numSamples)
 	}
 }
 

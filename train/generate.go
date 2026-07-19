@@ -2,6 +2,7 @@
 package train
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -22,12 +23,16 @@ type GenerateOptions struct {
 	TopK               int
 	Prompt             string
 	SequenceVocabulary string
+	NumSamples         int
+	GenerationSeed     int64
+	EOSTokenID         *int
+	OutputPath         string
 }
 
 func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature float32, topK int, prompt string) error {
 	return runGenerateWithOptions(GenerateOptions{
 		ConfigPath: configPath, SafetensorsLoad: safetensorsLoad, MaxTokens: maxTokens,
-		Temperature: temperature, TopK: topK, Prompt: prompt,
+		Temperature: temperature, TopK: topK, Prompt: prompt, NumSamples: 1,
 	})
 }
 
@@ -41,16 +46,6 @@ func runGenerateWithOptions(opts GenerateOptions) error {
 	if opts.SafetensorsLoad == "" {
 		return fmt.Errorf("-safetensors-load is required for generate mode")
 	}
-	if opts.MaxTokens < 0 {
-		return fmt.Errorf("-max-tokens must be >= 0")
-	}
-	if opts.Temperature <= 0 {
-		return fmt.Errorf("-temperature must be > 0")
-	}
-	if opts.TopK < 0 {
-		return fmt.Errorf("-top-k must be >= 0")
-	}
-
 	cfg, err := LoadArchConfig(opts.ConfigPath)
 	if err != nil {
 		return err
@@ -59,11 +54,26 @@ func runGenerateWithOptions(opts GenerateOptions) error {
 	if err != nil {
 		return err
 	}
-	if countTTTMLPBlocks(cfg.Blocks) > 0 {
-		if _, _, statefulErr := arch.BuildTTTMLPStatefulInferenceIRProgram(cfg, 1, make([]int, countTTTMLPBlocks(cfg.Blocks))); statefulErr == nil {
-			return runGenerateTTTMLPStateful(opts.ConfigPath, opts.SafetensorsLoad, cfg, opts.MaxTokens, opts.Temperature, opts.TopK, opts.Prompt, vocab)
-		}
+	plan, err := buildGenerationPlan(opts, cfg, vocab)
+	if err != nil {
+		return err
 	}
+	output, err := openGenerationOutput(opts.OutputPath)
+	if err != nil {
+		return err
+	}
+	runErr := func() error {
+		if countTTTMLPBlocks(cfg.Blocks) > 0 {
+			if _, _, statefulErr := arch.BuildTTTMLPStatefulInferenceIRProgram(cfg, 1, make([]int, countTTTMLPBlocks(cfg.Blocks))); statefulErr == nil {
+				return runGenerateTTTMLPStateful(opts.ConfigPath, opts.SafetensorsLoad, cfg, opts, plan, vocab, output.writer)
+			}
+		}
+		return runGenerateReplay(cfg, opts, plan, vocab, output.writer)
+	}()
+	return errors.Join(runErr, output.Close())
+}
+
+func runGenerateReplay(cfg *ArchConfig, opts GenerateOptions, plan generationPlan, vocab *data.NucleotideVocabulary, output generationWriter) error {
 	genCfg := *cfg
 	genCfg.Training.BatchTokens = genCfg.SeqLen
 	if err := configureCharFeaturesForConfigPath(&genCfg, opts.ConfigPath, opts.SafetensorsLoad); err != nil {
@@ -87,89 +97,24 @@ func runGenerateWithOptions(opts GenerateOptions) error {
 		return fmt.Errorf("init GPU trainer: %w", err)
 	}
 	defer trainer.CloseTrainer()
-
-	rng := rand.New(rand.NewSource(cfg.Training.Seed))
-	context, err := generationPromptTokensWithVocabulary(opts.Prompt, cfg.VocabSize, rng, vocab)
-	if err != nil {
-		return err
+	evaluator, ok := trainer.(causalGenerationEvaluator)
+	if !ok {
+		return fmt.Errorf("trainer does not support causal generation output readback")
 	}
-	if len(context) > cfg.SeqLen {
-		return fmt.Errorf("prompt length %d exceeds seq_len %d", len(context), cfg.SeqLen)
-	}
-
-	for i := 0; i < opts.MaxTokens; i++ {
-		if len(context) >= cfg.SeqLen {
-			fmt.Printf("stopped at seq_len limit (%d tokens)\n", cfg.SeqLen)
-			break
-		}
-		xTok, yTok, lastPos := generationBatch(context, cfg.SeqLen)
-		if _, err := trainer.EvaluateGPU(xTok, yTok, 1, cfg.SeqLen); err != nil {
-			return fmt.Errorf("generate step %d: %w", i, err)
-		}
-		logits, err := readTrainerOutput(trainer, "logits", []int{cfg.SeqLen, cfg.VocabSize})
-		if err != nil {
-			return fmt.Errorf("read logits: %w", err)
-		}
-		next, err := sampleNextToken(logits[lastPos*cfg.VocabSize:(lastPos+1)*cfg.VocabSize], opts.Temperature, opts.TopK, rng)
-		if err != nil {
-			return fmt.Errorf("sample token at step %d: %w", i, err)
-		}
-		context = append(context, next)
-	}
-
-	fmt.Printf("generated token_ids:%s\n", formatTokenIDs(context))
-	if vocab != nil {
-		sequence, err := vocab.Decode(context)
-		if err != nil {
-			return fmt.Errorf("decode generated nucleotide sequence: %w", err)
-		}
-		fmt.Printf("generated sequence:%s\n", sequence)
-	}
-	return nil
+	return runGenerationSamples(plan, vocab, output, func(_ int, rng *rand.Rand) (generationSample, error) {
+		return generateReplaySample(cfg, evaluator, opts, plan.eosTokenID, rng, vocab)
+	})
 }
 
-func runGenerateTTTMLPStateful(configPath, safetensorsLoad string, cfg *ArchConfig, maxTokens int, temperature float32, topK int, prompt string, vocab *data.NucleotideVocabulary) error {
-	rng := rand.New(rand.NewSource(cfg.Training.Seed))
-	context, err := generationPromptTokensWithVocabulary(prompt, cfg.VocabSize, rng, vocab)
-	if err != nil {
-		return err
-	}
+func runGenerateTTTMLPStateful(configPath, safetensorsLoad string, cfg *ArchConfig, opts GenerateOptions, plan generationPlan, vocab *data.NucleotideVocabulary, output generationWriter) error {
 	session, err := NewTTTMLPInferenceSession(configPath, safetensorsLoad)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = session.Close() }()
-	state, err := session.NewState()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = state.Close() }()
-	logits, err := session.PrefillLast(state, context)
-	if err != nil {
-		return fmt.Errorf("stateful TTT-MLP prefill: %w", err)
-	}
-	fmt.Printf("TTT-MLP stateful inference enabled (prompt_tokens=%d)\n", len(context))
-	for i := 0; i < maxTokens; i++ {
-		last := logits[len(logits)-cfg.VocabSize:]
-		next, err := sampleNextToken(last, temperature, topK, rng)
-		if err != nil {
-			return fmt.Errorf("sample token at step %d: %w", i, err)
-		}
-		context = append(context, next)
-		logits, err = session.Decode(state, next)
-		if err != nil {
-			return fmt.Errorf("stateful TTT-MLP decode step %d: %w", i, err)
-		}
-	}
-	fmt.Printf("generated token_ids:%s\n", formatTokenIDs(context))
-	if vocab != nil {
-		sequence, err := vocab.Decode(context)
-		if err != nil {
-			return fmt.Errorf("decode generated nucleotide sequence: %w", err)
-		}
-		fmt.Printf("generated sequence:%s\n", sequence)
-	}
-	return nil
+	runErr := runGenerationSamples(plan, vocab, output, func(_ int, rng *rand.Rand) (generationSample, error) {
+		return generateTTTMLPStatefulSample(session, cfg, opts, plan.eosTokenID, rng, vocab)
+	})
+	return errors.Join(runErr, session.Close())
 }
 
 func generationPromptTokens(prompt string, vocabSize int, rng *rand.Rand) ([]int, error) {

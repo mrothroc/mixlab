@@ -22,7 +22,37 @@ Generate causal next-token samples:
 | `-max-tokens` | Maximum generated tokens. Default: `256`. |
 | `-temperature` | Sampling temperature. Default: `0.8`. |
 | `-top-k` | Top-k sampling cutoff. `0` disables the cutoff. |
+| `-num-samples` | Number of independent sequences generated while reusing one initialized trainer. Default: `1`. |
+| `-gen-seed` | Base sampling seed. `0` uses `training.seed`. Sample `0` retains the base RNG stream; later samples use deterministically mixed seeds. |
+| `-eos-token-id` | Stop after emitting this token. Default: `-1` (disabled unless `-sequence-vocab` supplies EOS). |
+| `-generate-out` | Optional line-oriented output file. Without a sequence vocabulary each line is token-ID CSV; with one, each line is decoded sequence text. |
 | `-sequence-vocab` | Optional `nucleotide_vocab.json`. Enables `sequence:ACGT...` prompts and decoded nucleotide output. |
+
+Bulk generation initializes the model once and streams one completed sample per
+line:
+
+```bash
+./mixlab -mode generate \
+  -config examples/plain_3L.json \
+  -safetensors-load weights.safetensors \
+  -prompt token_ids:1 \
+  -num-samples 1000 \
+  -gen-seed 7 \
+  -eos-token-id 2 \
+  -max-tokens 100 \
+  -generate-out samples.txt
+```
+
+Token-ID records contain the prompt and generated continuation, including an
+emitted EOS token. Decoded sequence records omit framing tokens according to
+the supplied vocabulary. Output is deterministic: the first `K` records from a
+larger run equal a `K`-sample run using the same seed and sampling settings.
+
+When `-num-samples=1`, `-gen-seed=0`, and `-generate-out` is omitted, Mixlab
+retains the existing human-readable `generated token_ids:` output. Bulk or
+file-output runs suppress status messages so their records are safe for scripts.
+If both `-sequence-vocab` and `-eos-token-id` are supplied, their EOS IDs must
+match.
 
 For a nucleotide checkpoint, pass the preparation artifact and a raw sequence
 prompt. Mixlab still prints token IDs and additionally prints the decoded
@@ -44,6 +74,8 @@ Eligible TTT-MLP stacks automatically use persistent inner-model and Q/K
 convolution state instead of replaying the full prefix. The cached path supports
 `ttt_mlp` mixed with pointwise `swiglu`, `geglu`, or `mlp` blocks and can stream
 beyond configured `seq_len`. See [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md).
+Bulk generation reuses one TTT-MLP session and creates a fresh, explicitly
+closed adaptation state for every sample.
 
 ## `generate-diffusion`
 
