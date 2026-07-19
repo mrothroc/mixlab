@@ -2,6 +2,7 @@ package train
 
 import (
 	"bytes"
+	"fmt"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -72,7 +73,7 @@ func TestBuildGenerationPlanDefaultsEOSAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.numSamples != 1 || plan.baseSeed != 42 || plan.eosTokenID != -1 || !plan.legacyOutput {
+	if plan.numSamples != 1 || plan.batchSize != 1 || plan.baseSeed != 42 || plan.eosTokenID != -1 || !plan.legacyOutput {
 		t.Fatalf("default plan=%+v", plan)
 	}
 	vocab := trainTestDNAVocabulary()
@@ -89,6 +90,7 @@ func TestBuildGenerationPlanDefaultsEOSAndValidation(t *testing.T) {
 	}
 	for name, opts := range map[string]GenerateOptions{
 		"negative samples": {Temperature: 1, NumSamples: -1},
+		"negative batch":   {Temperature: 1, GenerationBatch: -1},
 		"negative max":     {Temperature: 1, MaxTokens: -1},
 		"zero temperature": {},
 		"negative top-k":   {Temperature: 1, TopK: -1},
@@ -98,6 +100,53 @@ func TestBuildGenerationPlanDefaultsEOSAndValidation(t *testing.T) {
 				t.Fatal("invalid generation options were accepted")
 			}
 		})
+	}
+}
+
+func TestBatchedGenerationMatchesBatchOneAndPreservesOrder(t *testing.T) {
+	cfg := &ArchConfig{VocabSize: 7, SeqLen: 6}
+	opts := GenerateOptions{MaxTokens: 4, Temperature: 0.9, TopK: 4, Prompt: "token_ids:1"}
+	run := func(batchSize int) string {
+		t.Helper()
+		plan := generationPlan{numSamples: 9, batchSize: batchSize, baseSeed: 77, eosTokenID: -1}
+		var out bytes.Buffer
+		if err := runBatchedGenerationSamples(cfg, deterministicBatchedGenerationEvaluator{vocabSize: cfg.VocabSize}, opts, plan, nil, &out); err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	if one, many := run(1), run(4); one != many {
+		t.Fatalf("batched output differs from batch one:\n%s\n---\n%s", one, many)
+	}
+}
+
+func TestBatchedGenerationStopsRowsIndependentlyAndPadsFinalWave(t *testing.T) {
+	cfg := &ArchConfig{VocabSize: 6, SeqLen: 6}
+	evaluator := &scriptedBatchedGenerationEvaluator{
+		vocabSize: cfg.VocabSize,
+		tokens: [][]int{
+			{2, 3, 4},
+			{5, 2, 5},
+			{5, 5, 2},
+			{2, 4, 4},
+		},
+	}
+	plan := generationPlan{numSamples: 4, batchSize: 3, baseSeed: 5, eosTokenID: 2}
+	var out bytes.Buffer
+	err := runBatchedGenerationSamples(cfg, evaluator, GenerateOptions{
+		MaxTokens: 4, Temperature: 1, TopK: 1, Prompt: "token_ids:1",
+	}, plan, nil, &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "1,2\n1,3,2\n1,4,5,2\n1,2\n"; got != want {
+		t.Fatalf("batched EOS output=%q want=%q", got, want)
+	}
+	if evaluator.calls != 4 {
+		t.Fatalf("evaluator calls=%d want=4", evaluator.calls)
+	}
+	if !evaluator.finalWavePadded {
+		t.Fatal("final partial wave did not duplicate its active row into padding rows")
 	}
 }
 
@@ -205,5 +254,43 @@ func (f *fakeCausalGenerationEvaluator) ReadOutput(_ string, shape []int) ([]flo
 	for row := 0; row < shape[0]; row++ {
 		logits[row*f.vocabSize+token] = 100
 	}
+	return logits, nil
+}
+
+type deterministicBatchedGenerationEvaluator struct{ vocabSize int }
+
+func (f deterministicBatchedGenerationEvaluator) EvaluateGenerationGPU(xTok, _ []int, positions []int, batchSize, seqLen int) ([]float32, error) {
+	logits := make([]float32, batchSize*f.vocabSize)
+	for row := 0; row < batchSize; row++ {
+		last := xTok[row*seqLen+positions[row]]
+		for token := 0; token < f.vocabSize; token++ {
+			logits[row*f.vocabSize+token] = float32(((last+1)*(token+3))%11) / 5
+		}
+	}
+	return logits, nil
+}
+
+type scriptedBatchedGenerationEvaluator struct {
+	vocabSize       int
+	tokens          [][]int
+	calls           int
+	finalWavePadded bool
+}
+
+func (f *scriptedBatchedGenerationEvaluator) EvaluateGenerationGPU(xTok, _ []int, _ []int, batchSize, seqLen int) ([]float32, error) {
+	if f.calls >= len(f.tokens) {
+		return nil, fmt.Errorf("unexpected evaluator call %d", f.calls)
+	}
+	if f.calls == len(f.tokens)-1 && batchSize >= 3 {
+		f.finalWavePadded = reflect.DeepEqual(xTok[:seqLen], xTok[seqLen:2*seqLen]) && reflect.DeepEqual(xTok[:seqLen], xTok[2*seqLen:3*seqLen])
+	}
+	logits := make([]float32, batchSize*f.vocabSize)
+	for i := range logits {
+		logits[i] = -100
+	}
+	for row, token := range f.tokens[f.calls] {
+		logits[row*f.vocabSize+token] = 100
+	}
+	f.calls++
 	return logits, nil
 }

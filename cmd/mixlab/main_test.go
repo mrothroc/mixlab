@@ -109,7 +109,7 @@ func TestSequenceVocabularyFlagsInNativeIOHelpGroups(t *testing.T) {
 
 func TestBulkGenerationFlagsInHelpGroup(t *testing.T) {
 	groups := modeFlagGroups["generate"]
-	for _, flagName := range []string{"num-samples", "gen-seed", "eos-token-id", "generate-out"} {
+	for _, flagName := range []string{"num-samples", "gen-batch", "gen-seed", "eos-token-id", "generate-out"} {
 		if !flagGroupContains(groups, flagName) {
 			t.Fatalf("generate help groups missing %s", flagName)
 		}

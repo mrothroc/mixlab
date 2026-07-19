@@ -930,6 +930,11 @@ func lowerIRToGPU(prog *ir.Program) (*gpu.Program, error) {
 func preferredEvalLossOutputName(prog *ir.Program) string {
 	if prog != nil {
 		for _, out := range prog.Outputs {
+			if out.Name == "generation_eval_loss" {
+				return "generation_eval_loss"
+			}
+		}
+		for _, out := range prog.Outputs {
 			if out.Name == "eval_loss" {
 				return "eval_loss"
 			}

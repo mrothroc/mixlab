@@ -39,6 +39,7 @@ func main() {
 	temperature := flag.Float64("temperature", 0.8, "sampling temperature (generate mode)")
 	topK := flag.Int("top-k", 40, "top-k sampling cutoff (generate mode)")
 	numSamples := flag.Int("num-samples", 1, "number of causal sequences to generate in one process")
+	genBatch := flag.Int("gen-batch", 1, "causal sequences evaluated concurrently; 1 preserves sequential generation")
 	genSeed := flag.Int64("gen-seed", 0, "generation RNG seed; 0 uses training.seed")
 	eosTokenID := flag.Int("eos-token-id", -1, "causal generation EOS token id; -1 disables when no sequence vocabulary is supplied")
 	generateOut := flag.String("generate-out", "", "write causal generation records, one sample per line")
@@ -299,7 +300,7 @@ func main() {
 		must(train.RunGenerateWithOptions(train.GenerateOptions{
 			ConfigPath: *configPath, SafetensorsLoad: *safetensorsLoad, MaxTokens: *maxTokens,
 			Temperature: float32(*temperature), TopK: *topK, Prompt: *prompt, SequenceVocabulary: *sequenceVocab,
-			NumSamples: *numSamples, GenerationSeed: *genSeed, EOSTokenID: &eosID, OutputPath: *generateOut,
+			NumSamples: *numSamples, GenerationBatch: *genBatch, GenerationSeed: *genSeed, EOSTokenID: &eosID, OutputPath: *generateOut,
 		}))
 	case "generate-diffusion":
 		var confidenceOverride *float64
@@ -419,7 +420,7 @@ var modeFlagGroups = map[string][]flagGroup{
 	},
 	"generate": {
 		{"Required", []string{"config", "safetensors-load", "prompt"}},
-		{"Sampling", []string{"max-tokens", "temperature", "top-k", "num-samples", "gen-seed", "eos-token-id"}},
+		{"Sampling", []string{"max-tokens", "temperature", "top-k", "num-samples", "gen-batch", "gen-seed", "eos-token-id"}},
 		{"Output", []string{"generate-out"}},
 		{"Sequence strings", []string{"sequence-vocab"}},
 	},

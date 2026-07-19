@@ -29,6 +29,60 @@ func TestBuildIRProgramFromConfig_Plain3L(t *testing.T) {
 	}
 }
 
+func TestBuildGenerationIRProgramGathersBeforeVocabularyProjection(t *testing.T) {
+	cfg := &ArchConfig{
+		Name: "generation", ModelDim: 8, VocabSize: 11, SeqLen: 4,
+		TieEmbeddings: true,
+		Blocks:        []BlockSpec{{Type: "plain", Heads: 2}},
+		Training:      TrainingSpec{BatchTokens: 12},
+	}
+	prog, err := BuildGenerationIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasGenerationTensorDecl(prog.Inputs, "generation_positions", []int{3}) {
+		t.Fatalf("missing generation_positions [3]: %+v", prog.Inputs)
+	}
+	if !hasGenerationTensorDecl(prog.Outputs, "generation_logits", []int{3, 11}) {
+		t.Fatalf("missing generation_logits [3,11]: %+v", prog.Outputs)
+	}
+	foundGather := false
+	foundProjectedGather := false
+	foundDummyLoss := false
+	for _, op := range prog.Ops {
+		switch {
+		case op.Code == OpEmbed && len(op.Inputs) == 2 && op.Inputs[0] == "x_final_norm" && op.Inputs[1] == "generation_positions" && len(op.Outputs) == 1 && op.Outputs[0] == "generation_hidden":
+			foundGather = true
+		case op.Code == OpMatMul && len(op.Inputs) == 2 && op.Inputs[0] == "generation_hidden" && len(op.Outputs) == 1 && op.Outputs[0] == "generation_logits_raw":
+			foundProjectedGather = true
+		case op.Code == OpFull && len(op.Outputs) == 1 && op.Outputs[0] == "generation_eval_loss":
+			foundDummyLoss = true
+		}
+	}
+	if !foundGather || !foundProjectedGather || !foundDummyLoss {
+		t.Fatalf("generation graph gather=%v projection=%v dummy_loss=%v", foundGather, foundProjectedGather, foundDummyLoss)
+	}
+}
+
+func hasGenerationTensorDecl(decls []TensorDecl, name string, shape []int) bool {
+	for _, decl := range decls {
+		if decl.Name != name || len(decl.Shape) != len(shape) {
+			continue
+		}
+		match := true
+		for i := range shape {
+			if decl.Shape[i] != shape[i] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCountIRWeightsFromConfig_AllExamples(t *testing.T) {
 	examples := []struct {
 		name        string

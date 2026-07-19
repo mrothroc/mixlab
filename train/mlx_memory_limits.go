@@ -2,6 +2,7 @@ package train
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -33,6 +34,10 @@ type mlxMemoryLimitPlan struct {
 }
 
 func configureMLXMemoryLimits(name string) error {
+	return configureMLXMemoryLimitsTo(name, os.Stdout)
+}
+
+func configureMLXMemoryLimitsTo(name string, output io.Writer) error {
 	totalRAM, _ := physicalMemoryBytes()
 	plan, err := resolveMLXMemoryLimitPlan(totalRAM)
 	if err != nil {
@@ -55,7 +60,11 @@ func configureMLXMemoryLimits(name string) error {
 	if plan.TotalRAMBytes > 0 {
 		parts = append(parts, "total_ram="+formatMiB(plan.TotalRAMBytes))
 	}
-	fmt.Printf("  [%s] MLX memory limits: %s\n", name, strings.Join(parts, ", "))
+	if output != nil {
+		if _, err := fmt.Fprintf(output, "  [%s] MLX memory limits: %s\n", name, strings.Join(parts, ", ")); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

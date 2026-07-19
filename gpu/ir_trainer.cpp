@@ -1509,6 +1509,9 @@ bool program_produces_output(const IRProgram& program, const std::string& output
 }
 
 std::string evaluation_loss_name(const IRProgram& program) {
+	if (program_produces_output(program, "generation_eval_loss")) {
+		return "generation_eval_loss";
+	}
   return program_produces_output(program, "eval_loss") ? "eval_loss" : "loss";
 }
 

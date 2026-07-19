@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"os"
 	"runtime"
 	"slices"
 	"strconv"
@@ -24,6 +25,7 @@ type GenerateOptions struct {
 	Prompt             string
 	SequenceVocabulary string
 	NumSamples         int
+	GenerationBatch    int
 	GenerationSeed     int64
 	EOSTokenID         *int
 	OutputPath         string
@@ -58,6 +60,12 @@ func runGenerateWithOptions(opts GenerateOptions) error {
 	if err != nil {
 		return err
 	}
+	if countTTTMLPBlocks(cfg.Blocks) > 0 && plan.batchSize > 1 {
+		return fmt.Errorf("-gen-batch=%d is not supported for TTT-MLP generation; use -gen-batch=1 until batched persistent inference state is available", plan.batchSize)
+	}
+	if err := configureMLXMemoryLimitsTo("generate", os.Stderr); err != nil {
+		return err
+	}
 	output, err := openGenerationOutput(opts.OutputPath)
 	if err != nil {
 		return err
@@ -75,12 +83,20 @@ func runGenerateWithOptions(opts GenerateOptions) error {
 
 func runGenerateReplay(cfg *ArchConfig, opts GenerateOptions, plan generationPlan, vocab *data.NucleotideVocabulary, output generationWriter) error {
 	genCfg := *cfg
-	genCfg.Training.BatchTokens = genCfg.SeqLen
+	genCfg.Training.BatchTokens = plan.batchSize * genCfg.SeqLen
 	if err := configureCharFeaturesForConfigPath(&genCfg, opts.ConfigPath, opts.SafetensorsLoad); err != nil {
 		return err
 	}
 
-	prog, err := BuildEvalIRProgramFromConfig(&genCfg)
+	var (
+		prog *arch.Program
+		err  error
+	)
+	if plan.batchSize == 1 {
+		prog, err = BuildEvalIRProgramFromConfig(&genCfg)
+	} else {
+		prog, err = arch.BuildGenerationIRProgramFromConfig(&genCfg)
+	}
 	if err != nil {
 		return fmt.Errorf("build IR program: %w", err)
 	}
@@ -100,6 +116,13 @@ func runGenerateReplay(cfg *ArchConfig, opts GenerateOptions, plan generationPla
 	evaluator, ok := trainer.(causalGenerationEvaluator)
 	if !ok {
 		return fmt.Errorf("trainer does not support causal generation output readback")
+	}
+	if plan.batchSize > 1 {
+		batchEvaluator, ok := trainer.(batchedCausalGenerationEvaluator)
+		if !ok {
+			return fmt.Errorf("trainer does not support batched causal generation")
+		}
+		return runBatchedGenerationSamples(cfg, batchEvaluator, opts, plan, vocab, output)
 	}
 	return runGenerationSamples(plan, vocab, output, func(_ int, rng *rand.Rand) (generationSample, error) {
 		return generateReplaySample(cfg, evaluator, opts, plan.eosTokenID, rng, vocab)

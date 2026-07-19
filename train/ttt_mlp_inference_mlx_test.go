@@ -269,6 +269,21 @@ func TestTTTMLPBulkGenerationClosesEachSampleState(t *testing.T) {
 	}
 }
 
+func TestTTTMLPGenerationRejectsBatchedPersistentState(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	configPath, weightsPath, _ := newTTTMLPInferenceFixture(t)
+	err := runGenerateWithOptions(GenerateOptions{
+		ConfigPath: configPath, SafetensorsLoad: weightsPath,
+		MaxTokens: 2, Temperature: 1, Prompt: "token_ids:1,2",
+		NumSamples: 3, GenerationBatch: 2,
+	})
+	if err == nil || !strings.Contains(err.Error(), "batched persistent inference state") {
+		t.Fatalf("TTT batched generation error=%v", err)
+	}
+}
+
 func newTTTMLPInferenceFixture(t *testing.T) (string, string, *ArchConfig) {
 	t.Helper()
 	dir := t.TempDir()

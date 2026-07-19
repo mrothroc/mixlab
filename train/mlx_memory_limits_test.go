@@ -1,7 +1,9 @@
 package train
 
 import (
+	"bytes"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -41,6 +43,19 @@ func TestDefaultMLXMemoryLimits(t *testing.T) {
 				t.Fatalf("limits=(%d,%d), want (%d,%d)", gotMemory, gotCache, tc.wantMemory, tc.wantCache)
 			}
 		})
+	}
+}
+
+func TestConfigureMLXMemoryLimitsWritesToSelectedStream(t *testing.T) {
+	clearMLXMemoryLimitEnv(t)
+	t.Setenv(mlxDisableDefaultMemoryLimitsEnv, "1")
+	t.Setenv(mlxCacheLimitMBEnv, "64")
+	var out bytes.Buffer
+	if err := configureMLXMemoryLimitsTo("generate", &out); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); !strings.Contains(got, "[generate] MLX memory limits") || !strings.Contains(got, "cache=64.0MiB") {
+		t.Fatalf("memory-limit diagnostic=%q", got)
 	}
 }
 

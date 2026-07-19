@@ -23,6 +23,7 @@ Generate causal next-token samples:
 | `-temperature` | Sampling temperature. Default: `0.8`. |
 | `-top-k` | Top-k sampling cutoff. `0` disables the cutoff. |
 | `-num-samples` | Number of independent sequences generated while reusing one initialized trainer. Default: `1`. |
+| `-gen-batch` | Number of sequences evaluated concurrently. Default: `1`, which preserves the sequential v0.69.1 path. |
 | `-gen-seed` | Base sampling seed. `0` uses `training.seed`. Sample `0` retains the base RNG stream; later samples use deterministically mixed seeds. |
 | `-eos-token-id` | Stop after emitting this token. Default: `-1` (disabled unless `-sequence-vocab` supplies EOS). |
 | `-generate-out` | Optional line-oriented output file. Without a sequence vocabulary each line is token-ID CSV; with one, each line is decoded sequence text. |
@@ -37,6 +38,7 @@ line:
   -safetensors-load weights.safetensors \
   -prompt token_ids:1 \
   -num-samples 1000 \
+  -gen-batch 64 \
   -gen-seed 7 \
   -eos-token-id 2 \
   -max-tokens 100 \
@@ -47,12 +49,28 @@ Token-ID records contain the prompt and generated continuation, including an
 emitted EOS token. Decoded sequence records omit framing tokens according to
 the supplied vocabulary. Output is deterministic: the first `K` records from a
 larger run equal a `K`-sample run using the same seed and sampling settings.
+Each global sample index owns its RNG stream, so output is also independent of
+`-gen-batch` on the same backend and hardware. Completed rows stop sampling
+independently; partial final batches use inert duplicate rows and preserve
+global sample order.
 
 When `-num-samples=1`, `-gen-seed=0`, and `-generate-out` is omitted, Mixlab
 retains the existing human-readable `generated token_ids:` output. Bulk or
 file-output runs suppress status messages so their records are safe for scripts.
 If both `-sequence-vocab` and `-eos-token-id` are supplied, their EOS IDs must
 match.
+
+For `-gen-batch > 1`, Mixlab gathers one final hidden position per sequence
+before the vocabulary projection and reads back `[batch,vocab]` logits. It does
+not transfer full `[batch,seq_len,vocab]` logits to the host. Larger batches use
+more activation memory and eventually stop improving throughput once the GPU is
+saturated; tune the value for the model and machine.
+
+Generation applies the same conservative MLX memory and buffer-cache limits as
+training. `MIXLAB_MLX_MEMORY_LIMIT_MB` and `MIXLAB_MLX_CACHE_LIMIT_MB` override
+the defaults, and `MIXLAB_DISABLE_MLX_MEMORY_LIMITS=1` disables them. Limit
+diagnostics are written to stderr so line-oriented generation output remains
+machine-readable.
 
 For a nucleotide checkpoint, pass the preparation artifact and a raw sequence
 prompt. Mixlab still prints token IDs and additionally prints the decoded
@@ -75,7 +93,9 @@ convolution state instead of replaying the full prefix. The cached path supports
 `ttt_mlp` mixed with pointwise `swiglu`, `geglu`, or `mlp` blocks and can stream
 beyond configured `seq_len`. See [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md).
 Bulk generation reuses one TTT-MLP session and creates a fresh, explicitly
-closed adaptation state for every sample.
+closed adaptation state for every sample. Stateful TTT-MLP remains batch-one;
+`-gen-batch > 1` is rejected until persistent inference state supports a batch
+dimension.
 
 ## `generate-diffusion`
 

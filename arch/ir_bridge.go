@@ -70,6 +70,48 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	}, nil, false)
 }
 
+// BuildGenerationIRProgramFromConfig constructs a fixed-width causal
+// generation graph. It gathers one normalized hidden row per batch element
+// before the vocabulary projection so generation reads back [B,V], not
+// [B*T,V].
+func BuildGenerationIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
+	prog, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.SeqLen <= 0 || cfg.Training.BatchTokens <= 0 || cfg.Training.BatchTokens%cfg.SeqLen != 0 {
+		return nil, fmt.Errorf("generation requires batch_tokens to be a positive multiple of seq_len")
+	}
+	batchSize := cfg.Training.BatchTokens / cfg.SeqLen
+	prog.DeclareInput("generation_positions", TensorInt32, []int{batchSize})
+	// x_final_norm is [B*T,D]. Flattened row offsets allow every batch row to
+	// select a different current position with the ordinary embedding gather.
+	prog.Embed("x_final_norm", "generation_positions", "generation_hidden")
+	if cfg.TieEmbeddings && !cfg.MTPUntieEnabled() {
+		prog.Transpose(weightName(0), []int{1, 0}, "generation_tied_head")
+		prog.MatMul("generation_hidden", "generation_tied_head", "generation_logits_raw")
+	} else {
+		prog.MatMul("generation_hidden", weightName(1), "generation_logits_raw")
+	}
+	logits := "generation_logits_raw"
+	if cfg.LogitSoftcap > 0 {
+		prog.ScalarMul(logits, 1/cfg.LogitSoftcap, "generation_logits_scaled")
+		prog.Tanh("generation_logits_scaled", "generation_logits_tanh")
+		prog.ScalarMul("generation_logits_tanh", cfg.LogitSoftcap, "generation_logits")
+		logits = "generation_logits"
+	}
+	if logits != "generation_logits" {
+		prog.ScalarMul(logits, 1, "generation_logits")
+	}
+	// The trainer evaluator historically requires a scalar loss. This constant
+	// keeps generation output-only: the native evaluator recognizes it and
+	// prunes the normal CE/logits branch from the compiled graph.
+	prog.Full([]int{1}, 0, "generation_eval_loss")
+	prog.DeclareOutput("generation_eval_loss", TensorFloat32, []int{1})
+	prog.DeclareOutput("generation_logits", TensorFloat32, []int{batchSize, cfg.VocabSize})
+	return prog, nil
+}
+
 // BuildDistillationTeacherIRProgramFromConfig constructs a dropout-free logits
 // program for fixed-teacher distillation. Unlike normal eval IR, masked
 // objectives keep their masked attention/head semantics so teacher logits match

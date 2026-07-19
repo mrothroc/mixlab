@@ -30,8 +30,9 @@ the cost of more GPU memory.
 
 ## MLX memory bounds
 
-mixlab sets conservative MLX memory limits at training startup so the MLX
-buffer cache cannot silently grow into OS swap on unified-memory systems. The
+mixlab sets conservative MLX memory limits at training and causal-generation
+startup so the MLX buffer cache cannot silently grow into OS swap on
+unified-memory systems. The
 default uses total RAM, reserves at least 25%, applies an 8 GiB floor capped
 for small machines, and sets a smaller cache cap.
 
