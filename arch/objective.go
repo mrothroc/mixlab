@@ -151,6 +151,10 @@ func (t TrainingSpec) ExampleFramingEnabled() bool {
 	return t.ExampleFraming != nil
 }
 
+func (t TrainingSpec) RecordFramingEnabled() bool {
+	return t.DatasetRecordFraming
+}
+
 func (t TrainingSpec) DefaultConcreteObjective() string {
 	obj := t.EffectiveObjective()
 	if obj == ObjectiveHybrid {
@@ -160,7 +164,7 @@ func (t TrainingSpec) DefaultConcreteObjective() string {
 }
 
 func (t TrainingSpec) NeedsMaskedLoss() bool {
-	return isMaskedTrainingObjective(t.DefaultConcreteObjective()) || t.ExampleFramingEnabled() || t.DatasetSequencePacking
+	return isMaskedTrainingObjective(t.DefaultConcreteObjective()) || t.ExampleFramingEnabled() || t.DatasetSequencePacking || t.RecordFramingEnabled()
 }
 
 func validateTrainingObjective(cfg *ArchConfig, source string) error {

@@ -37,7 +37,7 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error
 		return err
 	}
 	var prog *Program
-	if cfg.Training.DatasetSequencePacking {
+	if cfg.Training.DatasetSequencePacking || cfg.Training.RecordFramingEnabled() {
 		prog, err = BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
 			RecurrenceActive: true, HeadUntied: cfg.MTPUntieEnabled(), Objective: "causal",
 			MTPAuxInactive: true, DistillationInactive: true, Data2VecInactive: true,

@@ -60,6 +60,37 @@ func TestFindDatasetManifestOptionalAndAdjacent(t *testing.T) {
 	}
 }
 
+func TestDatasetManifestValidatesOneRecordPerRowLayout(t *testing.T) {
+	manifest := DatasetManifest{
+		Format: DatasetManifestFormat, Version: DatasetManifestVersion,
+		Representation: DatasetRepresentationDiscreteTokens, Modality: "text", VocabSize: 32,
+		TokenDType: DatasetTokenDTypeUint16, ShardFormat: DatasetShardFormatSequenceV1,
+		SequenceLayout: DatasetSequenceLayoutOneRecordRow, RecordSeqLen: 8,
+		SpecialTokenIDs: map[string]int{"pad": 0, "bos": 1, "eos": 2},
+		Splits: map[string]DatasetSplit{"train": {
+			Pattern: "train_*.bin", Tokens: 7, Shards: 1, Sequences: 2,
+			MeanSequenceTokens: 3.5, MaxSequenceTokens: 5,
+		}},
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("valid one-record manifest: %v", err)
+	}
+	if got := manifest.EffectiveSequenceLayout(); got != DatasetSequenceLayoutOneRecordRow {
+		t.Fatalf("layout=%q", got)
+	}
+	manifest.Splits["train"] = DatasetSplit{Pattern: "train_*.bin", Tokens: 7, Shards: 1, Sequences: 2, MaxSequenceTokens: 7}
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "exceeds record content capacity") {
+		t.Fatalf("capacity error=%v", err)
+	}
+}
+
+func TestDatasetManifestLegacySequenceLayoutDefaultsToPackedSegments(t *testing.T) {
+	manifest := DatasetManifest{ShardFormat: DatasetShardFormatSequenceV1}
+	if got := manifest.EffectiveSequenceLayout(); got != DatasetSequenceLayoutPackedSegments {
+		t.Fatalf("legacy sequence layout=%q", got)
+	}
+}
+
 func TestDatasetManifestValidationErrors(t *testing.T) {
 	valid := DatasetManifest{
 		Format:         DatasetManifestFormat,

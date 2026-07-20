@@ -26,6 +26,8 @@ from pathlib import Path
 
 import numpy as np
 
+from prepare_records import prepare_text_records, tokenizer_special_token_ids
+
 SHARD_MAGIC = 20240520
 SHARD_VERSION = 1
 SEQUENCE_SHARD_MAGIC = 20260718
@@ -166,15 +168,7 @@ def detect_wwm_boundary_scheme(tokenizer) -> str:
 
 def write_dataset_manifest(tokenizer, output_dir: str, n_train: int, n_val: int, n_train_shards: int, n_val_shards: int):
     """Write the versioned discrete-sequence contract consumed by Mixlab."""
-    tokenizer_doc = json.loads(tokenizer.to_str())
-    special_token_ids = {}
-    for entry in tokenizer_doc.get("added_tokens") or []:
-        if not entry.get("special", False):
-            continue
-        token = str(entry.get("content", ""))
-        token_id = entry.get("id")
-        if token and isinstance(token_id, int):
-            special_token_ids[token] = token_id
+    special_token_ids = tokenizer_special_token_ids(tokenizer)
 
     manifest = {
         "format": "mixlab.dataset",
@@ -372,8 +366,8 @@ def write_nucleotide_manifest(vocabulary: dict, output_dir: str, train_records, 
 
 
 def prepare_fasta(args):
-    if args.tokenizer_path or args.wwm_compatible_tokenizer or args.char_vocab_size > 0 or args.minimal_pair_out:
-        raise ValueError("FASTA preparation does not accept text tokenizer, whole-word, char-feature, or minimal-pair flags")
+    if args.tokenizer_path or args.wwm_compatible_tokenizer or args.char_vocab_size > 0 or args.minimal_pair_out or args.frame_per_record:
+        raise ValueError("FASTA preparation does not accept text tokenizer, whole-word, char-feature, minimal-pair, or per-record text framing flags")
     os.makedirs(args.output, exist_ok=True)
     vocabulary = build_nucleotide_vocabulary(args.nucleotide_alphabet, args.nucleotide_ambiguous_symbols, args.nucleotide_invalid_symbol_policy)
     write_nucleotide_vocabulary(vocabulary, args.output)
@@ -881,6 +875,12 @@ def main():
     parser.add_argument("--tokenizer-path", default="", help="Path to pre-trained tokenizer.json (skip training)")
     parser.add_argument("--wwm-compatible-tokenizer", action="store_true", help="Train or validate tokenizer metadata for whole-word masking")
     parser.add_argument("--text-field", default="text", help="JSON field name for text in JSONL files (default: text)")
+    parser.add_argument("--frame-per-record", action="store_true", help="preserve each text/JSONL record as one framed training row")
+    parser.add_argument("--record-seq-len", type=int, default=0, help="fixed training row length for --frame-per-record")
+    parser.add_argument("--record-pad-id", type=int, default=-1, help="PAD token ID for --frame-per-record")
+    parser.add_argument("--record-bos-id", type=int, default=-1, help="BOS token ID for --frame-per-record")
+    parser.add_argument("--record-eos-id", type=int, default=-1, help="EOS token ID for --frame-per-record")
+    parser.add_argument("--record-overflow", choices=["error", "drop", "truncate"], default="error", help="policy for records longer than record_seq_len-2")
     parser.add_argument("--tokens-per-shard", type=int, default=TOKENS_PER_SHARD, help="Tokens per shard (default: 1000000)")
     parser.add_argument("--no-shuffle", action="store_true", help="Disable token shuffling within shards")
     parser.add_argument("--char-vocab-size", type=int, default=0, help="Write tokenizer-level char_features.bin; 0 disables")
@@ -951,6 +951,10 @@ def main():
         args.minimal_pair_sample_out,
         args.minimal_pair_sample_count,
     )
+
+    if args.frame_per_record:
+        prepare_text_records(args, tokenizer, texts, write_sequence_shards)
+        return
 
     # Tokenize
     all_tokens = tokenize_texts(tokenizer, texts)

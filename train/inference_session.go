@@ -3,6 +3,8 @@ package train
 import (
 	"fmt"
 	"runtime"
+
+	"github.com/mrothroc/mixlab/data"
 )
 
 var errInferenceSessionClosed = fmt.Errorf("inference session is closed")
@@ -55,9 +57,13 @@ func newInferenceSession(configPath, safetensorsLoad, trainPattern string) (*Inf
 		return nil, err
 	}
 	if trainPattern != "" {
-		if _, _, err = validateDatasetManifestForConfig(cfg, trainPattern); err != nil {
+		manifest, _, manifestErr := validateDatasetManifestForConfig(cfg, trainPattern)
+		if manifestErr != nil {
 			runtime.UnlockOSThread()
-			return nil, err
+			return nil, manifestErr
+		}
+		if manifest != nil && manifest.EffectiveSequenceLayout() == data.DatasetSequenceLayoutOneRecordRow {
+			cfg.Training.DatasetRecordFraming = true
 		}
 		_, err = configureCharFeaturesForTraining(cfg, trainPattern)
 	} else {
@@ -124,8 +130,8 @@ func (s *InferenceSession) EvalTokens(tokens []uint16) ([]float32, error) {
 	if s.cfg == nil {
 		return nil, fmt.Errorf("inference session has no config")
 	}
-	if s.cfg.Training.ExampleFramingEnabled() {
-		return nil, fmt.Errorf("training.example_framing is not supported by flat-token EvalTokens in v1")
+	if s.cfg.Training.ExampleFramingEnabled() || s.cfg.Training.RecordFramingEnabled() {
+		return nil, fmt.Errorf("framed example datasets are not supported by flat-token EvalTokens in v1")
 	}
 
 	batchTokens := s.cfg.Training.BatchTokens
@@ -212,8 +218,8 @@ func (s *InferenceSession) checkEvalPreconditions(tokens []uint16) error {
 	if s.cfg == nil {
 		return fmt.Errorf("inference session has no config")
 	}
-	if s.cfg.Training.ExampleFramingEnabled() {
-		return fmt.Errorf("training.example_framing is not supported by flat-token EvalTokens/EvalLogits in v1")
+	if s.cfg.Training.ExampleFramingEnabled() || s.cfg.Training.RecordFramingEnabled() {
+		return fmt.Errorf("framed example datasets are not supported by flat-token EvalTokens/EvalLogits in v1")
 	}
 	batchTokens := s.cfg.Training.BatchTokens
 	seqLen := s.cfg.SeqLen

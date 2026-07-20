@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/mrothroc/mixlab/data"
@@ -265,6 +267,136 @@ func TestPrepareScript(t *testing.T) {
 	}
 	if len(x) != 128 || len(y) != 128 {
 		t.Errorf("batch size mismatch: got x=%d y=%d, want 128", len(x), len(y))
+	}
+}
+
+func TestPreparePerRecordTextProducesIndependentMaskedRows(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	if err := exec.Command("python3", "-c", "import numpy, tokenizers").Run(); err != nil {
+		t.Skip("python3 numpy/tokenizers libraries not available")
+	}
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "records.jsonl")
+	outDir := filepath.Join(dir, "prepared")
+	input := "{\"text\":\"CCO\"}\n{\"text\":\"NCC\"}\n{\"text\":\"CO\"}\n{\"text\":\"CN\"}\n"
+	if err := os.WriteFile(inputPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runPrepare(PrepareOptions{
+		Input: inputPath, Output: outDir, InputFormat: "text", VocabSize: 32, ValSplit: 0.25,
+		TextFieldName: "text", FramePerRecord: true, RecordSeqLen: 8,
+		RecordPADID: 0, RecordBOSID: 1, RecordEOSID: 2, RecordOverflow: "error",
+	})
+	if err != nil {
+		t.Fatalf("prepare per-record text: %v", err)
+	}
+	manifest, err := data.LoadDatasetManifest(filepath.Join(outDir, data.DatasetManifestFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ShardFormat != data.DatasetShardFormatSequenceV1 || manifest.EffectiveSequenceLayout() != data.DatasetSequenceLayoutOneRecordRow || manifest.RecordSeqLen != 8 {
+		t.Fatalf("manifest=%+v", manifest)
+	}
+	if manifest.Splits["train"].Sequences != 3 || manifest.Splits["val"].Sequences != 1 {
+		t.Fatalf("record split=%+v", manifest.Splits)
+	}
+	trainFiles, _ := filepath.Glob(filepath.Join(outDir, "train_*.bin"))
+	if len(trainFiles) == 0 {
+		t.Fatal("no record-oriented train shard")
+	}
+	records, err := data.LoadSequenceShard(trainFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	loader, err := data.NewLoaderWithOptions(filepath.Join(outDir, "train_*.bin"), 7, data.LoaderOptions{NoShardShuffle: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := loader.NextBatchDetailed(8, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contentLen := len(records[0])
+	if batch.X[0] != 1 || batch.X[contentLen+1] != 2 {
+		t.Fatalf("row framing x=%v record=%v", batch.X, records[0])
+	}
+	for i, token := range records[0] {
+		if batch.X[i+1] != int(token) {
+			t.Fatalf("record token %d=%d, row=%v", i, token, batch.X)
+		}
+	}
+	for i, active := range batch.LossMask {
+		want := float32(0)
+		if i <= contentLen {
+			want = 1
+		}
+		if active != want {
+			t.Fatalf("loss_mask[%d]=%g want=%g (content_len=%d)", i, active, want, contentLen)
+		}
+	}
+}
+
+func TestPreparePerRecordOverflowPolicies(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	if err := exec.Command("python3", "-c", "import numpy").Run(); err != nil {
+		t.Skip("python3 numpy library not available")
+	}
+	scriptPath, err := filepath.Abs(filepath.Join("..", "scripts", "prepare.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordScriptPath := filepath.Join(filepath.Dir(scriptPath), "prepare_records.py")
+	program := `import runpy
+m = runpy.run_path(` + strconv.Quote(recordScriptPath) + `, run_name="prepare_records_module")
+class Enc:
+    def __init__(self, ids): self.ids = ids
+class Tok:
+    def encode(self, text, add_special_tokens=False): return Enc(list(range(len(text))))
+records, stats = m["tokenize_text_records"](Tok(), ["abcdef", "xy"], 6, "drop", "train")
+assert len(records) == 1 and stats["dropped"] == 1 and list(records[0][1]) == [0, 1]
+records, stats = m["tokenize_text_records"](Tok(), ["abcdef", "xy"], 6, "truncate", "train")
+assert len(records) == 2 and stats["truncated"] == 1 and len(records[0][1]) == 4
+try:
+    m["tokenize_text_records"](Tok(), ["abcdef"], 6, "error", "train")
+except ValueError as exc:
+    assert "permits 4" in str(exc)
+else:
+    raise AssertionError("error overflow policy accepted an overlong record")
+`
+	if output, err := exec.Command("python3", "-c", program).CombinedOutput(); err != nil {
+		t.Fatalf("record overflow helper: %v\n%s", err, output)
+	}
+}
+
+func TestRunPrepareValidatesPerRecordContractBeforeLaunchingPython(t *testing.T) {
+	base := PrepareOptions{
+		Input: "records.jsonl", Output: "out", InputFormat: "text", FramePerRecord: true,
+		RecordSeqLen: 8, RecordPADID: 0, RecordBOSID: 1, RecordEOSID: 2, RecordOverflow: "error",
+	}
+	tests := []struct {
+		name string
+		edit func(*PrepareOptions)
+		want string
+	}{
+		{name: "format", edit: func(o *PrepareOptions) { o.InputFormat = "fasta" }, want: "input-format=text"},
+		{name: "seq len", edit: func(o *PrepareOptions) { o.RecordSeqLen = 2 }, want: "record-seq-len >= 3"},
+		{name: "missing id", edit: func(o *PrepareOptions) { o.RecordEOSID = -1 }, want: "non-negative"},
+		{name: "duplicate ids", edit: func(o *PrepareOptions) { o.RecordEOSID = 1 }, want: "must be distinct"},
+		{name: "overflow", edit: func(o *PrepareOptions) { o.RecordOverflow = "wrap" }, want: "record-overflow"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := base
+			tt.edit(&opts)
+			err := runPrepare(opts)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%v want %q", err, tt.want)
+			}
+		})
 	}
 }
 

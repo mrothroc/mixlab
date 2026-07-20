@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -97,5 +98,74 @@ func TestSequenceLoaderPacksBoundariesAndMasksCrossContigTargets(t *testing.T) {
 	}
 	if batch.LossMask[3] != 0 || batch.Y[3] == batch.X[4] {
 		t.Fatal("EOS position exposes a target from the next contig")
+	}
+}
+
+func TestSequenceLoaderFramesExactlyOneRecordPerRowAndMasksPadding(t *testing.T) {
+	dir := t.TempDir()
+	records := [][]uint16{{4, 5}, {6, 7, 8}}
+	writeSequenceShardFixture(t, filepath.Join(dir, "train_00000.bin"), records)
+	manifest := DatasetManifest{
+		Format: DatasetManifestFormat, Version: DatasetManifestVersion,
+		Representation: DatasetRepresentationDiscreteTokens, Modality: "text",
+		VocabSize: 9, TokenDType: DatasetTokenDTypeUint16, ShardFormat: DatasetShardFormatSequenceV1,
+		SequenceLayout: DatasetSequenceLayoutOneRecordRow, RecordSeqLen: 6,
+		SpecialTokenIDs: map[string]int{"pad": 0, "bos": 1, "eos": 2},
+		Artifacts:       DatasetManifestArtifacts{Tokenizer: "tokenizer.json"},
+		Splits: map[string]DatasetSplit{"train": {
+			Pattern: "train_*.bin", Tokens: 5, Shards: 1, Sequences: 2, MaxSequenceTokens: 3,
+		}},
+	}
+	blob, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, DatasetManifestFilename), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loader, err := NewLoaderWithOptions(filepath.Join(dir, "train_*.bin"), 42, LoaderOptions{NoShardShuffle: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := loader.NextBatchDetailed(12, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantX := []int{1, 4, 5, 2, 0, 0, 1, 6, 7, 8, 2, 0}
+	wantY := []int{4, 5, 2, 0, 0, 0, 6, 7, 8, 2, 0, 0}
+	wantLoss := []float32{1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 0, 0}
+	wantEligible := []uint8{0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 0, 0}
+	if !reflect.DeepEqual(batch.X, wantX) || !reflect.DeepEqual(batch.Y, wantY) {
+		t.Fatalf("x/y=%v/%v want=%v/%v", batch.X, batch.Y, wantX, wantY)
+	}
+	if !reflect.DeepEqual(batch.LossMask, wantLoss) || !reflect.DeepEqual(batch.MaskEligible, wantEligible) {
+		t.Fatalf("loss/eligible=%v/%v want=%v/%v", batch.LossMask, batch.MaskEligible, wantLoss, wantEligible)
+	}
+	if batch.SegmentIDs != nil {
+		t.Fatalf("one-record rows do not need segment IDs: %v", batch.SegmentIDs)
+	}
+}
+
+func TestSequenceLoaderRejectsRecordSeqLenMismatch(t *testing.T) {
+	dir := t.TempDir()
+	writeSequenceShardFixture(t, filepath.Join(dir, "train_00000.bin"), [][]uint16{{4}})
+	manifest := DatasetManifest{
+		Format: DatasetManifestFormat, Version: DatasetManifestVersion,
+		Representation: DatasetRepresentationDiscreteTokens, Modality: "text", VocabSize: 8,
+		TokenDType: DatasetTokenDTypeUint16, ShardFormat: DatasetShardFormatSequenceV1,
+		SequenceLayout: DatasetSequenceLayoutOneRecordRow, RecordSeqLen: 6,
+		SpecialTokenIDs: map[string]int{"pad": 0, "bos": 1, "eos": 2},
+		Splits:          map[string]DatasetSplit{"train": {Pattern: "train_*.bin", Tokens: 1, Shards: 1, Sequences: 1, MaxSequenceTokens: 1}},
+	}
+	blob, _ := json.Marshal(manifest)
+	if err := os.WriteFile(filepath.Join(dir, DatasetManifestFilename), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loader, err := NewLoaderWithOptions(filepath.Join(dir, "train_*.bin"), 0, LoaderOptions{NoShardShuffle: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loader.NextBatchDetailed(5, 5); err == nil || !strings.Contains(err.Error(), "requires seq_len=6") {
+		t.Fatalf("error=%v", err)
 	}
 }

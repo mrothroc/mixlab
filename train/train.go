@@ -90,11 +90,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		}
 		fmt.Printf("  [%s] char features enabled (%s)\n", name, source)
 	}
-	if cfg.Training.ExampleFramingEnabled() {
-		f := cfg.Training.ExampleFraming
-		fmt.Printf("  [%s] example framing: content_len=%d bos_id=%d eos_id=%d examples/batch=%d\n",
-			name, f.ContentLen, f.BosID, f.EosID, batchSize)
-	}
+	logDatasetFraming(cfg, name, batchSize)
 	pairSampler, err := newMinimalPairSampler(cfg)
 	if err != nil {
 		return TrainResult{}, err
@@ -912,7 +908,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("prepare final PLL margin training loss batch: %w", err)
 			}
-		} else if cfg.Training.ExampleFramingEnabled() || cfg.Training.DatasetSequencePacking {
+		} else if cfg.Training.ExampleFramingEnabled() || cfg.Training.DatasetSequencePacking || cfg.Training.RecordFramingEnabled() {
 			var err error
 			finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveCausal, seqLen)
 			if err != nil {
@@ -927,7 +923,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				evalLoss, evalErr = evaluateObjectiveTrainingLossGPU(trainer, finalEvalBatch, batchSize, seqLen)
 				return evalErr
 			})
-		case cfg.Training.ExampleFramingEnabled() || cfg.Training.DatasetSequencePacking:
+		case cfg.Training.ExampleFramingEnabled() || cfg.Training.DatasetSequencePacking || cfg.Training.RecordFramingEnabled():
 			evalLoss, err = causalEval.evaluateCausalObjectiveTrainingLossGPU(currentProgramKey, finalEvalBatch)
 		default:
 			evalLoss, err = causalEval.evaluateCausalObjectiveGPU(currentProgramKey, finalEvalBatch)
@@ -957,6 +953,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			fmt.Printf("  [%s] full validation BPB failed: training.example_framing is not supported by continuous-stream full eval in v1\n", name)
 		case cfg.Training.DatasetSequencePacking:
 			fmt.Printf("  [%s] full validation BPB failed: record-oriented sequence datasets require packed evaluation; use validation loss or native scoring\n", name)
+		case cfg.Training.RecordFramingEnabled():
+			fmt.Printf("  [%s] full validation BPB failed: one-record-per-row datasets require framed evaluation; use validation loss\n", name)
 		default:
 			if cfg.Training.TTTSteps > 0 {
 				if cfg.Training.TTTMode == "lora" {

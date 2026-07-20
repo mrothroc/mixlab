@@ -73,6 +73,57 @@ func TestConfigureNucleotideDatasetEnablesPackedSegmentTrainingIR(t *testing.T) 
 	}
 }
 
+func TestConfigureTextRecordDatasetEnablesMaskedCausalLossWithoutSegmentMask(t *testing.T) {
+	dir := t.TempDir()
+	writeTextRecordDatasetContract(t, dir, 32, 8)
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 8
+	cfg.Training.BatchTokens = 16
+	cfg.Training.Objective = arch.ObjectiveCausal
+	if err := configureDatasetForTraining(cfg, filepath.Join(dir, "train_*.bin"), cfg.Name); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Training.RecordFramingEnabled() || cfg.Training.DatasetSequencePacking || cfg.Training.AttentionSegmentMaskEnabled() {
+		t.Fatalf("runtime framing metadata=%+v", cfg.Training)
+	}
+	prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{Objective: arch.ObjectiveCausal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !testProgramDeclaresInput(prog, "loss_mask") {
+		t.Fatal("record-framed causal IR must consume loss_mask")
+	}
+	if testProgramDeclaresInput(prog, "segment_ids") {
+		t.Fatal("one-record-per-row causal IR must not require segment_ids")
+	}
+}
+
+func TestConfigureTextRecordDatasetRejectsIncompatibleConfig(t *testing.T) {
+	dir := t.TempDir()
+	writeTextRecordDatasetContract(t, dir, 32, 8)
+	tests := []struct {
+		name string
+		edit func(*ArchConfig)
+		want string
+	}{
+		{name: "seq len", edit: func(c *ArchConfig) { c.SeqLen = 7 }, want: "does not match"},
+		{name: "objective", edit: func(c *ArchConfig) { c.Training.Objective = arch.ObjectiveMLM }, want: "supports training.objective"},
+		{name: "segment mask", edit: func(c *ArchConfig) { c.Training.AttentionSegmentMask = arch.AttentionSegmentMaskBoundaryToken }, want: "unnecessary"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := objectiveTestConfig()
+			cfg.SeqLen = 8
+			cfg.Training.BatchTokens = 16
+			tt.edit(cfg)
+			err := configureDatasetForTraining(cfg, filepath.Join(dir, "train_*.bin"), cfg.Name)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%v want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func testProgramDeclaresInput(prog *Program, name string) bool {
 	for _, input := range prog.Inputs {
 		if input.Name == name {
@@ -146,6 +197,28 @@ func writeTrainingDatasetManifest(t *testing.T, dir string, vocabSize int) {
 		Splits: map[string]data.DatasetSplit{
 			"train": {Pattern: "train_*.bin", Tokens: 10, Shards: 1},
 		},
+	}
+	blob, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, data.DatasetManifestFilename), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeTextRecordDatasetContract(t *testing.T, dir string, vocabSize, seqLen int) {
+	t.Helper()
+	manifest := data.DatasetManifest{
+		Format: data.DatasetManifestFormat, Version: data.DatasetManifestVersion,
+		Representation: data.DatasetRepresentationDiscreteTokens, Modality: "text", VocabSize: vocabSize,
+		TokenDType: data.DatasetTokenDTypeUint16, ShardFormat: data.DatasetShardFormatSequenceV1,
+		SequenceLayout: data.DatasetSequenceLayoutOneRecordRow, RecordSeqLen: seqLen,
+		SpecialTokenIDs: map[string]int{"pad": 0, "bos": 1, "eos": 2},
+		Artifacts:       data.DatasetManifestArtifacts{Tokenizer: "tokenizer.json"},
+		Splits: map[string]data.DatasetSplit{"train": {
+			Pattern: "train_*.bin", Tokens: 4, Shards: 1, Sequences: 1, MaxSequenceTokens: 4,
+		}},
 	}
 	blob, err := json.Marshal(manifest)
 	if err != nil {

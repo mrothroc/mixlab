@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,6 +19,8 @@ const (
 	DatasetTokenDTypeUint16             = "uint16"
 	DatasetShardFormatTokenStreamV1     = "mixlab_token_shard_v1"
 	DatasetShardFormatSequenceV1        = "mixlab_sequence_shard_v1"
+	DatasetSequenceLayoutPackedSegments = "packed_segments"
+	DatasetSequenceLayoutOneRecordRow   = "one_record_per_row"
 )
 
 // DatasetManifest describes the representation shared by a set of Mixlab
@@ -31,6 +34,8 @@ type DatasetManifest struct {
 	VocabSize       int                      `json:"vocab_size"`
 	TokenDType      string                   `json:"token_dtype"`
 	ShardFormat     string                   `json:"shard_format"`
+	SequenceLayout  string                   `json:"sequence_layout,omitempty"`
+	RecordSeqLen    int                      `json:"record_seq_len,omitempty"`
 	SpecialTokenIDs map[string]int           `json:"special_token_ids,omitempty"`
 	Artifacts       DatasetManifestArtifacts `json:"artifacts,omitempty"`
 	Splits          map[string]DatasetSplit  `json:"splits"`
@@ -45,10 +50,14 @@ type DatasetManifestArtifacts struct {
 // DatasetSplit records the shard pattern and exact token/shard counts emitted
 // by preparation. Patterns are relative to the manifest directory.
 type DatasetSplit struct {
-	Pattern   string `json:"pattern"`
-	Tokens    int64  `json:"tokens"`
-	Shards    int    `json:"shards"`
-	Sequences int64  `json:"sequences,omitempty"`
+	Pattern            string  `json:"pattern"`
+	Tokens             int64   `json:"tokens"`
+	Shards             int     `json:"shards"`
+	Sequences          int64   `json:"sequences,omitempty"`
+	DroppedSequences   int64   `json:"dropped_sequences,omitempty"`
+	TruncatedSequences int64   `json:"truncated_sequences,omitempty"`
+	MeanSequenceTokens float64 `json:"mean_sequence_tokens,omitempty"`
+	MaxSequenceTokens  int     `json:"max_sequence_tokens,omitempty"`
 }
 
 // LoadDatasetManifest parses and validates a manifest from disk.
@@ -128,6 +137,30 @@ func (m *DatasetManifest) Validate() error {
 	if m.ShardFormat != DatasetShardFormatTokenStreamV1 && m.ShardFormat != DatasetShardFormatSequenceV1 {
 		return fmt.Errorf("shard_format=%q is unsupported; want %q or %q", m.ShardFormat, DatasetShardFormatTokenStreamV1, DatasetShardFormatSequenceV1)
 	}
+	layout := m.EffectiveSequenceLayout()
+	if m.ShardFormat == DatasetShardFormatTokenStreamV1 {
+		if layout != "" || m.RecordSeqLen != 0 {
+			return fmt.Errorf("sequence_layout and record_seq_len require shard_format=%q", DatasetShardFormatSequenceV1)
+		}
+	} else {
+		switch layout {
+		case DatasetSequenceLayoutPackedSegments:
+			if m.RecordSeqLen != 0 {
+				return fmt.Errorf("record_seq_len is valid only with sequence_layout=%q", DatasetSequenceLayoutOneRecordRow)
+			}
+		case DatasetSequenceLayoutOneRecordRow:
+			if m.RecordSeqLen < 3 {
+				return fmt.Errorf("record_seq_len=%d must be >= 3 for one-record-per-row framing", m.RecordSeqLen)
+			}
+		default:
+			return fmt.Errorf("sequence_layout=%q is unsupported", layout)
+		}
+		for _, name := range []string{"pad", "bos", "eos"} {
+			if _, ok := m.SpecialTokenIDs[name]; !ok {
+				return fmt.Errorf("record-oriented sequence datasets require special_token_ids.%s", name)
+			}
+		}
+	}
 	seenSpecialIDs := make(map[int]string, len(m.SpecialTokenIDs))
 	for name, id := range m.SpecialTokenIDs {
 		if strings.TrimSpace(name) == "" {
@@ -166,14 +199,36 @@ func (m *DatasetManifest) Validate() error {
 		if split.Sequences < 0 {
 			return fmt.Errorf("splits.%s.sequences=%d must be >= 0", name, split.Sequences)
 		}
+		if split.DroppedSequences < 0 || split.TruncatedSequences < 0 {
+			return fmt.Errorf("splits.%s dropped/truncated sequence counts must be >= 0", name)
+		}
+		if math.IsNaN(split.MeanSequenceTokens) || math.IsInf(split.MeanSequenceTokens, 0) || split.MeanSequenceTokens < 0 || split.MaxSequenceTokens < 0 {
+			return fmt.Errorf("splits.%s sequence length statistics must be >= 0", name)
+		}
 		if split.Tokens > 0 && split.Shards == 0 {
 			return fmt.Errorf("splits.%s has %d tokens but zero shards", name, split.Tokens)
 		}
 		if m.ShardFormat == DatasetShardFormatSequenceV1 && split.Tokens > 0 && split.Sequences == 0 {
 			return fmt.Errorf("splits.%s has %d sequence tokens but zero sequences", name, split.Tokens)
 		}
+		if layout == DatasetSequenceLayoutOneRecordRow && split.MaxSequenceTokens > m.RecordSeqLen-2 {
+			return fmt.Errorf("splits.%s.max_sequence_tokens=%d exceeds record content capacity %d", name, split.MaxSequenceTokens, m.RecordSeqLen-2)
+		}
 	}
 	return nil
+}
+
+// EffectiveSequenceLayout preserves the original packed-segment behavior for
+// sequence manifests written before sequence_layout was introduced.
+func (m *DatasetManifest) EffectiveSequenceLayout() string {
+	if m == nil || m.ShardFormat != DatasetShardFormatSequenceV1 {
+		return ""
+	}
+	layout := strings.ToLower(strings.TrimSpace(m.SequenceLayout))
+	if layout == "" {
+		return DatasetSequenceLayoutPackedSegments
+	}
+	return layout
 }
 
 // ValidateModelVocab rejects using a token dataset with an incompatible model
@@ -194,6 +249,7 @@ func (m *DatasetManifest) normalize() {
 	m.Modality = strings.ToLower(strings.TrimSpace(m.Modality))
 	m.TokenDType = strings.ToLower(strings.TrimSpace(m.TokenDType))
 	m.ShardFormat = strings.ToLower(strings.TrimSpace(m.ShardFormat))
+	m.SequenceLayout = strings.ToLower(strings.TrimSpace(m.SequenceLayout))
 }
 
 func validDatasetIdentifier(value string) bool {

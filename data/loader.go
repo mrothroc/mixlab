@@ -160,9 +160,11 @@ type Loader struct {
 }
 
 type sequencePacking struct {
-	padID int
-	bosID int
-	eosID int
+	padID        int
+	bosID        int
+	eosID        int
+	layout       string
+	recordSeqLen int
 }
 
 // Batch is a fixed-shape loader result. Optional masks are nil for legacy flat
@@ -219,7 +221,10 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 		if err != nil {
 			return nil, err
 		}
-		return &Loader{sequences: sequences, packing: &sequencePacking{padID: pad, bosID: bos, eosID: eos}}, nil
+		return &Loader{sequences: sequences, packing: &sequencePacking{
+			padID: pad, bosID: bos, eosID: eos,
+			layout: manifest.EffectiveSequenceLayout(), recordSeqLen: manifest.RecordSeqLen,
+		}}, nil
 	}
 	s, err := newTokenStreamWithOptions(pattern, seed, opts)
 	if err != nil {
@@ -244,6 +249,9 @@ func (l *Loader) NextBatchDetailed(batchTokens, seqLen int) (Batch, error) {
 		return Batch{}, fmt.Errorf("invalid batch shape: batchTokens=%d seqLen=%d; pass positive values with batchTokens divisible by seqLen", batchTokens, seqLen)
 	}
 	if l.sequences != nil {
+		if l.packing.layout == DatasetSequenceLayoutOneRecordRow {
+			return l.nextRecordBatch(batchTokens, seqLen)
+		}
 		return l.nextSequenceBatch(batchTokens, seqLen)
 	}
 	if l.framing.Enabled() {
@@ -261,6 +269,41 @@ func (l *Loader) NextBatchDetailed(batchTokens, seqLen int) (Batch, error) {
 		y[i] = int(tok[i+1])
 	}
 	return Batch{X: x, Y: y}, nil
+}
+
+func (l *Loader) nextRecordBatch(batchTokens, seqLen int) (Batch, error) {
+	if seqLen != l.packing.recordSeqLen {
+		return Batch{}, fmt.Errorf("one-record-per-row dataset requires seq_len=%d, got %d", l.packing.recordSeqLen, seqLen)
+	}
+	x := make([]int, batchTokens)
+	y := make([]int, batchTokens)
+	lossMask := make([]float32, batchTokens)
+	maskEligible := make([]uint8, batchTokens)
+	for rowStart := 0; rowStart < batchTokens; rowStart += seqLen {
+		record, err := l.sequences.takeRecord()
+		if err != nil {
+			return Batch{}, err
+		}
+		if len(record) > seqLen-2 {
+			return Batch{}, fmt.Errorf("record has %d tokens but seq_len=%d permits at most %d; re-run prepare with an explicit record overflow policy", len(record), seqLen, seqLen-2)
+		}
+		rowEnd := rowStart + seqLen
+		for i := rowStart; i < rowEnd; i++ {
+			x[i], y[i] = l.packing.padID, l.packing.padID
+		}
+		x[rowStart] = l.packing.bosID
+		for i, token := range record {
+			x[rowStart+1+i] = int(token)
+			maskEligible[rowStart+1+i] = 1
+		}
+		eosInput := rowStart + len(record) + 1
+		x[eosInput] = l.packing.eosID
+		for i := rowStart; i < eosInput; i++ {
+			y[i] = x[i+1]
+			lossMask[i] = 1
+		}
+	}
+	return Batch{X: x, Y: y, LossMask: lossMask, MaskEligible: maskEligible}, nil
 }
 
 func (l *Loader) nextSequenceBatch(batchTokens, seqLen int) (Batch, error) {

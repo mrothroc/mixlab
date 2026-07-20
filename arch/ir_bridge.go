@@ -283,7 +283,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		embeddingDropout = 0
 	}
 	segmentAttentionMask := cfg.Training.AttentionSegmentMaskEnabled() && !state.SegmentMaskInactive
-	framedCausalLoss := cfg.Training.ExampleFramingEnabled() && !state.ExampleFramingInactive
+	framedCausalLoss := (cfg.Training.ExampleFramingEnabled() || cfg.Training.RecordFramingEnabled()) && !state.ExampleFramingInactive
 	wordStructural := cfg.Training.WordStructuralObjective
 	if state.HiddenCaptureTopK > 0 {
 		wordStructural = nil

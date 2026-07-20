@@ -150,3 +150,20 @@ func (s *sequenceStream) takeChunk(max int) ([]uint16, error) {
 	}
 	return nil, fmt.Errorf("sequence shards contain no non-empty records")
 }
+
+func (s *sequenceStream) takeRecord() ([]uint16, error) {
+	for attempts := 0; attempts <= len(s.files); attempts++ {
+		if s.record >= len(s.records) {
+			if err := s.advanceRecord(); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		record := append([]uint16(nil), s.records[s.record]...)
+		if err := s.advanceRecord(); err != nil {
+			return nil, err
+		}
+		return record, nil
+	}
+	return nil, fmt.Errorf("sequence shards contain no records")
+}

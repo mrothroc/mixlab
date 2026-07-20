@@ -1097,6 +1097,16 @@ the record packer. Their fixed vocabulary uses `<MASK>=3`, so MLM configs must
 set `training.mlm_mask_token_id: 3`. Causal and MLM/MNTP objectives are
 supported; full continuous-stream BPB evaluation is intentionally disabled.
 
+Manifest-backed text datasets with
+`sequence_layout: "one_record_per_row"` enable per-record causal framing
+without a model-config field. Every source record becomes one
+`[BOS] content [EOS] [PAD]...` row, loss is active through the EOS target, and
+all PAD targets are ignored. The manifest supplies `record_seq_len` and
+semantic `pad`, `bos`, and `eos` token IDs; its length must match config
+`seq_len`. V1 supports causal training only and rejects an additional segment
+mask or `training.example_framing` because neither composes meaningfully with
+one-record-per-row data.
+
 `example_framing` is for raw continuous token shards that should train as independent fixed examples. It shuffles `content_len` raw-token chunks, drops ragged shard tails, prepends `bos_id`, appends `eos_id`, and masks the final EOS input position so it never predicts the next example. V1 is causal-training-only and rejects masked objectives, hybrid, block diffusion, MTP, first-byte masked loss, distillation, data2vec, attention segment masking, TTT eval settings, and `seq_len_schedule`.
 
 ```json

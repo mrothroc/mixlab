@@ -20,6 +20,12 @@ type PrepareOptions struct {
 	TokenizerPath           string
 	WWMCompatibleTokenizer  bool
 	TextFieldName           string
+	FramePerRecord          bool
+	RecordSeqLen            int
+	RecordPADID             int
+	RecordBOSID             int
+	RecordEOSID             int
+	RecordOverflow          string
 	CharVocabSize           int
 	CharMaxPerToken         int
 	MinimalPairOut          string
@@ -43,6 +49,26 @@ func runPrepare(opts PrepareOptions) error {
 	}
 	if opts.Output == "" {
 		return fmt.Errorf("-prepare-output-dir (or legacy -output) is required for prepare mode; pass an output directory, e.g.: mixlab -mode prepare -input corpus.jsonl -prepare-output-dir data/")
+	}
+	if opts.FramePerRecord {
+		if strings.ToLower(strings.TrimSpace(opts.InputFormat)) != "text" {
+			return fmt.Errorf("-frame-per-record requires -input-format=text")
+		}
+		if opts.RecordSeqLen < 3 {
+			return fmt.Errorf("-frame-per-record requires -record-seq-len >= 3")
+		}
+		ids := []int{opts.RecordPADID, opts.RecordBOSID, opts.RecordEOSID}
+		if ids[0] < 0 || ids[1] < 0 || ids[2] < 0 {
+			return fmt.Errorf("-frame-per-record requires non-negative -record-pad-id, -record-bos-id, and -record-eos-id")
+		}
+		if ids[0] == ids[1] || ids[0] == ids[2] || ids[1] == ids[2] {
+			return fmt.Errorf("-record-pad-id, -record-bos-id, and -record-eos-id must be distinct")
+		}
+		switch opts.RecordOverflow {
+		case "", "error", "drop", "truncate":
+		default:
+			return fmt.Errorf("invalid -record-overflow=%q (want error, drop, or truncate)", opts.RecordOverflow)
+		}
 	}
 
 	scriptPath, err := findPrepareScript()
@@ -77,6 +103,18 @@ func runPrepare(opts PrepareOptions) error {
 	}
 	if opts.TextFieldName != "" && opts.TextFieldName != "text" {
 		args = append(args, "--text-field", opts.TextFieldName)
+	}
+	if opts.FramePerRecord {
+		args = append(args,
+			"--frame-per-record",
+			"--record-seq-len", fmt.Sprintf("%d", opts.RecordSeqLen),
+			"--record-pad-id", fmt.Sprintf("%d", opts.RecordPADID),
+			"--record-bos-id", fmt.Sprintf("%d", opts.RecordBOSID),
+			"--record-eos-id", fmt.Sprintf("%d", opts.RecordEOSID),
+		)
+		if opts.RecordOverflow != "" {
+			args = append(args, "--record-overflow", opts.RecordOverflow)
+		}
 	}
 	if opts.CharVocabSize > 0 {
 		args = append(args, "--char-vocab-size", fmt.Sprintf("%d", opts.CharVocabSize))

@@ -19,10 +19,16 @@ tokenizer compatibility notes.
 | `-prepare-output-dir` | Output directory for shards and tokenizer artifacts. Preferred alias for legacy `-output`. |
 | `-output` | Legacy output directory. |
 | `-vocab-size` | BPE vocabulary size when training a tokenizer. Default: `1024`. |
-| `-val-split` | Fraction of tokens reserved for validation. Default: `0.1`. |
+| `-val-split` | Fraction of tokens reserved for validation, or fraction of records with `-frame-per-record`. Default: `0.1`. |
 | `-tokenizer-path` | Existing `tokenizer.json` to reuse instead of training a tokenizer. |
 | `-wwm-compatible-tokenizer` | Train or validate tokenizer metadata suitable for whole-word MLM. The built-in path uses prefix-space ByteLevel BPE and reserves `[PAD]`, `[CLS]`, `[SEP]`, `[UNK]`, and `[MASK]` as ids `0..4`. |
 | `-text-field` | JSONL field that contains text. Default: `text`. |
+| `-frame-per-record` | Preserve each input text/JSONL record and train it as one independently framed row. |
+| `-record-seq-len` | Required with `-frame-per-record`. Fixed row length including BOS/EOS and PAD. |
+| `-record-pad-id` | Required PAD token ID for per-record rows. |
+| `-record-bos-id` | Required BOS token ID for per-record rows. |
+| `-record-eos-id` | Required EOS token ID for per-record rows. |
+| `-record-overflow` | Policy when a tokenized record exceeds `record-seq-len - 2`: `error` (default), `drop`, or `truncate`. |
 | `-char-vocab-size` | Write tokenizer-level `char_features.bin` with this char vocab size. `0` disables. |
 | `-char-max-per-token` | Fixed char feature slots per token when char features are enabled. Default: `16`. |
 | `-minimal-pair-out` | Optional JSONL path for corpus-derived clean/corrupt minimal-pair records. |
@@ -62,6 +68,38 @@ block-diagonal segment IDs and loss masks automatically. Do not also set
 
 Text tokenizer, whole-word, char-feature, and minimal-pair preparation flags
 are rejected with `-input-format fasta` rather than being silently ignored.
+
+## Per-record causal examples
+
+Use per-record framing when every source record is a complete generative
+example, such as a molecule string, sentence, code snippet, or biological
+sequence:
+
+```bash
+./mixlab -mode prepare \
+  -input examples.jsonl \
+  -text-field text \
+  -tokenizer-path tokenizer.json \
+  -prepare-output-dir data/examples \
+  -frame-per-record \
+  -record-seq-len 64 \
+  -record-pad-id 0 \
+  -record-bos-id 1 \
+  -record-eos-id 2 \
+  -record-overflow drop
+```
+
+Preparation writes variable-length records without BOS, EOS, or padding. At
+load time, each record becomes `[BOS] content [EOS] [PAD]...`; causal loss is
+active through the EOS target and zero for every PAD target. Records are
+shuffled as units and never share or cross a row. Tokenizer-added special
+tokens are disabled while encoding records so framing tokens are not doubled.
+
+The manifest records `sequence_layout: "one_record_per_row"`, the required
+`record_seq_len`, semantic token IDs, and per-split record counts, dropped and
+truncated counts, and mean/max tokenized lengths. V1 supports causal training
+only. Prefer `error` or `drop` when record completeness matters; `truncate` is
+an explicit lossy policy.
 
 When `-char-vocab-size` is enabled, `prepare` writes a reusable
 tokenizer-level `char_features.bin` next to `tokenizer.json`. Configs with

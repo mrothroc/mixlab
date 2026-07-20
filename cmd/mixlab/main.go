@@ -94,6 +94,12 @@ func main() {
 	prepTokenizerPath := flag.String("tokenizer-path", "", "path to tokenizer.json for prepare reuse or export-hf bundling")
 	prepWWMCompatibleTokenizer := flag.Bool("wwm-compatible-tokenizer", false, "train or validate a tokenizer with reliable whole-word boundaries (prepare mode)")
 	prepTextField := flag.String("text-field", "text", "JSON field for text in JSONL (prepare mode)")
+	prepFramePerRecord := flag.Bool("frame-per-record", false, "preserve each text/JSONL record as one BOS/EOS/PAD-framed training row")
+	prepRecordSeqLen := flag.Int("record-seq-len", 0, "fixed row length for -frame-per-record")
+	prepRecordPADID := flag.Int("record-pad-id", -1, "PAD token ID for -frame-per-record")
+	prepRecordBOSID := flag.Int("record-bos-id", -1, "BOS token ID for -frame-per-record")
+	prepRecordEOSID := flag.Int("record-eos-id", -1, "EOS token ID for -frame-per-record")
+	prepRecordOverflow := flag.String("record-overflow", "error", "overlong record policy: error, drop, or truncate")
 	prepCharVocabSize := flag.Int("char-vocab-size", 0, "write tokenizer-level char_features.bin with this char vocab size; 0 disables (prepare mode)")
 	prepCharMaxPerToken := flag.Int("char-max-per-token", 16, "fixed char feature slots per token when -char-vocab-size is enabled (prepare mode)")
 	prepMinimalPairOut := flag.String("minimal-pair-out", "", "write corpus-derived minimal-pair JSONL to this path (prepare mode)")
@@ -187,6 +193,12 @@ func main() {
 			TokenizerPath:           *prepTokenizerPath,
 			WWMCompatibleTokenizer:  *prepWWMCompatibleTokenizer,
 			TextFieldName:           *prepTextField,
+			FramePerRecord:          *prepFramePerRecord,
+			RecordSeqLen:            *prepRecordSeqLen,
+			RecordPADID:             *prepRecordPADID,
+			RecordBOSID:             *prepRecordBOSID,
+			RecordEOSID:             *prepRecordEOSID,
+			RecordOverflow:          *prepRecordOverflow,
 			CharVocabSize:           *prepCharVocabSize,
 			CharMaxPerToken:         *prepCharMaxPerToken,
 			MinimalPairOut:          *prepMinimalPairOut,
@@ -399,6 +411,7 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Output", []string{"prepare-output-dir", "output"}},
 		{"Input and split", []string{"input-format", "val-split"}},
 		{"Text tokenizer/data", []string{"vocab-size", "tokenizer-path", "wwm-compatible-tokenizer", "text-field"}},
+		{"Per-record framing", []string{"frame-per-record", "record-seq-len", "record-pad-id", "record-bos-id", "record-eos-id", "record-overflow"}},
 		{"FASTA nucleotide data", []string{"nucleotide-alphabet", "nucleotide-ambiguous-symbols", "nucleotide-invalid-symbol-policy"}},
 		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},
 		{"Minimal pair artifact", []string{"minimal-pair-out", "minimal-pair-corruptions", "minimal-pair-weights", "minimal-pair-morphology", "minimal-pair-max-pairs", "minimal-pair-seed", "minimal-pair-report-out", "minimal-pair-sample-out", "minimal-pair-sample-count"}},

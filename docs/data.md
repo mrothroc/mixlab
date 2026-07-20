@@ -148,6 +148,15 @@ describes the sequence domain without changing the backbone; later releases
 will introduce separate
 versioned representations for continuous features.
 
+Text datasets prepared with `-frame-per-record` also use
+`mixlab_sequence_shard_v1`, with `sequence_layout: "one_record_per_row"` and a
+required `record_seq_len`. Each shard record contains content tokens only. The
+loader adds BOS/EOS and trailing PAD at runtime, places every record at position
+zero in its own row, and masks every PAD target from causal loss. This is the
+appropriate layout when source records are complete examples and must not be
+split or packed together. Record mode splits validation data by record rather
+than by token offset.
+
 ## Data/config compatibility
 
 The `vocab_size` in your JSON config must match the tokenizer used to create
@@ -186,3 +195,10 @@ self-attention so tokens attend only within their segment. Causal,
 bidirectional, and hybrid masks still apply inside each segment. This is a
 training feature for packed shards; prompt-time segmentation is out of scope in
 v1.
+
+Packed streams and per-record framing solve different problems. Segment masks
+preserve attention boundaries inside densely packed rows, while per-record
+framing preserves the generation-time condition that every row starts at BOS
+position zero. `training.example_framing` is a third mode for fixed chunks cut
+from an otherwise continuous raw token stream; it does not preserve source
+record boundaries.

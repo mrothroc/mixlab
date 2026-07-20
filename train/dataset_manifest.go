@@ -30,6 +30,30 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		}
 		return nil
 	}
+	if manifest.EffectiveSequenceLayout() == data.DatasetSequenceLayoutOneRecordRow {
+		if cfg.Training.ReverseComplementProb > 0 {
+			return fmt.Errorf("config %q training.reverse_complement_prob requires packed nucleotide sequence data", cfg.Name)
+		}
+		if cfg.SeqLen != manifest.RecordSeqLen {
+			return fmt.Errorf("dataset manifest %q record_seq_len=%d does not match config seq_len=%d", manifestPath, manifest.RecordSeqLen, cfg.SeqLen)
+		}
+		if cfg.Training.EffectiveObjective() != arch.ObjectiveCausal {
+			return fmt.Errorf("one-record-per-row framing supports training.objective=\"causal\" in v1; got %q", cfg.Training.EffectiveObjective())
+		}
+		if cfg.Training.ExampleFramingEnabled() {
+			return fmt.Errorf("config %q training.example_framing conflicts with manifest-backed one-record-per-row framing", cfg.Name)
+		}
+		if cfg.Training.EffectiveAttentionSegmentMask() != "" {
+			return fmt.Errorf("config %q training.attention_segment_mask is unnecessary and unsupported with one-record-per-row framing", cfg.Name)
+		}
+		cfg.Training.DatasetRecordFraming = true
+		cfg.Training.DatasetPADID = manifest.SpecialTokenIDs["pad"]
+		cfg.Training.DatasetBOSID = manifest.SpecialTokenIDs["bos"]
+		cfg.Training.DatasetEOSID = manifest.SpecialTokenIDs["eos"]
+		fmt.Printf("  [%s] per-record framing: seq_len=%d bos_id=%d eos_id=%d pad_id=%d\n",
+			name, manifest.RecordSeqLen, cfg.Training.DatasetBOSID, cfg.Training.DatasetEOSID, cfg.Training.DatasetPADID)
+		return nil
+	}
 	if manifest.Modality != "nucleotide" {
 		return fmt.Errorf("dataset manifest %q uses record-oriented sequence shards for unsupported modality %q", manifestPath, manifest.Modality)
 	}
