@@ -303,6 +303,34 @@ func (t *data2VecTeacher) updateFromStudentWeights(weights [][]float32, step int
 	return nil
 }
 
+func (t *data2VecTeacher) restoreEMAWeights(weights [][]float32) error {
+	if t == nil {
+		if len(weights) != 0 {
+			return fmt.Errorf("checkpoint contains data2vec EMA state but training.data2vec is disabled")
+		}
+		return nil
+	}
+	if len(weights) != len(t.emaWeights) {
+		return fmt.Errorf("data2vec EMA weight count mismatch: checkpoint=%d trainer=%d", len(weights), len(t.emaWeights))
+	}
+	restored := make([][]float32, len(weights))
+	for i := range weights {
+		want := shapeProduct(t.shapes[i].Shape)
+		if len(weights[i]) != want {
+			return fmt.Errorf("data2vec EMA weight %d size=%d want=%d", i, len(weights[i]), want)
+		}
+		restored[i] = append([]float32(nil), weights[i]...)
+	}
+	handles, err := uploadWeightHandles(t.shapes, restored)
+	if err != nil {
+		return err
+	}
+	gpu.FreeHandles(t.handles)
+	t.handles = handles
+	t.emaWeights = restored
+	return nil
+}
+
 func updateData2VecEMAWeights(ema, current [][]float32, spec *arch.Data2VecSpec, step int) {
 	tau := float32(data2VecTauForStep(spec, step))
 	updateEMAWeights(ema, current, tau)

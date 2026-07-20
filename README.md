@@ -146,6 +146,10 @@ framework. It trades generality for speed of iteration.
 # Train one config
 ./mixlab -mode arch -config examples/plain_3L.json -train 'data/example/train_*.bin'
 
+# Resume the newest complete periodic checkpoint without resetting optimizer or LR
+./mixlab -mode arch -config examples/plain_3L.json \
+    -train 'data/example/train_*.bin' -resume runs/plain_3L/checkpoints
+
 # Compare every config in examples/
 ./mixlab -mode arch_race -configs examples/ -train 'data/example/train_*.bin'
 

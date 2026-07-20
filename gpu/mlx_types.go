@@ -133,14 +133,39 @@ type TrainerCompileStats struct {
 }
 
 type TrainerOptimizerStats struct {
-	AttemptedSteps        uint64
-	CommittedSteps        uint64
-	SkippedSteps          uint64
-	ConsecutiveSkipped    uint64
-	LastStepSkipped       bool
-	LastLossNonfinite     uint64
-	LastGradientNonfinite uint64
-	LastStateNonfinite    uint64
+	AttemptedSteps        uint64 `json:"attempted_steps"`
+	CommittedSteps        uint64 `json:"committed_steps"`
+	SkippedSteps          uint64 `json:"skipped_steps"`
+	ConsecutiveSkipped    uint64 `json:"consecutive_skipped"`
+	LastStepSkipped       bool   `json:"last_step_skipped"`
+	LastLossNonfinite     uint64 `json:"last_loss_nonfinite"`
+	LastGradientNonfinite uint64 `json:"last_gradient_nonfinite"`
+	LastStateNonfinite    uint64 `json:"last_state_nonfinite"`
+}
+
+// OptimizerStateKind identifies one persistent tensor owned by the trainer.
+// The numeric values are part of the native bridge and resumable checkpoint
+// format; append new kinds instead of reordering existing values.
+type OptimizerStateKind int
+
+const (
+	OptimizerStateAdamM OptimizerStateKind = iota
+	OptimizerStateAdamV
+	OptimizerStateMuonMomentum
+	OptimizerStateMuonSecondMoment
+	OptimizerStateSGDMomentum
+)
+
+type TrainerOptimizerStateTensor struct {
+	Kind        OptimizerStateKind
+	WeightIndex int
+	Shape       []int
+	Data        []float32
+}
+
+type TrainerStateSnapshot struct {
+	Optimizer TrainerOptimizerStats
+	Tensors   []TrainerOptimizerStateTensor
 }
 
 type TrainerBackwardTraceStats struct {

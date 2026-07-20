@@ -12,12 +12,7 @@ import (
 	"github.com/mrothroc/mixlab/data"
 )
 
-// runTrain is the core training loop. It:
-// 1. Builds the IR program from the config
-// 2. Initializes the GPU trainer
-// 3. Runs the training loop with LR scheduling
-// 4. Optionally exports weights and runs BPB evaluation
-// 5. Reports loss and validation metrics
+// runTrain executes one configured training run end to end.
 func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainResult, error) {
 	// MLX CUDA uses thread-local stream state, so trainer creation and all
 	// subsequent trainer calls must stay on the same OS thread.
@@ -32,6 +27,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 	if opts.CheckpointEvery > 0 && opts.CheckpointDir == "" {
 		return TrainResult{}, fmt.Errorf("-checkpoint-dir is required when -checkpoint-every > 0")
+	}
+	if opts.Resume != "" && opts.SafetensorsLoad != "" {
+		return TrainResult{}, fmt.Errorf("-resume and -safetensors-load are mutually exclusive; use -resume for full training state or -safetensors-load for a weights-only warm start")
 	}
 	swaOverrideLogs, err := applyTrainingSWAOverrides(cfg, opts)
 	if err != nil {
@@ -124,6 +122,19 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			name, pllMarginSampler.path, len(pllMarginSampler.records), s.Margin, s.Weight, s.AnchorWeight, s.BatchFraction, s.Target)
 	}
 
+	resumeSetup, err := prepareResumeRun(cfg, trainPattern, opts.Resume, earlyStop)
+	if err != nil {
+		return TrainResult{}, err
+	}
+	sched := resumeSetup.Scheduler
+	steps := resumeSetup.Steps
+	startStep := resumeSetup.StartStep
+	checkpointSchedule := resumeSetup.CheckpointSchedule
+	resumed := resumeSetup.Loaded
+	if resumed != nil {
+		fmt.Printf("  [%s] resuming complete checkpoint %s at step %d/%d\n", name, resumed.Manifest.ManifestPath, startStep, steps)
+	}
+
 	// Build IR program
 	prog, err := BuildIRProgramFromConfig(cfg)
 	if err != nil {
@@ -132,16 +143,19 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	fmt.Printf("  [%s] IR program: %d ops, %d weights\n", name, len(prog.Ops), prog.NumWeights)
 	recurrenceActivationStep := cfg.Training.EffectiveRecurrenceActivationStep()
 	recurrenceScheduled := !recurrencePhasesScheduled && recurrenceActivationStep > 0 && len(cfg.Recurrence) > 0
-	recurrenceActive := !recurrenceScheduled
+	recurrenceActive := !recurrenceScheduled || startStep >= recurrenceActivationStep
 	currentRecurrencePhase := initialRecurrencePhase(recurrencePhasesScheduled)
+	if recurrencePhasesScheduled {
+		currentRecurrencePhase = recurrencePhaseIndexForStep(recurrencePhaseStarts, startStep)
+	}
 	mtpUntieScheduled := cfg.MTPUntieEnabled()
 	mtpUntieStep := cfg.EffectiveMTPUntieStep()
-	headUntied := mtpUntieScheduled && mtpUntieStep <= 0
+	headUntied := mtpUntieScheduled && startStep >= mtpUntieStep
 	mtpAuxActivationScheduled := cfg.MTPActivateAuxLossEnabled()
 	mtpAuxActivateStep := cfg.EffectiveMTPActivateStep()
-	mtpAuxActive := !mtpAuxActivationScheduled || mtpAuxActivateStep <= 0
-	currentObjective := objectiveForStep(cfg.Training, 0)
-	currentSeqLen := cfg.Training.EffectiveSeqLenForStep(seqLen, 0)
+	mtpAuxActive := !mtpAuxActivationScheduled || startStep >= mtpAuxActivateStep
+	currentObjective := objectiveForStep(cfg.Training, startStep)
+	currentSeqLen := cfg.Training.EffectiveSeqLenForStep(seqLen, startStep)
 	currentBatchSize := batchTokens / currentSeqLen
 	programCache := make(map[trainingProgramCacheKey]*arch.Program)
 	trainingProgramForKey := func(key trainingProgramCacheKey) (*arch.Program, error) {
@@ -205,9 +219,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	case arch.ObjectiveMLM, arch.ObjectiveMNTP:
 		fmt.Printf("  [%s] training objective: %s\n", name, cfg.Training.EffectiveObjective())
 	case arch.ObjectiveHybrid:
-		causalLabel := fmt.Sprintf("%.2f", cfg.Training.EffectiveHybridCLMFractionForStep(0))
+		causalLabel := fmt.Sprintf("%.2f", cfg.Training.EffectiveHybridCLMFractionForStep(startStep))
 		if len(cfg.Training.HybridCLMFractionSchedule) > 0 {
-			causalLabel = fmt.Sprintf("%.2f scheduled(%s)", cfg.Training.EffectiveHybridCLMFractionForStep(0), cfg.Training.HybridCLMFractionScheduleMode)
+			causalLabel = fmt.Sprintf("%.2f scheduled(%s)", cfg.Training.EffectiveHybridCLMFractionForStep(startStep), cfg.Training.HybridCLMFractionScheduleMode)
 		}
 		fmt.Printf("  [%s] training objective: hybrid granularity=%s causal=%s secondary=%s\n",
 			name, cfg.Training.EffectiveHybridMixGranularity(), causalLabel, cfg.Training.EffectiveHybridSecondaryObjective())
@@ -220,10 +234,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			name, cfg.Training.ExportHead, cfg.Training.DiffusionHead, formatMultiheadHeadsForLog(cfg.Training.Heads))
 	}
 	if len(cfg.Training.SeqLenSchedule) > 0 {
-		fmt.Printf("  [%s] seq_len schedule: max=%d active_step0=%d\n", name, seqLen, currentSeqLen)
+		fmt.Printf("  [%s] seq_len schedule: max=%d active_step%d=%d\n", name, seqLen, startStep, currentSeqLen)
 	}
 	if len(cfg.Training.MLMMaskProbSchedule) > 0 {
-		fmt.Printf("  [%s] MLM mask probability schedule enabled: step0=%.3f\n", name, cfg.Training.EffectiveMLMMaskProbForStep(0))
+		fmt.Printf("  [%s] MLM mask probability schedule enabled: step%d=%.3f\n", name, startStep, cfg.Training.EffectiveMLMMaskProbForStep(startStep))
 	}
 	if len(cfg.Training.MLMMaskUnitSchedule) > 0 {
 		fmt.Printf("  [%s] MLM mask unit schedule: %s\n", name, formatMLMMaskUnitSchedule(cfg.Training.MLMMaskUnitSchedule))
@@ -232,7 +246,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 
 	var shapes []WeightShape
-	if opts.SafetensorsPath != "" || opts.CheckpointEvery > 0 || cfg.Training.Data2VecActive() {
+	if opts.SafetensorsPath != "" || opts.CheckpointEvery > 0 || cfg.Training.Data2VecActive() || resumed != nil {
 		shapes, err = computeWeightShapes(cfg)
 		if err != nil {
 			return TrainResult{}, fmt.Errorf("compute weight shapes: %w", err)
@@ -241,18 +255,22 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 	// Load weights from safetensors if requested
 	var loadedWeights [][]float32
-	if opts.SafetensorsLoad != "" {
+	loadPath := opts.SafetensorsLoad
+	if resumed != nil {
+		loadPath = resumed.ModelPath
+	}
+	if loadPath != "" {
 		if len(shapes) == 0 {
 			shapes, err = computeWeightShapes(cfg)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("compute weight shapes for load: %w", err)
 			}
 		}
-		loadedWeights, err = loadSafetensorsWeights(opts.SafetensorsLoad, shapes)
+		loadedWeights, err = loadSafetensorsWeights(loadPath, shapes)
 		if err != nil {
-			return TrainResult{}, fmt.Errorf("load safetensors %q: %w", opts.SafetensorsLoad, err)
+			return TrainResult{}, fmt.Errorf("load safetensors %q: %w", loadPath, err)
 		}
-		fmt.Printf("  [%s] loaded %d weights from %s\n", name, len(loadedWeights), opts.SafetensorsLoad)
+		fmt.Printf("  [%s] loaded %d weights from %s\n", name, len(loadedWeights), loadPath)
 	}
 
 	if err := configureMLXMemoryLimits(name); err != nil {
@@ -277,7 +295,22 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return TrainResult{}, fmt.Errorf("init GPU trainer: %w", err)
 	}
 	defer trainer.CloseTrainer()
-	tttDiagnosticsEnabled := len(arch.TTTMLPInnerLRScalesForStep(cfg.Blocks, 0)) > 0
+	stepSetter, ok := trainer.(gpuTrainingStepSetter)
+	if !ok {
+		return TrainResult{}, fmt.Errorf("trainer does not support deterministic training-step RNG")
+	}
+	if err := stepSetter.SetTrainingStepGPU(startStep); err != nil {
+		return TrainResult{}, fmt.Errorf("set training step %d: %w", startStep, err)
+	}
+	if resumed != nil {
+		if err := restoreResumableTrainerState(trainer, *resumed); err != nil {
+			return TrainResult{}, err
+		}
+		if err := trainer.SetQATGPU(qatModeForStep(cfg.Training, startStep)); err != nil {
+			return TrainResult{}, fmt.Errorf("restore QAT mode at step %d: %w", startStep, err)
+		}
+	}
+	tttDiagnosticsEnabled := len(arch.TTTMLPInnerLRScalesForStep(cfg.Blocks, startStep)) > 0
 	if opts.telemetry != nil {
 		if err := enableTrainingStepComponentLossCapture(trainer); err != nil {
 			return TrainResult{}, err
@@ -293,7 +326,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		if err != nil {
 			return TrainResult{}, fmt.Errorf("init data2vec teacher: %w", err)
 		}
+		if resumed != nil {
+			if err := data2vec.restoreEMAWeights(resumed.Data2Vec); err != nil {
+				return TrainResult{}, fmt.Errorf("restore data2vec EMA: %w", err)
+			}
+		}
 		defer data2vec.Close()
+	} else if resumed != nil && len(resumed.Data2Vec) != 0 {
+		return TrainResult{}, fmt.Errorf("checkpoint contains data2vec EMA state but training.data2vec is disabled")
 	}
 	causalEval := causalEvalSwitcher{
 		trainer:       trainer,
@@ -307,11 +347,22 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	if swaStart > 0 {
 		swaEMA = make([][]float32, prog.NumWeights)
 	}
+	if resumed != nil {
+		if err := restoreSWAWeights(&swaEMA, resumed.SWA, shapes, swaStart > 0); err != nil {
+			return TrainResult{}, err
+		}
+	}
 
 	// Create data loader
 	loader, err := data.NewLoaderWithOptions(trainPattern, seed, effectiveLoaderOptions(cfg))
 	if err != nil {
 		return TrainResult{}, err
+	}
+	if startStep > 0 {
+		fmt.Printf("  [%s] replaying %d loader batches to restore deterministic data position\n", name, startStep)
+		if err := replayTrainingLoader(loader, startStep, batchTokens, seqLen); err != nil {
+			return TrainResult{}, err
+		}
 	}
 
 	// Load validation set
@@ -322,7 +373,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		fmt.Printf("  [%s] no val set: %v\n", name, valErr)
 	}
 
-	sched, steps := buildTrainingScheduler(cfg.Training)
 	phaseSched, hasPhases := sched.(phaseSchedule)
 
 	var firstLoss, lastLoss float64
@@ -340,14 +390,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	componentTelemetryEnabled := opts.telemetry != nil
 	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
-	// steadyStart is set after step 0 completes — excludes one-time
-	// compile/warmup costs from tok/s and ETA estimates.
+	// steadyStart is set after the first step in this process completes, which
+	// excludes one-time compile/warmup costs from fresh and resumed runs.
 	var steadyStart time.Time
 	telemetry.state.update(telemetryUpdate{
 		Model:       name,
-		Step:        0,
+		Step:        startStep,
 		TotalSteps:  steps,
-		LR:          sched.At(0),
+		LR:          sched.At(startStep),
 		Objective:   currentObjective,
 		SeqLen:      currentSeqLen,
 		BatchTokens: batchTokens,
@@ -381,7 +431,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 	if steps > 0 {
 		initialWaitStart := time.Now()
-		stopInitialBatchWait := startSlowTrainingPhaseLogger(name, 0, "load_initial_batch")
+		stopInitialBatchWait := startSlowTrainingPhaseLogger(name, startStep, "load_initial_batch")
 		batch, ok := <-batchCh
 		stopInitialBatchWait()
 		initialDataDuration := time.Since(initialWaitStart)
@@ -393,53 +443,26 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		}
 		lastTrainBatch := batch
 		initialSubmitStart := time.Now()
-		stopInitialSubmit := startSlowTrainingPhaseLogger(name, 0, "submit_step")
-		prepared, err := prepareObjectiveBatchWithSeqLen(cfg, batch, 0, currentObjective, currentSeqLen)
-		if err != nil {
-			stopInitialSubmit()
-			return TrainResult{}, fmt.Errorf("prepare step 0 objective batch: %w", err)
-		}
-		prepared, err = maybeAttachMinimalPairs(pairSampler, cfg, 0, prepared, currentBatchSize, currentSeqLen)
-		if err != nil {
-			stopInitialSubmit()
-			return TrainResult{}, fmt.Errorf("prepare step 0 minimal-pair batch: %w", err)
-		}
-		prepared, err = maybeAttachRTDCorruption(trainer, cfg, batch, 0, prepared, currentBatchSize, currentSeqLen, currentObjective)
+		stopInitialSubmit := startSlowTrainingPhaseLogger(name, startStep, "submit_step")
+		prepared, err := prepareTrainingBatch(
+			cfg, trainer, batch, startStep, currentObjective, currentBatchSize, currentSeqLen,
+			pairSampler, invarianceSampler, pllMarginSampler, distiller, data2vec,
+		)
 		if err != nil {
 			stopInitialSubmit()
 			return TrainResult{}, err
 		}
-		prepared, err = maybeAttachInvariancePairs(invarianceSampler, cfg, 0, prepared, currentBatchSize, currentSeqLen, currentObjective)
-		if err != nil {
-			stopInitialSubmit()
-			return TrainResult{}, fmt.Errorf("prepare step 0 invariance batch: %w", err)
-		}
-		prepared, err = maybeAttachPLLMarginPairs(pllMarginSampler, cfg, 0, prepared, currentBatchSize, currentSeqLen, currentObjective)
-		if err != nil {
-			stopInitialSubmit()
-			return TrainResult{}, fmt.Errorf("prepare step 0 PLL margin batch: %w", err)
-		}
-		prepared, err = attachDistillationTeacherProbs(distiller, prepared, currentBatchSize, currentSeqLen)
-		if err != nil {
-			stopInitialSubmit()
-			return TrainResult{}, fmt.Errorf("prepare step 0 distillation batch: %w", err)
-		}
-		prepared, err = attachData2VecTargets(data2vec, prepared, currentObjective, currentBatchSize, currentSeqLen)
-		if err != nil {
-			stopInitialSubmit()
-			return TrainResult{}, fmt.Errorf("prepare step 0 data2vec batch: %w", err)
-		}
 		currentDiagnosticBatch := prepared
 		currentDiagnosticBatchSize := currentBatchSize
 		currentDiagnosticSeqLen := currentSeqLen
-		if err := submitPreparedStepGPU(trainer, prepared, currentBatchSize, currentSeqLen, sched.At(0)); err != nil {
+		if err := submitPreparedStepGPU(trainer, prepared, currentBatchSize, currentSeqLen, sched.At(startStep)); err != nil {
 			stopInitialSubmit()
-			return TrainResult{}, fmt.Errorf("submit step 0: %w", err)
+			return TrainResult{}, fmt.Errorf("submit step %d: %w", startStep, err)
 		}
 		stopInitialSubmit()
 		currentSubmitDuration := time.Since(initialSubmitStart)
 		currentPhaseIdx := -1
-		currentMLMMaskUnit := cfg.Training.EffectiveMLMMaskUnitForStep(0)
+		currentMLMMaskUnit := cfg.Training.EffectiveMLMMaskUnitForStep(startStep)
 		submitStepWithScheduledState := func(nextStep int, batch trainBatch) (time.Duration, error) {
 			if nextMode := qatModeForStep(cfg.Training, nextStep); nextMode != qatModeForStep(cfg.Training, nextStep-1) {
 				if err := trainer.SetQATGPU(nextMode); err != nil {
@@ -522,40 +545,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 			submitStart := time.Now()
 			stopSubmit := startSlowTrainingPhaseLogger(name, nextStep, "submit_step")
-			prepared, err := prepareObjectiveBatchWithSeqLen(cfg, batch, nextStep, nextObjective, nextSeqLen)
-			if err != nil {
-				stopSubmit()
-				return 0, fmt.Errorf("prepare step %d objective batch: %w", nextStep, err)
-			}
-			prepared, err = maybeAttachMinimalPairs(pairSampler, cfg, nextStep, prepared, nextBatchSize, nextSeqLen)
-			if err != nil {
-				stopSubmit()
-				return 0, fmt.Errorf("prepare step %d minimal-pair batch: %w", nextStep, err)
-			}
-			prepared, err = maybeAttachRTDCorruption(trainer, cfg, batch, nextStep, prepared, nextBatchSize, nextSeqLen, nextObjective)
+			prepared, err := prepareTrainingBatch(
+				cfg, trainer, batch, nextStep, nextObjective, nextBatchSize, nextSeqLen,
+				pairSampler, invarianceSampler, pllMarginSampler, distiller, data2vec,
+			)
 			if err != nil {
 				stopSubmit()
 				return 0, err
-			}
-			prepared, err = maybeAttachInvariancePairs(invarianceSampler, cfg, nextStep, prepared, nextBatchSize, nextSeqLen, nextObjective)
-			if err != nil {
-				stopSubmit()
-				return 0, fmt.Errorf("prepare step %d invariance batch: %w", nextStep, err)
-			}
-			prepared, err = maybeAttachPLLMarginPairs(pllMarginSampler, cfg, nextStep, prepared, nextBatchSize, nextSeqLen, nextObjective)
-			if err != nil {
-				stopSubmit()
-				return 0, fmt.Errorf("prepare step %d PLL margin batch: %w", nextStep, err)
-			}
-			prepared, err = attachDistillationTeacherProbs(distiller, prepared, nextBatchSize, nextSeqLen)
-			if err != nil {
-				stopSubmit()
-				return 0, fmt.Errorf("prepare step %d distillation batch: %w", nextStep, err)
-			}
-			prepared, err = attachData2VecTargets(data2vec, prepared, nextObjective, nextBatchSize, nextSeqLen)
-			if err != nil {
-				stopSubmit()
-				return 0, fmt.Errorf("prepare step %d data2vec batch: %w", nextStep, err)
 			}
 			if err := submitPreparedStepGPU(trainer, prepared, nextBatchSize, nextSeqLen, sched.At(nextStep)); err != nil {
 				stopSubmit()
@@ -604,9 +600,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				nextMTPAuxActive == mtpAuxActive
 		}
 
-		for step := 0; step < steps; step++ {
+		for step := startStep; step < steps; step++ {
 			dataDuration := time.Duration(0)
-			if step == 0 {
+			if step == startStep {
 				dataDuration = initialDataDuration
 			}
 			if hasPhases {
@@ -684,7 +680,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				return TrainResult{}, fmt.Errorf("read optimizer stats at step %d: %w", step, err)
 			}
 
-			if step == 0 {
+			if step == startStep {
 				firstLoss = v
 				// Anchor steady-state timing after the first step so the
 				// one-time compile/warmup cost doesn't poison tok/s and ETA.
@@ -693,10 +689,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			lastLoss = v
 			elapsed := time.Since(start)
 			steadyElapsed := elapsed
-			stepsForRate := step + 1
-			if !steadyStart.IsZero() && step >= 1 {
+			stepsForRate := step - startStep + 1
+			if !steadyStart.IsZero() && step > startStep {
 				steadyElapsed = time.Since(steadyStart)
-				stepsForRate = step
+				stepsForRate = step - startStep
 			}
 			var tokensPerSec float64
 			if steadyElapsed > 0 {
@@ -867,13 +863,19 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 			if shouldWriteCheckpoint(step, opts.CheckpointEvery) {
 				stopCheckpoint := startSlowTrainingPhaseLogger(name, step, "checkpoint")
-				artifacts, err := writeCheckpoint(cfg, trainer, shapes, opts.CheckpointDir, step+1, swaEMA)
+				artifacts, manifestPath, err := writeResumableCheckpoint(cfg, trainer, shapes, opts.CheckpointDir, step+1, resumableCheckpointContext{
+					TrainPattern: trainPattern,
+					Schedule:     checkpointSchedule,
+					SWA:          swaEMA,
+					Data2Vec:     data2vec,
+					EarlyStop:    earlyStop,
+				})
 				if err != nil {
 					stopCheckpoint()
 					return TrainResult{}, fmt.Errorf("checkpoint at step %d: %w", step+1, err)
 				}
 				stopCheckpoint()
-				fmt.Printf("  [%s] checkpoint saved: %s\n", name, artifacts.Summary())
+				fmt.Printf("  [%s] checkpoint saved: %s resume=%s\n", name, artifacts.Summary(), manifestPath)
 			}
 
 			// Plain steps may submit the next batch before collecting the

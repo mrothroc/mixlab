@@ -66,6 +66,12 @@ func TestTelemetryFlagsInTrainingHelpGroups(t *testing.T) {
 	}
 }
 
+func TestResumeFlagInArchCheckpointHelpGroup(t *testing.T) {
+	if !flagGroupContains(modeFlagGroups["arch"], "resume") {
+		t.Fatal("arch help groups missing resume")
+	}
+}
+
 func TestPreparePairsFlagsInHelpGroup(t *testing.T) {
 	groups := modeFlagGroups["prepare-pairs"]
 	for _, flagName := range []string{"pair-in", "pair-out", "vocab-size", "pair-max-len"} {

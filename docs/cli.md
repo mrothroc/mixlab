@@ -32,8 +32,10 @@ mode-specific flags.
 - `-config` points to the JSON architecture config for single-config modes.
 - `-train` is a shard glob. It is used for training, eval, parity sampling,
   and hidden-state export.
-- `-safetensors-load` loads a checkpoint before eval, generation, export, or
-  resumed training.
+- `-safetensors-load` loads model weights before eval, generation, export, or a
+  weights-only warm start. It does not restore optimizer or schedule state.
+- `-resume` restores a complete periodic training bundle in `arch` mode. See
+  [CLI: Training](cli-train.md#resume-and-extension).
 - `-safetensors` writes a final checkpoint after training.
 - `-output` is still supported for older scripts. New scripts should prefer
   mode-specific aliases where available: `-prepare-output-dir`, `-export-dir`,

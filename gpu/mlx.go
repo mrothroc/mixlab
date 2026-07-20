@@ -628,6 +628,63 @@ func mlxTrainerSetQAT(t TrainerHandle, mode string) error {
 	return nil
 }
 
+func mlxTrainerOptimizerStateCount(t TrainerHandle) int {
+	return int(C.mlx_ir_trainer_optimizer_state_count(C.int64_t(t)))
+}
+
+func mlxTrainerOptimizerStateInfo(t TrainerHandle, stateIdx int) (OptimizerStateKind, int, []int, int, error) {
+	const maxRank = 8
+	shape := make([]C.int, maxRank)
+	var kind, weightIdx, ndim, size C.int
+	rc := C.mlx_ir_trainer_optimizer_state_info(
+		C.int64_t(t), C.int(stateIdx), &kind, &weightIdx, &ndim,
+		(*C.int)(unsafe.Pointer(&shape[0])), C.int(maxRank), &size,
+	)
+	if rc != 0 || ndim <= 0 || ndim > maxRank || size <= 0 {
+		return 0, 0, nil, 0, fmt.Errorf("mlx_ir_trainer_optimizer_state_info failed for state %d", stateIdx)
+	}
+	goShape := make([]int, int(ndim))
+	for i := range goShape {
+		goShape[i] = int(shape[i])
+	}
+	return OptimizerStateKind(kind), int(weightIdx), goShape, int(size), nil
+}
+
+func mlxTrainerReadOptimizerState(t TrainerHandle, kind OptimizerStateKind, weightIdx int, out []float32) int {
+	if len(out) == 0 {
+		return -1
+	}
+	return int(C.mlx_ir_trainer_read_optimizer_state(
+		C.int64_t(t), C.int(kind), C.int(weightIdx),
+		(*C.float)(unsafe.Pointer(&out[0])), C.int(len(out)),
+	))
+}
+
+func mlxTrainerSetOptimizerState(t TrainerHandle, state TrainerOptimizerStateTensor) int {
+	if len(state.Data) == 0 {
+		return -1
+	}
+	return int(C.mlx_ir_trainer_set_optimizer_state(
+		C.int64_t(t), C.int(state.Kind), C.int(state.WeightIndex),
+		(*C.float)(unsafe.Pointer(&state.Data[0])), C.int(len(state.Data)),
+	))
+}
+
+func mlxTrainerSetOptimizerCounters(t TrainerHandle, stats TrainerOptimizerStats) int {
+	lastSkipped := C.int(0)
+	if stats.LastStepSkipped {
+		lastSkipped = 1
+	}
+	return int(C.mlx_ir_trainer_set_optimizer_counters(
+		C.int64_t(t),
+		C.uint64_t(stats.AttemptedSteps), C.uint64_t(stats.CommittedSteps),
+		C.uint64_t(stats.SkippedSteps), C.uint64_t(stats.ConsecutiveSkipped),
+		lastSkipped,
+		C.uint64_t(stats.LastLossNonfinite), C.uint64_t(stats.LastGradientNonfinite),
+		C.uint64_t(stats.LastStateNonfinite),
+	))
+}
+
 func mlxTrainerDestroy(t TrainerHandle) {
 	C.mlx_ir_trainer_destroy(C.int64_t(t))
 }

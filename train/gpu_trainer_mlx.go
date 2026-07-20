@@ -18,6 +18,7 @@ type mlxGPUTrainer struct {
 	programCache               map[*ir.Program]*gpu.Program
 	handles                    []int64 // GPU weight array handles
 	shapes                     []WeightShape
+	optimizerSpec              gpu.TrainerOptimizerSpec
 	baseLR                     float32
 	evalLossOutputName         string
 	componentLossOutputs       []string
@@ -51,6 +52,9 @@ type mlxGPUTrainer struct {
 	diffusionTimestepInput     bool
 	tttInnerLRScaleInput       bool
 	tttInnerLRScaleCount       int
+	dropoutKeyCount            int
+	trainingSeed               uint64
+	trainingStep               int
 	// Pre-allocated input buffers to avoid per-step allocation.
 	tokBuf                 []int32
 	tgtBuf                 []int32
@@ -77,6 +81,7 @@ type mlxGPUTrainer struct {
 	bigramBuf              []int32
 	trigramBuf             []int32
 	tttInnerLRScaleBuf     []float32
+	dropoutKeyBuf          []int32
 	charFeatures           []int32
 	firstByteValid         []int32
 	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
@@ -225,6 +230,7 @@ func initMLXGPUTrainer(
 	diffusionTimestepInput := false
 	tttInnerLRScaleInput := false
 	tttInnerLRScaleCount := 0
+	dropoutKeyCount := 0
 	for _, inp := range irProg.Inputs {
 		if inp.Name == "tokens" && len(inp.Shape) == 2 {
 			declaredBatchSize = inp.Shape[0]
@@ -237,6 +243,9 @@ func initMLXGPUTrainer(
 		if inp.Name == "ttt_inner_lr_scale" && len(inp.Shape) == 1 {
 			tttInnerLRScaleInput = true
 			tttInnerLRScaleCount = inp.Shape[0]
+		}
+		if inp.Name == ir.DropoutKeysInput && len(inp.Shape) == 2 && inp.Shape[1] == 2 {
+			dropoutKeyCount = inp.Shape[0]
 		}
 		if inp.Name == "first_byte_valid" {
 			firstByteMaskInput = true
@@ -345,6 +354,7 @@ func initMLXGPUTrainer(
 		programCache:               map[*ir.Program]*gpu.Program{irProg: gpuProg},
 		handles:                    handles,
 		shapes:                     shapes,
+		optimizerSpec:              optimizerSpec,
 		baseLR:                     optimizerSpec.DefaultBaseLR,
 		evalLossOutputName:         preferredEvalLossOutputName(irProg),
 		componentLossOutputs:       componentLossOutputs,
@@ -377,6 +387,8 @@ func initMLXGPUTrainer(
 		diffusionTimestepInput:     diffusionTimestepInput,
 		tttInnerLRScaleInput:       tttInnerLRScaleInput,
 		tttInnerLRScaleCount:       tttInnerLRScaleCount,
+		dropoutKeyCount:            dropoutKeyCount,
+		trainingSeed:               uint64(cfg.Training.Seed),
 		tokBuf:                     make([]int32, batchElems),
 		tgtBuf:                     make([]int32, batchElems),
 		lossMaskBuf:                make([]float32, batchElems),
@@ -402,6 +414,7 @@ func initMLXGPUTrainer(
 		bigramBuf:                  make([]int32, batchElems),
 		trigramBuf:                 make([]int32, batchElems),
 		tttInnerLRScaleBuf:         make([]float32, tttInnerLRScaleCount),
+		dropoutKeyBuf:              make([]int32, dropoutKeyCount*2),
 		charFeatures:               charFeatures,
 		firstByteValid:             firstByteValid,
 		lockedOSThread:             true,
@@ -484,7 +497,11 @@ func (t *mlxGPUTrainer) TrainStepGPU(xTok, yTok []int, batchSize, seqLen int, lr
 	if err != nil {
 		return 0, err
 	}
-	return gpu.TrainerStep(t.handle, inputs)
+	loss, err := gpu.TrainerStep(t.handle, inputs)
+	if err == nil {
+		t.trainingStep++
+	}
+	return loss, err
 }
 
 func (t *mlxGPUTrainer) TrainObjectiveStepGPU(batch objectiveBatch, batchSize, seqLen int, lr float32) (float32, error) {
@@ -493,7 +510,11 @@ func (t *mlxGPUTrainer) TrainObjectiveStepGPU(batch objectiveBatch, batchSize, s
 	if err != nil {
 		return 0, err
 	}
-	return gpu.TrainerStep(t.handle, inputs)
+	loss, err := gpu.TrainerStep(t.handle, inputs)
+	if err == nil {
+		t.trainingStep++
+	}
+	return loss, err
 }
 
 // SubmitStepGPU submits one training step without blocking on loss readback.
@@ -503,7 +524,11 @@ func (t *mlxGPUTrainer) SubmitStepGPU(xTok, yTok []int, batchSize, seqLen int, l
 	if err != nil {
 		return err
 	}
-	return gpu.TrainerSubmitStep(t.handle, inputs)
+	if err := gpu.TrainerSubmitStep(t.handle, inputs); err != nil {
+		return err
+	}
+	t.trainingStep++
+	return nil
 }
 
 func (t *mlxGPUTrainer) SubmitObjectiveStepGPU(batch objectiveBatch, batchSize, seqLen int, lr float32) error {
@@ -512,7 +537,11 @@ func (t *mlxGPUTrainer) SubmitObjectiveStepGPU(batch objectiveBatch, batchSize, 
 	if err != nil {
 		return err
 	}
-	return gpu.TrainerSubmitStep(t.handle, inputs)
+	if err := gpu.TrainerSubmitStep(t.handle, inputs); err != nil {
+		return err
+	}
+	t.trainingStep++
+	return nil
 }
 
 // CollectLossGPU blocks until the oldest uncollected submitted step completes.
@@ -634,6 +663,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.rtdGeneratorPositionsInput = programDeclaresInput(irProg, "rtd_generator_positions")
 	t.tttInnerLRScaleInput = programDeclaresInput(irProg, "ttt_inner_lr_scale")
 	t.tttInnerLRScaleCount = 0
+	t.dropoutKeyCount = 0
 	t.rtdGeneratorBatchSize = 0
 	t.rtdGeneratorSeqLen = 0
 	t.rtdGeneratorMaskSlots = 0
@@ -642,6 +672,12 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 			t.tttInnerLRScaleCount = inp.Shape[0]
 			if len(t.tttInnerLRScaleBuf) < t.tttInnerLRScaleCount {
 				t.tttInnerLRScaleBuf = make([]float32, t.tttInnerLRScaleCount)
+			}
+		}
+		if inp.Name == ir.DropoutKeysInput && len(inp.Shape) == 2 && inp.Shape[1] == 2 {
+			t.dropoutKeyCount = inp.Shape[0]
+			if len(t.dropoutKeyBuf) < t.dropoutKeyCount*2 {
+				t.dropoutKeyBuf = make([]int32, t.dropoutKeyCount*2)
 			}
 		}
 		if inp.Name == "rtd_generator_tokens" && len(inp.Shape) == 2 {

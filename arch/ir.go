@@ -92,6 +92,10 @@ const (
 	OpMaskedDistillationKL = 99 // OP_MASKED_DISTILLATION_KL
 )
 
+// DropoutKeysInput is declared automatically when a program emits dropout.
+// Each row is a deterministic MLX PRNG key for one dropout op.
+const DropoutKeysInput = "dropout_keys"
+
 const OpMaskedSymmetricKL = 100 // OP_MASKED_SYMMETRIC_KL
 
 const OpMaskedMarginPLL = 101 // OP_MASKED_MARGIN_PLL
@@ -208,7 +212,21 @@ func (p *Program) ScalarMul(a string, s float32, output string) {
 
 // Dropout emits inverted dropout with probability rate.
 func (p *Program) Dropout(a string, rate float32, output string) {
-	p.AddOp(OpDropout, []string{a}, []string{output}, []float32{rate}, nil)
+	ordinal := 0
+	found := false
+	for i := range p.Inputs {
+		if p.Inputs[i].Name != DropoutKeysInput {
+			continue
+		}
+		ordinal = p.Inputs[i].Shape[0]
+		p.Inputs[i].Shape[0]++
+		found = true
+		break
+	}
+	if !found {
+		p.DeclareInput(DropoutKeysInput, TensorInt32, []int{1, 2})
+	}
+	p.AddOp(OpDropout, []string{a, DropoutKeysInput}, []string{output}, []float32{rate}, []int{ordinal})
 }
 
 // Sigmoid emits a sigmoid activation.

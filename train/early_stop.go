@@ -19,6 +19,37 @@ func newEarlyStopState(spec *EarlyStopSpec) *earlyStopState {
 	return &earlyStopState{spec: spec, best: math.Inf(1)}
 }
 
+func (s *earlyStopState) resumeSnapshot() resumeEarlyStop {
+	if s == nil || s.spec == nil {
+		return resumeEarlyStop{}
+	}
+	snapshot := resumeEarlyStop{
+		Enabled:  true,
+		HaveBest: s.haveBest,
+		Stale:    s.stale,
+	}
+	if s.haveBest {
+		snapshot.Best = s.best
+	}
+	return snapshot
+}
+
+func (s *earlyStopState) restoreResumeSnapshot(snapshot resumeEarlyStop) error {
+	if !snapshot.Enabled {
+		return nil
+	}
+	if s == nil || s.spec == nil {
+		return fmt.Errorf("checkpoint contains early-stop state but training.early_stop is disabled")
+	}
+	if snapshot.Stale < 0 || (snapshot.HaveBest && (math.IsNaN(snapshot.Best) || math.IsInf(snapshot.Best, 0))) {
+		return fmt.Errorf("checkpoint contains invalid early-stop state")
+	}
+	s.best = snapshot.Best
+	s.haveBest = snapshot.HaveBest
+	s.stale = snapshot.Stale
+	return nil
+}
+
 func (s *earlyStopState) observe(step int, valLoss float64) (bool, string) {
 	if s == nil || s.spec == nil {
 		return false, ""

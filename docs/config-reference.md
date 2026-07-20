@@ -1044,6 +1044,8 @@ When `-safetensors <base>.safetensors` is used without populated SWA/EMA weights
 
 Periodic checkpointing follows the same convention after averaged weights exist, producing `step_N.final.safetensors` and `step_N.swa.safetensors`. Checkpoints before the first averaging update keep the legacy `step_N.st` path.
 
+Each periodic model checkpoint also has `step_N.state.safetensors` and a completion marker named `step_N.resume.json`. Use `-resume <checkpoint-dir-or-manifest>` to restore the live model weights, optimizer state, global step, schedule, loader position, deterministic RNG position, SWA/data2vec EMA, and early-stop state. `-safetensors-load` remains a weights-only warm start. Standard-schedule extension may increase `training.steps`; it continues at the original terminal LR after the original horizon and never repeats warmup. See [CLI: Training](cli-train.md#resume-and-extension) for compatibility checks, phase-schedule limits, replay startup cost, and storage overhead.
+
 The Hugging Face exporter uses whichever checkpoint is passed through `-safetensors-load`. Pass the `.swa.safetensors` file to export averaged weights, or `.final.safetensors` to export live final weights.
 
 ### Training objectives

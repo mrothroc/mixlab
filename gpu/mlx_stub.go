@@ -175,6 +175,14 @@ func TrainerOptimizerStatsSnapshot(t TrainerHandle) (TrainerOptimizerStats, erro
 	return TrainerOptimizerStats{}, errNotBuilt
 }
 
+func TrainerStateSnapshotRead(t TrainerHandle) (TrainerStateSnapshot, error) {
+	return TrainerStateSnapshot{}, errNotBuilt
+}
+
+func TrainerStateSnapshotRestore(t TrainerHandle, snapshot TrainerStateSnapshot) error {
+	return errNotBuilt
+}
+
 func TrainerBackwardTraceStatsSnapshot(t TrainerHandle) (TrainerBackwardTraceStats, error) {
 	return TrainerBackwardTraceStats{}, errNotBuilt
 }

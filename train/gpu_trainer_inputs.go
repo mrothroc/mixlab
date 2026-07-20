@@ -5,6 +5,7 @@ package train
 import (
 	"fmt"
 
+	ir "github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/gpu"
 )
 
@@ -159,6 +160,16 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 	inputs := []gpu.TensorInput{
 		{Name: "tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.tokBuf[:need]},
 		{Name: "targets", DType: gpu.TensorInt32, Shape: targetShape, Data: targetData},
+	}
+	if t.dropoutKeyCount > 0 {
+		needKeys := t.dropoutKeyCount * 2
+		if len(t.dropoutKeyBuf) < needKeys {
+			t.dropoutKeyBuf = make([]int32, needKeys)
+		}
+		fillDropoutKeys(t.dropoutKeyBuf[:needKeys], t.trainingSeed, t.trainingStep)
+		inputs = append(inputs, gpu.TensorInput{
+			Name: ir.DropoutKeysInput, DType: gpu.TensorInt32, Shape: []int{t.dropoutKeyCount, 2}, Data: t.dropoutKeyBuf[:needKeys],
+		})
 	}
 	if t.tttInnerLRScaleInput {
 		if t.tttInnerLRScaleCount <= 0 {

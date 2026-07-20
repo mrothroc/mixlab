@@ -547,6 +547,105 @@ func TrainerOptimizerStatsSnapshot(t TrainerHandle) (TrainerOptimizerStats, erro
 	return mlxTrainerOptimizerStats(t)
 }
 
+// TrainerStateSnapshotRead flushes the trainer and copies all active optimizer
+// tensors and counters to host memory.
+func TrainerStateSnapshotRead(t TrainerHandle) (TrainerStateSnapshot, error) {
+	if t == 0 {
+		return TrainerStateSnapshot{}, fmt.Errorf("invalid trainer handle; create the trainer before reading state")
+	}
+	stats, err := TrainerOptimizerStatsSnapshot(t)
+	if err != nil {
+		return TrainerStateSnapshot{}, err
+	}
+	count := mlxTrainerOptimizerStateCount(t)
+	if count < 0 {
+		return TrainerStateSnapshot{}, fmt.Errorf("mlx_ir_trainer_optimizer_state_count failed")
+	}
+	out := TrainerStateSnapshot{Optimizer: stats, Tensors: make([]TrainerOptimizerStateTensor, 0, count)}
+	for i := 0; i < count; i++ {
+		kind, weightIdx, shape, size, err := mlxTrainerOptimizerStateInfo(t, i)
+		if err != nil {
+			return TrainerStateSnapshot{}, err
+		}
+		data := make([]float32, size)
+		if mlxTrainerReadOptimizerState(t, kind, weightIdx, data) != 0 {
+			return TrainerStateSnapshot{}, fmt.Errorf("read optimizer state kind=%d weight=%d failed", kind, weightIdx)
+		}
+		out.Tensors = append(out.Tensors, TrainerOptimizerStateTensor{
+			Kind: kind, WeightIndex: weightIdx, Shape: shape, Data: data,
+		})
+	}
+	return out, nil
+}
+
+// TrainerStateSnapshotRestore replaces every active optimizer tensor and the
+// trainer's step counters. The caller must validate the checkpoint's optimizer
+// specification before invoking this function.
+func TrainerStateSnapshotRestore(t TrainerHandle, snapshot TrainerStateSnapshot) error {
+	if t == 0 {
+		return fmt.Errorf("invalid trainer handle; create the trainer before restoring state")
+	}
+	wantCount := mlxTrainerOptimizerStateCount(t)
+	if wantCount < 0 {
+		return fmt.Errorf("mlx_ir_trainer_optimizer_state_count failed")
+	}
+	if len(snapshot.Tensors) != wantCount {
+		return fmt.Errorf("optimizer state tensor count mismatch: checkpoint=%d trainer=%d", len(snapshot.Tensors), wantCount)
+	}
+	want := make(map[[2]int][]int, wantCount)
+	for i := 0; i < wantCount; i++ {
+		kind, weightIdx, shape, _, err := mlxTrainerOptimizerStateInfo(t, i)
+		if err != nil {
+			return err
+		}
+		want[[2]int{int(kind), weightIdx}] = shape
+	}
+	seen := make(map[[2]int]struct{}, len(snapshot.Tensors))
+	for _, state := range snapshot.Tensors {
+		key := [2]int{int(state.Kind), state.WeightIndex}
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("duplicate optimizer state kind=%d weight=%d", state.Kind, state.WeightIndex)
+		}
+		seen[key] = struct{}{}
+		wantShape, ok := want[key]
+		if !ok {
+			return fmt.Errorf("checkpoint optimizer state kind=%d weight=%d is not active in trainer", state.Kind, state.WeightIndex)
+		}
+		if len(wantShape) != len(state.Shape) {
+			return fmt.Errorf("optimizer state kind=%d weight=%d rank mismatch: checkpoint=%v trainer=%v", state.Kind, state.WeightIndex, state.Shape, wantShape)
+		}
+		for i := range wantShape {
+			if wantShape[i] != state.Shape[i] {
+				return fmt.Errorf("optimizer state kind=%d weight=%d shape mismatch: checkpoint=%v trainer=%v", state.Kind, state.WeightIndex, state.Shape, wantShape)
+			}
+		}
+		if len(state.Data) == 0 || shapeElemCountMust(state.Shape) != len(state.Data) {
+			return fmt.Errorf("invalid optimizer state kind=%d weight=%d shape=%v data=%d", state.Kind, state.WeightIndex, state.Shape, len(state.Data))
+		}
+		if mlxTrainerSetOptimizerState(t, state) != 0 {
+			return fmt.Errorf("restore optimizer state kind=%d weight=%d failed", state.Kind, state.WeightIndex)
+		}
+	}
+	if mlxTrainerSetOptimizerCounters(t, snapshot.Optimizer) != 0 {
+		return fmt.Errorf("restore optimizer counters failed")
+	}
+	return nil
+}
+
+func shapeElemCountMust(shape []int) int {
+	if len(shape) == 0 {
+		return 0
+	}
+	n := 1
+	for _, dim := range shape {
+		if dim <= 0 {
+			return 0
+		}
+		n *= dim
+	}
+	return n
+}
+
 func TrainerBackwardTraceStatsSnapshot(t TrainerHandle) (TrainerBackwardTraceStats, error) {
 	if t == 0 {
 		return TrainerBackwardTraceStats{}, fmt.Errorf("invalid trainer handle; create the trainer before reading backward trace stats")

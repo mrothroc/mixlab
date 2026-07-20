@@ -13,6 +13,9 @@ import (
 // and prints ranked results sorted by validation loss (or last training loss
 // if validation is unavailable).
 func runArchRace(configsDir, trainPattern string, opts TrainOptions) error {
+	if opts.Resume != "" {
+		return fmt.Errorf("-resume is supported only for -mode arch; arch_race cannot apply one training state to multiple configs")
+	}
 	if configsDir == "" {
 		return fmt.Errorf("arch_race mode requires -configs; pass a directory of JSON configs, e.g.: mixlab -mode arch_race -configs examples/ -train 'data/train_*.bin'")
 	}

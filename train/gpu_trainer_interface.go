@@ -61,6 +61,22 @@ type gpuOptimizerStatsReader interface {
 	OptimizerStatsGPU() (gpu.TrainerOptimizerStats, error)
 }
 
+type gpuTrainerStateReader interface {
+	ReadTrainerState() (gpu.TrainerStateSnapshot, error)
+}
+
+type gpuTrainerStateRestorer interface {
+	RestoreTrainerState(gpu.TrainerStateSnapshot) error
+}
+
+type gpuOptimizerSpecReader interface {
+	OptimizerSpec() gpu.TrainerOptimizerSpec
+}
+
+type gpuTrainingStepSetter interface {
+	SetTrainingStepGPU(step int) error
+}
+
 func readOptimizerStats(trainer GPUTrainer) (gpu.TrainerOptimizerStats, error) {
 	reader, ok := trainer.(gpuOptimizerStatsReader)
 	if !ok {

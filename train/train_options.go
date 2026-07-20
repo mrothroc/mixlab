@@ -6,6 +6,7 @@ import "github.com/mrothroc/mixlab/gpu"
 type TrainOptions struct {
 	SafetensorsPath     string // If set, export weights after training
 	SafetensorsLoad     string // If set, load weights from safetensors file before training
+	Resume              string // If set, restore a complete resumable checkpoint bundle
 	Quantize            string // Quantization mode: "none", "int8", or "int6"
 	QuantMethod         string // Quantization clipping method: "quantile" or "sdclip"
 	QuantK              float32

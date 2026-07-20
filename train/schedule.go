@@ -8,13 +8,13 @@ import (
 
 // LRSchedule defines a cosine learning rate schedule with warmup and hold.
 type LRSchedule struct {
-	BaseLR             float32
-	MinLR              float32
-	Warmup             int
-	Hold               int
-	Warmdown           int
-	MaxSteps           int
-	ClampWarmdownToMin bool
+	BaseLR             float32 `json:"base_lr"`
+	MinLR              float32 `json:"min_lr"`
+	Warmup             int     `json:"warmup_steps"`
+	Hold               int     `json:"hold_steps"`
+	Warmdown           int     `json:"warmdown_steps"`
+	MaxSteps           int     `json:"max_steps"`
+	ClampWarmdownToMin bool    `json:"clamp_warmdown_to_min"`
 }
 
 type trainingScheduler interface {

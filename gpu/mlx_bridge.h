@@ -278,6 +278,38 @@ int mlx_ir_trainer_optimizer_stats(
     uint64_t* last_loss_nonfinite,
     uint64_t* last_gradient_nonfinite,
     uint64_t* last_state_nonfinite);
+int mlx_ir_trainer_optimizer_state_count(int64_t trainer);
+int mlx_ir_trainer_optimizer_state_info(
+    int64_t trainer,
+    int state_idx,
+    int* kind,
+    int* weight_idx,
+    int* ndim,
+    int* shape,
+    int max_ndim,
+    int* size);
+int mlx_ir_trainer_read_optimizer_state(
+    int64_t trainer,
+    int kind,
+    int weight_idx,
+    float* out,
+    int size);
+int mlx_ir_trainer_set_optimizer_state(
+    int64_t trainer,
+    int kind,
+    int weight_idx,
+    const float* data,
+    int size);
+int mlx_ir_trainer_set_optimizer_counters(
+    int64_t trainer,
+    uint64_t attempted_steps,
+    uint64_t committed_steps,
+    uint64_t skipped_steps,
+    uint64_t consecutive_skipped_steps,
+    int last_step_skipped,
+    uint64_t last_loss_nonfinite,
+    uint64_t last_gradient_nonfinite,
+    uint64_t last_state_nonfinite);
 int mlx_ir_trainer_backward_trace_stats(
     int64_t trainer,
     uint64_t* bad_edges,

@@ -70,28 +70,21 @@ func exportSafetensors(path string, cfg *ArchConfig, shapes []WeightShape, weigh
 		return err
 	}
 
-	// Write file
-	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := atomicWriteFile(path, func(f *os.File) error {
+		if err := binary.Write(f, binary.LittleEndian, uint64(len(headerBytes))); err != nil {
 			return err
 		}
-	}
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-
-	if err := binary.Write(f, binary.LittleEndian, uint64(len(headerBytes))); err != nil {
-		return err
-	}
-	if _, err := f.Write(headerBytes); err != nil {
-		return err
-	}
-	for i, data := range weights {
-		if err := writeSafetensorPayloadBytes(f, names[i], encodeFloat32Data(data)); err != nil {
+		if _, err := f.Write(headerBytes); err != nil {
 			return err
 		}
+		for i, data := range weights {
+			if err := writeSafetensorPayloadBytes(f, names[i], encodeFloat32Data(data)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	fmt.Printf("exported safetensors to %s (%d tensors)\n", path, len(weights))

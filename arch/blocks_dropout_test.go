@@ -31,7 +31,7 @@ func TestPlainAttentionDropoutAfterSoftmaxBeforeValueMatMul(t *testing.T) {
 				softmaxIdx = i
 			}
 		case OpDropout:
-			if len(op.Inputs) == 1 && op.Inputs[0] == "x_attn_0_attn" {
+			if len(op.Inputs) == 2 && op.Inputs[0] == "x_attn_0_attn" && op.Inputs[1] == DropoutKeysInput {
 				dropoutIdx = i
 				if len(op.FloatParams) != 1 || op.FloatParams[0] != 0.25 {
 					t.Fatalf("attention dropout params=%v, want [0.25]", op.FloatParams)

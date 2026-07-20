@@ -85,6 +85,10 @@ func TestLoadConfigsFromDirNotExists(t *testing.T) {
 }
 
 func TestRunArchRaceValidation(t *testing.T) {
+	if err := runArchRace("configs", "data/*.bin", TrainOptions{Resume: "checkpoint"}); err == nil {
+		t.Fatal("expected error when resume is used with arch_race")
+	}
+
 	// Missing configs dir.
 	err := runArchRace("", "data/*.bin", TrainOptions{})
 	if err == nil {

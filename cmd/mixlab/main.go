@@ -19,7 +19,8 @@ func main() {
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
 	safetensorsPath := flag.String("safetensors", "", "export weights to safetensors file after training")
-	safetensorsLoad := flag.String("safetensors-load", "", "load weights from safetensors file before training (resume/eval)")
+	safetensorsLoad := flag.String("safetensors-load", "", "load weights from safetensors file for a warm start, eval, generation, or export")
+	resume := flag.String("resume", "", "resume training from a complete checkpoint directory, manifest, or companion file")
 	quantize := flag.String("quantize", "none", "weight quantization mode: none, int8, int6")
 	quantMethod := flag.String("quant-method", "quantile", `quantization clipping method: "quantile" or "sdclip"`)
 	quantK := flag.Float64("quant-k", 12.85, "SDClip k for matrix weights")
@@ -237,6 +238,7 @@ func main() {
 	opts := train.TrainOptions{
 		SafetensorsPath: *safetensorsPath,
 		SafetensorsLoad: *safetensorsLoad,
+		Resume:          *resume,
 		Quantize:        *quantize,
 		QuantMethod:     *quantMethod,
 		QuantK:          float32(*quantK),
@@ -380,7 +382,7 @@ var supportedModes = []string{"smoke", "arch", "arch_race", "prepare", "prepare-
 var modeFlagGroups = map[string][]flagGroup{
 	"arch": {
 		{"Required", []string{"config", "train"}},
-		{"Checkpointing", []string{"safetensors", "safetensors-load", "checkpoint-dir", "checkpoint-every"}},
+		{"Checkpointing", []string{"safetensors", "safetensors-load", "resume", "checkpoint-dir", "checkpoint-every"}},
 		{"Training run controls", []string{"eval", "eval-after-train", "lut-dir", "log-every", "val-every", "timing", "swa-start", "swa-decay", "swa-interval"}},
 		{"Quantization", []string{"quantize", "quant-method", "quant-k", "quant-k-embed"}},
 		{"Profiling and telemetry", []string{"cpuprofile", "memprofile", "pprof-addr", "telemetry-out"}},

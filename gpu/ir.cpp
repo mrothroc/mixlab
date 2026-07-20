@@ -3944,7 +3944,17 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           break;
         }
         float keep_prob = 1.0f - rate;
-        auto mask = mx::astype(mx::random::bernoulli(keep_prob, x.shape()), x.dtype());
+        std::optional<mx::array> key = std::nullopt;
+        if (op.n_inputs >= 2) {
+          if (op.n_int_params < 1 || op.int_params[0] < 0) {
+            throw std::runtime_error("OP_DROPOUT keyed mode requires a non-negative key row");
+          }
+          if (op.int_params[0] >= get(op, 1).shape(0)) {
+            throw std::runtime_error("OP_DROPOUT key row index is out of range for dropout_keys");
+          }
+          key = mx::astype(mx::take(get(op, 1), mx::array(op.int_params[0]), 0), mx::uint32);
+        }
+        auto mask = mx::astype(mx::random::bernoulli(keep_prob, x.shape(), key), x.dtype());
         set_out(op, 0, x * mask / keep_prob);
         break;
       }
