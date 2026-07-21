@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -266,6 +267,29 @@ func TestTTTMLPBulkGenerationClosesEachSampleState(t *testing.T) {
 	}
 	if got := len(strings.Split(strings.TrimSpace(output.String()), "\n")); got != plan.numSamples {
 		t.Fatalf("output lines=%d want=%d", got, plan.numSamples)
+	}
+}
+
+func TestTTTMLPStatefulGenerationAppliesLogitProcessor(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	configPath, weightsPath, cfg := newTTTMLPInferenceFixture(t)
+	session, err := NewTTTMLPInferenceSession(configPath, weightsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	opts := GenerateOptions{
+		MaxTokens: 2, Temperature: 1, Prompt: "token_ids:1,2",
+		NewLogitProcessor: func() LogitProcessor { return &fixedTokenProcessor{token: 7} },
+	}
+	sample, err := generateTTTMLPStatefulSample(session, cfg, opts, -1, rand.New(rand.NewSource(3)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := sample.tokens, []int{1, 2, 7, 7}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tokens=%v want=%v", got, want)
 	}
 }
 

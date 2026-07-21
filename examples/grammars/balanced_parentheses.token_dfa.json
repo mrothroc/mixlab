@@ -1,0 +1,13 @@
+{
+  "format": "mixlab.token_dfa",
+  "version": 1,
+  "vocab_size": 5,
+  "start_state": "start",
+  "eos_token_ids": [4],
+  "states": [
+    {"name": "start", "transitions": {"0": "body"}},
+    {"name": "body", "transitions": {"1": "open", "3": "body", "4": "done"}},
+    {"name": "open", "transitions": {"2": "body", "3": "open"}},
+    {"name": "done", "accept": true}
+  ]
+}

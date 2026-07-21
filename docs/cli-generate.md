@@ -28,6 +28,11 @@ Generate causal next-token samples:
 | `-eos-token-id` | Stop after emitting this token. Default: `-1` (disabled unless `-sequence-vocab` supplies EOS). |
 | `-generate-out` | Optional line-oriented output file. Without a sequence vocabulary each line is token-ID CSV; with one, each line is decoded sequence text. |
 | `-sequence-vocab` | Optional `nucleotide_vocab.json`. Enables `sequence:ACGT...` prompts and decoded nucleotide output. |
+| `-grammar-table` | Versioned token-DFA JSON table for constrained decoding. Mutually exclusive with `-grammar` and `-grammar-string`. |
+| `-grammar` | GBNF grammar file for constrained decoding. |
+| `-grammar-string` | Inline GBNF grammar. |
+| `-grammar-prompt-mode` | `consume` (default) validates the prompt through the grammar; `ignore` starts grammar state at the generated continuation. |
+| `-tokenizer-path` | ByteLevel BPE `tokenizer.json` used to map candidate tokens to bytes for GBNF. Auto-discovered next to the config/checkpoint when possible. |
 
 Bulk generation initializes the model once and streams one completed sample per
 line:
@@ -59,6 +64,15 @@ retains the existing human-readable `generated token_ids:` output. Bulk or
 file-output runs suppress status messages so their records are safe for scripts.
 If both `-sequence-vocab` and `-eos-token-id` are supplied, their EOS IDs must
 match.
+
+Grammar constraints are applied before temperature and top-k. Mixlab creates a
+fresh grammar state for every sample, including each active row in batched
+generation. An all-masked step is an error; Mixlab never falls back to a
+forbidden token. Reaching `-max-tokens` or `seq_len` while the grammar is not in
+an accepting state is also an error, preventing incomplete bracket/string
+prefixes from being reported as valid output. See
+[Grammar-constrained generation](grammar-constrained-generation.md) for table
+schemas, GBNF support, prompt semantics, and examples.
 
 For `-gen-batch > 1`, Mixlab gathers one final hidden position per sequence
 before the vocabulary projection and reads back `[batch,vocab]` logits. It does

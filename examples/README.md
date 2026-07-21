@@ -28,6 +28,14 @@ After training a supported causal core model, export a Hugging Face custom-code 
 
 See [../docs/hf-export.md](../docs/hf-export.md) and the [HF export support matrix](../docs/hf-export-support-matrix.md) for supported blocks, gated advanced features, tokenizer artifacts, parity-test setup, and the `trust_remote_code=True` security boundary.
 
+## Grammar-constrained generation
+
+The [`grammars/`](grammars/) directory contains a versioned token-DFA fixture
+and a small GBNF fixture for causal constrained decoding. Grammar artifacts are
+kept below the top-level example-config directory so config discovery does not
+treat them as architectures. See
+[Grammar-constrained generation](../docs/grammar-constrained-generation.md).
+
 ## SWA/EMA Averaged Weights
 
 Configs can enable averaged weight tracking with `training.swa_start`, `training.swa_decay`, and `training.swa_interval`, or you can override those fields at the CLI:

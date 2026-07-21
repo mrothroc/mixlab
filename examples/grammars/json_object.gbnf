@@ -1,0 +1,5 @@
+root ::= object
+object ::= "{" ws pair ("," ws pair)* ws "}"
+pair ::= "\"value\"" ws ":" ws number
+number ::= "-"? [0-9]+
+ws ::= [ \t\n\r]*

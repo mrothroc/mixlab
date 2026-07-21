@@ -29,6 +29,12 @@ type GenerateOptions struct {
 	GenerationSeed     int64
 	EOSTokenID         *int
 	OutputPath         string
+	GrammarTablePath   string
+	GrammarPath        string
+	GrammarString      string
+	GrammarPromptMode  string
+	TokenizerPath      string
+	NewLogitProcessor  LogitProcessorFactory
 }
 
 func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature float32, topK int, prompt string) error {
@@ -60,6 +66,11 @@ func runGenerateWithOptions(opts GenerateOptions) error {
 	if err != nil {
 		return err
 	}
+	processorFactory, err := buildGenerationLogitProcessorFactory(opts, cfg, vocab, plan.eosTokenID)
+	if err != nil {
+		return err
+	}
+	opts.NewLogitProcessor = processorFactory
 	if countTTTMLPBlocks(cfg.Blocks) > 0 && plan.batchSize > 1 {
 		return fmt.Errorf("-gen-batch=%d is not supported for TTT-MLP generation; use -gen-batch=1 until batched persistent inference state is available", plan.batchSize)
 	}
@@ -205,13 +216,32 @@ func sampleNextToken(logits []float32, temperature float32, topK int, rng *rand.
 	if len(logits) == 0 {
 		return 0, fmt.Errorf("empty logits")
 	}
+	if temperature <= 0 || math.IsNaN(float64(temperature)) || math.IsInf(float64(temperature), 0) {
+		return 0, fmt.Errorf("sampling temperature must be finite and > 0, got %g", temperature)
+	}
+	if topK < 0 {
+		return 0, fmt.Errorf("top-k must be >= 0, got %d", topK)
+	}
+	if rng == nil {
+		return 0, fmt.Errorf("sampling RNG is nil")
+	}
 	type candidate struct {
 		token int
 		logit float64
 	}
-	candidates := make([]candidate, len(logits))
+	candidates := make([]candidate, 0, len(logits))
 	for i, logit := range logits {
-		candidates[i] = candidate{token: i, logit: float64(logit) / float64(temperature)}
+		value := float64(logit)
+		switch {
+		case math.IsInf(value, -1):
+			continue
+		case math.IsNaN(value), math.IsInf(value, 1):
+			return 0, fmt.Errorf("logit for token %d is non-finite", i)
+		}
+		candidates = append(candidates, candidate{token: i, logit: value / float64(temperature)})
+	}
+	if len(candidates) == 0 {
+		return 0, errNoFiniteLogits
 	}
 	slices.SortFunc(candidates, func(a, b candidate) int {
 		switch {
@@ -236,7 +266,7 @@ func sampleNextToken(logits []float32, temperature float32, topK int, rng *rand.
 		total += weight
 	}
 	if total == 0 || math.IsNaN(total) || math.IsInf(total, 0) {
-		return candidates[0].token, nil
+		return 0, fmt.Errorf("sampling distribution is non-finite")
 	}
 	draw := rng.Float64() * total
 	accum := 0.0

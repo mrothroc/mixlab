@@ -192,6 +192,7 @@ func writeGenerationSample(plan generationPlan, vocab *data.NucleotideVocabulary
 type replayGenerationSlot struct {
 	tokens    []int
 	rng       *rand.Rand
+	processor LogitProcessor
 	steps     int
 	done      bool
 	notice    string
@@ -219,7 +220,11 @@ func runBatchedGenerationSamples(
 			if len(context) > cfg.SeqLen {
 				return fmt.Errorf("generate sample %d: prompt length %d exceeds seq_len %d", sampleIdx, len(context), cfg.SeqLen)
 			}
-			slots[row] = replayGenerationSlot{tokens: context, rng: rng, sampleIdx: sampleIdx}
+			processor, err := startLogitProcessor(opts.NewLogitProcessor, context)
+			if err != nil {
+				return fmt.Errorf("generate sample %d: %w", sampleIdx, err)
+			}
+			slots[row] = replayGenerationSlot{tokens: context, rng: rng, processor: processor, sampleIdx: sampleIdx}
 			if plan.eosTokenID >= 0 && context[len(context)-1] == plan.eosTokenID || opts.MaxTokens == 0 {
 				slots[row].done = true
 			} else if len(context) >= cfg.SeqLen {
@@ -250,7 +255,7 @@ func runBatchedGenerationSamples(
 				if slot.done {
 					continue
 				}
-				next, err := sampleNextToken(logits[row*cfg.VocabSize:(row+1)*cfg.VocabSize], opts.Temperature, opts.TopK, slot.rng)
+				next, err := constrainAndSampleNextToken(slot.processor, slot.steps, logits[row*cfg.VocabSize:(row+1)*cfg.VocabSize], opts.Temperature, opts.TopK, slot.rng)
 				if err != nil {
 					return fmt.Errorf("generate sample %d step %d: %w", slot.sampleIdx, slot.steps, err)
 				}
@@ -266,6 +271,9 @@ func runBatchedGenerationSamples(
 			}
 		}
 		for row := 0; row < waveSize; row++ {
+			if err := finishLogitProcessor(slots[row].processor); err != nil {
+				return fmt.Errorf("generate sample %d: %w", slots[row].sampleIdx, err)
+			}
 			if err := writeGenerationSample(plan, vocab, output, generationSample{tokens: slots[row].tokens, notice: slots[row].notice}); err != nil {
 				return fmt.Errorf("write generated sample %d: %w", slots[row].sampleIdx, err)
 			}
@@ -317,11 +325,21 @@ func generateReplaySample(
 	if len(context) > cfg.SeqLen {
 		return generationSample{}, fmt.Errorf("prompt length %d exceeds seq_len %d", len(context), cfg.SeqLen)
 	}
+	processor, err := startLogitProcessor(opts.NewLogitProcessor, context)
+	if err != nil {
+		return generationSample{}, err
+	}
 	if eosTokenID >= 0 && context[len(context)-1] == eosTokenID {
+		if err := finishLogitProcessor(processor); err != nil {
+			return generationSample{}, err
+		}
 		return generationSample{tokens: context}, nil
 	}
 	for step := 0; step < opts.MaxTokens; step++ {
 		if len(context) >= cfg.SeqLen {
+			if err := finishLogitProcessor(processor); err != nil {
+				return generationSample{}, err
+			}
 			return generationSample{tokens: context, notice: fmt.Sprintf("stopped at seq_len limit (%d tokens)", cfg.SeqLen)}, nil
 		}
 		xTok, yTok, lastPos := generationBatch(context, cfg.SeqLen)
@@ -332,7 +350,7 @@ func generateReplaySample(
 		if err != nil {
 			return generationSample{}, fmt.Errorf("read logits: %w", err)
 		}
-		next, err := sampleNextToken(logits[lastPos*cfg.VocabSize:(lastPos+1)*cfg.VocabSize], opts.Temperature, opts.TopK, rng)
+		next, err := constrainAndSampleNextToken(processor, step, logits[lastPos*cfg.VocabSize:(lastPos+1)*cfg.VocabSize], opts.Temperature, opts.TopK, rng)
 		if err != nil {
 			return generationSample{}, fmt.Errorf("sample token at step %d: %w", step, err)
 		}
@@ -340,6 +358,9 @@ func generateReplaySample(
 		if next == eosTokenID {
 			break
 		}
+	}
+	if err := finishLogitProcessor(processor); err != nil {
+		return generationSample{}, err
 	}
 	return generationSample{tokens: context}, nil
 }
@@ -361,8 +382,15 @@ func generateTTTMLPStatefulSample(
 		if err != nil {
 			return generationSample{}, err
 		}
+		processor, err := startLogitProcessor(opts.NewLogitProcessor, context)
+		if err != nil {
+			return generationSample{}, err
+		}
 		notice := fmt.Sprintf("TTT-MLP stateful inference enabled (prompt_tokens=%d)", len(context))
 		if eosTokenID >= 0 && context[len(context)-1] == eosTokenID {
+			if err := finishLogitProcessor(processor); err != nil {
+				return generationSample{}, err
+			}
 			return generationSample{tokens: context, notice: notice}, nil
 		}
 		logits, err := session.PrefillLast(state, context)
@@ -371,7 +399,7 @@ func generateTTTMLPStatefulSample(
 		}
 		for step := 0; step < opts.MaxTokens; step++ {
 			last := logits[len(logits)-cfg.VocabSize:]
-			next, err := sampleNextToken(last, opts.Temperature, opts.TopK, rng)
+			next, err := constrainAndSampleNextToken(processor, step, last, opts.Temperature, opts.TopK, rng)
 			if err != nil {
 				return generationSample{}, fmt.Errorf("sample token at step %d: %w", step, err)
 			}
@@ -383,6 +411,9 @@ func generateTTTMLPStatefulSample(
 			if err != nil {
 				return generationSample{}, fmt.Errorf("stateful TTT-MLP decode step %d: %w", step, err)
 			}
+		}
+		if err := finishLogitProcessor(processor); err != nil {
+			return generationSample{}, err
 		}
 		return generationSample{tokens: context, notice: notice}, nil
 	}()

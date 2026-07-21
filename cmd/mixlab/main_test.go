@@ -131,6 +131,15 @@ func TestBulkGenerationFlagsInHelpGroup(t *testing.T) {
 	}
 }
 
+func TestConstrainedGenerationFlagsInHelpGroup(t *testing.T) {
+	groups := modeFlagGroups["generate"]
+	for _, flagName := range []string{"grammar-table", "grammar", "grammar-string", "grammar-prompt-mode", "tokenizer-path"} {
+		if !flagGroupContains(groups, flagName) {
+			t.Fatalf("generate help groups missing %s", flagName)
+		}
+	}
+}
+
 func TestScoreEBMPLLFlagsInHelpGroup(t *testing.T) {
 	groups := modeFlagGroups["score-ebm"]
 	for _, flagName := range []string{"score-pll-aggregation", "score-pll-window", "score-pll-attribution-dump", "score-pll-skip-token-ids", "score-position-batch", "score-emit-token-energy"} {

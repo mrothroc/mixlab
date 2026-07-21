@@ -9,6 +9,7 @@ This directory holds focused guides for using and extending mixlab.
 | [cli-prepare.md](cli-prepare.md) | `prepare` data/tokenizer flags. |
 | [cli-eval.md](cli-eval.md) | `count`, `eval`, diffusion scoring, hidden-state export, and per-token eval exports. |
 | [cli-generate.md](cli-generate.md) | Causal and block-diffusion generation flags. |
+| [grammar-constrained-generation.md](grammar-constrained-generation.md) | Token-DFA and GBNF constrained causal decoding. |
 | [cli-export.md](cli-export.md) | Hugging Face `export-hf` and `parity` flags. |
 | [data.md](data.md) | Preparing example data, FineWeb-Edu, custom corpora, and tokenizer compatibility. |
 | [architecture.md](architecture.md) | Model/block concepts, config customization, custom blocks, and extension points. |
