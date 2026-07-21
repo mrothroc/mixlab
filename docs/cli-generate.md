@@ -32,6 +32,8 @@ Generate causal next-token samples:
 | `-grammar` | GBNF grammar file for constrained decoding. |
 | `-grammar-string` | Inline GBNF grammar. |
 | `-grammar-prompt-mode` | `consume` (default) validates the prompt through the grammar; `ignore` starts grammar state at the generated continuation. |
+| `-grammar-on-incomplete` | `error` (default) aborts if a sample reaches `max-tokens` or `seq_len` before acceptance; `skip` discards that attempt and keeps drawing until `num-samples` accepted outputs are written. |
+| `-grammar-max-attempts` | Total attempt cap for `-grammar-on-incomplete=skip`. `0` defaults to `4 * num-samples`; must be at least `num-samples`. |
 | `-tokenizer-path` | ByteLevel BPE `tokenizer.json` used to map candidate tokens to bytes for GBNF. Auto-discovered next to the config/checkpoint when possible. |
 
 Bulk generation initializes the model once and streams one completed sample per
@@ -68,9 +70,13 @@ match.
 Grammar constraints are applied before temperature and top-k. Mixlab creates a
 fresh grammar state for every sample, including each active row in batched
 generation. An all-masked step is an error; Mixlab never falls back to a
-forbidden token. Reaching `-max-tokens` or `seq_len` while the grammar is not in
-an accepting state is also an error, preventing incomplete bracket/string
-prefixes from being reported as valid output. See
+forbidden token. By default, reaching `-max-tokens` or `seq_len` while the
+grammar is not accepting is also an error. Use
+`-grammar-on-incomplete=skip` for large distribution-sampling runs: incomplete
+attempts are never written, attempt RNG streams continue by global attempt
+index, and Mixlab writes exactly `-num-samples` accepted records unless the
+bounded attempt cap is exhausted. The completion/skip summary is written to
+stderr, leaving line-oriented sample output unchanged. See
 [Grammar-constrained generation](grammar-constrained-generation.md) for table
 schemas, GBNF support, prompt semantics, and examples.
 

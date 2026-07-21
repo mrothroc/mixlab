@@ -17,24 +17,26 @@ import (
 )
 
 type GenerateOptions struct {
-	ConfigPath         string
-	SafetensorsLoad    string
-	MaxTokens          int
-	Temperature        float32
-	TopK               int
-	Prompt             string
-	SequenceVocabulary string
-	NumSamples         int
-	GenerationBatch    int
-	GenerationSeed     int64
-	EOSTokenID         *int
-	OutputPath         string
-	GrammarTablePath   string
-	GrammarPath        string
-	GrammarString      string
-	GrammarPromptMode  string
-	TokenizerPath      string
-	NewLogitProcessor  LogitProcessorFactory
+	ConfigPath          string
+	SafetensorsLoad     string
+	MaxTokens           int
+	Temperature         float32
+	TopK                int
+	Prompt              string
+	SequenceVocabulary  string
+	NumSamples          int
+	GenerationBatch     int
+	GenerationSeed      int64
+	EOSTokenID          *int
+	OutputPath          string
+	GrammarTablePath    string
+	GrammarPath         string
+	GrammarString       string
+	GrammarPromptMode   string
+	GrammarOnIncomplete string
+	GrammarMaxAttempts  int
+	TokenizerPath       string
+	NewLogitProcessor   LogitProcessorFactory
 }
 
 func runGenerate(configPath, safetensorsLoad string, maxTokens int, temperature float32, topK int, prompt string) error {
@@ -70,6 +72,9 @@ func runGenerateWithOptions(opts GenerateOptions) error {
 	if err != nil {
 		return err
 	}
+	if err := validateGenerationIncompleteProcessor(plan, processorFactory); err != nil {
+		return err
+	}
 	opts.NewLogitProcessor = processorFactory
 	if countTTTMLPBlocks(cfg.Blocks) > 0 && plan.batchSize > 1 {
 		return fmt.Errorf("-gen-batch=%d is not supported for TTT-MLP generation; use -gen-batch=1 until batched persistent inference state is available", plan.batchSize)
@@ -81,7 +86,7 @@ func runGenerateWithOptions(opts GenerateOptions) error {
 	if err != nil {
 		return err
 	}
-	runErr := func() error {
+	stats, runErr := func() (generationRunStats, error) {
 		if countTTTMLPBlocks(cfg.Blocks) > 0 {
 			if _, _, statefulErr := arch.BuildTTTMLPStatefulInferenceIRProgram(cfg, 1, make([]int, countTTTMLPBlocks(cfg.Blocks))); statefulErr == nil {
 				return runGenerateTTTMLPStateful(opts.ConfigPath, opts.SafetensorsLoad, cfg, opts, plan, vocab, output.writer)
@@ -89,14 +94,17 @@ func runGenerateWithOptions(opts GenerateOptions) error {
 		}
 		return runGenerateReplay(cfg, opts, plan, vocab, output.writer)
 	}()
+	if plan.incompletePolicy == grammarIncompleteSkip && (runErr == nil || stats.Attempts > 0) {
+		writeGenerationSkipSummary(os.Stderr, stats)
+	}
 	return errors.Join(runErr, output.Close())
 }
 
-func runGenerateReplay(cfg *ArchConfig, opts GenerateOptions, plan generationPlan, vocab *data.NucleotideVocabulary, output generationWriter) error {
+func runGenerateReplay(cfg *ArchConfig, opts GenerateOptions, plan generationPlan, vocab *data.NucleotideVocabulary, output generationWriter) (generationRunStats, error) {
 	genCfg := *cfg
 	genCfg.Training.BatchTokens = plan.batchSize * genCfg.SeqLen
 	if err := configureCharFeaturesForConfigPath(&genCfg, opts.ConfigPath, opts.SafetensorsLoad); err != nil {
-		return err
+		return generationRunStats{}, err
 	}
 
 	var (
@@ -109,46 +117,46 @@ func runGenerateReplay(cfg *ArchConfig, opts GenerateOptions, plan generationPla
 		prog, err = arch.BuildGenerationIRProgramFromConfig(&genCfg)
 	}
 	if err != nil {
-		return fmt.Errorf("build IR program: %w", err)
+		return generationRunStats{}, fmt.Errorf("build IR program: %w", err)
 	}
 	shapes, err := computeWeightShapes(&genCfg)
 	if err != nil {
-		return fmt.Errorf("compute weight shapes: %w", err)
+		return generationRunStats{}, fmt.Errorf("compute weight shapes: %w", err)
 	}
 	loadedWeights, err := loadSafetensorsWeights(opts.SafetensorsLoad, shapes)
 	if err != nil {
-		return fmt.Errorf("load safetensors %q: %w", opts.SafetensorsLoad, err)
+		return generationRunStats{}, fmt.Errorf("load safetensors %q: %w", opts.SafetensorsLoad, err)
 	}
 	trainer, err := initGPUTrainer(prog, &genCfg, loadedWeights, nil)
 	if err != nil {
-		return fmt.Errorf("init GPU trainer: %w", err)
+		return generationRunStats{}, fmt.Errorf("init GPU trainer: %w", err)
 	}
 	defer trainer.CloseTrainer()
 	evaluator, ok := trainer.(causalGenerationEvaluator)
 	if !ok {
-		return fmt.Errorf("trainer does not support causal generation output readback")
+		return generationRunStats{}, fmt.Errorf("trainer does not support causal generation output readback")
 	}
 	if plan.batchSize > 1 {
 		batchEvaluator, ok := trainer.(batchedCausalGenerationEvaluator)
 		if !ok {
-			return fmt.Errorf("trainer does not support batched causal generation")
+			return generationRunStats{}, fmt.Errorf("trainer does not support batched causal generation")
 		}
-		return runBatchedGenerationSamples(cfg, batchEvaluator, opts, plan, vocab, output)
+		return runBatchedGenerationSamplesWithStats(cfg, batchEvaluator, opts, plan, vocab, output)
 	}
-	return runGenerationSamples(plan, vocab, output, func(_ int, rng *rand.Rand) (generationSample, error) {
+	return runGenerationSamplesWithStats(plan, vocab, output, func(_ int, rng *rand.Rand) (generationSample, error) {
 		return generateReplaySample(cfg, evaluator, opts, plan.eosTokenID, rng, vocab)
 	})
 }
 
-func runGenerateTTTMLPStateful(configPath, safetensorsLoad string, cfg *ArchConfig, opts GenerateOptions, plan generationPlan, vocab *data.NucleotideVocabulary, output generationWriter) error {
+func runGenerateTTTMLPStateful(configPath, safetensorsLoad string, cfg *ArchConfig, opts GenerateOptions, plan generationPlan, vocab *data.NucleotideVocabulary, output generationWriter) (generationRunStats, error) {
 	session, err := NewTTTMLPInferenceSession(configPath, safetensorsLoad)
 	if err != nil {
-		return err
+		return generationRunStats{}, err
 	}
-	runErr := runGenerationSamples(plan, vocab, output, func(_ int, rng *rand.Rand) (generationSample, error) {
+	stats, runErr := runGenerationSamplesWithStats(plan, vocab, output, func(_ int, rng *rand.Rand) (generationSample, error) {
 		return generateTTTMLPStatefulSample(session, cfg, opts, plan.eosTokenID, rng, vocab)
 	})
-	return errors.Join(runErr, session.Close())
+	return stats, errors.Join(runErr, session.Close())
 }
 
 func generationPromptTokens(prompt string, vocabSize int, rng *rand.Rand) ([]int, error) {

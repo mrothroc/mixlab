@@ -2,6 +2,8 @@ package train
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"math"
 	"math/rand"
 	"reflect"
@@ -10,10 +12,10 @@ import (
 )
 
 type fixedTokenProcessor struct {
-	token      int
-	prompt     []int
-	accepted   []int
-	finishFail bool
+	token     int
+	prompt    []int
+	accepted  []int
+	finishErr error
 }
 
 func (p *fixedTokenProcessor) Start(prompt []int) error {
@@ -36,10 +38,49 @@ func (p *fixedTokenProcessor) Accept(token int) error {
 }
 
 func (p *fixedTokenProcessor) Finish() error {
-	if p.finishFail {
-		return errNoFiniteLogits
+	if p.finishErr != nil {
+		return p.finishErr
 	}
 	return nil
+}
+
+func TestBatchedGenerationSkipIsDeterministicAcrossBatchSizes(t *testing.T) {
+	cfg := &ArchConfig{VocabSize: 8, SeqLen: 4}
+	run := func(batchSize int) (string, generationRunStats) {
+		t.Helper()
+		attempt := 0
+		factory := func() LogitProcessor {
+			current := attempt
+			attempt++
+			processor := &fixedTokenProcessor{token: current%7 + 1}
+			if current == 1 || current == 4 {
+				processor.finishErr = fmt.Errorf("%w: attempt %d", ErrGrammarIncomplete, current)
+			}
+			return processor
+		}
+		opts := GenerateOptions{
+			MaxTokens: 1, Temperature: 1, TopK: 1, Prompt: "token_ids:0",
+			NewLogitProcessor: factory,
+		}
+		plan := generationPlan{
+			numSamples: 4, batchSize: batchSize, maxAttempts: 8, baseSeed: 3,
+			incompletePolicy: grammarIncompleteSkip, eosTokenID: -1,
+		}
+		var output bytes.Buffer
+		stats, err := runBatchedGenerationSamplesWithStats(cfg, deterministicBatchedGenerationEvaluator{vocabSize: cfg.VocabSize}, opts, plan, nil, &output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return output.String(), stats
+	}
+	oneOutput, oneStats := run(1)
+	manyOutput, manyStats := run(3)
+	if oneOutput != manyOutput {
+		t.Fatalf("skip output differs by batch size:\n%s\n---\n%s", oneOutput, manyOutput)
+	}
+	if oneStats != manyStats || oneStats != (generationRunStats{Attempts: 6, Completed: 4, SkippedIncomplete: 2}) {
+		t.Fatalf("batch stats one=%+v many=%+v", oneStats, manyStats)
+	}
 }
 
 func TestConstrainedSamplingMasksBeforeTemperatureAndTopK(t *testing.T) {
@@ -114,11 +155,11 @@ func TestBatchedGenerationUsesIndependentProcessors(t *testing.T) {
 func TestGenerationRejectsIncompleteGrammarAtLimit(t *testing.T) {
 	cfg := &ArchConfig{VocabSize: 4, SeqLen: 4}
 	evaluator := &fakeCausalGenerationEvaluator{vocabSize: cfg.VocabSize, tokens: []int{1}}
-	processor := &fixedTokenProcessor{token: 1, finishFail: true}
+	processor := &fixedTokenProcessor{token: 1, finishErr: ErrGrammarIncomplete}
 	_, err := generateReplaySample(cfg, evaluator, GenerateOptions{
 		MaxTokens: 1, Temperature: 1, Prompt: "token_ids:0", NewLogitProcessor: func() LogitProcessor { return processor },
 	}, -1, rand.New(rand.NewSource(1)), nil)
-	if err == nil || !strings.Contains(err.Error(), "does not complete the grammar") {
+	if err == nil || !strings.Contains(err.Error(), "does not complete the grammar") || !errors.Is(err, ErrGrammarIncomplete) {
 		t.Fatalf("incomplete grammar error=%v", err)
 	}
 }

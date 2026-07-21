@@ -223,7 +223,7 @@ func (p *tokenDFAProcessor) Finish() error {
 		return fmt.Errorf("processor has not been started")
 	}
 	if !p.dfa.states[p.state].accept {
-		return fmt.Errorf("state %q is not accepting", p.dfa.states[p.state].name)
+		return fmt.Errorf("%w: state %q is not accepting", ErrGrammarIncomplete, p.dfa.states[p.state].name)
 	}
 	return nil
 }

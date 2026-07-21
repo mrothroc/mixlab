@@ -113,3 +113,38 @@ token when its root rule accepts. Mixlab returns an error when:
 - model logits contain `NaN` or positive infinity;
 - the grammar exceeds state/stack limits; or
 - generation reaches a configured length limit before the grammar accepts.
+
+The default `-grammar-on-incomplete=error` preserves this fail-fast behavior.
+For bulk sampling, use:
+
+```bash
+./mixlab -mode generate \
+  -config model.json \
+  -safetensors-load weights.safetensors \
+  -prompt token_ids:0 \
+  -eos-token-id 4 \
+  -grammar-table grammar.json \
+  -grammar-on-incomplete skip \
+  -num-samples 10000 \
+  -gen-batch 64 \
+  -generate-out samples.txt
+```
+
+In `skip` mode, `-num-samples` counts accepted outputs, not attempts. Mixlab
+discards a sample only when its processor reports that the grammar is still
+non-accepting after `max-tokens` or `seq_len` exhaustion. Prompt errors,
+invalid logits, grammar resource-limit failures, and states with no legal
+continuation remain fatal because they may indicate a bad grammar or runtime
+failure.
+
+`-grammar-max-attempts` bounds the total work. Its default `0` resolves to
+`4 * num-samples`; an explicit value must be at least `num-samples`. If the cap
+is exhausted, Mixlab keeps already-written accepted records but exits nonzero
+with a shortfall error. Attempt indices, rather than accepted-output indices,
+own RNG streams. The accepted output is therefore deterministic for a fixed
+seed and independent of `gen-batch` on the same backend and hardware.
+
+At completion, Mixlab writes accepted records only to `generate-out` and a
+summary to stderr. There is intentionally no `truncate` policy: emitting a
+non-accepting prefix through the normal sample stream would weaken the
+structural-validity contract and require a separately marked output schema.

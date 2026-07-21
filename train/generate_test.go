@@ -2,6 +2,7 @@ package train
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -73,7 +74,7 @@ func TestBuildGenerationPlanDefaultsEOSAndValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.numSamples != 1 || plan.batchSize != 1 || plan.baseSeed != 42 || plan.eosTokenID != -1 || !plan.legacyOutput {
+	if plan.numSamples != 1 || plan.batchSize != 1 || plan.maxAttempts != 1 || plan.baseSeed != 42 || plan.eosTokenID != -1 || plan.incompletePolicy != grammarIncompleteError || !plan.legacyOutput {
 		t.Fatalf("default plan=%+v", plan)
 	}
 	vocab := trainTestDNAVocabulary()
@@ -89,17 +90,142 @@ func TestBuildGenerationPlanDefaultsEOSAndValidation(t *testing.T) {
 		t.Fatalf("mismatched vocabulary EOS error=%v", err)
 	}
 	for name, opts := range map[string]GenerateOptions{
-		"negative samples": {Temperature: 1, NumSamples: -1},
-		"negative batch":   {Temperature: 1, GenerationBatch: -1},
-		"negative max":     {Temperature: 1, MaxTokens: -1},
-		"zero temperature": {},
-		"negative top-k":   {Temperature: 1, TopK: -1},
+		"negative samples":         {Temperature: 1, NumSamples: -1},
+		"negative batch":           {Temperature: 1, GenerationBatch: -1},
+		"negative max":             {Temperature: 1, MaxTokens: -1},
+		"zero temperature":         {},
+		"negative top-k":           {Temperature: 1, TopK: -1},
+		"unknown incomplete mode":  {Temperature: 1, GrammarOnIncomplete: "truncate"},
+		"attempt cap without skip": {Temperature: 1, GrammarMaxAttempts: 4},
+		"negative attempt cap":     {Temperature: 1, GrammarOnIncomplete: "skip", GrammarMaxAttempts: -1},
+		"cap below target":         {Temperature: 1, NumSamples: 3, GrammarOnIncomplete: "skip", GrammarMaxAttempts: 2},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := buildGenerationPlan(opts, cfg, nil); err == nil {
 				t.Fatal("invalid generation options were accepted")
 			}
 		})
+	}
+	skipPlan, err := buildGenerationPlan(GenerateOptions{
+		Temperature: 1, NumSamples: 3, GrammarOnIncomplete: "skip",
+	}, cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skipPlan.incompletePolicy != grammarIncompleteSkip || skipPlan.maxAttempts != 12 {
+		t.Fatalf("skip plan=%+v", skipPlan)
+	}
+}
+
+func TestGenerationSkipProducesRequestedAcceptedCount(t *testing.T) {
+	plan := generationPlan{
+		numSamples: 3, batchSize: 1, maxAttempts: 8, baseSeed: 17,
+		incompletePolicy: grammarIncompleteSkip, eosTokenID: -1,
+	}
+	var output bytes.Buffer
+	stats, err := runGenerationSamplesWithStats(plan, nil, &output, func(attempt int, _ *rand.Rand) (generationSample, error) {
+		if attempt == 1 || attempt == 3 {
+			return generationSample{}, fmt.Errorf("%w: test attempt %d", ErrGrammarIncomplete, attempt)
+		}
+		return generationSample{tokens: []int{attempt}}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output.String(), "0\n2\n4\n"; got != want {
+		t.Fatalf("skip output=%q want=%q", got, want)
+	}
+	if stats != (generationRunStats{Attempts: 5, Completed: 3, SkippedIncomplete: 2}) {
+		t.Fatalf("skip stats=%+v", stats)
+	}
+}
+
+func TestGenerationSkipAttemptCapReturnsShortfall(t *testing.T) {
+	plan := generationPlan{
+		numSamples: 2, batchSize: 1, maxAttempts: 3, baseSeed: 9,
+		incompletePolicy: grammarIncompleteSkip, eosTokenID: -1,
+	}
+	var output bytes.Buffer
+	stats, err := runGenerationSamplesWithStats(plan, nil, &output, func(attempt int, _ *rand.Rand) (generationSample, error) {
+		if attempt == 0 {
+			return generationSample{tokens: []int{7}}, nil
+		}
+		return generationSample{}, fmt.Errorf("%w: test", ErrGrammarIncomplete)
+	})
+	if err == nil || !strings.Contains(err.Error(), "generated 1 of 2 requested samples after 3 attempts") {
+		t.Fatalf("shortfall error=%v", err)
+	}
+	if got, want := output.String(), "7\n"; got != want {
+		t.Fatalf("shortfall partial output=%q want=%q", got, want)
+	}
+	if stats != (generationRunStats{Attempts: 3, Completed: 1, SkippedIncomplete: 2}) {
+		t.Fatalf("shortfall stats=%+v", stats)
+	}
+}
+
+func TestGenerationIncompleteErrorPolicyAndFatalErrors(t *testing.T) {
+	errorPlan := generationPlan{numSamples: 2, batchSize: 1, maxAttempts: 2, incompletePolicy: grammarIncompleteError}
+	var output bytes.Buffer
+	stats, err := runGenerationSamplesWithStats(errorPlan, nil, &output, func(_ int, _ *rand.Rand) (generationSample, error) {
+		return generationSample{}, fmt.Errorf("%w: test", ErrGrammarIncomplete)
+	})
+	if err == nil || !errors.Is(err, ErrGrammarIncomplete) || !strings.Contains(err.Error(), "generate sample 0") {
+		t.Fatalf("default incomplete error=%v", err)
+	}
+	if stats.Attempts != 1 || stats.Completed != 0 || output.Len() != 0 {
+		t.Fatalf("default incomplete stats=%+v output=%q", stats, output.String())
+	}
+
+	skipPlan := generationPlan{
+		numSamples: 1, batchSize: 1, maxAttempts: 4,
+		incompletePolicy: grammarIncompleteSkip,
+	}
+	stats, err = runGenerationSamplesWithStats(skipPlan, nil, &output, func(_ int, _ *rand.Rand) (generationSample, error) {
+		return generationSample{}, errGrammarNoContinuation
+	})
+	if err == nil || !errors.Is(err, errGrammarNoContinuation) {
+		t.Fatalf("skip swallowed fatal grammar error=%v", err)
+	}
+	if stats.SkippedIncomplete != 0 {
+		t.Fatalf("fatal grammar error counted as incomplete: %+v", stats)
+	}
+}
+
+func TestGenerationSkipAndErrorParityWithoutIncompletes(t *testing.T) {
+	run := func(policy grammarIncompletePolicy, maxAttempts int) string {
+		t.Helper()
+		plan := generationPlan{
+			numSamples: 5, batchSize: 1, maxAttempts: maxAttempts, baseSeed: 77,
+			incompletePolicy: policy, eosTokenID: -1,
+		}
+		var output bytes.Buffer
+		if _, err := runGenerationSamplesWithStats(plan, nil, &output, func(_ int, rng *rand.Rand) (generationSample, error) {
+			return generationSample{tokens: []int{rng.Intn(1_000_000)}}, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return output.String()
+	}
+	if errorOutput, skipOutput := run(grammarIncompleteError, 5), run(grammarIncompleteSkip, 20); errorOutput != skipOutput {
+		t.Fatalf("error and skip outputs differ without incompletes:\n%s\n---\n%s", errorOutput, skipOutput)
+	}
+}
+
+func TestGenerationSkipSummary(t *testing.T) {
+	var output bytes.Buffer
+	writeGenerationSkipSummary(&output, generationRunStats{Completed: 10, SkippedIncomplete: 2})
+	if got, want := output.String(), "generated 10 samples, skipped 2 incomplete (grammar not accepting at max-tokens or seq_len)\n"; got != want {
+		t.Fatalf("summary=%q want=%q", got, want)
+	}
+}
+
+func TestGenerationSkipRequiresGrammarProcessor(t *testing.T) {
+	plan := generationPlan{numSamples: 1, maxAttempts: 4, incompletePolicy: grammarIncompleteSkip}
+	if err := validateGenerationIncompleteProcessor(plan, nil); err == nil || !strings.Contains(err.Error(), "requires -grammar-table") {
+		t.Fatalf("missing grammar processor error=%v", err)
+	}
+	if err := validateGenerationIncompleteProcessor(plan, func() LogitProcessor { return &fixedTokenProcessor{} }); err != nil {
+		t.Fatalf("configured grammar processor: %v", err)
 	}
 }
 

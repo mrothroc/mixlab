@@ -13,6 +13,10 @@ import (
 var errNoFiniteLogits = errors.New("no finite logits remain after constraints")
 var errGrammarNoContinuation = errors.New("grammar has no legal continuation")
 
+// ErrGrammarIncomplete identifies an otherwise valid constrained sample that
+// stopped before its grammar reached an accepting state.
+var ErrGrammarIncomplete = errors.New("grammar is not accepting")
+
 // LogitProcessor incrementally constrains one generated sample. Start consumes
 // the prompt once, Mask edits the current vocab-wide logit row in place, and
 // Accept advances state after the selected token.

@@ -292,7 +292,7 @@ func (p *gbnfLogitProcessor) Finish() error {
 	if p.terminated || p.state.accepting() {
 		return nil
 	}
-	return fmt.Errorf("GBNF grammar is not accepting")
+	return fmt.Errorf("%w: GBNF grammar is not accepting", ErrGrammarIncomplete)
 }
 
 func (p *gbnfLogitProcessor) accept(token int, prompt bool) error {

@@ -3,6 +3,7 @@
 package train
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -83,4 +84,39 @@ func TestConstrainedGenerationMLXReplayAndBatch(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("batched_skip_incomplete", func(t *testing.T) {
+		outputPath := filepath.Join(dir, "batched_skip_incomplete.txt")
+		attempt := 0
+		eos := -1
+		opts := GenerateOptions{
+			ConfigPath: configPath, SafetensorsLoad: weightsPath,
+			MaxTokens: 1, Temperature: 1, TopK: 1, Prompt: "token_ids:0",
+			NumSamples: 3, GenerationBatch: 2, GenerationSeed: 7,
+			EOSTokenID: &eos, OutputPath: outputPath,
+			GrammarOnIncomplete: "skip", GrammarMaxAttempts: 6,
+			NewLogitProcessor: func() LogitProcessor {
+				current := attempt
+				attempt++
+				processor := &fixedTokenProcessor{token: 2}
+				if current == 1 {
+					processor.finishErr = fmt.Errorf("%w: MLX fixture", ErrGrammarIncomplete)
+				}
+				return processor
+			},
+		}
+		if err := runGenerateWithOptions(opts); err != nil {
+			t.Fatal(err)
+		}
+		body, err := os.ReadFile(outputPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, want := strings.TrimSpace(string(body)), "0,2\n0,2\n0,2"; got != want {
+			t.Fatalf("skip output=%q want=%q", got, want)
+		}
+		if attempt != 4 {
+			t.Fatalf("attempts=%d want=4", attempt)
+		}
+	})
 }

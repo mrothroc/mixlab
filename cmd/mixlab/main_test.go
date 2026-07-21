@@ -133,7 +133,7 @@ func TestBulkGenerationFlagsInHelpGroup(t *testing.T) {
 
 func TestConstrainedGenerationFlagsInHelpGroup(t *testing.T) {
 	groups := modeFlagGroups["generate"]
-	for _, flagName := range []string{"grammar-table", "grammar", "grammar-string", "grammar-prompt-mode", "tokenizer-path"} {
+	for _, flagName := range []string{"grammar-table", "grammar", "grammar-string", "grammar-prompt-mode", "grammar-on-incomplete", "grammar-max-attempts", "tokenizer-path"} {
 		if !flagGroupContains(groups, flagName) {
 			t.Fatalf("generate help groups missing %s", flagName)
 		}

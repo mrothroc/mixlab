@@ -1,6 +1,7 @@
 package train
 
 import (
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -58,6 +59,9 @@ func TestGBNFTokenizerCandidatesSupportPartialBPEPieces(t *testing.T) {
 	processor := factory()
 	if err := processor.Start([]int{0}); err != nil {
 		t.Fatal(err)
+	}
+	if err := processor.Finish(); err == nil || !errors.Is(err, ErrGrammarIncomplete) {
+		t.Fatalf("incomplete GBNF finish error=%v", err)
 	}
 	logits := []float32{0, 0, 0, 0, 0}
 	if err := processor.Mask(0, logits); err != nil {

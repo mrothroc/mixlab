@@ -35,6 +35,8 @@ and a small GBNF fixture for causal constrained decoding. Grammar artifacts are
 kept below the top-level example-config directory so config discovery does not
 treat them as architectures. See
 [Grammar-constrained generation](../docs/grammar-constrained-generation.md).
+For large constrained sample sets, use `-grammar-on-incomplete=skip`; Mixlab
+will discard non-accepting length-limit attempts under a bounded retry cap.
 
 ## SWA/EMA Averaged Weights
 

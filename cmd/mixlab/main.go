@@ -48,6 +48,8 @@ func main() {
 	grammarPath := flag.String("grammar", "", "GBNF grammar file for constrained causal generation")
 	grammarString := flag.String("grammar-string", "", "inline GBNF grammar for constrained causal generation")
 	grammarPromptMode := flag.String("grammar-prompt-mode", "consume", "grammar prompt handling: consume or ignore")
+	grammarOnIncomplete := flag.String("grammar-on-incomplete", "error", "incomplete grammar policy at generation limits: error or skip")
+	grammarMaxAttempts := flag.Int("grammar-max-attempts", 0, "maximum total attempts with -grammar-on-incomplete=skip; 0 uses 4*num-samples")
 	diffusionStepsPerBlock := flag.Int("diffusion-steps-per-block", 0, "override training.diffusion.steps_per_block for generate-diffusion (0 uses config)")
 	diffusionConfidenceThreshold := flag.Float64("diffusion-confidence-threshold", 0, "override training.diffusion.confidence_threshold for generate-diffusion when explicitly set")
 	diffusionCommitFloor := flag.Int("diffusion-commit-floor", 0, "override training.diffusion.commit_floor for generate-diffusion (0 uses config)")
@@ -320,7 +322,8 @@ func main() {
 			Temperature: float32(*temperature), TopK: *topK, Prompt: *prompt, SequenceVocabulary: *sequenceVocab,
 			NumSamples: *numSamples, GenerationBatch: *genBatch, GenerationSeed: *genSeed, EOSTokenID: &eosID, OutputPath: *generateOut,
 			GrammarTablePath: *grammarTable, GrammarPath: *grammarPath, GrammarString: *grammarString,
-			GrammarPromptMode: *grammarPromptMode, TokenizerPath: *prepTokenizerPath,
+			GrammarPromptMode: *grammarPromptMode, GrammarOnIncomplete: *grammarOnIncomplete,
+			GrammarMaxAttempts: *grammarMaxAttempts, TokenizerPath: *prepTokenizerPath,
 		}))
 	case "generate-diffusion":
 		var confidenceOverride *float64
@@ -444,7 +447,7 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Sampling", []string{"max-tokens", "temperature", "top-k", "num-samples", "gen-batch", "gen-seed", "eos-token-id"}},
 		{"Output", []string{"generate-out"}},
 		{"Sequence strings", []string{"sequence-vocab"}},
-		{"Constraints", []string{"grammar-table", "grammar", "grammar-string", "grammar-prompt-mode", "tokenizer-path"}},
+		{"Constraints", []string{"grammar-table", "grammar", "grammar-string", "grammar-prompt-mode", "grammar-on-incomplete", "grammar-max-attempts", "tokenizer-path"}},
 	},
 	"generate-diffusion": {
 		{"Required", []string{"config", "safetensors-load", "prompt"}},

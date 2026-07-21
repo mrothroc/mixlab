@@ -27,11 +27,13 @@ type batchedCausalGenerationEvaluator interface {
 }
 
 type generationPlan struct {
-	numSamples   int
-	batchSize    int
-	baseSeed     int64
-	eosTokenID   int
-	legacyOutput bool
+	numSamples       int
+	batchSize        int
+	maxAttempts      int
+	baseSeed         int64
+	eosTokenID       int
+	incompletePolicy grammarIncompletePolicy
+	legacyOutput     bool
 }
 
 type generationSample struct {
@@ -87,6 +89,10 @@ func buildGenerationPlan(opts GenerateOptions, cfg *ArchConfig, vocab *data.Nucl
 	if numSamples < 1 {
 		return generationPlan{}, fmt.Errorf("-num-samples must be >= 1")
 	}
+	incompletePolicy, maxAttempts, err := resolveGrammarIncompletePolicy(opts.GrammarOnIncomplete, numSamples, opts.GrammarMaxAttempts)
+	if err != nil {
+		return generationPlan{}, err
+	}
 	batchSize := opts.GenerationBatch
 	if batchSize == 0 {
 		batchSize = 1
@@ -122,7 +128,8 @@ func buildGenerationPlan(opts GenerateOptions, cfg *ArchConfig, vocab *data.Nucl
 		baseSeed = cfg.Training.Seed
 	}
 	return generationPlan{
-		numSamples: numSamples, batchSize: batchSize, baseSeed: baseSeed, eosTokenID: eosTokenID,
+		numSamples: numSamples, batchSize: batchSize, maxAttempts: maxAttempts,
+		baseSeed: baseSeed, eosTokenID: eosTokenID, incompletePolicy: incompletePolicy,
 		legacyOutput: numSamples == 1 && opts.GenerationSeed == 0 && opts.OutputPath == "",
 	}, nil
 }
@@ -144,17 +151,49 @@ func runGenerationSamples(
 	output generationWriter,
 	generate func(sampleIndex int, rng *rand.Rand) (generationSample, error),
 ) error {
-	for sampleIndex := 0; sampleIndex < plan.numSamples; sampleIndex++ {
-		seed := generationSeedForSample(plan.baseSeed, sampleIndex)
-		sample, err := generate(sampleIndex, rand.New(rand.NewSource(seed)))
+	_, err := runGenerationSamplesWithStats(plan, vocab, output, generate)
+	return err
+}
+
+func runGenerationSamplesWithStats(
+	plan generationPlan,
+	vocab *data.NucleotideVocabulary,
+	output generationWriter,
+	generate func(sampleIndex int, rng *rand.Rand) (generationSample, error),
+) (generationRunStats, error) {
+	stats := generationRunStats{}
+	for stats.Attempts < plan.effectiveMaxAttempts() && stats.Completed < plan.numSamples {
+		attemptIndex := stats.Attempts
+		stats.Attempts++
+		seed := generationSeedForSample(plan.baseSeed, attemptIndex)
+		sample, err := generate(attemptIndex, rand.New(rand.NewSource(seed)))
 		if err != nil {
-			return fmt.Errorf("generate sample %d: %w", sampleIndex, err)
+			if plan.skipsIncomplete() && errors.Is(err, ErrGrammarIncomplete) {
+				stats.SkippedIncomplete++
+				continue
+			}
+			return stats, fmt.Errorf("generate sample %d: %w", attemptIndex, err)
 		}
 		if err := writeGenerationSample(plan, vocab, output, sample); err != nil {
-			return err
+			return stats, err
 		}
+		stats.Completed++
 	}
-	return nil
+	if stats.Completed < plan.numSamples {
+		return stats, generationAttemptLimitError(plan, stats)
+	}
+	return stats, nil
+}
+
+func (p generationPlan) effectiveMaxAttempts() int {
+	if p.maxAttempts > 0 {
+		return p.maxAttempts
+	}
+	return p.numSamples
+}
+
+func (p generationPlan) skipsIncomplete() bool {
+	return p.incompletePolicy == grammarIncompleteSkip
 }
 
 func writeGenerationSample(plan generationPlan, vocab *data.NucleotideVocabulary, output generationWriter, sample generationSample) error {
@@ -207,22 +246,36 @@ func runBatchedGenerationSamples(
 	vocab *data.NucleotideVocabulary,
 	output generationWriter,
 ) error {
-	for waveStart := 0; waveStart < plan.numSamples; waveStart += plan.batchSize {
-		waveSize := min(plan.batchSize, plan.numSamples-waveStart)
+	_, err := runBatchedGenerationSamplesWithStats(cfg, evaluator, opts, plan, vocab, output)
+	return err
+}
+
+func runBatchedGenerationSamplesWithStats(
+	cfg *ArchConfig,
+	evaluator batchedCausalGenerationEvaluator,
+	opts GenerateOptions,
+	plan generationPlan,
+	vocab *data.NucleotideVocabulary,
+	output generationWriter,
+) (generationRunStats, error) {
+	stats := generationRunStats{}
+	for stats.Completed < plan.numSamples && stats.Attempts < plan.effectiveMaxAttempts() {
+		waveStart := stats.Attempts
+		waveSize := min(plan.batchSize, plan.numSamples-stats.Completed, plan.effectiveMaxAttempts()-waveStart)
 		slots := make([]replayGenerationSlot, plan.batchSize)
 		for row := 0; row < waveSize; row++ {
 			sampleIdx := waveStart + row
 			rng := rand.New(rand.NewSource(generationSeedForSample(plan.baseSeed, sampleIdx)))
 			context, err := generationPromptTokensWithVocabulary(opts.Prompt, cfg.VocabSize, rng, vocab)
 			if err != nil {
-				return fmt.Errorf("generate sample %d: %w", sampleIdx, err)
+				return stats, fmt.Errorf("generate sample %d: %w", sampleIdx, err)
 			}
 			if len(context) > cfg.SeqLen {
-				return fmt.Errorf("generate sample %d: prompt length %d exceeds seq_len %d", sampleIdx, len(context), cfg.SeqLen)
+				return stats, fmt.Errorf("generate sample %d: prompt length %d exceeds seq_len %d", sampleIdx, len(context), cfg.SeqLen)
 			}
 			processor, err := startLogitProcessor(opts.NewLogitProcessor, context)
 			if err != nil {
-				return fmt.Errorf("generate sample %d: %w", sampleIdx, err)
+				return stats, fmt.Errorf("generate sample %d: %w", sampleIdx, err)
 			}
 			slots[row] = replayGenerationSlot{tokens: context, rng: rng, processor: processor, sampleIdx: sampleIdx}
 			if plan.eosTokenID >= 0 && context[len(context)-1] == plan.eosTokenID || opts.MaxTokens == 0 {
@@ -245,10 +298,10 @@ func runBatchedGenerationSamples(
 			}
 			logits, err := evaluator.EvaluateGenerationGPU(xTok, yTok, positions, plan.batchSize, cfg.SeqLen)
 			if err != nil {
-				return fmt.Errorf("generate wave starting at sample %d: %w", waveStart, err)
+				return stats, fmt.Errorf("generate wave starting at sample %d: %w", waveStart, err)
 			}
 			if len(logits) != plan.batchSize*cfg.VocabSize {
-				return fmt.Errorf("generation logits size=%d, want %d", len(logits), plan.batchSize*cfg.VocabSize)
+				return stats, fmt.Errorf("generation logits size=%d, want %d", len(logits), plan.batchSize*cfg.VocabSize)
 			}
 			for row := 0; row < waveSize; row++ {
 				slot := &slots[row]
@@ -257,7 +310,7 @@ func runBatchedGenerationSamples(
 				}
 				next, err := constrainAndSampleNextToken(slot.processor, slot.steps, logits[row*cfg.VocabSize:(row+1)*cfg.VocabSize], opts.Temperature, opts.TopK, slot.rng)
 				if err != nil {
-					return fmt.Errorf("generate sample %d step %d: %w", slot.sampleIdx, slot.steps, err)
+					return stats, fmt.Errorf("generate sample %d step %d: %w", slot.sampleIdx, slot.steps, err)
 				}
 				slot.tokens = append(slot.tokens, next)
 				slot.steps++
@@ -271,15 +324,24 @@ func runBatchedGenerationSamples(
 			}
 		}
 		for row := 0; row < waveSize; row++ {
+			stats.Attempts++
 			if err := finishLogitProcessor(slots[row].processor); err != nil {
-				return fmt.Errorf("generate sample %d: %w", slots[row].sampleIdx, err)
+				if plan.skipsIncomplete() && errors.Is(err, ErrGrammarIncomplete) {
+					stats.SkippedIncomplete++
+					continue
+				}
+				return stats, fmt.Errorf("generate sample %d: %w", slots[row].sampleIdx, err)
 			}
 			if err := writeGenerationSample(plan, vocab, output, generationSample{tokens: slots[row].tokens, notice: slots[row].notice}); err != nil {
-				return fmt.Errorf("write generated sample %d: %w", slots[row].sampleIdx, err)
+				return stats, fmt.Errorf("write generated sample %d: %w", slots[row].sampleIdx, err)
 			}
+			stats.Completed++
 		}
 	}
-	return nil
+	if stats.Completed < plan.numSamples {
+		return stats, generationAttemptLimitError(plan, stats)
+	}
+	return stats, nil
 }
 
 func generationWaveDone(slots []replayGenerationSlot, waveSize int) bool {

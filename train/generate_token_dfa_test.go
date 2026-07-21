@@ -1,6 +1,7 @@
 package train
 
 import (
+	"errors"
 	"math"
 	"math/rand"
 	"strings"
@@ -40,7 +41,7 @@ func TestTokenDFAConsumesPromptMasksAndRequiresAcceptingFinish(t *testing.T) {
 	if err := processor.Accept(1); err != nil {
 		t.Fatal(err)
 	}
-	if err := processor.Finish(); err == nil || !strings.Contains(err.Error(), "not accepting") {
+	if err := processor.Finish(); err == nil || !strings.Contains(err.Error(), "not accepting") || !errors.Is(err, ErrGrammarIncomplete) {
 		t.Fatalf("open grammar finish error=%v", err)
 	}
 	if err := processor.Accept(2); err != nil {
