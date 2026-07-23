@@ -66,6 +66,12 @@ func TestTelemetryFlagsInTrainingHelpGroups(t *testing.T) {
 	}
 }
 
+func TestValidateModeHasConfigHelp(t *testing.T) {
+	if !flagGroupContains(modeFlagGroups["validate"], "config") {
+		t.Fatal("validate help groups missing config")
+	}
+}
+
 func TestResumeFlagInArchCheckpointHelpGroup(t *testing.T) {
 	if !flagGroupContains(modeFlagGroups["arch"], "resume") {
 		t.Fatal("arch help groups missing resume")
@@ -128,6 +134,26 @@ func TestBulkGenerationFlagsInHelpGroup(t *testing.T) {
 		if !flagGroupContains(groups, flagName) {
 			t.Fatalf("generate help groups missing %s", flagName)
 		}
+	}
+}
+
+func TestHFExportSpecialTokenFlagsInHelpGroup(t *testing.T) {
+	groups := modeFlagGroups["export-hf"]
+	for _, flagName := range []string{"bos-token-id", "eos-token-id", "pad-token-id"} {
+		if !flagGroupContains(groups, flagName) {
+			t.Fatalf("export-hf help groups missing %s", flagName)
+		}
+	}
+}
+
+func TestExplicitIntFlag(t *testing.T) {
+	provided := map[string]bool{"eos-token-id": true}
+	if got := explicitIntFlag("bos-token-id", -1, provided); got != nil {
+		t.Fatalf("unprovided flag returned %v", *got)
+	}
+	got := explicitIntFlag("eos-token-id", 0, provided)
+	if got == nil || *got != 0 {
+		t.Fatalf("explicit zero = %v, want pointer to 0", got)
 	}
 }
 

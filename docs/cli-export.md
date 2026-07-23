@@ -22,11 +22,15 @@ Export a supported Mixlab checkpoint:
 | `-export-dir` | Destination Hugging Face model directory. Preferred alias for legacy `-output`. |
 | `-output` | Legacy destination directory. |
 | `-tokenizer-path` | Tokenizer JSON to bundle with the export. |
+| `-bos-token-id` | Explicit BOS token ID when tokenizer metadata does not declare one. |
+| `-eos-token-id` | Explicit EOS token ID when tokenizer metadata does not declare one. |
+| `-pad-token-id` | Explicit PAD token ID when tokenizer metadata does not declare one. |
 
 The default export format is Mixlab custom-code Hugging Face export. Configs
 with `hf_export_format: "gpt2"` export as native `GPT2LMHeadModel` when they
 meet the strict GPT-2 compatibility rules. See [hf-export.md](hf-export.md)
-for supported features, sequence-classification pooling, and load examples.
+for supported features, special-token resolution, sequence-classification
+pooling, and load examples.
 
 ## `parity`
 

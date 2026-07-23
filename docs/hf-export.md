@@ -29,6 +29,25 @@ The exported directory contains:
 - `tokenizer.json`, plus `tokenizer_config.json` and `special_tokens_map.json`
 - `char_features.bin` when token-level character feature embeddings are enabled
 
+## Special Token IDs
+
+Export resolves BOS, EOS, and PAD IDs in this order:
+
+1. `tokenizer_config.json`, `special_tokens_map.json`, and special added tokens in `tokenizer.json`.
+2. Explicit `-bos-token-id`, `-eos-token-id`, and `-pad-token-id` flags.
+3. `special_token_ids` in a `mixlab.dataset.json` beside the tokenizer.
+4. Legacy `training.example_framing.bos_id` and `eos_id`.
+
+Every resolved ID must be inside the model vocabulary. Export fails instead of
+writing invalid metadata. When an ID remains unknown, export prints a warning
+and leaves it unset. Native GPT-2 exports write unresolved BOS, EOS, and PAD
+fields as JSON `null`; this prevents Transformers from restoring GPT-2's legacy
+`50256` defaults for small custom vocabularies.
+
+The IDs are stored in `config.json`, which Transformers uses to initialize the
+model's generation configuration. A separate `generation_config.json` is not
+written because it would duplicate the same metadata.
+
 Load it with:
 
 ```python

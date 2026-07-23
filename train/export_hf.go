@@ -23,6 +23,9 @@ type ExportHFOptions struct {
 	SafetensorsLoad string
 	OutputDir       string
 	TokenizerSource string
+	BOSTokenID      *int
+	EOSTokenID      *int
+	PADTokenID      *int
 }
 
 type hfConfigJSON struct {
@@ -142,10 +145,11 @@ func runExportHF(opts ExportHFOptions) error {
 	if err != nil {
 		return err
 	}
-	specials, err := deriveHFTokenizerSpecials(tokenizer, exportCfg)
+	specials, err := deriveHFTokenizerSpecials(tokenizer, exportCfg, opts)
 	if err != nil {
 		return err
 	}
+	warnMissingHFGenerationSpecials(specials)
 
 	if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("create HF output directory %q: %w", opts.OutputDir, err)

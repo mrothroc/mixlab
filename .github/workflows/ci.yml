@@ -19,10 +19,10 @@ jobs:
       # GPU package requires MLX headers (Metal/CUDA) — skip on CI.
       # Pure-Go packages (arch, data, train) compile and test without CGO.
       - name: Vet
-        run: CGO_ENABLED=0 go vet ./arch/... ./data/... ./train/...
+        run: CGO_ENABLED=0 go vet ./arch/... ./cmd/mixlab ./data/... ./train/...
 
       - name: Test
-        run: CGO_ENABLED=0 go test ./arch/... ./data/... ./train/... -count=1 -timeout 120s
+        run: CGO_ENABLED=0 go test ./arch/... ./cmd/mixlab ./data/... ./train/... -count=1 -timeout 120s
 
   lint:
     runs-on: ubuntu-latest
@@ -38,7 +38,7 @@ jobs:
           CGO_ENABLED: "0"
         with:
           version: v2.1.6
-          args: ./arch/... ./data/... ./train/...
+          args: ./arch/... ./cmd/mixlab ./data/... ./train/...
 
       - name: Check file sizes (max 1000 lines per .go file)
         run: |

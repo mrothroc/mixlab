@@ -28,9 +28,9 @@ type hfGPT2ConfigJSON struct {
 	ScaleAttnByInverseLayerIdx bool     `json:"scale_attn_by_inverse_layer_idx"`
 	ReorderAndUpcastAttn       bool     `json:"reorder_and_upcast_attn"`
 	TieWordEmbeddings          bool     `json:"tie_word_embeddings"`
-	PadTokenID                 *int     `json:"pad_token_id,omitempty"`
-	EOSTokenID                 *int     `json:"eos_token_id,omitempty"`
-	BOSTokenID                 *int     `json:"bos_token_id,omitempty"`
+	PadTokenID                 *int     `json:"pad_token_id"`
+	EOSTokenID                 *int     `json:"eos_token_id"`
+	BOSTokenID                 *int     `json:"bos_token_id"`
 	UNKTokenID                 *int     `json:"unk_token_id,omitempty"`
 }
 
@@ -61,10 +61,11 @@ func runExportHFGPT2(opts ExportHFOptions, cfg *ArchConfig) error {
 	if err != nil {
 		return err
 	}
-	specials, err := deriveHFTokenizerSpecials(tokenizer, cfg)
+	specials, err := deriveHFTokenizerSpecials(tokenizer, cfg, opts)
 	if err != nil {
 		return err
 	}
+	warnMissingHFGenerationSpecials(specials)
 	if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("create HF output directory %q: %w", opts.OutputDir, err)
 	}

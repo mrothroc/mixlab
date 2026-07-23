@@ -3,6 +3,7 @@ package train
 import (
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -119,6 +120,128 @@ func TestExportHFGPT2NativeFormat(t *testing.T) {
 	if maxAbsDiffFloat32(gotHead, nativeWeights[nthWeightShapeIndex(t, shapes, "embed")]) != 0 {
 		t.Fatal("lm_head.weight is not tied to exported token embeddings")
 	}
+}
+
+func TestExportHFGPT2WritesNullForUnresolvedSpecialTokens(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, strictGPT2SpecialTokenTestConfig())
+	removeTokenizerSpecialDeclarations(t, tokenizerDir)
+	outDir := filepath.Join(dir, "hf_gpt2")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+	var cfg map[string]any
+	readJSON(t, filepath.Join(outDir, "config.json"), &cfg)
+	for _, key := range []string{"bos_token_id", "eos_token_id", "pad_token_id"} {
+		value, ok := cfg[key]
+		if !ok {
+			t.Fatalf("config omitted %s; GPT2Config would restore its legacy out-of-vocab default", key)
+		}
+		if value != nil {
+			t.Fatalf("config %s=%v want null", key, value)
+		}
+	}
+}
+
+func TestExportHFGPT2SpecialTokensLoadInTransformers(t *testing.T) {
+	if os.Getenv("HF_PARITY") != "1" {
+		t.Skip("set HF_PARITY=1 to run the Transformers integration check")
+	}
+	python := os.Getenv("HF_PARITY_PYTHON")
+	if python == "" {
+		python = "python3"
+	}
+	if err := exec.Command(python, "-c", "import torch, transformers, safetensors").Run(); err != nil {
+		t.Skipf("python HF dependencies unavailable via %q: %v", python, err)
+	}
+
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixture(t, dir, strictGPT2SpecialTokenTestConfig())
+	removeTokenizerSpecialDeclarations(t, tokenizerDir)
+	writeHFExportDatasetManifest(t, tokenizerDir, 7, map[string]int{
+		"pad": 0,
+		"bos": 3,
+		"eos": 2,
+	})
+	outDir := filepath.Join(dir, "hf_gpt2")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       outDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+	if err := os.Remove(filepath.Join(tokenizerDir, "mixlab.dataset.json")); err != nil {
+		t.Fatal(err)
+	}
+	nullOutDir := filepath.Join(dir, "hf_gpt2_unresolved")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath:      cfgPath,
+		SafetensorsLoad: weightsPath,
+		OutputDir:       nullOutDir,
+		TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF unresolved specials: %v", err)
+	}
+	script := `
+import torch
+from transformers import AutoModelForCausalLM, GPT2Config, LogitsProcessor
+model = AutoModelForCausalLM.from_pretrained(r"` + outDir + `")
+assert model.config.bos_token_id == 3
+assert model.config.eos_token_id == 2
+assert model.config.pad_token_id == 0
+assert model.generation_config.bos_token_id == 3
+assert model.generation_config.eos_token_id == 2
+assert model.generation_config.pad_token_id == 0
+class ForceEOS(LogitsProcessor):
+    def __call__(self, input_ids, scores):
+        scores.fill_(-float("inf"))
+        scores[:, 2] = 0
+        return scores
+generated = model.generate(
+    torch.tensor([[3]]),
+    do_sample=True,
+    max_new_tokens=2,
+    logits_processor=[ForceEOS()],
+)
+assert generated.tolist() == [[3, 2]]
+unresolved = GPT2Config.from_pretrained(r"` + nullOutDir + `")
+assert unresolved.bos_token_id is None
+assert unresolved.eos_token_id is None
+assert unresolved.pad_token_id is None
+`
+	output, err := exec.Command(python, "-c", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("Transformers failed to load native GPT-2 special-token metadata: %v\n%s", err, output)
+	}
+	if strings.Contains(string(output), "50256") || strings.Contains(strings.ToLower(string(output)), "out of range") {
+		t.Fatalf("Transformers emitted an invalid-special-token warning:\n%s", output)
+	}
+}
+
+func strictGPT2SpecialTokenTestConfig() string {
+	return `{
+		"name":"gpt2_specials",
+		"model_dim":6,
+		"vocab_size":7,
+		"seq_len":3,
+		"mlp_mult":2.0,
+		"tie_embeddings":true,
+		"norm_type":"layernorm",
+		"norm_affine":true,
+		"positional_embedding":"learned_absolute",
+		"hf_export_format":"gpt2",
+		"blocks":[
+			{"type":"plain","heads":2,"attention_mask":"causal","attn_bias":true,"ffn_activation":"gelu_new","ffn_pre_norm":true,"ffn_bias":true}
+		],
+		"training":{"batch_tokens":3,"objective":"causal","seed":7}
+	}`
 }
 
 func TestExportHFGPT2RejectsNonStrictPlainBlock(t *testing.T) {

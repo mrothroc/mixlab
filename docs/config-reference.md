@@ -15,6 +15,12 @@ For a shorter path through the schema, start with:
 - [Config: Training](config-training.md)
 - [Config: Advanced Features](config-advanced.md)
 
+Check a config without initializing MLX or loading data:
+
+```bash
+mixlab -mode validate -config model.json
+```
+
 ## Top-level model fields
 
 These fields live at the root of the config object.
@@ -40,6 +46,8 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 | `hf_export_format` | string | No | `"mixlab"` | Hugging Face export format. `"mixlab"` writes the maintained custom-code Mixlab model. `"gpt2"` writes a native `model_type: "gpt2"` directory and is accepted only for strict GPT-2-compatible sequential `plain` stacks. |
 | `bigram_vocab_size` | integer | No | Disabled | Enables model-level hashed bigram embeddings when `> 1`. `0` disables. `1` is invalid. |
 | `bigram_dim` | integer | No | `model_dim` when bigrams enabled | Bigram embedding dimension. `0` inherits `model_dim`. Ignored when `bigram_vocab_size == 0`. |
+| `trigram_vocab_size` | integer | No | Disabled | Enables model-level hashed trigram embeddings when `> 1`. `0` disables. Trigram IDs are computed within each sequence row and never cross row boundaries. |
+| `trigram_dim` | integer | No | `model_dim` when trigrams enabled | Trigram embedding dimension. `0` inherits `model_dim`. Ignored when `trigram_vocab_size == 0`. |
 | `tie_embeddings` | boolean | No | `false` | Shares token embedding and output head weights. |
 | `dropout` | number | No | `0` | Legacy training dropout applied to both hidden/residual projections and attention probabilities unless `hidden_dropout` or `attn_dropout` override it. Must be in `[0,1]`. Eval, generation, parity, and HF export run with dropout disabled. |
 | `hidden_dropout` | number | No | `dropout` | Training dropout on attention output projections, FFN output projections, and MoE deltas. Explicit `0` disables hidden dropout even when `dropout` is nonzero. |
@@ -251,6 +259,8 @@ Per-phase order:
 
 ## Block types
 
+Every block object requires a `type` field. The selected type determines which
+additional block fields are valid.
 
 ### `plain`
 
@@ -486,6 +496,8 @@ Optional fields:
 - `conv_kernel` — causal depthwise convolution width; defaults to `4`.
 - `use_conv` — whether to keep the short causal convolution; defaults to `true`.
 - `scan_chunk_size` — exact affine scan chunk size; defaults to `64`. `0` uses the original full-sequence parallel scan, mainly for debugging.
+- `dt_min` — lower initialization bound for the learned time step; defaults to `0.001`.
+- `dt_max` — upper initialization bound for the learned time step; defaults to `0.1` and must be greater than `dt_min`.
 
 Example:
 
@@ -987,6 +999,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `warmup_ratio` | number | No | Disabled | Fraction of `steps` to use for warmup in the standard cosine schedule, rounded to the nearest step. Must be in `[0,1]`. Mutually exclusive with `warmup_steps`. For example, `0.016` gives about a 1.6% warmup. |
 | `hold_steps` | integer | No | Legacy default | Constant-peak-LR plateau after warmup in the standard cosine schedule. Must be `>= 0`; values above the remaining steps are clamped. When omitted, Mixlab keeps the historical `200`-step hold, clamped by total steps. Set `0` explicitly to start cosine decay immediately after warmup. |
 | `warmdown_steps` | integer | No | `0` | Cosine warmdown length at the end of training. Must be `>= 0`; values above `steps` are clamped by the scheduler. |
+| `min_lr_fraction` | number | No | `0` | Absolute learning-rate floor as a fraction of peak LR across cosine decay and warmdown. Must be in `[0,1)`. `0` preserves the historical near-zero endpoint; `0.1` keeps LR at or above 10% of peak. |
 | `target_val_loss` | number | No | `0` | Early-stop threshold on validation loss. `0` disables it. Must be `>= 0`. Checked when validation loss is computed during training. |
 | `early_stop` | object | No | Disabled | Optional validation early-stop policy. V1 supports validation-loss plateau patience and step-gated `val_gt` aborts. See below. |
 | `first_byte_mask` | boolean | No | `false` | Enables training-time first-byte masked softmax. At UTF-8 codepoint-boundary targets, the optimization loss only normalizes over vocabulary entries whose first byte is syntactically valid as a UTF-8 first byte. Validation, exported per-token NLL, and BPB evaluation use the unmasked loss. Byte-id corpora (`vocab_size <= 256`) work directly; BPE corpora use `tokenizer.json` next to the training shards. |
@@ -1000,6 +1013,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `optimizer` | string | No | `"muon"` | Optimizer selector: `"muon"`/`"muon_eq_r"`/`"normuon"` use Muon variants for matrix weights and AdamW for embed/head/scalar groups; `"adamw"` uses AdamW for all groups; `"lamb"` uses LAMB for all groups. |
 | `compute_dtype` | string | No | `"float32"` | MLX training compute dtype: `"float32"` or experimental `"bf16"`. BF16 keeps fp32 master weights and optimizer state, and currently supports `plain`, `swiglu`, `geglu`, `mlp`, and `moe` blocks. Unsupported blocks and QAT fail fast instead of silently falling back. |
 | `qat` | string | No | `"none"` | Quantization-aware training mode for rank-2 weights during the training forward pass. `"none"` disables it, `"int8"` applies per-row fake int8 quantization, and `"int6"` applies a coarser fake quantization with STE. |
+| `qat_start` | integer | No | `0` | Delays QAT until this zero-based training step. Before activation the normal unquantized training graph is used. Must be `>= 0`; positive values require `qat` to be enabled. |
 | `weight_init` | string | No | `"xavier_uniform"` | Initialization for rank ≥ 2 weights: `"xavier_uniform"`, `"normal"`, `"gptbert"`, or `"gpt2"`. 1D weights are always ones (norms) or zeros unless a special block initializer says otherwise. |
 | `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` and `"gpt2"` initialization. Ignored when `weight_init` is `"xavier_uniform"` or `"gptbert"`. |
 | `grad_clip` | number | No | `0` | Max grad norm. `0` means no clipping. Must be `>= 0`. |
@@ -1024,6 +1038,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `head_lr` | number | No | `lr` | Learning rate for the output head. Ignored when `tie_embeddings=true` unless `mtp.untie_embed_at_frac < 1` reserves and later activates a separate head. |
 | `muon_momentum` | number | No | `beta1` | Muon momentum term for matrix weights. Must be `>= 0`. |
 | `muon_backend_steps` | integer | No | `5` | Muon backend iteration count. Must be `> 0` after defaults. |
+| `newton_schulz_variant` | string | No | `"fixed"` | Muon Newton-Schulz coefficient schedule. `"fixed"` uses the canonical fixed coefficients; `"polar_express"` uses the supported per-iteration Polar Express coefficients. Ignored by AdamW and LAMB. |
 | `muon_nesterov` | boolean | No | `true` | Enables Muon Nesterov mode when set or omitted. |
 | `embed_weight_decay` | number | No | `weight_decay` | Per-group weight decay for embeddings. Explicit `0` disables this group's decay. |
 | `matrix_weight_decay` | number | No | `weight_decay` | Per-group weight decay for matrices. Explicit `0` disables this group's decay. |

@@ -3,15 +3,19 @@ package train
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/mrothroc/mixlab/data"
 )
 
 type hfSpecialToken struct {
-	Token string
-	ID    int
-	Set   bool
+	Token  string
+	ID     int
+	Set    bool
+	Source string
 }
 
 type hfTokenizerSpecials struct {
@@ -59,9 +63,12 @@ func writeHFTokenizerArtifacts(outputDir string, src hfTokenizerSource, specials
 	return nil
 }
 
-func deriveHFTokenizerSpecials(src hfTokenizerSource, cfg *ArchConfig) (hfTokenizerSpecials, error) {
+func deriveHFTokenizerSpecials(src hfTokenizerSource, cfg *ArchConfig, opts ExportHFOptions) (hfTokenizerSpecials, error) {
 	tokenToID, added, err := inspectTokenizerJSONForSpecials(src.TokenizerJSON)
 	if err != nil {
+		return hfTokenizerSpecials{}, err
+	}
+	if err := validateHFExportSpecialTokenOptions(opts, cfg.VocabSize); err != nil {
 		return hfTokenizerSpecials{}, err
 	}
 	var out hfTokenizerSpecials
@@ -84,10 +91,69 @@ func deriveHFTokenizerSpecials(src hfTokenizerSource, cfg *ArchConfig) (hfTokeni
 	// declare a mask token.
 	if !out.Mask.Set && hfExportSupportsMaskedLM(cfg) {
 		if token, ok := tokenForID(tokenToID, cfg.Training.MLMMaskTokenID); ok {
-			setSpecialToken(&out.Mask, token, cfg.Training.MLMMaskTokenID)
+			setSpecialToken(&out.Mask, token, cfg.Training.MLMMaskTokenID, "training.mlm_mask_token_id")
 		}
 	}
+	setSpecialTokenFlag(&out.BOS, opts.BOSTokenID, tokenToID, "-bos-token-id")
+	setSpecialTokenFlag(&out.EOS, opts.EOSTokenID, tokenToID, "-eos-token-id")
+	setSpecialTokenFlag(&out.Pad, opts.PADTokenID, tokenToID, "-pad-token-id")
+	if err := mergeSpecialsFromDatasetManifest(src.Dir, cfg, tokenToID, &out); err != nil {
+		return hfTokenizerSpecials{}, err
+	}
+	if framing := cfg.Training.ExampleFraming; framing != nil {
+		setSpecialTokenID(&out.BOS, framing.BosID, tokenToID, "training.example_framing.bos_id")
+		setSpecialTokenID(&out.EOS, framing.EosID, tokenToID, "training.example_framing.eos_id")
+	}
+	if err := validateHFTokenizerSpecials(out, cfg.VocabSize); err != nil {
+		return hfTokenizerSpecials{}, err
+	}
 	return out, nil
+}
+
+func validateHFExportSpecialTokenOptions(opts ExportHFOptions, vocabSize int) error {
+	for _, item := range []struct {
+		name string
+		id   *int
+	}{
+		{name: "-bos-token-id", id: opts.BOSTokenID},
+		{name: "-eos-token-id", id: opts.EOSTokenID},
+		{name: "-pad-token-id", id: opts.PADTokenID},
+	} {
+		if item.id != nil && (*item.id < 0 || *item.id >= vocabSize) {
+			return fmt.Errorf("%s=%d is outside model vocabulary [0,%d)", item.name, *item.id, vocabSize)
+		}
+	}
+	return nil
+}
+
+func mergeSpecialsFromDatasetManifest(dir string, cfg *ArchConfig, tokenToID map[string]int, out *hfTokenizerSpecials) error {
+	path := filepath.Join(dir, data.DatasetManifestFilename)
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat dataset manifest %q: %w", path, err)
+	}
+	manifest, err := data.LoadDatasetManifest(path)
+	if err != nil {
+		return err
+	}
+	if err := manifest.ValidateModelVocab(cfg.VocabSize); err != nil {
+		return fmt.Errorf("dataset manifest %q is incompatible with HF export: %w", path, err)
+	}
+	for _, item := range []struct {
+		name string
+		dst  *hfSpecialToken
+	}{
+		{name: "pad", dst: &out.Pad},
+		{name: "eos", dst: &out.EOS},
+		{name: "bos", dst: &out.BOS},
+	} {
+		if id, ok := manifest.SpecialTokenIDs[item.name]; ok {
+			setSpecialTokenID(item.dst, id, tokenToID, data.DatasetManifestFilename+".special_token_ids."+item.name)
+		}
+	}
+	return nil
 }
 
 func tokenForID(tokenToID map[string]int, id int) (string, bool) {
@@ -143,26 +209,39 @@ func mergeSpecialsFromSidecar(path string, tokenToID map[string]int, out *hfToke
 		return err
 	}
 	for _, spec := range []struct {
-		key string
-		dst *hfSpecialToken
+		key   string
+		idKey string
+		dst   *hfSpecialToken
 	}{
-		{key: "pad_token", dst: &out.Pad},
-		{key: "eos_token", dst: &out.EOS},
-		{key: "bos_token", dst: &out.BOS},
-		{key: "unk_token", dst: &out.UNK},
-		{key: "mask_token", dst: &out.Mask},
+		{key: "pad_token", idKey: "pad_token_id", dst: &out.Pad},
+		{key: "eos_token", idKey: "eos_token_id", dst: &out.EOS},
+		{key: "bos_token", idKey: "bos_token_id", dst: &out.BOS},
+		{key: "unk_token", idKey: "unk_token_id", dst: &out.UNK},
+		{key: "mask_token", idKey: "mask_token_id", dst: &out.Mask},
 	} {
 		token, ok := specialTokenString(doc[spec.key])
-		if !ok {
+		tokenID, tokenFound := tokenToID[token]
+		declaredID, idFound := jsonInteger(doc[spec.idKey])
+		if ok && tokenFound && idFound && tokenID != declaredID {
+			return fmt.Errorf("tokenizer sidecar %q has %s=%q at id %d but %s=%d", path, spec.key, token, tokenID, spec.idKey, declaredID)
+		}
+		if ok && tokenFound {
+			setSpecialToken(spec.dst, token, tokenID, filepath.Base(path)+"."+spec.key)
 			continue
 		}
-		id, ok := tokenToID[token]
-		if !ok {
-			continue
+		if idFound {
+			setSpecialTokenID(spec.dst, declaredID, tokenToID, filepath.Base(path)+"."+spec.idKey)
 		}
-		setSpecialToken(spec.dst, token, id)
 	}
 	return nil
+}
+
+func jsonInteger(v any) (int, bool) {
+	number, ok := v.(float64)
+	if !ok || math.IsNaN(number) || math.IsInf(number, 0) || math.Trunc(number) != number {
+		return 0, false
+	}
+	return int(number), true
 }
 
 func specialTokenString(v any) (string, bool) {
@@ -181,25 +260,82 @@ func applyInferredSpecialToken(token string, id int, out *hfTokenizerSpecials) {
 	lower := strings.ToLower(token)
 	switch {
 	case !out.Pad.Set && strings.Contains(lower, "pad"):
-		setSpecialToken(&out.Pad, token, id)
+		setSpecialToken(&out.Pad, token, id, "tokenizer.json added token")
 	case !out.EOS.Set && (strings.Contains(lower, "eos") || strings.Contains(lower, "endoftext") || token == "</s>"):
-		setSpecialToken(&out.EOS, token, id)
+		setSpecialToken(&out.EOS, token, id, "tokenizer.json added token")
 	case !out.BOS.Set && (strings.Contains(lower, "bos") || token == "<s>"):
-		setSpecialToken(&out.BOS, token, id)
+		setSpecialToken(&out.BOS, token, id, "tokenizer.json added token")
 	case !out.UNK.Set && strings.Contains(lower, "unk"):
-		setSpecialToken(&out.UNK, token, id)
+		setSpecialToken(&out.UNK, token, id, "tokenizer.json added token")
 	case !out.Mask.Set && strings.Contains(lower, "mask"):
-		setSpecialToken(&out.Mask, token, id)
+		setSpecialToken(&out.Mask, token, id, "tokenizer.json added token")
 	}
 }
 
-func setSpecialToken(dst *hfSpecialToken, token string, id int) {
+func setSpecialToken(dst *hfSpecialToken, token string, id int, source string) {
 	if dst == nil || dst.Set {
 		return
 	}
 	dst.Token = token
 	dst.ID = id
 	dst.Set = true
+	dst.Source = source
+}
+
+func setSpecialTokenID(dst *hfSpecialToken, id int, tokenToID map[string]int, source string) {
+	if dst == nil || dst.Set {
+		return
+	}
+	token, _ := tokenForID(tokenToID, id)
+	*dst = hfSpecialToken{Token: token, ID: id, Set: true, Source: source}
+}
+
+func setSpecialTokenFlag(dst *hfSpecialToken, id *int, tokenToID map[string]int, source string) {
+	if id == nil {
+		return
+	}
+	setSpecialTokenID(dst, *id, tokenToID, source)
+}
+
+func validateHFTokenizerSpecials(specials hfTokenizerSpecials, vocabSize int) error {
+	for _, item := range []struct {
+		name  string
+		token hfSpecialToken
+	}{
+		{name: "pad", token: specials.Pad},
+		{name: "eos", token: specials.EOS},
+		{name: "bos", token: specials.BOS},
+		{name: "unk", token: specials.UNK},
+		{name: "mask", token: specials.Mask},
+	} {
+		if !item.token.Set {
+			continue
+		}
+		if item.token.ID < 0 || item.token.ID >= vocabSize {
+			return fmt.Errorf("%s token id %d from %s is outside model vocabulary [0,%d)", item.name, item.token.ID, item.token.Source, vocabSize)
+		}
+	}
+	return nil
+}
+
+func warnMissingHFGenerationSpecials(specials hfTokenizerSpecials) {
+	missing := make([]string, 0, 3)
+	for _, item := range []struct {
+		name string
+		set  bool
+	}{
+		{name: "bos", set: specials.BOS.Set},
+		{name: "eos", set: specials.EOS.Set},
+		{name: "pad", set: specials.Pad.Set},
+	} {
+		if !item.set {
+			missing = append(missing, item.name)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "warning: export-hf could not resolve %s token ids; pass explicit -bos-token-id, -eos-token-id, or -pad-token-id overrides as needed\n", strings.Join(missing, ", "))
 }
 
 func mergeTokenizerConfigSpecials(doc map[string]any, specials hfTokenizerSpecials) {
@@ -217,7 +353,9 @@ func mergeTokenizerConfigSpecials(doc map[string]any, specials hfTokenizerSpecia
 		if !item.token.Set {
 			continue
 		}
-		doc[item.tokenKey] = item.token.Token
+		if item.token.Token != "" {
+			doc[item.tokenKey] = item.token.Token
+		}
 		doc[item.idKey] = item.token.ID
 	}
 }
@@ -233,7 +371,7 @@ func mergeSpecialTokensMap(doc map[string]any, specials hfTokenizerSpecials) {
 		{key: "unk_token", token: specials.UNK},
 		{key: "mask_token", token: specials.Mask},
 	} {
-		if item.token.Set {
+		if item.token.Set && item.token.Token != "" {
 			doc[item.key] = item.token.Token
 		}
 	}

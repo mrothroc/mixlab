@@ -54,6 +54,12 @@ func RunCount(configPath string) error {
 	return runCount(configPath)
 }
 
+// RunValidate parses, validates, and builds the IR for one config without
+// initializing MLX or requiring training data.
+func RunValidate(configPath string) error {
+	return runValidate(configPath)
+}
+
 func RunEvalMode(configPath, trainPattern, safetensorsLoad string) error {
 	return runEvalMode(configPath, trainPattern, safetensorsLoad, "data")
 }

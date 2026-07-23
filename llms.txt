@@ -1,0 +1,65 @@
+# Mixlab
+
+Mixlab is a JSON-configured language and discrete-sequence model research tool.
+It trains through native MLX on Apple Silicon or CUDA and exports supported
+model surfaces to Hugging Face.
+
+## Canonical documentation
+
+- [Project quickstart](README.md)
+- [Task-oriented docs index](docs/README.md)
+- [CLI modes](docs/cli.md)
+- [Configuration reference](docs/config-reference.md)
+- [Feature compatibility matrix](docs/feature-matrix.md)
+- [Hugging Face support matrix](docs/hf-export-support-matrix.md)
+- [Example configs](examples/README.md)
+
+## Recommended workflow
+
+1. Start from the closest maintained file in `examples/`.
+2. Change only fields documented in `docs/config-reference.md`.
+3. Run `mixlab -mode validate -config model.json`.
+4. Run `mixlab -mode count -config model.json`.
+5. Prepare data, train, evaluate, and export using the focused CLI guide.
+
+## Config-generation rules
+
+- Configs are JSON or JSONC with `//` line comments.
+- Unknown JSON fields are rejected.
+- Omitted fields receive defaults; do not invent explicit values without a
+  reason.
+- Compatibility restrictions are intentional. Do not infer that two supported
+  features compose; validate the combined config.
+- `training.batch_tokens` is the optimization-step token budget and must meet
+  the active sequence-shape divisibility rules.
+- Training-only auxiliaries generally do not affect native eval/generation or
+  HF inference. Check the feature matrix and export support matrix.
+- Pure block-diffusion, native energy, and RTD detector surfaces are not normal
+  causal or masked Hugging Face language models.
+- Prefer mode-specific output flags over legacy `-output`.
+
+## Task routing
+
+- Data and artifacts: `docs/data.md`, `docs/cli-prepare.md`
+- Architecture and blocks: `docs/architecture.md`, `docs/config-blocks.md`
+- Objectives and optimizers: `docs/config-training.md`
+- Training and resume: `docs/cli-train.md`
+- Eval and scoring: `docs/cli-eval.md`
+- Generation and grammars: `docs/cli-generate.md`,
+  `docs/grammar-constrained-generation.md`
+- Export and parity: `docs/hf-export.md`, `docs/cli-export.md`
+- Performance and profiling: `docs/performance.md`
+
+## Source entry points
+
+- Config schema/defaults/validation: `arch/config.go`,
+  `arch/config_validate.go`, `arch/config_load.go`
+- Block registry and IR emission: `arch/registry.go`, `arch/builder.go`
+- CLI modes and grouped help: `cmd/mixlab/main.go`
+- Training orchestration: `train/train.go`
+- Hugging Face exporter/templates: `train/export_hf*.go`,
+  `train/hf_templates/`
+
+The installed binary is authoritative for its version. Use
+`mixlab -mode MODE -h` and `mixlab -mode validate` when documentation and a
+local binary differ.

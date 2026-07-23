@@ -135,5 +135,6 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 
 ## Companion documentation
 
+- [Feature matrix](../docs/feature-matrix.md) — training, runtime, and export compatibility
 - [plain_3L.md](plain_3L.md) — Plain transformer field reference
 - [custom_geglu.md](custom_geglu.md) — Custom block JSON format reference

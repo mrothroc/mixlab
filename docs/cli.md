@@ -11,6 +11,7 @@ mode-specific flags.
 
 | Mode | Description | Details |
 |------|-------------|---------|
+| `validate` | Parse, validate, and build the IR for one config without initializing MLX. | This page |
 | `arch` | Train a single architecture from a JSON config. The default mode. | [cli-train.md](cli-train.md) |
 | `arch_race` | Train every JSON config in a directory and compare results. | [cli-train.md](cli-train.md) |
 | `smoke` | Run diagnostic checks for MLX availability and GPU health. | This page |
@@ -42,6 +43,18 @@ mode-specific flags.
   and `-hiddenstats-out`.
 - The training flag `-eval` remains supported. New scripts can use
   `-eval-after-train` to avoid confusion with `-mode eval`.
+
+## Validate
+
+Validate a config before allocating a GPU or loading training data:
+
+```bash
+mixlab -mode validate -config examples/plain_3L.json
+```
+
+This applies defaults, rejects unknown or incompatible fields, and builds the
+native IR. A successful command exits zero and prints one summary line. Use
+`count` when you also want parameter, memory, op, and FLOP estimates.
 
 ## Smoke
 

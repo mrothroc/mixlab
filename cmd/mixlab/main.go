@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "arch", "run mode: smoke, arch, arch_race, prepare, prepare-pairs, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
+	mode := flag.String("mode", "arch", "run mode: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
@@ -42,7 +42,9 @@ func main() {
 	numSamples := flag.Int("num-samples", 1, "number of causal sequences to generate in one process")
 	genBatch := flag.Int("gen-batch", 1, "causal sequences evaluated concurrently; 1 preserves sequential generation")
 	genSeed := flag.Int64("gen-seed", 0, "generation RNG seed; 0 uses training.seed")
-	eosTokenID := flag.Int("eos-token-id", -1, "causal generation EOS token id; -1 disables when no sequence vocabulary is supplied")
+	bosTokenID := flag.Int("bos-token-id", -1, "BOS token id fallback for export-hf when tokenizer metadata does not declare one")
+	eosTokenID := flag.Int("eos-token-id", -1, "EOS token id for causal generation or export-hf; -1 disables generation stopping when no sequence vocabulary is supplied")
+	padTokenID := flag.Int("pad-token-id", -1, "PAD token id fallback for export-hf when tokenizer metadata does not declare one")
 	generateOut := flag.String("generate-out", "", "write causal generation records, one sample per line")
 	grammarTable := flag.String("grammar-table", "", "versioned token-DFA JSON table for constrained causal generation")
 	grammarPath := flag.String("grammar", "", "GBNF grammar file for constrained causal generation")
@@ -182,7 +184,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// smoke, prepare, and count modes handle availability themselves
+	// smoke, prepare, validate, and count modes handle availability themselves
 	if *mode == "smoke" {
 		must(train.RunSmoke())
 		return
@@ -232,6 +234,10 @@ func main() {
 		}))
 		return
 	}
+	if *mode == "validate" {
+		must(train.RunValidate(*configPath))
+		return
+	}
 	if *mode == "count" {
 		must(train.RunCount(*configPath))
 		return
@@ -244,6 +250,9 @@ func main() {
 			SafetensorsLoad: *safetensorsLoad,
 			OutputDir:       exportOutput,
 			TokenizerSource: *prepTokenizerPath,
+			BOSTokenID:      explicitIntFlag("bos-token-id", *bosTokenID, providedFlags),
+			EOSTokenID:      explicitIntFlag("eos-token-id", *eosTokenID, providedFlags),
+			PADTokenID:      explicitIntFlag("pad-token-id", *padTokenID, providedFlags),
 		}))
 		return
 	}
@@ -389,7 +398,7 @@ func main() {
 			LogitTokens:     *parityLogitTokens,
 		}))
 	default:
-		must(fmt.Errorf("unknown mode %q (supported: smoke, arch, arch_race, prepare, prepare-pairs, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity)", *mode))
+		must(fmt.Errorf("unknown mode %q (supported: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity)", *mode))
 	}
 }
 
@@ -398,7 +407,7 @@ type flagGroup struct {
 	Names []string
 }
 
-var supportedModes = []string{"smoke", "arch", "arch_race", "prepare", "prepare-pairs", "count", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "export-hf", "parity"}
+var supportedModes = []string{"smoke", "validate", "arch", "arch_race", "prepare", "prepare-pairs", "count", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "export-hf", "parity"}
 
 var modeFlagGroups = map[string][]flagGroup{
 	"arch": {
@@ -429,6 +438,9 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Input", []string{"pair-in", "config"}},
 		{"Validation", []string{"vocab-size", "pair-max-len"}},
 		{"Output", []string{"pair-out"}},
+	},
+	"validate": {
+		{"Required", []string{"config"}},
 	},
 	"count": {
 		{"Required", []string{"config"}},
@@ -470,6 +482,7 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Required", []string{"config", "safetensors-load"}},
 		{"Output", []string{"export-dir", "output"}},
 		{"Tokenizer", []string{"tokenizer-path"}},
+		{"Special tokens", []string{"bos-token-id", "eos-token-id", "pad-token-id"}},
 	},
 	"parity": {
 		{"Required", []string{"config", "safetensors-load", "hf", "train"}},
@@ -574,6 +587,14 @@ func providedFlagSet() map[string]bool {
 		provided[f.Name] = true
 	})
 	return provided
+}
+
+func explicitIntFlag(name string, value int, provided map[string]bool) *int {
+	if !provided[name] {
+		return nil
+	}
+	out := value
+	return &out
 }
 
 func must(err error) {

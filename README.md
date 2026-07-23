@@ -131,6 +131,7 @@ framework. It trades generality for speed of iteration.
 - [CLI usage](docs/cli.md)
 - [Data preparation](docs/data.md)
 - [Architecture guide](docs/architecture.md)
+- [Feature compatibility matrix](docs/feature-matrix.md)
 - [Recipes](docs/recipes.md) — reproducible end-to-end models (config → trained → Hugging Face)
 - [Config guides](docs/config-model.md)
 - [Configuration reference](docs/config-reference.md)
@@ -139,6 +140,7 @@ framework. It trades generality for speed of iteration.
 - [Performance and profiling](docs/performance.md)
 - [Docker](docker/README.md)
 - [Releasing](docs/releasing.md)
+- [LLM documentation index](llms.txt)
 
 ## Common Commands
 
@@ -155,6 +157,9 @@ framework. It trades generality for speed of iteration.
 
 # Count parameters, blocks, FLOPs, and IR ops
 ./mixlab -mode count -config examples/plain_3L.json
+
+# Validate config fields and compatibility without initializing MLX
+./mixlab -mode validate -config examples/plain_3L.json
 
 # Evaluate a checkpoint
 ./mixlab -mode eval -config examples/plain_3L.json \

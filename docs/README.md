@@ -1,38 +1,60 @@
 # mixlab docs
 
-This directory holds focused guides for using and extending mixlab.
+Use this page to choose the shortest path for the task at hand. The root
+[README](../README.md) remains the installation and first-run guide.
 
-| Document | Purpose |
-|----------|---------|
-| [cli.md](cli.md) | CLI mode overview and links to focused mode references. |
-| [cli-train.md](cli-train.md) | `arch` and `arch_race` training flags. |
-| [cli-prepare.md](cli-prepare.md) | `prepare` data/tokenizer flags. |
-| [cli-eval.md](cli-eval.md) | `count`, `eval`, diffusion scoring, hidden-state export, and per-token eval exports. |
-| [cli-generate.md](cli-generate.md) | Causal and block-diffusion generation flags. |
-| [grammar-constrained-generation.md](grammar-constrained-generation.md) | Token-DFA and GBNF constrained causal decoding. |
-| [cli-export.md](cli-export.md) | Hugging Face `export-hf` and `parity` flags. |
-| [data.md](data.md) | Preparing example data, FineWeb-Edu, custom corpora, and tokenizer compatibility. |
-| [architecture.md](architecture.md) | Model/block concepts, config customization, custom blocks, and extension points. |
-| [recipes.md](recipes.md) | Registry of reproducible end-to-end recipes (config → trained → published HF model). |
-| [config-model.md](config-model.md) | Short guide to top-level model fields and embedding channels. |
-| [config-blocks.md](config-blocks.md) | Short guide to block families and common block patterns. |
-| [config-training.md](config-training.md) | Short guide to training objectives, optimizers, and auxiliary losses. |
-| [config-advanced.md](config-advanced.md) | Routing map for advanced graph, export, and runtime features. |
-| [config-reference.md](config-reference.md) | Exhaustive JSON configuration reference with stable anchors. |
-| [hf-export.md](hf-export.md) | Hugging Face export workflow and compatibility notes. |
-| [hf-export-support-matrix.md](hf-export-support-matrix.md) | Supported HF export features by model surface. |
-| [performance.md](performance.md) | MLX tuning, memory limits, step timing, and profiling. |
-| [canonical_mamba3.md](canonical_mamba3.md) | Canonical Mamba-3 implementation notes. |
-| [ttt-mlp-stateful-inference.md](ttt-mlp-stateful-inference.md) | Native TTT-MLP prefill/decode state, ownership, and Apple runtime measurements. |
-| [diffusion-experiments.md](diffusion-experiments.md) | Workflow for causal, MLM, block-diffusion, hybrid-diffusion, and sampler sweeps. |
-| [block-diffusion-design.md](block-diffusion-design.md) | Technical design for the block-diffusion walking skeleton. |
-| [block-diffusion-release-verification.md](block-diffusion-release-verification.md) | Release verification notes for the block-diffusion walking skeleton. |
-| [reference-parity-audit-2026-06.md](reference-parity-audit-2026-06.md) | Reference parity audit notes. |
-| [sequence-modality-release-train.md](sequence-modality-release-train.md) | Review-gated roadmap from discrete sequences through encoder-free media inputs and codec-token generation. |
-| [sequence-modality-r1-verification.md](sequence-modality-r1-verification.md) | Release 1 compatibility evidence and review gate. |
-| [sequence-modality-r2-verification.md](sequence-modality-r2-verification.md) | Release 2 nucleotide vertical-slice evidence and review gate. |
-| [releasing.md](releasing.md) | Release process notes. |
+## Start By Task
 
-Start with the root [README](../README.md) for installation and a quickstart,
-then use [cli.md](cli.md), [data.md](data.md), [config-model.md](config-model.md),
-and [architecture.md](architecture.md) for day-to-day workflows.
+| Task | Start here | Then use |
+|------|------------|----------|
+| Prepare text, JSONL, records, or FASTA | [Data preparation](data.md) | [Prepare CLI](cli-prepare.md) |
+| Choose an architecture or objective | [Architecture guide](architecture.md) | [Model](config-model.md), [blocks](config-blocks.md), and [training](config-training.md) guides |
+| Check a config without a GPU | `mixlab -mode validate -config model.json` | [Configuration reference](config-reference.md) |
+| Count parameters and estimated compute | `mixlab -mode count -config model.json` | [Count and eval CLI](cli-eval.md) |
+| Train, compare, or resume runs | [Training CLI](cli-train.md) | [Performance](performance.md) |
+| Evaluate or score checkpoints | [Count and eval CLI](cli-eval.md) | [Feature matrix](feature-matrix.md) |
+| Generate causal or diffusion samples | [Generation CLI](cli-generate.md) | [Grammar constraints](grammar-constrained-generation.md) |
+| Export to Hugging Face | [HF export workflow](hf-export.md) | [HF support matrix](hf-export-support-matrix.md) |
+| Reproduce a complete workflow | [Recipes](recipes.md) | [Example configs](../examples/README.md) |
+| Add blocks or custom IR | [Architecture guide](architecture.md) | [Advanced config](config-advanced.md) and [custom ops](config-reference.md#custom-blocks) |
+
+## Canonical References
+
+These documents define the public user-facing contract:
+
+| Document | Scope |
+|----------|-------|
+| [CLI index](cli.md) | Modes, common conventions, and links to mode-specific flags. |
+| [Configuration reference](config-reference.md) | Public JSON fields, defaults, validation rules, and custom ops. |
+| [Feature matrix](feature-matrix.md) | Lifecycle support across training, native runtime, and HF export. |
+| [HF support matrix](hf-export-support-matrix.md) | Detailed Hugging Face export compatibility. |
+| [Examples index](../examples/README.md) | Maintained starting configs and selection guidance. |
+| [LLM index](../llms.txt) | Compact retrieval map and config-generation rules for automated clients. |
+
+Run mode-specific help for the installed version:
+
+```bash
+mixlab -mode MODE -h
+```
+
+## Specialized Guides
+
+- [Canonical Mamba-3](canonical_mamba3.md)
+- [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md)
+- [Block-diffusion experiments](diffusion-experiments.md)
+- [Grammar-constrained generation](grammar-constrained-generation.md)
+- [Performance, memory, and profiling](performance.md)
+
+## Maintainer And Design Records
+
+These explain implementation decisions and release evidence; they are not the
+primary user contract:
+
+- [Block-diffusion design](block-diffusion-design.md)
+- [Block-diffusion release verification](block-diffusion-release-verification.md)
+- [Reference parity audit](reference-parity-audit-2026-06.md)
+- [Release process](releasing.md)
+
+Public config fields and CLI flags are checked against the documentation by the
+Go test suite. Prefer updating the canonical references instead of adding a
+second description with different defaults.
