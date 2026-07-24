@@ -473,6 +473,61 @@ def write_nucleotide_manifest(vocabulary: dict, output_dir: str, train_records, 
     print(f"Saved dataset manifest to {path}")
 
 
+def flatten_nucleotide_stream(records: list[tuple[str, np.ndarray]], separator_id) -> np.ndarray:
+    if not records:
+        return np.asarray([], dtype=np.uint16)
+    pieces = []
+    separator = None if separator_id is None else np.asarray([separator_id], dtype=np.uint16)
+    for index, (_, record) in enumerate(records):
+        if index > 0 and separator is not None:
+            pieces.append(separator)
+        pieces.append(record)
+    return np.concatenate(pieces).astype(np.uint16, copy=False)
+
+
+def write_nucleotide_stream_manifest(
+    vocabulary: dict,
+    output_dir: str,
+    train_records,
+    val_records,
+    train_tokens: np.ndarray,
+    val_tokens: np.ndarray,
+    n_train_shards: int,
+    n_val_shards: int,
+):
+    tokens = vocabulary["tokens"]
+    manifest = {
+        "format": "mixlab.dataset",
+        "version": 1,
+        "representation": "discrete_tokens",
+        "modality": "nucleotide",
+        "vocab_size": len(tokens),
+        "token_dtype": "uint16",
+        "shard_format": "mixlab_token_shard_v1",
+        "sequence_layout": "continuous_stream",
+        "special_token_ids": {
+            "pad": tokens["<PAD>"], "bos": tokens["<BOS>"],
+            "eos": tokens["<EOS>"], "mask": tokens["<MASK>"],
+        },
+        "artifacts": {"vocabulary": "nucleotide_vocab.json"},
+        "splits": {
+            "train": {
+                "pattern": "train_*.bin", "tokens": len(train_tokens),
+                "shards": n_train_shards, "sequences": len(train_records),
+            },
+            "val": {
+                "pattern": "val_*.bin", "tokens": len(val_tokens),
+                "shards": n_val_shards, "sequences": len(val_records),
+            },
+        },
+    }
+    path = os.path.join(output_dir, "mixlab.dataset.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
+    print(f"Saved continuous nucleotide stream manifest to {path}")
+
+
 def apply_labeled_array_overflow(records, seq_len: int, overflow: str, split_name: str):
     capacity = seq_len - 2
     output = []
@@ -590,6 +645,8 @@ def prepare_fasta(args):
     write_nucleotide_vocabulary(vocabulary, args.output)
     records = encode_fasta_records(read_fasta_records(args.input), vocabulary)
     if args.label_file:
+        if args.nucleotide_framing != "record":
+            raise ValueError("--label-file requires --nucleotide-framing=record")
         prepare_labeled_fasta(args, vocabulary, records)
         print(f"Done! Train pattern: {args.output}/train_*.bin")
         return
@@ -601,6 +658,28 @@ def prepare_fasta(args):
     split = len(records) - n_val
     train_records, val_records = records[:split], records[split:]
     print(f"Read {len(records):,} FASTA contigs; split {len(train_records):,} train / {len(val_records):,} val")
+    if args.nucleotide_framing == "stream":
+        separator_id = vocabulary["tokens"]["<EOS>"] if args.nucleotide_stream_separator == "eos" else None
+        train_tokens = flatten_nucleotide_stream(train_records, separator_id)
+        val_tokens = flatten_nucleotide_stream(val_records, separator_id)
+        print(
+            f"Writing continuous nucleotide streams "
+            f"(separator={args.nucleotide_stream_separator}, train={len(train_tokens):,}, val={len(val_tokens):,})"
+        )
+        n_train_shards = write_shards(
+            train_tokens, args.output, "train", shuffle=False, tokens_per_shard=args.tokens_per_shard
+        )
+        n_val_shards = 0
+        if len(val_tokens) > 0:
+            n_val_shards = write_shards(
+                val_tokens, args.output, "val", shuffle=False, tokens_per_shard=args.tokens_per_shard
+            )
+        write_nucleotide_stream_manifest(
+            vocabulary, args.output, train_records, val_records, train_tokens, val_tokens,
+            n_train_shards, n_val_shards,
+        )
+        print(f"Done! Train pattern: {args.output}/train_*.bin")
+        return
     n_train_shards = write_sequence_shards(train_records, args.output, "train", args.tokens_per_shard)
     n_val_shards = write_sequence_shards(val_records, args.output, "val", args.tokens_per_shard)
     write_nucleotide_manifest(vocabulary, args.output, train_records, val_records, n_train_shards, n_val_shards)
@@ -1132,6 +1211,8 @@ def main():
     parser.add_argument("--nucleotide-alphabet", choices=["dna", "rna"], default="dna", help="FASTA nucleotide alphabet")
     parser.add_argument("--nucleotide-ambiguous-symbols", default="N", help="Comma-separated IUPAC ambiguity symbols to include")
     parser.add_argument("--nucleotide-invalid-symbol-policy", choices=["error", "map_to_n", "skip"], default="error", help="FASTA invalid-symbol policy")
+    parser.add_argument("--nucleotide-framing", choices=["record", "stream"], default="record", help="FASTA shard layout: record or continuous token stream")
+    parser.add_argument("--nucleotide-stream-separator", choices=["eos", "none"], default="eos", help="Separator inserted between FASTA contigs in stream mode")
     args = parser.parse_args()
 
     tokens_per_shard = args.tokens_per_shard

@@ -30,12 +30,56 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 	}
 	fmt.Printf("  [%s] dataset manifest: modality=%s representation=%s vocab_size=%d (%s)\n",
 		name, manifest.Modality, manifest.Representation, manifest.VocabSize, manifestPath)
+	if manifest.ShardFormat == data.DatasetShardFormatTokenStreamV1 && manifest.Modality == "nucleotide" {
+		if manifest.EffectiveSequenceLayout() != data.DatasetSequenceLayoutContinuousStream {
+			return fmt.Errorf("nucleotide token-stream manifest %q requires sequence_layout=%q", manifestPath, data.DatasetSequenceLayoutContinuousStream)
+		}
+		if cfg.ClassificationEnabled() {
+			return fmt.Errorf("config %q training.objective=%q requires record-oriented labeled nucleotide data", cfg.Name, arch.ObjectiveClassification)
+		}
+		if !cfg.Training.ExampleFramingEnabled() {
+			return fmt.Errorf("config %q continuous nucleotide streams require training.example_framing so recurrent state and causal targets reset at fixed row boundaries", cfg.Name)
+		}
+		if cfg.Training.EffectiveObjective() != arch.ObjectiveCausal {
+			return fmt.Errorf("config %q continuous nucleotide streams with training.example_framing require training.objective=%q", cfg.Name, arch.ObjectiveCausal)
+		}
+		if cfg.Training.EffectiveAttentionSegmentMask() != "" {
+			return fmt.Errorf("config %q continuous nucleotide streams do not use training.attention_segment_mask", cfg.Name)
+		}
+		vocab, vocabPath, err := configureNucleotideVocabularyForTraining(cfg, manifest, manifestPath)
+		if err != nil {
+			return err
+		}
+		bosID, _ := vocab.SpecialTokenID("bos")
+		eosID, _ := vocab.SpecialTokenID("eos")
+		padID, _ := vocab.SpecialTokenID("pad")
+		framing := cfg.Training.ExampleFraming
+		if framing.BosID != bosID || framing.EosID != eosID {
+			return fmt.Errorf(
+				"config %q training.example_framing bos_id/eos_id=%d/%d do not match nucleotide vocabulary ids %d/%d",
+				cfg.Name, framing.BosID, framing.EosID, bosID, eosID,
+			)
+		}
+		cfg.Training.DatasetNucleotideStream = true
+		cfg.Training.DatasetBOSID = bosID
+		cfg.Training.DatasetEOSID = eosID
+		cfg.Training.DatasetPADID = padID
+		fmt.Printf(
+			"  [%s] continuous nucleotide stream: alphabet=%s content_len=%d bos_id=%d eos_id=%d vocabulary=%s\n",
+			name, vocab.Alphabet, framing.ContentLen, bosID, eosID, vocabPath,
+		)
+		if cfg.Training.ReverseComplementProb > 0 {
+			fmt.Printf("  [%s] DNA reverse-complement stream augmentation: probability=%g seed=%d\n",
+				name, cfg.Training.ReverseComplementProb, cfg.Training.Seed)
+		}
+		return nil
+	}
 	if manifest.ShardFormat != data.DatasetShardFormatSequenceV1 && manifest.ShardFormat != data.DatasetShardFormatLabeledSequenceV1 {
 		if cfg.ClassificationEnabled() {
 			return fmt.Errorf("config %q training.objective=%q requires shard_format=%q", cfg.Name, arch.ObjectiveClassification, data.DatasetShardFormatLabeledSequenceV1)
 		}
 		if cfg.Training.ReverseComplementProb > 0 {
-			return fmt.Errorf("config %q training.reverse_complement_prob requires shard_format=%q", cfg.Name, data.DatasetShardFormatSequenceV1)
+			return fmt.Errorf("config %q training.reverse_complement_prob requires a nucleotide sequence or continuous-stream dataset", cfg.Name)
 		}
 		if cfg.RCEquivarianceEnabled() {
 			return fmt.Errorf("config %q rc_equivariant=true requires record-oriented nucleotide sequence shards", cfg.Name)

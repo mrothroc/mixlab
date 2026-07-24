@@ -9,19 +9,22 @@ import (
 const reverseComplementRNGSalt uint64 = 0xbb67ae8584caa73b
 
 func maybeApplyReverseComplement(cfg *ArchConfig, batch trainBatch, step, need int) (trainBatch, error) {
-	if cfg == nil || (!cfg.Training.DatasetSequencePacking && !cfg.Training.DatasetRecordFraming) ||
+	if cfg == nil || (!cfg.Training.DatasetSequencePacking && !cfg.Training.DatasetRecordFraming && !cfg.Training.DatasetNucleotideStream) ||
 		cfg.Training.ReverseComplementProb == 0 || batch.disableAugmentation {
 		return batch, nil
 	}
 	if cfg.Training.DatasetNucleotideAlphabet != "dna" {
 		return trainBatch{}, fmt.Errorf("reverse-complement augmentation requires a DNA dataset")
 	}
+	if len(cfg.Training.DatasetNucleotideComplement) != cfg.VocabSize {
+		return trainBatch{}, fmt.Errorf("DNA complement lookup has %d entries, want vocab_size=%d", len(cfg.Training.DatasetNucleotideComplement), cfg.VocabSize)
+	}
+	if cfg.Training.DatasetNucleotideStream {
+		return applyStreamReverseComplement(cfg, batch, step, need)
+	}
 	if len(batch.x) < need || len(batch.segmentIDs) < need || len(batch.maskEligible) < need {
 		return trainBatch{}, fmt.Errorf("reverse-complement batch metadata is incomplete: x=%d y=%d segments=%d eligible=%d need=%d",
 			len(batch.x), len(batch.y), len(batch.segmentIDs), len(batch.maskEligible), need)
-	}
-	if len(cfg.Training.DatasetNucleotideComplement) != cfg.VocabSize {
-		return trainBatch{}, fmt.Errorf("DNA complement lookup has %d entries, want vocab_size=%d", len(cfg.Training.DatasetNucleotideComplement), cfg.VocabSize)
 	}
 	out := batch
 	out.x = append([]int(nil), batch.x...)
@@ -64,6 +67,64 @@ func maybeApplyReverseComplement(cfg *ArchConfig, batch trainBatch, step, need i
 		}
 	}
 	return out, nil
+}
+
+func applyStreamReverseComplement(cfg *ArchConfig, batch trainBatch, step, need int) (trainBatch, error) {
+	if len(batch.x) < need {
+		return trainBatch{}, fmt.Errorf("reverse-complement stream batch has %d input tokens, need %d", len(batch.x), need)
+	}
+	if len(cfg.Training.DatasetTokenEligible) != cfg.VocabSize {
+		return trainBatch{}, fmt.Errorf("DNA biological-token lookup has %d entries, want vocab_size=%d", len(cfg.Training.DatasetTokenEligible), cfg.VocabSize)
+	}
+	out := batch
+	out.x = append([]int(nil), batch.x...)
+	if len(batch.y) >= need {
+		out.y = append([]int(nil), batch.y...)
+	}
+	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, reverseComplementRNGSalt)
+	for rowStart := 0; rowStart < need; rowStart += cfg.SeqLen {
+		rowEnd := rowStart + cfg.SeqLen
+		if rowEnd > need {
+			rowEnd = need
+		}
+		if rng.Float64() >= cfg.Training.ReverseComplementProb {
+			continue
+		}
+		for start := rowStart; start < rowEnd; {
+			for start < rowEnd && !nucleotideStreamTokenEligible(cfg, batch.x[start]) {
+				start++
+			}
+			end := start
+			for end < rowEnd && nucleotideStreamTokenEligible(cfg, batch.x[end]) {
+				end++
+			}
+			for left, right := start, end-1; left <= right; left, right = left+1, right-1 {
+				leftToken, rightToken := batch.x[left], batch.x[right]
+				out.x[left] = cfg.Training.DatasetNucleotideComplement[rightToken]
+				out.x[right] = cfg.Training.DatasetNucleotideComplement[leftToken]
+			}
+			start = end
+		}
+	}
+	if len(out.y) >= need {
+		for rowStart := 0; rowStart < need; rowStart += cfg.SeqLen {
+			rowEnd := rowStart + cfg.SeqLen
+			if rowEnd > need {
+				rowEnd = need
+			}
+			for i := rowStart; i+1 < rowEnd; i++ {
+				if len(batch.lossMask) < need || batch.lossMask[i] > 0 {
+					out.y[i] = out.x[i+1]
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+func nucleotideStreamTokenEligible(cfg *ArchConfig, token int) bool {
+	return token >= 0 && token < len(cfg.Training.DatasetTokenEligible) &&
+		cfg.Training.DatasetTokenEligible[token] != 0
 }
 
 func attachRCEquivariantInputs(cfg *ArchConfig, batch trainBatch, prepared *objectiveBatch, need, seqLen int) error {

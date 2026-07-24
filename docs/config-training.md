@@ -117,7 +117,7 @@ you are trying to measure.
 | `mtp` | Parameter-free multi-token prediction auxiliary loss. |
 | `first_byte_mask` | First-byte masked loss path. |
 | `attention_segment_mask` | Block-diagonal segment attention for packed training sequences. |
-| `reverse_complement_prob` | Deterministic per-segment DNA augmentation for manifest-backed FASTA datasets. |
+| `reverse_complement_prob` | Deterministic per-segment or per-framed-row DNA augmentation for manifest-backed FASTA datasets. |
 | `swa_start`, `swa_decay`, `swa_interval` | SWA/EMA averaged checkpoint accumulation. |
 
 Compatibility is intentionally explicit. Some features are training-only and

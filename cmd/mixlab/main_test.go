@@ -104,7 +104,10 @@ func TestMinimalPairFactoryFlagsInPrepareHelpGroup(t *testing.T) {
 
 func TestFASTAFlagsInPrepareHelpGroup(t *testing.T) {
 	groups := modeFlagGroups["prepare"]
-	for _, flagName := range []string{"input-format", "nucleotide-alphabet", "nucleotide-ambiguous-symbols", "nucleotide-invalid-symbol-policy"} {
+	for _, flagName := range []string{
+		"input-format", "nucleotide-alphabet", "nucleotide-ambiguous-symbols",
+		"nucleotide-invalid-symbol-policy", "nucleotide-framing", "nucleotide-stream-separator",
+	} {
 		if !flagGroupContains(groups, flagName) {
 			t.Fatalf("prepare help groups missing %s", flagName)
 		}

@@ -123,6 +123,32 @@ func TestReverseComplementDoesNotCrossBatchRowsWithRepeatedSegmentIDs(t *testing
 	}
 }
 
+func TestReverseComplementStreamUsesFramedRowsWithoutSegmentMetadata(t *testing.T) {
+	cfg := nucleotideObjectiveConfig(arch.ObjectiveCausal, 1)
+	cfg.SeqLen = 7
+	cfg.Training.BatchTokens = 7
+	cfg.Training.DatasetSequencePacking = false
+	cfg.Training.DatasetNucleotideStream = true
+	cfg.Training.ExampleFraming = &arch.ExampleFramingSpec{ContentLen: 5, BosID: 1, EosID: 2}
+	batch := trainBatch{
+		x:        []int{1, 4, 5, 2, 6, 7, 2}, // BOS A C EOS G T EOS
+		y:        []int{4, 5, 2, 6, 7, 2, 2},
+		lossMask: []float32{1, 1, 1, 1, 1, 1, 0},
+	}
+	got, err := prepareObjectiveBatch(cfg, batch, 3, arch.ObjectiveCausal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantX := []int{1, 6, 7, 2, 4, 5, 2} // AC -> GT; GT -> AC; separators remain fixed.
+	wantY := []int{6, 7, 2, 4, 5, 2, 2}
+	if !reflect.DeepEqual(got.x, wantX) || !reflect.DeepEqual(got.y, wantY) {
+		t.Fatalf("stream reverse complement x/y=%v/%v want=%v/%v", got.x, got.y, wantX, wantY)
+	}
+	if len(got.segmentIDs) != 0 {
+		t.Fatalf("stream augmentation unexpectedly attached segment ids: %v", got.segmentIDs)
+	}
+}
+
 func TestAttachRCEquivariantInputsReversesOnlyBiologicalPositions(t *testing.T) {
 	cfg := nucleotideObjectiveConfig(arch.ObjectiveMLM, 0)
 	cfg.RCEquivariant = true

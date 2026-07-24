@@ -84,8 +84,8 @@ Tokens are stored as uint16, so `vocab-size` must be 65,535 or less.
 
 ## Nucleotide FASTA
 
-Base-level DNA and RNA data use the same discrete embedding/model path as text,
-but preparation preserves each FASTA contig as a record:
+Base-level DNA and RNA data use the same discrete embedding/model path as text.
+The default preparation mode preserves each FASTA contig as a record:
 
 ```bash
 mixlab -mode prepare -input genome.fasta -input-format fasta \
@@ -97,6 +97,36 @@ The emitted `nucleotide_vocab.json` records every symbol, ID, complement, and
 invalid-symbol decision. The record-oriented loader frames and packs contig
 chunks at runtime. Causal targets at EOS and all cross-contig attention are
 masked, while MLM position selection considers biological symbols only.
+
+Recurrent and SSM causal models cannot consume the record packer's
+block-diagonal attention mask. Prepare a continuous nucleotide stream instead:
+
+```bash
+mixlab -mode prepare -input genome.fasta -input-format fasta \
+  -prepare-output-dir data/genome-stream \
+  -nucleotide-framing stream \
+  -nucleotide-stream-separator eos
+```
+
+This writes `mixlab_token_shard_v1` with
+`sequence_layout: "continuous_stream"`. Configure fixed causal rows explicitly:
+
+```json
+{
+  "seq_len": 1024,
+  "training": {
+    "objective": "causal",
+    "example_framing": {"content_len": 1022, "bos_id": 1, "eos_id": 2},
+    "reverse_complement_prob": 0.5
+  }
+}
+```
+
+The validation split is still made by contig before either split is flattened.
+EOS is inserted between contigs by default; use
+`-nucleotide-stream-separator none` only when direct cross-contig transitions
+are intentional. Runtime framing resets recurrent state at every row and masks
+the final row target. No attention segment mask is emitted or required.
 
 Common flags:
 
@@ -143,7 +173,8 @@ model before constructing a trainer. Existing shard directories without a
 manifest remain supported for backward compatibility.
 
 Discrete datasets support `shard_format: "mixlab_token_shard_v1"` for flat
-token streams, `"mixlab_sequence_shard_v1"` for record-oriented sequences, and
+token streams, including `sequence_layout: "continuous_stream"` nucleotide
+data, `"mixlab_sequence_shard_v1"` for record-oriented sequences, and
 `"mixlab_labeled_sequence_shard_v1"` for atomic record-plus-label
 classification data.
 Nucleotide split entries additionally report `sequences`, and the manifest

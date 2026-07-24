@@ -127,6 +127,8 @@ func main() {
 	prepNucleotideAlphabet := flag.String("nucleotide-alphabet", "dna", "FASTA alphabet: dna or rna (prepare mode)")
 	prepNucleotideAmbiguous := flag.String("nucleotide-ambiguous-symbols", "N", "IUPAC ambiguity symbols included in the FASTA vocabulary")
 	prepNucleotideInvalidPolicy := flag.String("nucleotide-invalid-symbol-policy", "error", "FASTA invalid-symbol policy: error, map_to_n, or skip")
+	prepNucleotideFraming := flag.String("nucleotide-framing", "record", "FASTA shard layout: record or stream (prepare mode)")
+	prepNucleotideStreamSeparator := flag.String("nucleotide-stream-separator", "eos", "separator between FASTA contigs in stream mode: eos or none")
 
 	flag.Usage = func() {
 		printUsage(os.Stderr, requestedHelpMode(os.Args[1:]))
@@ -195,36 +197,38 @@ func main() {
 		prepareOutput, err := aliasedStringFlagValue(*prepOutput, "prepare-output-dir", *prepareOutputDir, providedFlags)
 		must(err)
 		must(train.RunPrepare(train.PrepareOptions{
-			Input:                   *prepInput,
-			Output:                  prepareOutput,
-			InputFormat:             *prepInputFormat,
-			VocabSize:               *prepVocabSize,
-			ValSplit:                *prepValSplit,
-			TokenizerPath:           *prepTokenizerPath,
-			WWMCompatibleTokenizer:  *prepWWMCompatibleTokenizer,
-			TextFieldName:           *prepTextField,
-			LabelFieldName:          *prepLabelField,
-			LabelFile:               *prepLabelFile,
-			FramePerRecord:          *prepFramePerRecord,
-			RecordSeqLen:            *prepRecordSeqLen,
-			RecordPADID:             *prepRecordPADID,
-			RecordBOSID:             *prepRecordBOSID,
-			RecordEOSID:             *prepRecordEOSID,
-			RecordOverflow:          *prepRecordOverflow,
-			CharVocabSize:           *prepCharVocabSize,
-			CharMaxPerToken:         *prepCharMaxPerToken,
-			MinimalPairOut:          *prepMinimalPairOut,
-			MinimalPairCorruptions:  *prepMinimalPairCorruptions,
-			MinimalPairWeights:      *prepMinimalPairWeights,
-			MinimalPairMorphology:   *prepMinimalPairMorphology,
-			MinimalPairMaxPairs:     *prepMinimalPairMaxPairs,
-			MinimalPairSeed:         *prepMinimalPairSeed,
-			MinimalPairReportOut:    *prepMinimalPairReportOut,
-			MinimalPairSampleOut:    *prepMinimalPairSampleOut,
-			MinimalPairSampleCount:  *prepMinimalPairSampleCount,
-			NucleotideAlphabet:      *prepNucleotideAlphabet,
-			NucleotideAmbiguous:     *prepNucleotideAmbiguous,
-			NucleotideInvalidPolicy: *prepNucleotideInvalidPolicy,
+			Input:                     *prepInput,
+			Output:                    prepareOutput,
+			InputFormat:               *prepInputFormat,
+			VocabSize:                 *prepVocabSize,
+			ValSplit:                  *prepValSplit,
+			TokenizerPath:             *prepTokenizerPath,
+			WWMCompatibleTokenizer:    *prepWWMCompatibleTokenizer,
+			TextFieldName:             *prepTextField,
+			LabelFieldName:            *prepLabelField,
+			LabelFile:                 *prepLabelFile,
+			FramePerRecord:            *prepFramePerRecord,
+			RecordSeqLen:              *prepRecordSeqLen,
+			RecordPADID:               *prepRecordPADID,
+			RecordBOSID:               *prepRecordBOSID,
+			RecordEOSID:               *prepRecordEOSID,
+			RecordOverflow:            *prepRecordOverflow,
+			CharVocabSize:             *prepCharVocabSize,
+			CharMaxPerToken:           *prepCharMaxPerToken,
+			MinimalPairOut:            *prepMinimalPairOut,
+			MinimalPairCorruptions:    *prepMinimalPairCorruptions,
+			MinimalPairWeights:        *prepMinimalPairWeights,
+			MinimalPairMorphology:     *prepMinimalPairMorphology,
+			MinimalPairMaxPairs:       *prepMinimalPairMaxPairs,
+			MinimalPairSeed:           *prepMinimalPairSeed,
+			MinimalPairReportOut:      *prepMinimalPairReportOut,
+			MinimalPairSampleOut:      *prepMinimalPairSampleOut,
+			MinimalPairSampleCount:    *prepMinimalPairSampleCount,
+			NucleotideAlphabet:        *prepNucleotideAlphabet,
+			NucleotideAmbiguous:       *prepNucleotideAmbiguous,
+			NucleotideInvalidPolicy:   *prepNucleotideInvalidPolicy,
+			NucleotideFraming:         *prepNucleotideFraming,
+			NucleotideStreamSeparator: *prepNucleotideStreamSeparator,
 		}))
 		return
 	}
@@ -435,7 +439,7 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Text tokenizer/data", []string{"vocab-size", "tokenizer-path", "wwm-compatible-tokenizer", "text-field"}},
 		{"Sequence classification labels", []string{"label-field", "label-file"}},
 		{"Per-record framing", []string{"frame-per-record", "record-seq-len", "record-pad-id", "record-bos-id", "record-eos-id", "record-overflow"}},
-		{"FASTA nucleotide data", []string{"nucleotide-alphabet", "nucleotide-ambiguous-symbols", "nucleotide-invalid-symbol-policy"}},
+		{"FASTA nucleotide data", []string{"nucleotide-alphabet", "nucleotide-ambiguous-symbols", "nucleotide-invalid-symbol-policy", "nucleotide-framing", "nucleotide-stream-separator"}},
 		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},
 		{"Minimal pair artifact", []string{"minimal-pair-out", "minimal-pair-corruptions", "minimal-pair-weights", "minimal-pair-morphology", "minimal-pair-max-pairs", "minimal-pair-seed", "minimal-pair-report-out", "minimal-pair-sample-out", "minimal-pair-sample-count"}},
 	},

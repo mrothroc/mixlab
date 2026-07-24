@@ -1,0 +1,30 @@
+{
+  "name": "nucleotide_dna_mamba_stream_tiny",
+  "model_dim": 32,
+  "vocab_size": 9,
+  "seq_len": 64,
+  "mlp_mult": 2.0,
+  "tie_embeddings": true,
+  "blocks": [
+    {"type": "mamba", "inner_dim": 32},
+    {"type": "swiglu"},
+    {"type": "mamba", "inner_dim": 32},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "causal",
+    "example_framing": {
+      "content_len": 62,
+      "bos_id": 1,
+      "eos_id": 2
+    },
+    "reverse_complement_prob": 0.5,
+    "optimizer": "adamw",
+    "steps": 100,
+    "lr": 0.0003,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "batch_tokens": 256,
+    "seed": 42
+  }
+}

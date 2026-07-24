@@ -15,7 +15,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Text/JSONL preparation | Yes | `mixlab -mode prepare` | Produces tokenizer, shards, and a dataset manifest. |
 | Per-record text framing | Yes | `mixlab -mode prepare -frame-per-record` | One BOS/EOS/PAD-framed record per sequence row. |
 | Labeled sequence preparation | Yes | `mixlab -mode prepare -label-field` / `-label-file` | Writes atomic labeled sequence shards and task metadata. |
-| FASTA preparation | Yes | `mixlab -mode prepare -input-format fasta` | Produces record-oriented nucleotide shards and vocabulary metadata. |
+| FASTA preparation | Yes | `mixlab -mode prepare -input-format fasta` | Produces record-oriented nucleotide shards by default, or recurrent-compatible token streams with `-nucleotide-framing stream`. |
 | Training and races | Yes | `mixlab -mode arch` / `arch_race` | Periodic checkpoints can be resumed with `-resume`. |
 | Native evaluation | Yes | `mixlab -mode eval` | Supports loss plus optional aligned logprob, rank, uncertainty, and logits exports. |
 | Causal generation | Yes | `mixlab -mode generate` | Supports batching, deterministic seeds, sequence vocabularies, and grammar constraints. |
@@ -52,7 +52,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Word structural objective | Shuffles local spans and reconstructs originals | MLM/MNTP vocab head | [word_structural_mlm_tiny.json](../examples/word_structural_mlm_tiny.json) |
 | Whole-word masking curriculum | Changes host-side mask selection | Compatible `tokenizer.json` beside shards | [mlm_wwm_curriculum_tiny.json](../examples/mlm_wwm_curriculum_tiny.json) |
 | Segment attention masking | Blocks cross-segment attention | Boundary token or manifest-backed record segments | [packed_segment_mask_tiny.json](../examples/packed_segment_mask_tiny.json) |
-| Reverse-complement handling | Augmentation or exact shared-backbone RCPS | Manifest-backed DNA vocabulary; the two modes are mutually exclusive | [RC-equivariant classifier](../examples/nucleotide_dna_rc_equivariant_classification_tiny.json) |
+| Reverse-complement handling | Augmentation or exact shared-backbone RCPS | Manifest-backed DNA vocabulary; augmentation supports packed records and framed nucleotide streams; the two modes are mutually exclusive | [RC-equivariant classifier](../examples/nucleotide_dna_rc_equivariant_classification_tiny.json) |
 | Character, bigram, trigram features | Adds token-derived embedding channels | Character features require `char_features.bin` | [char_features_plain.json](../examples/char_features_plain.json) |
 | SWA/EMA checkpoints | Writes live and averaged weights | Configure start, decay, and interval | [swa_ema_tiny.json](../examples/swa_ema_tiny.json) |
 

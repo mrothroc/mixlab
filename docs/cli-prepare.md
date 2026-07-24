@@ -45,6 +45,8 @@ tokenizer compatibility notes.
 | `-nucleotide-alphabet` | FASTA alphabet: `dna` (default) or `rna`. |
 | `-nucleotide-ambiguous-symbols` | Comma-separated IUPAC ambiguity symbols to include. Default: `N`; complementary partners are added automatically. |
 | `-nucleotide-invalid-symbol-policy` | FASTA invalid-symbol handling: `error` (default), `map_to_n`, or `skip`. `map_to_n` requires `N` in the vocabulary. |
+| `-nucleotide-framing` | FASTA shard layout: `record` (default) or `stream`. |
+| `-nucleotide-stream-separator` | Separator inserted between contigs in stream mode: `eos` (default) or `none`. |
 
 ## FASTA nucleotide data
 
@@ -63,10 +65,31 @@ text tokenizer:
 The first IDs are always `<PAD>=0`, `<BOS>=1`, `<EOS>=2`, and `<MASK>=3`,
 followed by `A,C,G,T` for DNA or `A,C,G,U` for RNA and then enabled ambiguity
 symbols in canonical IUPAC order. Preparation writes `nucleotide_vocab.json`
-and record-oriented `mixlab_sequence_shard_v1` shards. Contigs remain separate
-records; the runtime packs framed contig chunks into fixed rows and supplies
-block-diagonal segment IDs and loss masks automatically. Do not also set
-`training.attention_segment_mask` for these datasets.
+and, by default, record-oriented `mixlab_sequence_shard_v1` shards. Contigs
+remain separate records; the runtime packs framed contig chunks into fixed rows
+and supplies block-diagonal segment IDs and loss masks automatically. Do not
+also set `training.attention_segment_mask` for these datasets.
+
+For recurrent or SSM causal pretraining, emit a continuous token stream instead:
+
+```bash
+./mixlab -mode prepare \
+  -input reference.fasta \
+  -input-format fasta \
+  -prepare-output-dir data/reference-dna-stream \
+  -nucleotide-framing stream \
+  -nucleotide-stream-separator eos
+```
+
+Stream mode splits train and validation data by contig first, then concatenates
+each split and writes `mixlab_token_shard_v1` with
+`sequence_layout: "continuous_stream"`. It never enables attention segment
+masking. Train it with causal `training.example_framing`, where
+`content_len = seq_len - 2`, `bos_id = 1`, and `eos_id = 2`. The default EOS
+separator marks source-contig transitions without resetting recurrent state;
+`none` allows direct cross-contig transitions. Reverse-complement augmentation
+operates independently on biological runs inside each framed row while leaving
+special tokens fixed. Labeled FASTA classification remains record-only.
 
 Text tokenizer, whole-word, char-feature, and minimal-pair preparation flags
 are rejected with `-input-format fasta` rather than being silently ignored.

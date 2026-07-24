@@ -528,6 +528,107 @@ func TestPrepareFASTAProducesInspectableBoundarySafeDataset(t *testing.T) {
 	}
 }
 
+func TestPrepareFASTAStreamProducesFramableNucleotideTokenShards(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	if err := exec.Command("python3", "-c", "import numpy").Run(); err != nil {
+		t.Skip("python3 numpy library not available")
+	}
+	scriptPath := filepath.Join("..", "scripts", "prepare.py")
+	if _, err := os.Stat(scriptPath); err != nil {
+		scriptPath = filepath.Join("scripts", "prepare.py")
+	}
+	dir := t.TempDir()
+	fasta := filepath.Join(dir, "tiny.fasta")
+	outDir := filepath.Join(dir, "prepared")
+	input := ">contig_a\nACGT\n>contig_b\nTGCA\n>contig_c\nAAAA\n"
+	if err := os.WriteFile(fasta, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("python3", scriptPath,
+		"--input", fasta, "--output", outDir, "--input-format", "fasta",
+		"--nucleotide-framing", "stream", "--nucleotide-stream-separator", "eos",
+		"--nucleotide-alphabet", "dna", "--nucleotide-ambiguous-symbols", "N",
+		"--val-split", "0.34", "--tokens-per-shard", "64")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("prepare FASTA stream: %v\n%s", err, output)
+	}
+	manifest, err := data.LoadDatasetManifest(filepath.Join(outDir, data.DatasetManifestFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Modality != "nucleotide" ||
+		manifest.ShardFormat != data.DatasetShardFormatTokenStreamV1 ||
+		manifest.EffectiveSequenceLayout() != data.DatasetSequenceLayoutContinuousStream {
+		t.Fatalf("stream manifest=%+v", manifest)
+	}
+	if manifest.Splits["train"].Sequences != 2 || manifest.Splits["val"].Sequences != 1 {
+		t.Fatalf("stream split metadata=%+v", manifest.Splits)
+	}
+	vocab, err := data.LoadNucleotideVocabulary(filepath.Join(outDir, manifest.Artifacts.Vocabulary))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainFiles, _ := filepath.Glob(filepath.Join(outDir, "train_*.bin"))
+	if len(trainFiles) != 1 {
+		t.Fatalf("train files=%v", trainFiles)
+	}
+	stream, err := data.LoadDataShard(trainFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []uint16{
+		uint16(vocab.Tokens["A"]), uint16(vocab.Tokens["C"]), uint16(vocab.Tokens["G"]), uint16(vocab.Tokens["T"]),
+		uint16(vocab.Tokens["<EOS>"]),
+		uint16(vocab.Tokens["T"]), uint16(vocab.Tokens["G"]), uint16(vocab.Tokens["C"]), uint16(vocab.Tokens["A"]),
+	}
+	if !reflect.DeepEqual(stream, want) {
+		t.Fatalf("stream tokens=%v want=%v", stream, want)
+	}
+	loader, err := data.NewLoaderWithOptions(
+		filepath.Join(outDir, "train_*.bin"), 1,
+		data.LoaderOptions{NoShardShuffle: true, Framing: data.ExampleFraming{ContentLen: 3, BosID: 1, EosID: 2}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := loader.NextBatchDetailed(10, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(batch.SegmentIDs) != 0 || batch.X[0] != 1 || batch.X[4] != 2 || batch.X[5] != 1 || batch.X[9] != 2 {
+		t.Fatalf("framed stream batch=%+v", batch)
+	}
+}
+
+func TestRunPrepareRejectsInvalidNucleotideStreamCombinations(t *testing.T) {
+	base := PrepareOptions{
+		Input: "genome.fasta", Output: "out", InputFormat: "fasta",
+		NucleotideFraming: "stream", NucleotideStreamSeparator: "eos",
+	}
+	tests := []struct {
+		name string
+		edit func(*PrepareOptions)
+		want string
+	}{
+		{name: "framing", edit: func(o *PrepareOptions) { o.NucleotideFraming = "chunks" }, want: "nucleotide-framing"},
+		{name: "separator", edit: func(o *PrepareOptions) { o.NucleotideStreamSeparator = "pad" }, want: "nucleotide-stream-separator"},
+		{name: "text", edit: func(o *PrepareOptions) { o.InputFormat = "text" }, want: "requires -input-format=fasta"},
+		{name: "labels", edit: func(o *PrepareOptions) { o.LabelFile = "labels.tsv" }, want: "requires -nucleotide-framing=record"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := base
+			tt.edit(&opts)
+			err := runPrepare(opts)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%v want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestPrepareLabeledFASTAKeepsTSVLabelsAtomic(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not found")

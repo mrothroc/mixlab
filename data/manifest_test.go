@@ -91,6 +91,28 @@ func TestDatasetManifestLegacySequenceLayoutDefaultsToPackedSegments(t *testing.
 	}
 }
 
+func TestDatasetManifestAcceptsContinuousTokenStreamLayout(t *testing.T) {
+	manifest := DatasetManifest{
+		Format: DatasetManifestFormat, Version: DatasetManifestVersion,
+		Representation: DatasetRepresentationDiscreteTokens, Modality: "nucleotide", VocabSize: 9,
+		TokenDType: DatasetTokenDTypeUint16, ShardFormat: DatasetShardFormatTokenStreamV1,
+		SequenceLayout:  DatasetSequenceLayoutContinuousStream,
+		SpecialTokenIDs: map[string]int{"pad": 0, "bos": 1, "eos": 2, "mask": 3},
+		Artifacts:       DatasetManifestArtifacts{Vocabulary: "nucleotide_vocab.json"},
+		Splits:          map[string]DatasetSplit{"train": {Pattern: "train_*.bin", Tokens: 10, Shards: 1, Sequences: 2}},
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("valid continuous stream manifest: %v", err)
+	}
+	if got := manifest.EffectiveSequenceLayout(); got != DatasetSequenceLayoutContinuousStream {
+		t.Fatalf("layout=%q", got)
+	}
+	manifest.SequenceLayout = DatasetSequenceLayoutPackedSegments
+	if err := manifest.Validate(); err == nil || !strings.Contains(err.Error(), "continuous_stream") {
+		t.Fatalf("invalid token-stream layout error=%v", err)
+	}
+}
+
 func TestDatasetManifestValidationErrors(t *testing.T) {
 	valid := DatasetManifest{
 		Format:         DatasetManifestFormat,

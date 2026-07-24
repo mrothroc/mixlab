@@ -194,6 +194,11 @@ var exampleConfigs = []exampleConfigCase{
 		minOps:      8,
 	},
 	{
+		filename:    "nucleotide_dna_mamba_stream_tiny.json",
+		wantWeights: 18, // 2 tied-embed base + 2*(4 mamba + 4 swiglu)
+		minOps:      8,
+	},
+	{
 		filename:    "retnet_2L.json",
 		wantWeights: 27, // 3 base + retnet+swiglu blocks
 		minOps:      8,

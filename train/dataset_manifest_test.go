@@ -73,6 +73,68 @@ func TestConfigureNucleotideDatasetEnablesPackedSegmentTrainingIR(t *testing.T) 
 	}
 }
 
+func TestConfigureNucleotideStreamEnablesFramingWithoutSegmentAttention(t *testing.T) {
+	dir := t.TempDir()
+	writeNucleotideStreamDatasetContract(t, dir, data.NucleotideAlphabetDNA)
+	for _, blocks := range [][]arch.BlockSpec{
+		{{Type: "mamba", InnerDim: 8}},
+		{{Type: "gated_deltanet", Heads: 2, DK: 4}},
+		{{Type: "plain", Heads: 2}},
+	} {
+		cfg := objectiveTestConfig()
+		cfg.VocabSize = 9
+		cfg.SeqLen = 8
+		cfg.Blocks = blocks
+		cfg.Training.BatchTokens = 8
+		cfg.Training.Objective = arch.ObjectiveCausal
+		cfg.Training.ExampleFraming = &arch.ExampleFramingSpec{ContentLen: 6, BosID: 1, EosID: 2}
+		cfg.Training.ReverseComplementProb = 0.5
+		if err := configureDatasetForTraining(cfg, filepath.Join(dir, "train_*.bin"), cfg.Name); err != nil {
+			t.Fatalf("configureDatasetForTraining(%s): %v", blocks[0].Type, err)
+		}
+		if !cfg.Training.DatasetNucleotideStream || cfg.Training.DatasetSequencePacking ||
+			cfg.Training.AttentionSegmentMaskEnabled() || len(cfg.Training.DatasetNucleotideComplement) != 9 {
+			t.Fatalf("runtime stream metadata=%+v", cfg.Training)
+		}
+		prog, err := BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{Objective: arch.ObjectiveCausal})
+		if err != nil {
+			t.Fatalf("BuildTrainingIRProgramFromConfig(%s): %v", blocks[0].Type, err)
+		}
+		if !testProgramDeclaresInput(prog, "loss_mask") {
+			t.Fatal("framed nucleotide stream must consume loss_mask")
+		}
+		if testProgramDeclaresInput(prog, "segment_ids") {
+			t.Fatal("continuous nucleotide stream must not expose segment_ids to the model graph")
+		}
+	}
+}
+
+func TestConfigureNucleotideStreamRequiresMatchingExampleFraming(t *testing.T) {
+	dir := t.TempDir()
+	writeNucleotideStreamDatasetContract(t, dir, data.NucleotideAlphabetDNA)
+	tests := []struct {
+		name    string
+		framing *arch.ExampleFramingSpec
+		want    string
+	}{
+		{name: "missing", want: "require training.example_framing"},
+		{name: "special ids", framing: &arch.ExampleFramingSpec{ContentLen: 6, BosID: 4, EosID: 2}, want: "do not match"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := objectiveTestConfig()
+			cfg.VocabSize = 9
+			cfg.SeqLen = 8
+			cfg.Training.BatchTokens = 8
+			cfg.Training.ExampleFraming = tt.framing
+			err := configureDatasetForTraining(cfg, filepath.Join(dir, "train_*.bin"), cfg.Name)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%v want %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfigureTextRecordDatasetEnablesMaskedCausalLossWithoutSegmentMask(t *testing.T) {
 	dir := t.TempDir()
 	writeTextRecordDatasetContract(t, dir, 32, 8)
@@ -233,6 +295,29 @@ func writeNucleotideDatasetContract(t *testing.T, dir, alphabet string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, data.DatasetManifestFilename), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeNucleotideStreamDatasetContract(t *testing.T, dir, alphabet string) {
+	t.Helper()
+	writeNucleotideDatasetContract(t, dir, alphabet)
+	path := filepath.Join(dir, data.DatasetManifestFilename)
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest data.DatasetManifest
+	if err := json.Unmarshal(blob, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.ShardFormat = data.DatasetShardFormatTokenStreamV1
+	manifest.SequenceLayout = data.DatasetSequenceLayoutContinuousStream
+	blob, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, blob, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

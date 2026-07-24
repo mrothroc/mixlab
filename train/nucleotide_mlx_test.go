@@ -48,6 +48,52 @@ func TestNucleotideTinyCausalAndMLMTrainingSmoke(t *testing.T) {
 	}
 }
 
+func TestNucleotideStreamTrainsAttentionAndRecurrentMixers(t *testing.T) {
+	tests := []struct {
+		name  string
+		block string
+	}{
+		{name: "mamba", block: `{"type":"mamba","inner_dim":16}`},
+		{name: "gated_deltanet", block: `{"type":"gated_deltanet","heads":2,"d_k":4}`},
+		{name: "plain", block: `{"type":"plain","heads":2}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeNucleotideMLXStreamDataset(t, dir)
+			config := []byte(`{
+				"name":"nucleotide-stream-` + tt.name + `-mlx",
+				"model_dim":16,"vocab_size":9,"seq_len":8,"mlp_mult":2,"tie_embeddings":true,
+				"blocks":[` + tt.block + `,{"type":"swiglu"}],
+				"training":{
+					"objective":"causal","steps":16,"lr":0.001,"batch_tokens":16,"seed":7,
+					"example_framing":{"content_len":6,"bos_id":1,"eos_id":2},
+					"reverse_complement_prob":0.5,
+					"optimizer":"adamw","weight_decay":0,"grad_clip":1
+				}
+			}`)
+			cfg, err := ParseArchConfig(config, "nucleotide-stream-smoke")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := runTrain(cfg, filepath.Join(dir, "train_*.bin"), TrainOptions{LogEvery: 100, ValEvery: 100})
+			if err != nil {
+				t.Fatalf("runTrain: %v", err)
+			}
+			if math.IsNaN(result.FirstLoss) || math.IsInf(result.FirstLoss, 0) ||
+				math.IsNaN(result.LastLoss) || math.IsInf(result.LastLoss, 0) {
+				t.Fatalf("non-finite loss first=%g last=%g", result.FirstLoss, result.LastLoss)
+			}
+			if !result.HasValLoss || math.IsNaN(result.LastValLoss) || math.IsInf(result.LastValLoss, 0) {
+				t.Fatalf("missing or non-finite validation loss: has=%t val=%g", result.HasValLoss, result.LastValLoss)
+			}
+			if result.LastValLoss >= result.FirstLoss {
+				t.Fatalf("held-out loss did not improve: first_train=%g final_val=%g", result.FirstLoss, result.LastValLoss)
+			}
+		})
+	}
+}
+
 func writeNucleotideMLXDataset(t *testing.T, dir string) {
 	t.Helper()
 	vocab := data.NucleotideVocabulary{
@@ -81,6 +127,59 @@ func writeNucleotideMLXDataset(t *testing.T, dir string) {
 	}
 	blob, _ = json.Marshal(manifest)
 	if err := os.WriteFile(filepath.Join(dir, data.DatasetManifestFilename), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeNucleotideMLXStreamDataset(t *testing.T, dir string) {
+	t.Helper()
+	vocab := data.NucleotideVocabulary{
+		Format: data.NucleotideVocabularyFormat, Version: data.NucleotideVocabularyVersion,
+		Alphabet: data.NucleotideAlphabetDNA, InvalidSymbolPolicy: "error", AmbiguousSymbols: []string{"N"},
+		Tokens:      map[string]int{"<PAD>": 0, "<BOS>": 1, "<EOS>": 2, "<MASK>": 3, "A": 4, "C": 5, "G": 6, "T": 7, "N": 8},
+		Complements: map[string]string{"A": "T", "C": "G", "G": "C", "T": "A", "N": "N"},
+	}
+	blob, _ := json.Marshal(vocab)
+	if err := os.WriteFile(filepath.Join(dir, "nucleotide_vocab.json"), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pattern := []uint16{4, 5, 6, 7, 4, 5, 2, 7, 6, 5, 4, 7, 6, 2}
+	tokens := make([]uint16, 0, 14*32)
+	for i := 0; i < 32; i++ {
+		tokens = append(tokens, pattern...)
+	}
+	writeNucleotideMLXTokenShard(t, filepath.Join(dir, "train_00000.bin"), tokens)
+	writeNucleotideMLXTokenShard(t, filepath.Join(dir, "val_00000.bin"), tokens)
+	manifest := data.DatasetManifest{
+		Format: data.DatasetManifestFormat, Version: data.DatasetManifestVersion,
+		Representation: data.DatasetRepresentationDiscreteTokens, Modality: "nucleotide", VocabSize: 9,
+		TokenDType: data.DatasetTokenDTypeUint16, ShardFormat: data.DatasetShardFormatTokenStreamV1,
+		SequenceLayout:  data.DatasetSequenceLayoutContinuousStream,
+		SpecialTokenIDs: map[string]int{"pad": 0, "bos": 1, "eos": 2, "mask": 3},
+		Artifacts:       data.DatasetManifestArtifacts{Vocabulary: "nucleotide_vocab.json"},
+		Splits: map[string]data.DatasetSplit{
+			"train": {Pattern: "train_*.bin", Tokens: int64(len(tokens)), Shards: 1, Sequences: 64},
+			"val":   {Pattern: "val_*.bin", Tokens: int64(len(tokens)), Shards: 1, Sequences: 64},
+		},
+	}
+	blob, _ = json.Marshal(manifest)
+	if err := os.WriteFile(filepath.Join(dir, data.DatasetManifestFilename), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeNucleotideMLXTokenShard(t *testing.T, path string, tokens []uint16) {
+	t.Helper()
+	const headerInts = 256
+	header := make([]byte, headerInts*4)
+	binary.LittleEndian.PutUint32(header[0:4], 20240520)
+	binary.LittleEndian.PutUint32(header[4:8], 1)
+	binary.LittleEndian.PutUint32(header[8:12], uint32(len(tokens)))
+	payload := make([]byte, len(tokens)*2)
+	for i, token := range tokens {
+		binary.LittleEndian.PutUint16(payload[i*2:], token)
+	}
+	if err := os.WriteFile(path, append(header, payload...), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

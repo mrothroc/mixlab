@@ -12,36 +12,38 @@ import (
 
 // PrepareOptions holds flags for the prepare command.
 type PrepareOptions struct {
-	Input                   string
-	Output                  string
-	InputFormat             string
-	VocabSize               int
-	ValSplit                float64
-	TokenizerPath           string
-	WWMCompatibleTokenizer  bool
-	TextFieldName           string
-	LabelFieldName          string
-	LabelFile               string
-	FramePerRecord          bool
-	RecordSeqLen            int
-	RecordPADID             int
-	RecordBOSID             int
-	RecordEOSID             int
-	RecordOverflow          string
-	CharVocabSize           int
-	CharMaxPerToken         int
-	MinimalPairOut          string
-	MinimalPairCorruptions  string
-	MinimalPairWeights      string
-	MinimalPairMorphology   string
-	MinimalPairMaxPairs     int
-	MinimalPairSeed         int
-	MinimalPairReportOut    string
-	MinimalPairSampleOut    string
-	MinimalPairSampleCount  int
-	NucleotideAlphabet      string
-	NucleotideAmbiguous     string
-	NucleotideInvalidPolicy string
+	Input                     string
+	Output                    string
+	InputFormat               string
+	VocabSize                 int
+	ValSplit                  float64
+	TokenizerPath             string
+	WWMCompatibleTokenizer    bool
+	TextFieldName             string
+	LabelFieldName            string
+	LabelFile                 string
+	FramePerRecord            bool
+	RecordSeqLen              int
+	RecordPADID               int
+	RecordBOSID               int
+	RecordEOSID               int
+	RecordOverflow            string
+	CharVocabSize             int
+	CharMaxPerToken           int
+	MinimalPairOut            string
+	MinimalPairCorruptions    string
+	MinimalPairWeights        string
+	MinimalPairMorphology     string
+	MinimalPairMaxPairs       int
+	MinimalPairSeed           int
+	MinimalPairReportOut      string
+	MinimalPairSampleOut      string
+	MinimalPairSampleCount    int
+	NucleotideAlphabet        string
+	NucleotideAmbiguous       string
+	NucleotideInvalidPolicy   string
+	NucleotideFraming         string
+	NucleotideStreamSeparator string
 }
 
 // runPrepare shells out to scripts/prepare.py to tokenize raw text into binary shards.
@@ -53,6 +55,30 @@ func runPrepare(opts PrepareOptions) error {
 		return fmt.Errorf("-prepare-output-dir (or legacy -output) is required for prepare mode; pass an output directory, e.g.: mixlab -mode prepare -input corpus.jsonl -prepare-output-dir data/")
 	}
 	inputFormat := strings.ToLower(strings.TrimSpace(opts.InputFormat))
+	nucleotideFraming := strings.ToLower(strings.TrimSpace(opts.NucleotideFraming))
+	if nucleotideFraming == "" {
+		nucleotideFraming = "record"
+	}
+	switch nucleotideFraming {
+	case "record", "stream":
+	default:
+		return fmt.Errorf("invalid -nucleotide-framing=%q (want record or stream)", opts.NucleotideFraming)
+	}
+	nucleotideStreamSeparator := strings.ToLower(strings.TrimSpace(opts.NucleotideStreamSeparator))
+	if nucleotideStreamSeparator == "" {
+		nucleotideStreamSeparator = "eos"
+	}
+	switch nucleotideStreamSeparator {
+	case "eos", "none":
+	default:
+		return fmt.Errorf("invalid -nucleotide-stream-separator=%q (want eos or none)", opts.NucleotideStreamSeparator)
+	}
+	if inputFormat != "fasta" && nucleotideFraming != "record" {
+		return fmt.Errorf("-nucleotide-framing=%s requires -input-format=fasta", nucleotideFraming)
+	}
+	if opts.LabelFile != "" && nucleotideFraming != "record" {
+		return fmt.Errorf("-label-file requires -nucleotide-framing=record")
+	}
 	if opts.LabelFieldName != "" && opts.LabelFile != "" {
 		return fmt.Errorf("-label-field and -label-file are mutually exclusive")
 	}
@@ -116,6 +142,8 @@ func runPrepare(opts PrepareOptions) error {
 	if opts.NucleotideInvalidPolicy != "" {
 		args = append(args, "--nucleotide-invalid-symbol-policy", opts.NucleotideInvalidPolicy)
 	}
+	args = append(args, "--nucleotide-framing", nucleotideFraming)
+	args = append(args, "--nucleotide-stream-separator", nucleotideStreamSeparator)
 	if opts.TokenizerPath != "" {
 		args = append(args, "--tokenizer-path", opts.TokenizerPath)
 	}

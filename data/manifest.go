@@ -13,17 +13,18 @@ import (
 )
 
 const (
-	DatasetManifestFilename              = "mixlab.dataset.json"
-	DatasetManifestFormat                = "mixlab.dataset"
-	DatasetManifestVersion               = 1
-	DatasetRepresentationDiscreteTokens  = "discrete_tokens"
-	DatasetTokenDTypeUint16              = "uint16"
-	DatasetShardFormatTokenStreamV1      = "mixlab_token_shard_v1"
-	DatasetShardFormatSequenceV1         = "mixlab_sequence_shard_v1"
-	DatasetShardFormatLabeledSequenceV1  = "mixlab_labeled_sequence_shard_v1"
-	DatasetSequenceLayoutPackedSegments  = "packed_segments"
-	DatasetSequenceLayoutOneRecordRow    = "one_record_per_row"
-	DatasetTaskSingleLabelClassification = "single_label_classification"
+	DatasetManifestFilename               = "mixlab.dataset.json"
+	DatasetManifestFormat                 = "mixlab.dataset"
+	DatasetManifestVersion                = 1
+	DatasetRepresentationDiscreteTokens   = "discrete_tokens"
+	DatasetTokenDTypeUint16               = "uint16"
+	DatasetShardFormatTokenStreamV1       = "mixlab_token_shard_v1"
+	DatasetShardFormatSequenceV1          = "mixlab_sequence_shard_v1"
+	DatasetShardFormatLabeledSequenceV1   = "mixlab_labeled_sequence_shard_v1"
+	DatasetSequenceLayoutContinuousStream = "continuous_stream"
+	DatasetSequenceLayoutPackedSegments   = "packed_segments"
+	DatasetSequenceLayoutOneRecordRow     = "one_record_per_row"
+	DatasetTaskSingleLabelClassification  = "single_label_classification"
 )
 
 // DatasetManifest describes the representation shared by a set of Mixlab
@@ -163,8 +164,11 @@ func (m *DatasetManifest) Validate() error {
 		return fmt.Errorf("task metadata requires shard_format=%q", DatasetShardFormatLabeledSequenceV1)
 	}
 	if m.ShardFormat == DatasetShardFormatTokenStreamV1 {
-		if layout != "" || m.RecordSeqLen != 0 {
-			return fmt.Errorf("sequence_layout and record_seq_len require shard_format=%q", DatasetShardFormatSequenceV1)
+		if layout != "" && layout != DatasetSequenceLayoutContinuousStream {
+			return fmt.Errorf("shard_format=%q supports only sequence_layout=%q when set", DatasetShardFormatTokenStreamV1, DatasetSequenceLayoutContinuousStream)
+		}
+		if m.RecordSeqLen != 0 {
+			return fmt.Errorf("record_seq_len requires shard_format=%q", DatasetShardFormatSequenceV1)
 		}
 	} else {
 		switch layout {
@@ -263,10 +267,16 @@ func (m *DatasetManifest) Validate() error {
 // EffectiveSequenceLayout preserves the original packed-segment behavior for
 // sequence manifests written before sequence_layout was introduced.
 func (m *DatasetManifest) EffectiveSequenceLayout() string {
-	if m == nil || (m.ShardFormat != DatasetShardFormatSequenceV1 && m.ShardFormat != DatasetShardFormatLabeledSequenceV1) {
+	if m == nil {
 		return ""
 	}
 	layout := strings.ToLower(strings.TrimSpace(m.SequenceLayout))
+	if m.ShardFormat == DatasetShardFormatTokenStreamV1 {
+		return layout
+	}
+	if m.ShardFormat != DatasetShardFormatSequenceV1 && m.ShardFormat != DatasetShardFormatLabeledSequenceV1 {
+		return ""
+	}
 	if layout == "" {
 		return DatasetSequenceLayoutPackedSegments
 	}

@@ -1033,7 +1033,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `batch_tokens` | integer | No | `1024` | Tokens per optimization step. Must be divisible by `seq_len`. |
 | `seq_len_schedule` | array | No | Disabled | Stepwise training sequence-length schedule as `[[step, seq_len], ...]`. The top-level `seq_len` remains the maximum/eval/inference length. Scheduled lengths must start at step `0`, be strictly increasing by step, stay in `[1, seq_len]`, and divide `batch_tokens`. V1 rejects this with distillation or active data2vec. |
 | `shuffle_chunk_tokens` | integer | No | `seq_len` | Token-block shuffle granularity for train/validation loaders. Values `<= 0` inherit `seq_len`; set to `2048` to reproduce the previous fixed-block behavior. |
-| `reverse_complement_prob` | number | No | `0` | Deterministic per-segment DNA reverse-complement augmentation probability in `[0,1]`. Requires a manifest-backed FASTA DNA dataset; RNA and legacy/text shards reject nonzero values. Randomness is derived from `training.seed` and step, independent of loader prefetch. |
+| `reverse_complement_prob` | number | No | `0` | Deterministic DNA reverse-complement augmentation probability in `[0,1]`. It applies per packed segment for record shards and per framed row for continuous nucleotide streams. Requires a manifest-backed FASTA DNA dataset; RNA and legacy/text shards reject nonzero values. Randomness is derived from `training.seed` and step, independent of loader prefetch. |
 | `embed_lr` | number | No | `lr` | Learning rate for embedding-class weights. |
 | `matrix_lr` | number | No | `lr` | Learning rate for matrix weights. Used with Muon. |
 | `scalar_lr` | number | No | `lr` | Learning rate for scalar and vector weights. |
@@ -1136,6 +1136,12 @@ the record packer. Their fixed vocabulary uses `<MASK>=3`, so MLM configs must
 set `training.mlm_mask_token_id: 3`. Causal and MLM/MNTP objectives are
 supported; full continuous-stream BPB evaluation is intentionally disabled.
 
+Manifest-backed nucleotide `mixlab_token_shard_v1` datasets with
+`sequence_layout: "continuous_stream"` require causal `training.example_framing`.
+They load the same nucleotide vocabulary and reverse-complement metadata but do
+not enable `attention_segment_mask` or declare `segment_ids` in the model graph,
+so attention, recurrent, and SSM mixers can train on the same shards.
+
 With `rc_equivariant: true`, Mixlab additionally loads the DNA complement map
 for packed MLM and labeled one-record classification datasets. Every input is
 paired with its segment-local reverse complement and evaluated by the same
@@ -1154,7 +1160,7 @@ semantic `pad`, `bos`, and `eos` token IDs; its length must match config
 mask or `training.example_framing` because neither composes meaningfully with
 one-record-per-row data.
 
-`example_framing` is for raw continuous token shards that should train as independent fixed examples. It shuffles `content_len` raw-token chunks, drops ragged shard tails, prepends `bos_id`, appends `eos_id`, and masks the final EOS input position so it never predicts the next example. V1 is causal-training-only and rejects masked objectives, hybrid, block diffusion, MTP, first-byte masked loss, distillation, data2vec, attention segment masking, TTT eval settings, and `seq_len_schedule`.
+`example_framing` is for raw continuous token shards that should train as independent fixed examples. It shuffles `content_len` raw-token chunks, drops ragged shard tails, prepends `bos_id`, appends `eos_id`, and masks the final EOS input position so it never predicts the next example. Nucleotide stream manifests require the framing IDs to match `nucleotide_vocab.json` (`BOS=1`, `EOS=2`). V1 is causal-training-only and rejects masked objectives, hybrid, block diffusion, MTP, first-byte masked loss, distillation, data2vec, attention segment masking, TTT eval settings, and `seq_len_schedule`.
 
 ```json
 {

@@ -363,6 +363,7 @@ type TrainingSpec struct {
 	// Dataset runtime fields are populated from mixlab.dataset.json after JSON
 	// validation. They do not alter checkpoint or marshaled config shape.
 	DatasetSequencePacking       bool    `json:"-"`
+	DatasetNucleotideStream      bool    `json:"-"`
 	DatasetRecordFraming         bool    `json:"-"`
 	DatasetClassification        bool    `json:"-"`
 	DatasetNumLabels             int     `json:"-"`
