@@ -20,6 +20,15 @@ Custom GPU compute is wrapped in an `mx::Primitive` subclass with `eval_gpu()` +
 ## Mamba-3 specifics
 The canonical Mamba-3 path has 7 layers of memory/compile pressure mitigation. See [`../docs/canonical_mamba3.md`](../docs/canonical_mamba3.md) for the full architecture, env-var reference, and which file each layer lives in.
 
+## Determinism / keyed RNG
+- `OP_DROPOUT` takes an optional `dropout_keys` input; when present it draws its
+  mask from an explicit per-op MLX PRNG key instead of the global RNG, so
+  training resumes bit-exactly (see `train/dropout_rng.go`, `arch` keys the op).
+- `OP_RANDOM_NORMAL` still uses the **global** MLX RNG (no key) — not
+  resume-reproducible. Tracked as GitHub issue #3; key it the same way if you
+  touch that path.
+
 ## Runtime gotchas
 - `libcuda.so.1` is the NVIDIA driver lib, runtime-provided (NVIDIA Container Toolkit). The Dockerfile's ldd check excludes it — see `docker/app.Dockerfile`.
 - Cloud Build has nvcc → CUDA kernels are precompiled and embedded. GitHub CI doesn't → kernels stub out, fallback paths run.
+- Op codes are a stable on-disk/ABI contract shared across `arch/ir.go`, `gpu/ir.h`, `gpu/mlx_types.go`, `gpu/lower.go`, and the `TestIRToGPUOpCodeAlignment` table in `gpu/lower_test.go`. A new op MUST touch all five.

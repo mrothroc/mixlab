@@ -9,6 +9,16 @@ This package builds the IR program from a JSON `ArchConfig`. It runs in pure Go 
 - `recurrent_blocks.go` — emit functions for mamba/mamba3-canonical/rwkv/retnet/gated_deltanet
 - `blocks.go` — emit functions for plain/swiglu/mlp/perceiver/bottleneck/etc.
 - `weight_shapes.go` — per-block `WeightMeta` for the optimizer
+- `objective.go` — training objectives + validators (causal/mlm/mntp/hybrid/block-diffusion/multihead/classification)
+- `ir_bridge.go` — `Build{IR,Training,Eval,Generation}IRProgramFromConfig`; assembles backbone + head per objective/state (`TrainingProgramState`)
+- `classification_ir.go` — classification head: truncate backbone at `x_hidden`, pool, linear + cross-entropy
+
+## Objectives & non-block IR heads
+Objective/task heads (classification, batched-generation gather) are built by
+**composing existing ops** — no new op code, no `gpu/` change. Only a genuinely
+new primitive needs the full add-a-block dance below. `Dropout` is **keyed**: it
+declares a `dropout_keys` input + per-op ordinal so masks are deterministic from
+`(seed, step, ordinal)` — the prerequisite for reproducible resume.
 
 ## Public registry-delegation API (v0.19.1+)
 For downstream packages (mixlab-jazz) that compose registered blocks inside custom containers:

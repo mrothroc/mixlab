@@ -1,6 +1,20 @@
-# train/ — trainer, optimizer, training-step paths
+# train/ — trainer, optimizer, objectives, resume, generation
 
-Houses the `GPUTrainer` Go API plus the in-process training loop. The actual MLX dispatch lives in `gpu/`; this package is the orchestrator.
+Houses the `GPUTrainer` Go API plus the in-process training loop, objective
+batch preparation, checkpoint/resume, and generation. The actual MLX dispatch
+lives in `gpu/`; this package is the orchestrator. The largest package —
+`runTrain` in `train.go` is one function, so extract cohesive tails to siblings
+(e.g. `train_final_eval.go`, `train_batch.go`, `train_schedule.go`) to stay
+under the 1000-line cap.
+
+## Subsystems (entry files)
+Each objective's batch prep dispatches from `objective.go::prepareObjectiveBatchWithSeqLen`.
+
+- **Objectives / batching** — `objective.go` (causal/mlm/mntp/hybrid/block-diffusion/multihead/classification masking + label/valid-mask/position construction); `train_batch.go` (`trainBatch` ↔ loader `Batch`).
+- **Classification** — `classification.go` (metrics, warm-start), `train_final_eval.go`; head IR is `arch/classification_ir.go`. Uses a `dropoutInactive` program-cache-key variant for dropout-free eval. Guide: [`../docs/config-training.md`](../docs/config-training.md).
+- **Resume / checkpoints** — `resume_setup.go`, `resume_checkpoint.go`, `resume_manifest.go`, `gpu_trainer_resume_mlx.go`. Versioned `mixlab_resume_v1` bundle; manifest written last as the commit marker. Keyed dropout (`dropout_rng.go`) makes resumed dropout bit-reproducible.
+- **Generation** — `generate.go`, `generate_sampling.go` (replay / batched / TTT-stateful paths + retry-on-incomplete). Grammar constraints: `generate_constraints.go`, `generate_gbnf*.go`, `generate_token_dfa.go` — see [`../docs/grammar-constrained-generation.md`](../docs/grammar-constrained-generation.md). GBNF parses **untrusted** input: keep the recursion-depth and incremental-production bounds.
+- **Dataset wiring** — `dataset_manifest.go` (`configureDatasetForTraining`: validate manifest, attach runtime sequence-packing/framing/classification state). Formats live in [`../data/CLAUDE.md`](../data/CLAUDE.md).
 
 ## Key files
 - `gpu_trainer.go` — public `GPUTrainer` API (`TrainStepGPU`, `SubmitStepGPU`, `CollectLossGPU`, etc.)
