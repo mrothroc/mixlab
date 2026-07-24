@@ -86,6 +86,33 @@ func loadSafetensorsWeights(path string, shapes []WeightShape) ([][]float32, err
 	return weights, nil
 }
 
+// loadClassificationWarmStartWeights accepts either an exact classification
+// checkpoint or an LM checkpoint whose complete weight layout is the prefix of
+// the classification layout. Only the appended classifier weights are freshly
+// initialized in the latter case.
+func loadClassificationWarmStartWeights(path string, shapes []WeightShape, seed int64, initMode string, initStd float32) ([][]float32, int, error) {
+	if exact, err := loadSafetensorsWeights(path, shapes); err == nil {
+		return exact, 0, nil
+	}
+	headStart := -1
+	for i, shape := range shapes {
+		if shape.Name == "head_classifier_proj" {
+			headStart = i
+			break
+		}
+	}
+	if headStart <= 0 || len(shapes)-headStart != 2 || shapes[headStart+1].Name != "head_classifier_bias" {
+		return nil, 0, fmt.Errorf("classification weight layout must end with head_classifier_proj and head_classifier_bias")
+	}
+	backbone, err := loadSafetensorsWeights(path, shapes[:headStart])
+	if err != nil {
+		return nil, 0, fmt.Errorf("checkpoint is neither an exact classification checkpoint nor a compatible LM prefix: %w", err)
+	}
+	weights := initWeightData(shapes, seed, initMode, initStd)
+	copy(weights[:headStart], backbone)
+	return weights, len(shapes) - headStart, nil
+}
+
 // decodeSafetensorFloat32 decodes a single tensor from the parsed safetensors map.
 func decodeSafetensorFloat32(name string, wantShape []int, tensors map[string]safeTensorBlob) ([]float32, error) {
 	ent, ok := tensors[name]

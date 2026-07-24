@@ -40,6 +40,14 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	if cfg.Training.MultiheadEnabled() {
 		return nil, fmt.Errorf("multihead eval IR is not a single-head next-token graph; export the configured scorer head or use native diffusion generation/scoring for the diffusion head")
 	}
+	if cfg.ClassificationEnabled() {
+		return BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
+			RecurrenceActive: true,
+			HeadUntied:       cfg.MTPUntieEnabled(),
+			DropoutInactive:  true,
+			Objective:        ObjectiveClassification,
+		})
+	}
 	if len(cfg.RecurrencePhases) > 0 {
 		return buildIRProgramFromConfigWithStateAndOrder(cfg, TrainingProgramState{
 			RecurrenceActive:       true,
@@ -75,6 +83,9 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 // before the vocabulary projection so generation reads back [B,V], not
 // [B*T,V].
 func BuildGenerationIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
+	if cfg != nil && cfg.ClassificationEnabled() {
+		return nil, fmt.Errorf("generation is not supported for training.objective=%q checkpoints", ObjectiveClassification)
+	}
 	prog, err := BuildEvalIRProgramFromConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -181,7 +192,14 @@ func BuildTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingProgramStat
 	if cfg.Training.MultiheadEnabled() {
 		return buildMultiheadTrainingIRProgramFromConfig(cfg, state)
 	}
-	return buildIRProgramFromConfigWithState(cfg, state, cfg.MTP, cfg.Training.FirstByteMask)
+	prog, err := buildIRProgramFromConfigWithState(cfg, state, cfg.MTP, cfg.Training.FirstByteMask)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ClassificationEnabled() {
+		return convertToClassificationIR(cfg, state, prog)
+	}
+	return prog, nil
 }
 
 // BuildTrainingIRProgramForRecurrencePhaseFromConfig constructs a training
@@ -193,7 +211,14 @@ func BuildTrainingIRProgramForRecurrencePhaseFromConfig(cfg *ArchConfig, phaseId
 	if phaseIdx < 0 || phaseIdx >= len(cfg.RecurrencePhases) {
 		return nil, fmt.Errorf("recurrence phase index %d out of range [0,%d)", phaseIdx, len(cfg.RecurrencePhases))
 	}
-	return buildIRProgramFromConfigWithStateAndOrder(cfg, state, cfg.MTP, cfg.RecurrencePhases[phaseIdx].Order, cfg.Training.FirstByteMask)
+	prog, err := buildIRProgramFromConfigWithStateAndOrder(cfg, state, cfg.MTP, cfg.RecurrencePhases[phaseIdx].Order, cfg.Training.FirstByteMask)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.ClassificationEnabled() {
+		return convertToClassificationIR(cfg, state, prog)
+	}
+	return prog, nil
 }
 
 // BuildPreActivationIRProgramFromConfig constructs the recurrence-inactive
@@ -282,7 +307,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		attnDropout = 0
 		embeddingDropout = 0
 	}
-	segmentAttentionMask := cfg.Training.AttentionSegmentMaskEnabled() && !state.SegmentMaskInactive
+	segmentAttentionMask := (cfg.Training.AttentionSegmentMaskEnabled() || cfg.ClassificationEnabled()) && !state.SegmentMaskInactive
 	framedCausalLoss := (cfg.Training.ExampleFramingEnabled() || cfg.Training.RecordFramingEnabled()) && !state.ExampleFramingInactive
 	wordStructural := cfg.Training.WordStructuralObjective
 	if state.HiddenCaptureTopK > 0 {

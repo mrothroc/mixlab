@@ -102,6 +102,8 @@ func main() {
 	prepTokenizerPath := flag.String("tokenizer-path", "", "path to tokenizer.json for prepare reuse, GBNF generation, or export-hf bundling")
 	prepWWMCompatibleTokenizer := flag.Bool("wwm-compatible-tokenizer", false, "train or validate a tokenizer with reliable whole-word boundaries (prepare mode)")
 	prepTextField := flag.String("text-field", "text", "JSON field for text in JSONL (prepare mode)")
+	prepLabelField := flag.String("label-field", "", "JSON integer-label field; emits labeled classification shards (prepare mode)")
+	prepLabelFile := flag.String("label-file", "", "FASTA label TSV containing id<TAB>label (prepare mode)")
 	prepFramePerRecord := flag.Bool("frame-per-record", false, "preserve each text/JSONL record as one BOS/EOS/PAD-framed training row")
 	prepRecordSeqLen := flag.Int("record-seq-len", 0, "fixed row length for -frame-per-record")
 	prepRecordPADID := flag.Int("record-pad-id", -1, "PAD token ID for -frame-per-record")
@@ -201,6 +203,8 @@ func main() {
 			TokenizerPath:           *prepTokenizerPath,
 			WWMCompatibleTokenizer:  *prepWWMCompatibleTokenizer,
 			TextFieldName:           *prepTextField,
+			LabelFieldName:          *prepLabelField,
+			LabelFile:               *prepLabelFile,
 			FramePerRecord:          *prepFramePerRecord,
 			RecordSeqLen:            *prepRecordSeqLen,
 			RecordPADID:             *prepRecordPADID,
@@ -429,6 +433,7 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Output", []string{"prepare-output-dir", "output"}},
 		{"Input and split", []string{"input-format", "val-split"}},
 		{"Text tokenizer/data", []string{"vocab-size", "tokenizer-path", "wwm-compatible-tokenizer", "text-field"}},
+		{"Sequence classification labels", []string{"label-field", "label-file"}},
 		{"Per-record framing", []string{"frame-per-record", "record-seq-len", "record-pad-id", "record-bos-id", "record-eos-id", "record-overflow"}},
 		{"FASTA nucleotide data", []string{"nucleotide-alphabet", "nucleotide-ambiguous-symbols", "nucleotide-invalid-symbol-policy"}},
 		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},

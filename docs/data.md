@@ -108,6 +108,8 @@ Common flags:
 | `-val-split` | Fraction of tokens reserved for validation. Default: `0.1`. |
 | `-tokenizer-path` | Path to a pre-trained `tokenizer.json`. |
 | `-text-field` | JSON field name for text in JSONL input. Default: `text`. |
+| `-label-field` | JSONL integer-label field for sequence classification. |
+| `-label-file` | FASTA sibling `id<TAB>label` TSV for sequence classification. |
 | `-char-vocab-size` | Generate tokenizer-level byte/character feature lookup when enabled. |
 | `-char-max-per-token` | Maximum byte/character slots per token for char features. |
 
@@ -141,7 +143,9 @@ model before constructing a trainer. Existing shard directories without a
 manifest remain supported for backward compatibility.
 
 Discrete datasets support `shard_format: "mixlab_token_shard_v1"` for flat
-token streams and `"mixlab_sequence_shard_v1"` for record-oriented sequences.
+token streams, `"mixlab_sequence_shard_v1"` for record-oriented sequences, and
+`"mixlab_labeled_sequence_shard_v1"` for atomic record-plus-label
+classification data.
 Nucleotide split entries additionally report `sequences`, and the manifest
 points to `artifacts.vocabulary: "nucleotide_vocab.json"`. The `modality` field
 describes the sequence domain without changing the backbone; later releases
@@ -156,6 +160,29 @@ zero in its own row, and masks every PAD target from causal loss. This is the
 appropriate layout when source records are complete examples and must not be
 split or packed together. Record mode splits validation data by record rather
 than by token offset.
+
+Labeled sequence manifests additionally declare:
+
+```json
+{
+  "shard_format": "mixlab_labeled_sequence_shard_v1",
+  "sequence_layout": "one_record_per_row",
+  "record_seq_len": 502,
+  "task": {
+    "type": "single_label_classification",
+    "num_labels": 2
+  },
+  "splits": {
+    "train": {"sequences": 900, "class_counts": {"0": 450, "1": 450}},
+    "val": {"sequences": 100, "class_counts": {"0": 50, "1": 50}}
+  }
+}
+```
+
+The loader keeps each label aligned with its variable-length token record,
+frames the record as `[BOS] content [EOS] [PAD]...`, and emits a validity mask.
+For `plain` attention, PAD occupies a separate segment so bidirectional
+classification cannot use padding as context.
 
 ## Data/config compatibility
 

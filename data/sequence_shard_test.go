@@ -41,6 +41,39 @@ func writeSequenceShardFixture(t *testing.T, path string, records [][]uint16) {
 	}
 }
 
+func writeLabeledSequenceShardFixture(t *testing.T, path string, records [][]uint16, labels []int32) {
+	t.Helper()
+	if len(records) != len(labels) {
+		t.Fatalf("records=%d labels=%d", len(records), len(labels))
+	}
+	header := make([]byte, headerInts*4)
+	nTokens := 0
+	for _, record := range records {
+		nTokens += len(record)
+	}
+	binary.LittleEndian.PutUint32(header[0:4], labeledSequenceShardMagic)
+	binary.LittleEndian.PutUint32(header[4:8], labeledSequenceShardVersion)
+	binary.LittleEndian.PutUint32(header[8:12], uint32(nTokens))
+	binary.LittleEndian.PutUint32(header[12:16], uint32(len(records)))
+	offsets := make([]byte, (len(records)+1)*8)
+	labelBytes := make([]byte, len(labels)*4)
+	payload := make([]byte, nTokens*2)
+	tokenOffset := 0
+	for i, record := range records {
+		binary.LittleEndian.PutUint64(offsets[i*8:], uint64(tokenOffset))
+		binary.LittleEndian.PutUint32(labelBytes[i*4:], uint32(labels[i]))
+		for _, token := range record {
+			binary.LittleEndian.PutUint16(payload[tokenOffset*2:], token)
+			tokenOffset++
+		}
+	}
+	binary.LittleEndian.PutUint64(offsets[len(records)*8:], uint64(tokenOffset))
+	blob := append(append(append(header, offsets...), labelBytes...), payload...)
+	if err := os.WriteFile(path, blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func writeSequenceManifestFixture(t *testing.T, dir string) {
 	t.Helper()
 	manifest := DatasetManifest{
@@ -70,6 +103,59 @@ func TestLoadSequenceShardRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("records=%v want=%v", got, want)
+	}
+}
+
+func TestLabeledSequenceShardAndLoaderKeepLabelsAligned(t *testing.T) {
+	dir := t.TempDir()
+	records := [][]uint16{{4, 5}, {6, 7, 8}}
+	labels := []int32{1, 0}
+	path := filepath.Join(dir, "train_00000.bin")
+	writeLabeledSequenceShardFixture(t, path, records, labels)
+	gotRecords, gotLabels, err := LoadLabeledSequenceShard(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotRecords, records) || !reflect.DeepEqual(gotLabels, labels) {
+		t.Fatalf("records/labels=%v/%v want=%v/%v", gotRecords, gotLabels, records, labels)
+	}
+	manifest := DatasetManifest{
+		Format: DatasetManifestFormat, Version: DatasetManifestVersion,
+		Representation: DatasetRepresentationDiscreteTokens, Modality: "nucleotide",
+		VocabSize: 9, TokenDType: DatasetTokenDTypeUint16, ShardFormat: DatasetShardFormatLabeledSequenceV1,
+		SequenceLayout: DatasetSequenceLayoutOneRecordRow, RecordSeqLen: 6,
+		SpecialTokenIDs: map[string]int{"pad": 0, "bos": 1, "eos": 2},
+		Task:            &DatasetTask{Type: DatasetTaskSingleLabelClassification, NumLabels: 2},
+		Splits: map[string]DatasetSplit{"train": {
+			Pattern: "train_*.bin", Tokens: 5, Shards: 1, Sequences: 2, MaxSequenceTokens: 3,
+			ClassCounts: map[string]int64{"0": 1, "1": 1},
+		}},
+	}
+	if err := manifest.Validate(); err != nil {
+		t.Fatalf("manifest validation: %v", err)
+	}
+	raw, _ := json.Marshal(manifest)
+	if err := os.WriteFile(filepath.Join(dir, DatasetManifestFilename), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loader, err := NewLoaderWithOptions(filepath.Join(dir, "train_*.bin"), 42, LoaderOptions{NoShardShuffle: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := loader.NextBatchDetailed(12, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(batch.Labels, labels) {
+		t.Fatalf("batch labels=%v want=%v", batch.Labels, labels)
+	}
+	wantValid := []float32{1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 0}
+	if !reflect.DeepEqual(batch.ValidMask, wantValid) {
+		t.Fatalf("valid mask=%v want=%v", batch.ValidMask, wantValid)
+	}
+	wantSegments := []int32{0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 1}
+	if !reflect.DeepEqual(batch.SegmentIDs, wantSegments) {
+		t.Fatalf("segment ids=%v want=%v", batch.SegmentIDs, wantSegments)
 	}
 }
 

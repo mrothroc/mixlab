@@ -293,6 +293,7 @@ type TrainingSpec struct {
 	Invariance                        *InvarianceSpec              `json:"invariance,omitempty"`
 	PLLMargin                         *PLLMarginSpec               `json:"pll_margin,omitempty"`
 	WordStructuralObjective           *WordStructuralObjectiveSpec `json:"word_structural_objective,omitempty"`
+	Classification                    *ClassificationSpec          `json:"classification,omitempty"`
 	Distillation                      *DistillationSpec            `json:"distillation,omitempty"`
 	Data2Vec                          *Data2VecSpec                `json:"data2vec,omitempty"`
 	ZLoss                             float64                      `json:"z_loss,omitempty"`
@@ -362,6 +363,8 @@ type TrainingSpec struct {
 	// validation. They do not alter checkpoint or marshaled config shape.
 	DatasetSequencePacking       bool    `json:"-"`
 	DatasetRecordFraming         bool    `json:"-"`
+	DatasetClassification        bool    `json:"-"`
+	DatasetNumLabels             int     `json:"-"`
 	DatasetBOSID                 int     `json:"-"`
 	DatasetEOSID                 int     `json:"-"`
 	DatasetPADID                 int     `json:"-"`

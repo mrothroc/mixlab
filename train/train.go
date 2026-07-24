@@ -168,6 +168,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			RecurrenceActive: key.recurrenceOn,
 			HeadUntied:       key.headUntied,
 			MTPAuxInactive:   !key.mtpAuxOn,
+			DropoutInactive:  key.dropoutInactive,
 			Objective:        key.objective,
 		}
 		var built *arch.Program
@@ -214,6 +215,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	switch cfg.Training.EffectiveObjective() {
 	case arch.ObjectiveMLM, arch.ObjectiveMNTP:
 		fmt.Printf("  [%s] training objective: %s\n", name, cfg.Training.EffectiveObjective())
+	case arch.ObjectiveClassification:
+		fmt.Printf("  [%s] training objective: classification num_labels=%d pooling=%s classifier_dropout=%g\n",
+			name, cfg.Training.Classification.NumLabels, cfg.EffectiveClassificationPooling(), cfg.EffectiveClassifierDropout())
 	case arch.ObjectiveHybrid:
 		causalLabel := fmt.Sprintf("%.2f", cfg.Training.EffectiveHybridCLMFractionForStep(startStep))
 		if len(cfg.Training.HybridCLMFractionSchedule) > 0 {
@@ -262,11 +266,23 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				return TrainResult{}, fmt.Errorf("compute weight shapes for load: %w", err)
 			}
 		}
-		loadedWeights, err = loadSafetensorsWeights(loadPath, shapes)
+		freshClassificationWeights := 0
+		if cfg.ClassificationEnabled() && resumed == nil {
+			loadedWeights, freshClassificationWeights, err = loadClassificationWarmStartWeights(
+				loadPath, shapes, cfg.Training.Seed, cfg.Training.WeightInit, cfg.Training.WeightInitStd,
+			)
+		} else {
+			loadedWeights, err = loadSafetensorsWeights(loadPath, shapes)
+		}
 		if err != nil {
 			return TrainResult{}, fmt.Errorf("load safetensors %q: %w", loadPath, err)
 		}
-		fmt.Printf("  [%s] loaded %d weights from %s\n", name, len(loadedWeights), loadPath)
+		if freshClassificationWeights > 0 {
+			fmt.Printf("  [%s] warm-started %d LM/backbone weights from %s; initialized %d classifier weights\n",
+				name, len(loadedWeights)-freshClassificationWeights, loadPath, freshClassificationWeights)
+		} else {
+			fmt.Printf("  [%s] loaded %d weights from %s\n", name, len(loadedWeights), loadPath)
+		}
 	}
 
 	if err := configureMLXMemoryLimits(name); err != nil {
@@ -758,14 +774,27 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					valStart := time.Now()
 					stopValidation := startSlowTrainingPhaseLogger(name, step, "validation")
 					var valAvg float64
+					classificationSummary := ""
 					var err error
-					if cfg.Training.MultiheadEnabled() {
+					switch {
+					case cfg.ClassificationEnabled():
+						evalKey := currentProgramKey
+						evalKey.dropoutInactive = true
+						err = causalEval.withProgramKey(currentProgramKey, evalKey, func() error {
+							metrics, evalErr := evaluateClassificationValidation(cfg, valSet, trainer, step, batchSize, seqLen)
+							if evalErr == nil {
+								valAvg = metrics.Loss
+								classificationSummary = metrics.summary()
+							}
+							return evalErr
+						})
+					case cfg.Training.MultiheadEnabled():
 						err = causalEval.withCausalEvalProgram(currentProgramKey, func() error {
 							var evalErr error
 							valAvg, evalErr = meanMultiheadValidationLoss(cfg, valSet, trainer, pairSampler, invarianceSampler, pllMarginSampler, step, batchSize, seqLen)
 							return evalErr
 						})
-					} else {
+					default:
 						valAvg, err = causalEval.meanValidationLossCausal(currentProgramKey, valSet)
 					}
 					stopValidation()
@@ -774,7 +803,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 						lastValLoss = valAvg
 						hasValLoss = true
 						ranValidation = true
-						valStr = fmt.Sprintf(" val=%.4f", valAvg)
+						if classificationSummary != "" {
+							valStr = " val_" + classificationSummary
+						} else {
+							valStr = fmt.Sprintf(" val=%.4f", valAvg)
+						}
 					}
 				}
 				// Use wall-clock average for tok/s and MFU — per-step EMA is
@@ -889,47 +922,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 			}
 		}
-		finalEvalBatch := objectiveBatch{x: lastTrainBatch.x, y: lastTrainBatch.y}
-		if cfg.Training.MultiheadEnabled() {
-			var err error
-			finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveMultihead, seqLen)
-			if err != nil {
-				return TrainResult{}, fmt.Errorf("prepare final multihead training loss batch: %w", err)
-			}
-			finalEvalBatch, err = maybeAttachMinimalPairs(pairSampler, cfg, steps, finalEvalBatch, batchSize, seqLen)
-			if err != nil {
-				return TrainResult{}, fmt.Errorf("prepare final minimal-pair training loss batch: %w", err)
-			}
-			finalEvalBatch, err = maybeAttachInvariancePairs(invarianceSampler, cfg, steps, finalEvalBatch, batchSize, seqLen, arch.ObjectiveMultihead)
-			if err != nil {
-				return TrainResult{}, fmt.Errorf("prepare final invariance training loss batch: %w", err)
-			}
-			finalEvalBatch, err = maybeAttachPLLMarginPairs(pllMarginSampler, cfg, steps, finalEvalBatch, batchSize, seqLen, arch.ObjectiveMultihead)
-			if err != nil {
-				return TrainResult{}, fmt.Errorf("prepare final PLL margin training loss batch: %w", err)
-			}
-		} else if cfg.Training.ExampleFramingEnabled() || cfg.Training.DatasetSequencePacking || cfg.Training.RecordFramingEnabled() {
-			var err error
-			finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveCausal, seqLen)
-			if err != nil {
-				return TrainResult{}, fmt.Errorf("prepare final framed training loss batch: %w", err)
-			}
-		}
-		var evalLoss float32
-		switch {
-		case cfg.Training.MultiheadEnabled():
-			err = causalEval.withCausalEvalProgram(currentProgramKey, func() error {
-				var evalErr error
-				evalLoss, evalErr = evaluateObjectiveTrainingLossGPU(trainer, finalEvalBatch, batchSize, seqLen)
-				return evalErr
-			})
-		case cfg.Training.ExampleFramingEnabled() || cfg.Training.DatasetSequencePacking || cfg.Training.RecordFramingEnabled():
-			evalLoss, err = causalEval.evaluateCausalObjectiveTrainingLossGPU(currentProgramKey, finalEvalBatch)
-		default:
-			evalLoss, err = causalEval.evaluateCausalObjectiveGPU(currentProgramKey, finalEvalBatch)
-		}
+		evalLoss, err := computeFinalTrainingLoss(cfg, lastTrainBatch, steps, seqLen, batchSize,
+			trainer, causalEval, currentProgramKey, pairSampler, invarianceSampler, pllMarginSampler)
 		if err != nil {
-			return TrainResult{}, fmt.Errorf("evaluate final training loss: %w", err)
+			return TrainResult{}, err
 		}
 		lastUnmaskedLoss = float64(evalLoss)
 	}
@@ -946,35 +942,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 	// Full BPB evaluation if requested
 	if opts.DoFullEval {
-		switch {
-		case cfg.Training.MultiheadEnabled():
-			fmt.Printf("  [%s] full validation BPB failed: training.objective=multihead is not supported by continuous-stream full eval in v1\n", name)
-		case cfg.Training.ExampleFramingEnabled():
-			fmt.Printf("  [%s] full validation BPB failed: training.example_framing is not supported by continuous-stream full eval in v1\n", name)
-		case cfg.Training.DatasetSequencePacking:
-			fmt.Printf("  [%s] full validation BPB failed: record-oriented sequence datasets require packed evaluation; use validation loss or native scoring\n", name)
-		case cfg.Training.RecordFramingEnabled():
-			fmt.Printf("  [%s] full validation BPB failed: one-record-per-row datasets require framed evaluation; use validation loss\n", name)
-		default:
-			if cfg.Training.TTTSteps > 0 {
-				if cfg.Training.TTTMode == "lora" {
-					fmt.Printf("  [%s] computing full validation BPB with LoRA-TTT (steps=%d lr=%g rank=%d)...\n", name, cfg.Training.TTTSteps, cfg.Training.TTTLR, cfg.Training.TTTRank)
-				} else {
-					fmt.Printf("  [%s] computing full validation BPB with score-first TTT (steps=%d lr=%g)...\n", name, cfg.Training.TTTSteps, cfg.Training.TTTLR)
-				}
-			} else {
-				fmt.Printf("  [%s] computing full validation BPB...\n", name)
-			}
-			lutDir := opts.LUTDir
-			if lutDir == "" {
-				lutDir = "data"
-			}
-			if err := causalEval.withCausalEvalProgram(currentProgramKey, func() error {
-				return runFullEval(cfg, valPattern, trainer, lutDir)
-			}); err != nil {
-				fmt.Printf("  [%s] full validation BPB failed: %v\n", name, err)
-			}
-		}
+		runFullEvaluation(cfg, name, valPattern, valSet, trainer, causalEval, currentProgramKey, opts, steps, batchSize, seqLen)
 	}
 
 	elapsed := time.Since(start)

@@ -808,7 +808,8 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(smearMetas) == 0 && len(backoutMetas) == 0 && len(data2VecMetas) == 0 && len(mlmHeadMetas) == 0 && len(layerAggregationMetas) == 0 {
+	classificationMetas := classificationWeightShapes(cfg.ModelDim, cfg.Training.Classification)
+	if len(smearMetas) == 0 && len(backoutMetas) == 0 && len(data2VecMetas) == 0 && len(mlmHeadMetas) == 0 && len(layerAggregationMetas) == 0 && len(classificationMetas) == 0 {
 		return metas, nil
 	}
 	fixed := fixedWeightCountWithHeadAndNorm(cfg.ReservesUntiedHeadWeight(), cfg.EffectiveNormSpec()) + len(positionalEmbeddingWeightShapes(cfg.ModelDim, cfg.EffectiveMaxPositions(), cfg.EffectivePositionalEmbedding()))
@@ -820,6 +821,7 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	out = append(out, data2VecMetas...)
 	out = append(out, mlmHeadMetas...)
 	out = append(out, layerAggregationMetas...)
+	out = append(out, classificationMetas...)
 	return out, nil
 }
 

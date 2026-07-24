@@ -14,6 +14,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Parameter/compute inspection | Yes, no GPU required | `mixlab -mode count -config model.json` | Reports unique/active parameters, memory, IR ops, and estimated FLOPs. |
 | Text/JSONL preparation | Yes | `mixlab -mode prepare` | Produces tokenizer, shards, and a dataset manifest. |
 | Per-record text framing | Yes | `mixlab -mode prepare -frame-per-record` | One BOS/EOS/PAD-framed record per sequence row. |
+| Labeled sequence preparation | Yes | `mixlab -mode prepare -label-field` / `-label-file` | Writes atomic labeled sequence shards and task metadata. |
 | FASTA preparation | Yes | `mixlab -mode prepare -input-format fasta` | Produces record-oriented nucleotide shards and vocabulary metadata. |
 | Training and races | Yes | `mixlab -mode arch` / `arch_race` | Periodic checkpoints can be resumed with `-resume`. |
 | Native evaluation | Yes | `mixlab -mode eval` | Supports loss plus optional aligned logprob, rank, uncertainty, and logits exports. |
@@ -33,6 +34,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Causal + masked hybrid | Yes | Concrete-objective eval; causal validation | Causal path | Causal and masked surfaces when supported | [hybrid_tiny.json](../examples/hybrid_tiny.json) |
 | Block diffusion | Yes | Native PLL scoring | Native diffusion generation | Pure diffusion is native-only | [block_diffusion_tiny.json](../examples/block_diffusion_tiny.json) |
 | Multihead | Yes | Selected native scorer/detector/denoiser | Selected diffusion head | Exports only `export_head` | [multihead_mntp_diffusion_tiny.json](../examples/multihead_mntp_diffusion_tiny.json) |
+| Sequence classification | Yes | Loss, accuracy, MCC, macro-F1, binary AUROC | No | Native classifier checkpoints are native-only; LM backbone export remains architecture-gated | [sequence_classification_gated_deltanet_tiny.json](../examples/sequence_classification_gated_deltanet_tiny.json) |
 | RTD detector | Multihead auxiliary | `score-electra` | No | Detector and generator are skipped | [multihead_mntp_rtd_tiny.json](../examples/multihead_mntp_rtd_tiny.json) |
 | Native energy head | Multihead auxiliary | `score-ebm` | No | Energy head is skipped | [multihead_mntp_energy_tiny.json](../examples/multihead_mntp_energy_tiny.json) |
 | MLM/MNTP span-PLL ranking | Multihead auxiliary | `score-ebm` | No | Scorer exports normally | [multihead_mntp_span_pll_ranking_tiny.json](../examples/multihead_mntp_span_pll_ranking_tiny.json) |

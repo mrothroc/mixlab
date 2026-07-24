@@ -10,6 +10,8 @@ type trainBatch struct {
 	lossMask            []float32
 	segmentIDs          []int32
 	maskEligible        []uint8
+	labels              []int32
+	validMask           []float32
 	disableAugmentation bool
 	err                 error
 }
@@ -17,7 +19,8 @@ type trainBatch struct {
 func trainBatchFromDataBatch(batch data.Batch, err error) trainBatch {
 	return trainBatch{
 		x: batch.X, y: batch.Y, lossMask: batch.LossMask,
-		segmentIDs: batch.SegmentIDs, maskEligible: batch.MaskEligible, err: err,
+		segmentIDs: batch.SegmentIDs, maskEligible: batch.MaskEligible,
+		labels: batch.Labels, validMask: batch.ValidMask, err: err,
 	}
 }
 
@@ -25,6 +28,7 @@ func trainBatchFromValBatch(batch data.ValBatch) trainBatch {
 	return trainBatch{
 		x: batch.X, y: batch.Y, lossMask: batch.LossMask,
 		segmentIDs: batch.SegmentIDs, maskEligible: batch.MaskEligible,
+		labels: batch.Labels, validMask: batch.ValidMask,
 		disableAugmentation: true,
 	}
 }

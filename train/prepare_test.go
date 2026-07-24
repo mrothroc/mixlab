@@ -338,6 +338,57 @@ func TestPreparePerRecordTextProducesIndependentMaskedRows(t *testing.T) {
 	}
 }
 
+func TestPrepareLabeledJSONLProducesClassificationManifestAndAtomicLabels(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	if err := exec.Command("python3", "-c", "import numpy, tokenizers").Run(); err != nil {
+		t.Skip("python3 numpy/tokenizers libraries not available")
+	}
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "classification.jsonl")
+	outDir := filepath.Join(dir, "prepared")
+	input := "" +
+		"{\"id\":\"a\",\"sequence\":\"alpha one\",\"label\":0}\n" +
+		"{\"id\":\"b\",\"sequence\":\"beta two\",\"label\":1}\n" +
+		"{\"id\":\"c\",\"sequence\":\"alpha three\",\"label\":0}\n" +
+		"{\"id\":\"d\",\"sequence\":\"beta four\",\"label\":1}\n" +
+		"{\"id\":\"e\",\"sequence\":\"alpha five\",\"label\":0}\n" +
+		"{\"id\":\"f\",\"sequence\":\"beta six\",\"label\":1}\n"
+	if err := os.WriteFile(inputPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runPrepare(PrepareOptions{
+		Input: inputPath, Output: outDir, InputFormat: "text", VocabSize: 32, ValSplit: 0.34,
+		TextFieldName: "sequence", LabelFieldName: "label", RecordSeqLen: 12,
+		RecordPADID: 0, RecordBOSID: 1, RecordEOSID: 2, RecordOverflow: "truncate",
+	})
+	if err != nil {
+		t.Fatalf("prepare labeled JSONL: %v", err)
+	}
+	manifest, err := data.LoadDatasetManifest(filepath.Join(outDir, data.DatasetManifestFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ShardFormat != data.DatasetShardFormatLabeledSequenceV1 ||
+		manifest.Task == nil || manifest.Task.NumLabels != 2 ||
+		manifest.Task.Type != data.DatasetTaskSingleLabelClassification {
+		t.Fatalf("classification manifest=%+v", manifest)
+	}
+	if !reflect.DeepEqual(manifest.Splits["train"].ClassCounts, map[string]int64{"0": 2, "1": 2}) ||
+		!reflect.DeepEqual(manifest.Splits["val"].ClassCounts, map[string]int64{"0": 1, "1": 1}) {
+		t.Fatalf("class counts=%+v", manifest.Splits)
+	}
+	trainFiles, _ := filepath.Glob(filepath.Join(outDir, "train_*.bin"))
+	records, labels, err := data.LoadLabeledSequenceShard(trainFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 4 || !reflect.DeepEqual(labels, []int32{0, 1, 0, 1}) {
+		t.Fatalf("prepared records/labels=%d/%v", len(records), labels)
+	}
+}
+
 func TestPreparePerRecordOverflowPolicies(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not found")
@@ -474,6 +525,49 @@ func TestPrepareFASTAProducesInspectableBoundarySafeDataset(t *testing.T) {
 		if batch.SegmentIDs[i] != batch.SegmentIDs[i+1] && batch.LossMask[i] != 0 {
 			t.Fatalf("cross-contig target at position %d: x=%v y=%v mask=%v segments=%v", i, batch.X, batch.Y, batch.LossMask, batch.SegmentIDs)
 		}
+	}
+}
+
+func TestPrepareLabeledFASTAKeepsTSVLabelsAtomic(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	if err := exec.Command("python3", "-c", "import numpy").Run(); err != nil {
+		t.Skip("python3 numpy library not available")
+	}
+	dir := t.TempDir()
+	fasta := filepath.Join(dir, "tiny.fasta")
+	labelsPath := filepath.Join(dir, "labels.tsv")
+	outDir := filepath.Join(dir, "prepared")
+	if err := os.WriteFile(fasta, []byte(">a\nACGT\n>b\nTGCA\n>c\nAAAA\n>d\nCCCC\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(labelsPath, []byte("a\t0\nb\t1\nc\t0\nd\t1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err := runPrepare(PrepareOptions{
+		Input: fasta, Output: outDir, InputFormat: "fasta", ValSplit: 0.25,
+		LabelFile: labelsPath, RecordSeqLen: 8, RecordOverflow: "error",
+		NucleotideAlphabet: "dna", NucleotideAmbiguous: "N", NucleotideInvalidPolicy: "error",
+	})
+	if err != nil {
+		t.Fatalf("prepare labeled FASTA: %v", err)
+	}
+	manifest, err := data.LoadDatasetManifest(filepath.Join(outDir, data.DatasetManifestFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ShardFormat != data.DatasetShardFormatLabeledSequenceV1 || manifest.Modality != "nucleotide" ||
+		manifest.Task == nil || manifest.Task.NumLabels != 2 {
+		t.Fatalf("manifest=%+v", manifest)
+	}
+	trainFiles, _ := filepath.Glob(filepath.Join(outDir, "train_*.bin"))
+	_, labels, err := data.LoadLabeledSequenceShard(trainFiles[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(labels, []int32{0, 1}) {
+		t.Fatalf("train labels=%v want [0 1]", labels)
 	}
 }
 

@@ -20,6 +20,8 @@ type PrepareOptions struct {
 	TokenizerPath           string
 	WWMCompatibleTokenizer  bool
 	TextFieldName           string
+	LabelFieldName          string
+	LabelFile               string
 	FramePerRecord          bool
 	RecordSeqLen            int
 	RecordPADID             int
@@ -50,20 +52,39 @@ func runPrepare(opts PrepareOptions) error {
 	if opts.Output == "" {
 		return fmt.Errorf("-prepare-output-dir (or legacy -output) is required for prepare mode; pass an output directory, e.g.: mixlab -mode prepare -input corpus.jsonl -prepare-output-dir data/")
 	}
-	if opts.FramePerRecord {
-		if strings.ToLower(strings.TrimSpace(opts.InputFormat)) != "text" {
-			return fmt.Errorf("-frame-per-record requires -input-format=text")
-		}
+	inputFormat := strings.ToLower(strings.TrimSpace(opts.InputFormat))
+	if opts.LabelFieldName != "" && opts.LabelFile != "" {
+		return fmt.Errorf("-label-field and -label-file are mutually exclusive")
+	}
+	if opts.LabelFieldName != "" && inputFormat != "text" {
+		return fmt.Errorf("-label-field requires -input-format=text JSONL")
+	}
+	if opts.LabelFile != "" && inputFormat != "fasta" {
+		return fmt.Errorf("-label-file requires -input-format=fasta")
+	}
+	recordIDsRequired := opts.FramePerRecord || opts.LabelFieldName != ""
+	recordLengthRequired := recordIDsRequired || opts.LabelFile != ""
+	if opts.FramePerRecord && inputFormat != "text" && opts.LabelFile == "" {
+		return fmt.Errorf("-frame-per-record requires -input-format=text")
+	}
+	if recordLengthRequired {
 		if opts.RecordSeqLen < 3 {
-			return fmt.Errorf("-frame-per-record requires -record-seq-len >= 3")
+			return fmt.Errorf("record-oriented preparation requires -record-seq-len >= 3")
+		}
+	}
+	if recordIDsRequired {
+		if inputFormat != "text" {
+			return fmt.Errorf("-frame-per-record requires -input-format=text")
 		}
 		ids := []int{opts.RecordPADID, opts.RecordBOSID, opts.RecordEOSID}
 		if ids[0] < 0 || ids[1] < 0 || ids[2] < 0 {
-			return fmt.Errorf("-frame-per-record requires non-negative -record-pad-id, -record-bos-id, and -record-eos-id")
+			return fmt.Errorf("record-oriented text preparation requires non-negative -record-pad-id, -record-bos-id, and -record-eos-id")
 		}
 		if ids[0] == ids[1] || ids[0] == ids[2] || ids[1] == ids[2] {
 			return fmt.Errorf("-record-pad-id, -record-bos-id, and -record-eos-id must be distinct")
 		}
+	}
+	if recordLengthRequired {
 		switch opts.RecordOverflow {
 		case "", "error", "drop", "truncate":
 		default:
@@ -104,14 +125,26 @@ func runPrepare(opts PrepareOptions) error {
 	if opts.TextFieldName != "" && opts.TextFieldName != "text" {
 		args = append(args, "--text-field", opts.TextFieldName)
 	}
+	if opts.LabelFieldName != "" {
+		args = append(args, "--label-field", opts.LabelFieldName)
+	}
+	if opts.LabelFile != "" {
+		args = append(args, "--label-file", opts.LabelFile)
+	}
 	if opts.FramePerRecord {
+		args = append(args, "--frame-per-record")
+	}
+	if recordIDsRequired {
 		args = append(args,
-			"--frame-per-record",
 			"--record-seq-len", fmt.Sprintf("%d", opts.RecordSeqLen),
 			"--record-pad-id", fmt.Sprintf("%d", opts.RecordPADID),
 			"--record-bos-id", fmt.Sprintf("%d", opts.RecordBOSID),
 			"--record-eos-id", fmt.Sprintf("%d", opts.RecordEOSID),
 		)
+	} else if opts.LabelFile != "" {
+		args = append(args, "--record-seq-len", fmt.Sprintf("%d", opts.RecordSeqLen))
+	}
+	if recordLengthRequired {
 		if opts.RecordOverflow != "" {
 			args = append(args, "--record-overflow", opts.RecordOverflow)
 		}

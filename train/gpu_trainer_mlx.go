@@ -30,6 +30,8 @@ type mlxGPUTrainer struct {
 	bigramVocabSize            int
 	trigramVocabSize           int
 	declaredTargetSize         int
+	targetsInput               bool
+	targetsInputKnown          bool
 	rtdGeneratorBatchSize      int
 	rtdGeneratorSeqLen         int
 	rtdGeneratorMaskSlots      int
@@ -51,6 +53,9 @@ type mlxGPUTrainer struct {
 	diffusionBlockEndInput     bool
 	diffusionTimestepInput     bool
 	tttInnerLRScaleInput       bool
+	classificationLabelsInput  bool
+	classificationMaskInput    bool
+	classificationPosInput     bool
 	tttInnerLRScaleCount       int
 	dropoutKeyCount            int
 	trainingSeed               uint64
@@ -82,6 +87,9 @@ type mlxGPUTrainer struct {
 	trigramBuf             []int32
 	tttInnerLRScaleBuf     []float32
 	dropoutKeyBuf          []int32
+	classificationLabelBuf []int32
+	classificationMaskBuf  []float32
+	classificationPosBuf   []int32
 	charFeatures           []int32
 	firstByteValid         []int32
 	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
@@ -206,6 +214,7 @@ func initMLXGPUTrainer(
 
 	batchElems := cfg.Training.BatchTokens
 	declaredTargetSize := 0
+	targetsInput := false
 	declaredBatchSize := 0
 	declaredSeqLen := 0
 	rtdGeneratorBatchSize := 0
@@ -229,6 +238,9 @@ func initMLXGPUTrainer(
 	diffusionBlockEndInput := false
 	diffusionTimestepInput := false
 	tttInnerLRScaleInput := false
+	classificationLabelsInput := false
+	classificationMaskInput := false
+	classificationPosInput := false
 	tttInnerLRScaleCount := 0
 	dropoutKeyCount := 0
 	for _, inp := range irProg.Inputs {
@@ -238,6 +250,7 @@ func initMLXGPUTrainer(
 			batchElems = declaredBatchSize * declaredSeqLen
 		}
 		if inp.Name == "targets" && len(inp.Shape) == 1 {
+			targetsInput = true
 			declaredTargetSize = inp.Shape[0]
 		}
 		if inp.Name == "ttt_inner_lr_scale" && len(inp.Shape) == 1 {
@@ -305,6 +318,15 @@ func initMLXGPUTrainer(
 		if inp.Name == "char_ids" {
 			charInput = true
 		}
+		if inp.Name == "classification_labels" {
+			classificationLabelsInput = true
+		}
+		if inp.Name == "classification_valid_mask" {
+			classificationMaskInput = true
+		}
+		if inp.Name == "classification_positions" {
+			classificationPosInput = true
+		}
 	}
 	charFeatures := []int32(nil)
 	if charInput {
@@ -365,6 +387,8 @@ func initMLXGPUTrainer(
 		bigramVocabSize:            cfg.BigramVocabSize,
 		trigramVocabSize:           cfg.TrigramVocabSize,
 		declaredTargetSize:         declaredTargetSize,
+		targetsInput:               targetsInput,
+		targetsInputKnown:          true,
 		rtdGeneratorBatchSize:      rtdGeneratorBatchSize,
 		rtdGeneratorSeqLen:         rtdGeneratorSeqLen,
 		rtdGeneratorMaskSlots:      rtdGeneratorMaskSlots,
@@ -386,6 +410,9 @@ func initMLXGPUTrainer(
 		diffusionBlockEndInput:     diffusionBlockEndInput,
 		diffusionTimestepInput:     diffusionTimestepInput,
 		tttInnerLRScaleInput:       tttInnerLRScaleInput,
+		classificationLabelsInput:  classificationLabelsInput,
+		classificationMaskInput:    classificationMaskInput,
+		classificationPosInput:     classificationPosInput,
 		tttInnerLRScaleCount:       tttInnerLRScaleCount,
 		dropoutKeyCount:            dropoutKeyCount,
 		trainingSeed:               uint64(cfg.Training.Seed),
@@ -415,6 +442,9 @@ func initMLXGPUTrainer(
 		trigramBuf:                 make([]int32, batchElems),
 		tttInnerLRScaleBuf:         make([]float32, tttInnerLRScaleCount),
 		dropoutKeyBuf:              make([]int32, dropoutKeyCount*2),
+		classificationLabelBuf:     make([]int32, declaredBatchSize),
+		classificationMaskBuf:      make([]float32, batchElems),
+		classificationPosBuf:       make([]int32, declaredBatchSize),
 		charFeatures:               charFeatures,
 		firstByteValid:             firstByteValid,
 		lockedOSThread:             true,
@@ -662,6 +692,11 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.rtdGeneratorInput = programDeclaresInput(irProg, "rtd_generator_tokens")
 	t.rtdGeneratorPositionsInput = programDeclaresInput(irProg, "rtd_generator_positions")
 	t.tttInnerLRScaleInput = programDeclaresInput(irProg, "ttt_inner_lr_scale")
+	t.targetsInput = programDeclaresInput(irProg, "targets")
+	t.targetsInputKnown = true
+	t.classificationLabelsInput = programDeclaresInput(irProg, "classification_labels")
+	t.classificationMaskInput = programDeclaresInput(irProg, "classification_valid_mask")
+	t.classificationPosInput = programDeclaresInput(irProg, "classification_positions")
 	t.tttInnerLRScaleCount = 0
 	t.dropoutKeyCount = 0
 	t.rtdGeneratorBatchSize = 0
@@ -919,74 +954,4 @@ func (t *mlxGPUTrainer) ReadComponentLossesGPU() (map[string]float64, error) {
 		result[name] = float64(out[0])
 	}
 	return result, nil
-}
-
-// lowerIRToGPU converts a mixlab ir.Program to a gpu.Program.
-func lowerIRToGPU(prog *ir.Program) (*gpu.Program, error) {
-	gpuProg, err := gpu.NewProgram(prog.NumWeights)
-	if err != nil {
-		return nil, err
-	}
-
-	// Declare inputs
-	for _, inp := range prog.Inputs {
-		dtype := gpu.TensorInt32
-		if inp.DType == ir.TensorFloat32 {
-			dtype = gpu.TensorFloat32
-		}
-		if err := gpuProg.DeclareInput(inp.Name, dtype, inp.Shape); err != nil {
-			gpuProg.Destroy()
-			return nil, fmt.Errorf("declare input %q: %w", inp.Name, err)
-		}
-	}
-
-	// Emit ops
-	for _, op := range prog.Ops {
-		if err := gpuProg.AddOp(op.Code, op.Inputs, op.Outputs, op.FloatParams, op.IntParams); err != nil {
-			gpuProg.Destroy()
-			return nil, fmt.Errorf("add op code=%d: %w", op.Code, err)
-		}
-	}
-
-	// Declare outputs
-	for _, out := range prog.Outputs {
-		dtype := gpu.TensorInt32
-		if out.DType == ir.TensorFloat32 {
-			dtype = gpu.TensorFloat32
-		}
-		if err := gpuProg.DeclareOutput(out.Name, dtype, out.Shape); err != nil {
-			gpuProg.Destroy()
-			return nil, fmt.Errorf("declare output %q: %w", out.Name, err)
-		}
-	}
-
-	return gpuProg, nil
-}
-
-func preferredEvalLossOutputName(prog *ir.Program) string {
-	if prog != nil {
-		for _, out := range prog.Outputs {
-			if out.Name == "generation_eval_loss" {
-				return "generation_eval_loss"
-			}
-		}
-		for _, out := range prog.Outputs {
-			if out.Name == "eval_loss" {
-				return "eval_loss"
-			}
-		}
-	}
-	return "loss"
-}
-
-func programDeclaresInput(prog *ir.Program, name string) bool {
-	if prog == nil {
-		return false
-	}
-	for _, in := range prog.Inputs {
-		if in.Name == name {
-			return true
-		}
-	}
-	return false
 }

@@ -73,8 +73,17 @@ func (t *mlxGPUTrainer) makeRTDGeneratorInputs(batch objectiveBatch) ([]gpu.Tens
 
 func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seqLen int) ([]gpu.TensorInput, error) {
 	need := batchSize * seqLen
-	if len(batch.x) < need || len(batch.y) < need {
-		return nil, fmt.Errorf("input size mismatch: tokens=%d targets=%d need=%d", len(batch.x), len(batch.y), need)
+	targetsInput := t.targetsInput
+	if !t.targetsInputKnown {
+		// Preserve the historical zero-value test/helper behavior. Real
+		// trainers always discover the input contract from their IR program.
+		targetsInput = true
+	}
+	if len(batch.x) < need {
+		return nil, fmt.Errorf("input size mismatch: tokens=%d need=%d", len(batch.x), need)
+	}
+	if targetsInput && len(batch.y) < need {
+		return nil, fmt.Errorf("input size mismatch: targets=%d need=%d", len(batch.y), need)
 	}
 	// Grow buffers if needed (shouldn't happen with consistent batch size).
 	if len(t.tokBuf) < need {
@@ -151,15 +160,57 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 	}
 	for i := 0; i < need; i++ {
 		t.tokBuf[i] = int32(batch.x[i])
-		t.tgtBuf[i] = int32(batch.y[i])
-	}
-	targetData, targetShape, err := t.prepareTargets(batchSize, seqLen, need)
-	if err != nil {
-		return nil, err
 	}
 	inputs := []gpu.TensorInput{
 		{Name: "tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.tokBuf[:need]},
-		{Name: "targets", DType: gpu.TensorInt32, Shape: targetShape, Data: targetData},
+	}
+	if targetsInput {
+		for i := 0; i < need; i++ {
+			t.tgtBuf[i] = int32(batch.y[i])
+		}
+		targetData, targetShape, err := t.prepareTargets(batchSize, seqLen, need)
+		if err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "targets", DType: gpu.TensorInt32, Shape: targetShape, Data: targetData,
+		})
+	}
+	if t.classificationLabelsInput {
+		if len(batch.classificationLabels) < batchSize {
+			return nil, fmt.Errorf("objective batch missing classification_labels: got=%d need=%d", len(batch.classificationLabels), batchSize)
+		}
+		if len(t.classificationLabelBuf) < batchSize {
+			t.classificationLabelBuf = make([]int32, batchSize)
+		}
+		copy(t.classificationLabelBuf[:batchSize], batch.classificationLabels[:batchSize])
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "classification_labels", DType: gpu.TensorInt32, Shape: []int{batchSize}, Data: t.classificationLabelBuf[:batchSize],
+		})
+	}
+	if t.classificationMaskInput {
+		if len(batch.classificationMask) < need {
+			return nil, fmt.Errorf("objective batch missing classification_valid_mask: got=%d need=%d", len(batch.classificationMask), need)
+		}
+		if len(t.classificationMaskBuf) < need {
+			t.classificationMaskBuf = make([]float32, need)
+		}
+		copy(t.classificationMaskBuf[:need], batch.classificationMask[:need])
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "classification_valid_mask", DType: gpu.TensorFloat32, Shape: []int{batchSize, seqLen}, Data: t.classificationMaskBuf[:need],
+		})
+	}
+	if t.classificationPosInput {
+		if len(batch.classificationPos) < batchSize {
+			return nil, fmt.Errorf("objective batch missing classification_positions: got=%d need=%d", len(batch.classificationPos), batchSize)
+		}
+		if len(t.classificationPosBuf) < batchSize {
+			t.classificationPosBuf = make([]int32, batchSize)
+		}
+		copy(t.classificationPosBuf[:batchSize], batch.classificationPos[:batchSize])
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "classification_positions", DType: gpu.TensorInt32, Shape: []int{batchSize}, Data: t.classificationPosBuf[:batchSize],
+		})
 	}
 	if t.dropoutKeyCount > 0 {
 		needKeys := t.dropoutKeyCount * 2

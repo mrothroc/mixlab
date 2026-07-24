@@ -97,6 +97,9 @@ func syntheticBatchUnsupportedReason(cfg *arch.ArchConfig) string {
 	if cfg.Training.MultiheadEnabled() {
 		return "multihead needs per-row diffusion block-boundary inputs (and an RTD generator pass) the synthetic next-token harness cannot supply; covered by dedicated multihead/RTD tests"
 	}
+	if cfg.ClassificationEnabled() {
+		return "classification needs sequence labels and validity masks the synthetic next-token harness cannot supply; covered by dedicated classification tests"
+	}
 	return ""
 }
 

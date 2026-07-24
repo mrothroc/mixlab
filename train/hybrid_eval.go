@@ -14,6 +14,7 @@ type trainingProgramCacheKey struct {
 	recurrenceOn    bool
 	headUntied      bool
 	mtpAuxOn        bool
+	dropoutInactive bool
 	objective       string
 	seqLen          int
 }
@@ -36,6 +37,41 @@ type causalEvalSwitcher struct {
 	programForKey func(trainingProgramCacheKey) (*arch.Program, error)
 	batchSize     int
 	seqLen        int
+}
+
+func (c causalEvalSwitcher) withProgramKey(currentKey, targetKey trainingProgramCacheKey, fn func() error) error {
+	if currentKey == targetKey {
+		return fn()
+	}
+	switcher, ok := c.trainer.(gpuProgramSwitcher)
+	if !ok {
+		return fmt.Errorf("trainer does not support scheduled program switching")
+	}
+	if err := c.trainer.FlushGPU(); err != nil {
+		return err
+	}
+	target, err := c.programForKey(targetKey)
+	if err != nil {
+		return fmt.Errorf("build eval IR program: %w", err)
+	}
+	if err := switcher.SetProgramGPU(target); err != nil {
+		return fmt.Errorf("switch eval IR program: %w", err)
+	}
+	runErr := fn()
+	restore, err := c.programForKey(currentKey)
+	if err != nil {
+		if runErr != nil {
+			return fmt.Errorf("%v; build restore IR program: %w", runErr, err)
+		}
+		return fmt.Errorf("build restore IR program: %w", err)
+	}
+	if err := switcher.SetProgramGPU(restore); err != nil {
+		if runErr != nil {
+			return fmt.Errorf("%v; restore IR program: %w", runErr, err)
+		}
+		return fmt.Errorf("restore IR program: %w", err)
+	}
+	return runErr
 }
 
 // withCausalEvalProgram flushes the trainer, switches it to the cached causal
@@ -62,31 +98,10 @@ func (c causalEvalSwitcher) withCausalEvalProgram(currentKey trainingProgramCach
 	causalKey.seqLen = c.seqLen
 	switched := causalKey != restoreKey
 	if switched {
-		causalProg, err := c.programForKey(causalKey)
-		if err != nil {
-			return fmt.Errorf("build causal eval IR program: %w", err)
-		}
-		if err := switcher.SetProgramGPU(causalProg); err != nil {
-			return fmt.Errorf("switch causal eval IR program: %w", err)
-		}
+		return c.withProgramKey(restoreKey, causalKey, fn)
 	}
-	runErr := fn()
-	if switched {
-		restoreProg, err := c.programForKey(restoreKey)
-		if err != nil {
-			if runErr != nil {
-				return fmt.Errorf("%v; build restore IR program: %w", runErr, err)
-			}
-			return fmt.Errorf("build restore IR program: %w", err)
-		}
-		if err := switcher.SetProgramGPU(restoreProg); err != nil {
-			if runErr != nil {
-				return fmt.Errorf("%v; restore IR program: %w", runErr, err)
-			}
-			return fmt.Errorf("restore IR program: %w", err)
-		}
-	}
-	return runErr
+	_ = switcher
+	return fn()
 }
 
 func (c causalEvalSwitcher) evaluateCausalObjectiveGPU(currentKey trainingProgramCacheKey, batch objectiveBatch) (float32, error) {

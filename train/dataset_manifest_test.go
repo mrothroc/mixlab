@@ -124,6 +124,32 @@ func TestConfigureTextRecordDatasetRejectsIncompatibleConfig(t *testing.T) {
 	}
 }
 
+func TestConfigureClassificationDatasetValidatesTaskContract(t *testing.T) {
+	dir := t.TempDir()
+	writeClassificationDatasetContract(t, dir, 32, 8, 3)
+	cfg := objectiveTestConfig()
+	cfg.SeqLen = 8
+	cfg.Training.BatchTokens = 16
+	cfg.Training.Objective = arch.ObjectiveClassification
+	cfg.Training.Classification = &arch.ClassificationSpec{NumLabels: 3}
+	if err := configureDatasetForTraining(cfg, filepath.Join(dir, "train_*.bin"), cfg.Name); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Training.DatasetRecordFraming || !cfg.Training.DatasetClassification || cfg.Training.DatasetNumLabels != 3 {
+		t.Fatalf("runtime classification metadata=%+v", cfg.Training)
+	}
+
+	mismatch := *cfg
+	mismatch.Training.DatasetRecordFraming = false
+	mismatch.Training.DatasetClassification = false
+	mismatch.Training.DatasetNumLabels = 0
+	mismatch.Training.Classification = &arch.ClassificationSpec{NumLabels: 2}
+	err := configureDatasetForTraining(&mismatch, filepath.Join(dir, "train_*.bin"), mismatch.Name)
+	if err == nil || !strings.Contains(err.Error(), "task.num_labels=3") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
 func testProgramDeclaresInput(prog *Program, name string) bool {
 	for _, input := range prog.Inputs {
 		if input.Name == name {
@@ -218,6 +244,30 @@ func writeTextRecordDatasetContract(t *testing.T, dir string, vocabSize, seqLen 
 		Artifacts:       data.DatasetManifestArtifacts{Tokenizer: "tokenizer.json"},
 		Splits: map[string]data.DatasetSplit{"train": {
 			Pattern: "train_*.bin", Tokens: 4, Shards: 1, Sequences: 1, MaxSequenceTokens: 4,
+		}},
+	}
+	blob, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, data.DatasetManifestFilename), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeClassificationDatasetContract(t *testing.T, dir string, vocabSize, seqLen, numLabels int) {
+	t.Helper()
+	manifest := data.DatasetManifest{
+		Format: data.DatasetManifestFormat, Version: data.DatasetManifestVersion,
+		Representation: data.DatasetRepresentationDiscreteTokens, Modality: "text", VocabSize: vocabSize,
+		TokenDType: data.DatasetTokenDTypeUint16, ShardFormat: data.DatasetShardFormatLabeledSequenceV1,
+		SequenceLayout: data.DatasetSequenceLayoutOneRecordRow, RecordSeqLen: seqLen,
+		SpecialTokenIDs: map[string]int{"pad": 0, "bos": 1, "eos": 2},
+		Artifacts:       data.DatasetManifestArtifacts{Tokenizer: "tokenizer.json"},
+		Task:            &data.DatasetTask{Type: data.DatasetTaskSingleLabelClassification, NumLabels: numLabels},
+		Splits: map[string]data.DatasetSplit{"train": {
+			Pattern: "train_*.bin", Tokens: 8, Shards: 1, Sequences: 2, MaxSequenceTokens: 4,
+			ClassCounts: map[string]int64{"0": 1, "1": 1},
 		}},
 	}
 	blob, err := json.Marshal(manifest)

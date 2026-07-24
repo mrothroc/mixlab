@@ -33,6 +33,11 @@ Evaluate a checkpoint:
 | `-train` | Required. Shard glob used as the eval token stream. |
 | `-lut-dir` | Directory containing BPB lookup tables. Default: `data`. |
 
+For `training.objective: "classification"`, `eval` consumes labeled
+validation shards and reports cross-entropy loss, accuracy, multiclass MCC,
+macro-F1, and binary AUROC. BPB and per-token LM exports do not apply to this
+objective.
+
 Per-token export flags can be combined in a single eval pass:
 
 | Flag | Output |

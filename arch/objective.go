@@ -174,9 +174,12 @@ func validateTrainingObjective(cfg *ArchConfig, source string) error {
 	}
 	t.Objective = normalizeTrainingObjective(t.Objective)
 	switch t.Objective {
-	case ObjectiveCausal, ObjectiveMLM, ObjectiveHybrid, ObjectiveMNTP, ObjectiveBlockDiffusion, ObjectiveMultihead:
+	case ObjectiveCausal, ObjectiveMLM, ObjectiveHybrid, ObjectiveMNTP, ObjectiveBlockDiffusion, ObjectiveMultihead, ObjectiveClassification:
 	default:
-		return fmt.Errorf("config %q has invalid training.objective=%q (must be \"causal\", \"mlm\", \"hybrid\", \"mntp\", \"block_diffusion\", or \"multihead\")", source, t.Objective)
+		return fmt.Errorf("config %q has invalid training.objective=%q (must be \"causal\", \"mlm\", \"hybrid\", \"mntp\", \"block_diffusion\", \"multihead\", or \"classification\")", source, t.Objective)
+	}
+	if err := validateTrainingClassification(cfg, source); err != nil {
+		return err
 	}
 	if t.Objective == ObjectiveMultihead {
 		return validateTrainingMultihead(cfg, source)

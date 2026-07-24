@@ -23,6 +23,8 @@ tokenizer compatibility notes.
 | `-tokenizer-path` | Existing `tokenizer.json` to reuse instead of training a tokenizer. |
 | `-wwm-compatible-tokenizer` | Train or validate tokenizer metadata suitable for whole-word MLM. The built-in path uses prefix-space ByteLevel BPE and reserves `[PAD]`, `[CLS]`, `[SEP]`, `[UNK]`, and `[MASK]` as ids `0..4`. |
 | `-text-field` | JSONL field that contains text. Default: `text`. |
+| `-label-field` | JSONL integer-label field. Enables labeled one-record-per-row classification shards. |
+| `-label-file` | FASTA sibling TSV containing exactly one `id<TAB>label` row per FASTA record. |
 | `-frame-per-record` | Preserve each input text/JSONL record and train it as one independently framed row. |
 | `-record-seq-len` | Required with `-frame-per-record`. Fixed row length including BOS/EOS and PAD. |
 | `-record-pad-id` | Required PAD token ID for per-record rows. |
@@ -98,8 +100,46 @@ tokens are disabled while encoding records so framing tokens are not doubled.
 The manifest records `sequence_layout: "one_record_per_row"`, the required
 `record_seq_len`, semantic token IDs, and per-split record counts, dropped and
 truncated counts, and mean/max tokenized lengths. V1 supports causal training
-only. Prefer `error` or `drop` when record completeness matters; `truncate` is
-an explicit lossy policy.
+for unlabeled records. Prefer `error` or `drop` when record completeness
+matters; `truncate` is an explicit lossy policy.
+
+## Labeled sequence classification
+
+For JSONL, set `-label-field` alongside the text and framing fields:
+
+```bash
+./mixlab -mode prepare \
+  -input data/classification.jsonl \
+  -prepare-output-dir data/classification \
+  -text-field sequence \
+  -label-field label \
+  -record-seq-len 514 \
+  -record-pad-id 0 -record-bos-id 1 -record-eos-id 2 \
+  -record-overflow error
+```
+
+Each record must contain an integer label. Labels must form a contiguous set
+`0..num_labels-1` with at least two classes. The validation split is
+deterministic and class-aware, preserving at least one training example for
+each class.
+
+For FASTA, provide a sibling label TSV:
+
+```bash
+./mixlab -mode prepare \
+  -input data/sequences.fasta \
+  -input-format fasta \
+  -label-file data/labels.tsv \
+  -prepare-output-dir data/classification \
+  -nucleotide-alphabet dna \
+  -record-seq-len 502 \
+  -record-overflow error
+```
+
+The TSV IDs must match the FASTA record IDs exactly. Labeled preparation writes
+`mixlab_labeled_sequence_shard_v1`, where labels are stored atomically with
+record offsets and tokens, plus manifest task metadata and per-split class
+counts. This prevents token and label shuffles from drifting apart.
 
 When `-char-vocab-size` is enabled, `prepare` writes a reusable
 tokenizer-level `char_features.bin` next to `tokenizer.json`. Configs with

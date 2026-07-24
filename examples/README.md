@@ -66,6 +66,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [packed_segment_mask_tiny.json](packed_segment_mask_tiny.json) | Packed segment masking | Block-diagonal plain attention from a boundary token |
 | [nucleotide_dna_causal_tiny.json](nucleotide_dna_causal_tiny.json) | Base-level DNA causal model | Manifest-backed contig packing and deterministic reverse complements |
 | [nucleotide_dna_mlm_tiny.json](nucleotide_dna_mlm_tiny.json) | Base-level DNA MLM | Bidirectional base reconstruction with contig isolation |
+| [sequence_classification_gated_deltanet_tiny.json](sequence_classification_gated_deltanet_tiny.json) | Native sequence classifier | End-to-end single-label classification on a recurrent Gated DeltaNet backbone |
 | [softcap_plain.json](softcap_plain.json) | Logit softcap | Bounded logits before loss |
 | [qk_norm_tiny.json](qk_norm_tiny.json) | QK-norm attention | Learned per-head-dimension Q/K RMSNorm |
 | [differential_attention_tiny.json](differential_attention_tiny.json) | Differential attention | DIFF Transformer two-softmax attention variant |
@@ -109,6 +110,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **Learning mixlab**: Start with `plain_3L.json` — it trains in seconds.
 - **Masked objectives**: Use `mlm_tiny.json` as the smallest bidirectional MLM starting point.
 - **Nucleotide sequences**: Prepare FASTA with `-input-format fasta`, then use `nucleotide_dna_causal_tiny.json` or `nucleotide_dna_mlm_tiny.json`. Match `vocab_size` to the emitted `nucleotide_vocab.json` when enabling ambiguity symbols beyond the default `N`.
+- **Native sequence classification**: Use `sequence_classification_gated_deltanet_tiny.json` with labeled JSONL prepared using `-label-field` or FASTA prepared using `-label-file`. Warm-start from the matching LM architecture with `-safetensors-load`; Mixlab appends a fresh classifier and fine-tunes the full native backbone.
 - **Whole-word MLM**: Use `mlm_wwm_curriculum_tiny.json` with shards prepared using `-wwm-compatible-tokenizer`. Mixlab derives word starts from the shard-adjacent `tokenizer.json` and changes only host-side mask selection.
 - **Word-structural auxiliary**: Use `word_structural_mlm_tiny.json` when you want MLM training with local shuffled-span reconstruction through the same vocab head.
 - **Hybrid objectives**: Use `hybrid_tiny.json` for GPT-BERT-style causal plus masked-objective training. Set `training.hybrid_mix_granularity: "example"` when you want mixed causal and masked sequences in the same batch.

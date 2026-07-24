@@ -964,7 +964,8 @@ The `training` object controls optimization, batching, and stochastic settings.
 |------|------|----------|---------|-------|
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
 | `lr` | number | No | `3e-4` | Base learning rate. Must be `> 0`. |
-| `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, `"hybrid"`, `"block_diffusion"`, or `"multihead"`. Existing configs default to causal next-token training. |
+| `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, `"hybrid"`, `"block_diffusion"`, `"multihead"`, or `"classification"`. Existing configs default to causal next-token training. |
+| `classification` | object | Required for `objective: "classification"` | Disabled | Native sequence-level single-label classification. Requires `num_labels >= 2`; optional `pooling` is `"last"` or `"mean"` and optional `classifier_dropout` is in `[0,1]`. |
 | `diffusion` | object | No | Defaults | Block-diffusion corruption and sampler knobs. Only valid with `objective: "block_diffusion"` or `objective: "hybrid"` plus `hybrid_secondary_objective: "block_diffusion"`. Multihead configs put diffusion settings on the block-diffusion head instead. Omit it to use conservative defaults. |
 | `heads` | array | Required for `objective: "multihead"` | None | Per-head objective specs for shared-trunk multihead training. V1 supports head objectives `"causal"`, `"mlm"`, `"mntp"`, `"block_diffusion"`, `"rtd"`, and `"energy"`. |
 | `export_head` | string | No | First non-native-only scorer head | Multihead scorer head exported by `export-hf`. Must not name a `block_diffusion`, `rtd`, or `energy` head. |
@@ -1064,6 +1065,28 @@ Each periodic model checkpoint also has `step_N.state.safetensors` and a complet
 The Hugging Face exporter uses whichever checkpoint is passed through `-safetensors-load`. Pass the `.swa.safetensors` file to export averaged weights, or `.final.safetensors` to export live final weights.
 
 ### Training objectives
+
+`training.objective: "classification"` replaces the language-model loss with a
+padding-aware sequence classifier while retaining the complete LM weight layout
+as a warm-startable prefix. Its two appended weights are
+`head_classifier_proj: [model_dim, num_labels]` and
+`head_classifier_bias: [num_labels]`. The bias initializes to zero.
+
+`training.classification.pooling` defaults to `"mean"` for a stack whose token
+mixers are all bidirectional `plain` attention and to `"last"` for causal,
+recurrent, SSM, or mixed stacks. Mean pooling uses the validity-mask-weighted
+mean. Last pooling selects the final non-padding token. Both reject empty rows.
+`classifier_dropout` defaults to top-level `hidden_dropout`.
+
+Classification requires a manifest-backed
+`mixlab_labeled_sequence_shard_v1` dataset with
+`sequence_layout: "one_record_per_row"` and task metadata
+`{"type":"single_label_classification","num_labels":N}`. V1 supports
+single-label cross-entropy only. Masked-objective auxiliaries, diffusion,
+segment packing, sequence-length schedules, and reverse-complement augmentation
+are rejected rather than silently composed. Native classification checkpoints
+are not exported to Hugging Face in v1; export a supported LM checkpoint before
+HF-side classifier fine-tuning when that workflow is required.
 
 `objective: "causal"` preserves the existing shifted next-token objective. `objective: "mlm"` masks selected input positions and trains only those positions to predict the original token. `objective: "mntp"` predicts next tokens from bidirectional context while masking the corresponding next-token input position so the answer is not visible. `objective: "hybrid"` deterministically mixes causal and the configured secondary objective from `training.seed` and the step index. Hybrid secondary objectives can be `"mlm"`, `"mntp"`, or `"block_diffusion"`. `objective: "block_diffusion"` trains block-wise masked diffusion: each example masks a randomly selected active block under a prefix-plus-block attention mask, and the masked cross-entropy loss is taken over the masked positions. `objective: "multihead"` trains one shared trunk over expanded rows with distinct named heads, currently intended for scorer-plus-denoiser recipes such as MNTP/BERT-MLM scoring plus block-diffusion denoising. Sample from a trained diffusion checkpoint with `-mode generate-diffusion` (see [cli.md](cli.md#generate-diffusion)). The default `hybrid_mix_granularity: "batch"` chooses one objective per batch. `hybrid_mix_granularity: "example"` chooses independently per sequence inside the batch for MLM/MNTP secondary objectives, so `hybrid_clm_fraction: 0.0625` gives approximately 6.25% causal sequences and 93.75% masked sequences over time.
 

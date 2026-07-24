@@ -81,6 +81,13 @@ raising `training.steps`.
 `-safetensors-load` is intentionally unchanged and remains a weights-only warm
 start. It is mutually exclusive with `-resume`.
 
+For `training.objective: "classification"`, a language-model checkpoint with
+the same architecture is a supported warm start. Mixlab requires every LM
+weight to match the classification config's prefix exactly, initializes the
+two appended classifier weights freshly, and trains the backbone and classifier
+end to end. Loading a complete classification checkpoint also works.
+`-resume` still requires a complete matching training-state bundle.
+
 Optimizer state adds roughly two model-weight copies for AdamW/LAMB. A normal
 resumable bundle is therefore about three times model-weight size including the
 model itself; active SWA or data2vec EMA adds another copy for each feature.

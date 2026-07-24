@@ -175,6 +175,8 @@ type Batch struct {
 	LossMask     []float32
 	SegmentIDs   []int32
 	MaskEligible []uint8
+	Labels       []int32
+	ValidMask    []float32
 }
 
 // NewLoader creates a Loader from a glob pattern for binary shard files.
@@ -210,14 +212,14 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 	if err != nil {
 		return nil, err
 	}
-	if found && manifest.ShardFormat == DatasetShardFormatSequenceV1 {
+	if found && (manifest.ShardFormat == DatasetShardFormatSequenceV1 || manifest.ShardFormat == DatasetShardFormatLabeledSequenceV1) {
 		pad, padOK := manifest.SpecialTokenIDs["pad"]
 		bos, bosOK := manifest.SpecialTokenIDs["bos"]
 		eos, eosOK := manifest.SpecialTokenIDs["eos"]
 		if !padOK || !bosOK || !eosOK {
 			return nil, fmt.Errorf("sequence dataset manifest requires semantic special_token_ids pad, bos, and eos")
 		}
-		sequences, err := newSequenceStream(pattern, seed, opts.NoShardShuffle)
+		sequences, err := newSequenceStreamWithFormat(pattern, seed, opts.NoShardShuffle, manifest.ShardFormat)
 		if err != nil {
 			return nil, err
 		}
@@ -279,8 +281,16 @@ func (l *Loader) nextRecordBatch(batchTokens, seqLen int) (Batch, error) {
 	y := make([]int, batchTokens)
 	lossMask := make([]float32, batchTokens)
 	maskEligible := make([]uint8, batchTokens)
+	var validMask []float32
+	var segmentIDs []int32
+	var labels []int32
+	if l.sequences.labeled {
+		validMask = make([]float32, batchTokens)
+		segmentIDs = make([]int32, batchTokens)
+		labels = make([]int32, batchTokens/seqLen)
+	}
 	for rowStart := 0; rowStart < batchTokens; rowStart += seqLen {
-		record, err := l.sequences.takeRecord()
+		record, label, err := l.sequences.takeLabeledRecord()
 		if err != nil {
 			return Batch{}, err
 		}
@@ -292,18 +302,36 @@ func (l *Loader) nextRecordBatch(batchTokens, seqLen int) (Batch, error) {
 			x[i], y[i] = l.packing.padID, l.packing.padID
 		}
 		x[rowStart] = l.packing.bosID
+		if l.sequences.labeled {
+			validMask[rowStart] = 1
+		}
 		for i, token := range record {
 			x[rowStart+1+i] = int(token)
 			maskEligible[rowStart+1+i] = 1
+			if l.sequences.labeled {
+				validMask[rowStart+1+i] = 1
+			}
 		}
 		eosInput := rowStart + len(record) + 1
 		x[eosInput] = l.packing.eosID
+		if l.sequences.labeled {
+			validMask[eosInput] = 1
+			labels[rowStart/seqLen] = label
+		}
 		for i := rowStart; i < eosInput; i++ {
 			y[i] = x[i+1]
 			lossMask[i] = 1
 		}
+		if l.sequences.labeled {
+			for i := eosInput + 1; i < rowEnd; i++ {
+				segmentIDs[i] = 1
+			}
+		}
 	}
-	return Batch{X: x, Y: y, LossMask: lossMask, MaskEligible: maskEligible}, nil
+	return Batch{
+		X: x, Y: y, LossMask: lossMask, SegmentIDs: segmentIDs,
+		MaskEligible: maskEligible, Labels: labels, ValidMask: validMask,
+	}, nil
 }
 
 func (l *Loader) nextSequenceBatch(batchTokens, seqLen int) (Batch, error) {
@@ -394,6 +422,8 @@ type ValBatch struct {
 	LossMask     []float32
 	SegmentIDs   []int32
 	MaskEligible []uint8
+	Labels       []int32
+	ValidMask    []float32
 }
 
 // ValSet holds fixed batches for repeatable evaluation.

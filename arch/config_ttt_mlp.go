@@ -75,8 +75,8 @@ func validateTTTMLPPolicy(cfg *ArchConfig, source string) error {
 	}
 
 	field := fmt.Sprintf("config %q blocks[%d] type=ttt_mlp", source, first)
-	if cfg.Training.EffectiveObjective() != ObjectiveCausal {
-		return fmt.Errorf("%s supports training.objective=causal only in v1", field)
+	if objective := cfg.Training.EffectiveObjective(); objective != ObjectiveCausal && objective != ObjectiveClassification {
+		return fmt.Errorf("%s supports causal only for language modeling, plus sequence classification, in v1", field)
 	}
 	if cfg.UNet {
 		return fmt.Errorf("%s does not support unet in v1", field)

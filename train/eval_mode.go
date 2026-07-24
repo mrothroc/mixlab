@@ -37,13 +37,16 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error
 		return err
 	}
 	var prog *Program
-	if cfg.Training.DatasetSequencePacking || cfg.Training.RecordFramingEnabled() {
+	switch {
+	case cfg.ClassificationEnabled():
+		prog, err = BuildEvalIRProgramFromConfig(cfg)
+	case cfg.Training.DatasetSequencePacking || cfg.Training.RecordFramingEnabled():
 		prog, err = BuildTrainingIRProgramFromConfig(cfg, TrainingProgramState{
 			RecurrenceActive: true, HeadUntied: cfg.MTPUntieEnabled(), Objective: "causal",
 			MTPAuxInactive: true, DistillationInactive: true, Data2VecInactive: true,
 			InvarianceInactive: true, PLLMarginInactive: true, ZLossInactive: true, DropoutInactive: true,
 		})
-	} else {
+	default:
 		prog, err = BuildEvalIRProgramFromConfig(cfg)
 	}
 	if err != nil {
@@ -86,6 +89,17 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error
 	valSet, err := data.NewValSetWithOptions(valPattern, cfg.Training.Seed, defaultValBatchCount, batchTokens, seqLen, effectiveLoaderOptions(cfg))
 	if err != nil {
 		return fmt.Errorf("load val set %q: %w", valPattern, err)
+	}
+	if cfg.ClassificationEnabled() {
+		metrics, err := evaluateClassificationValidation(cfg, valSet, trainer, 0, batchSize, seqLen)
+		if err != nil {
+			return fmt.Errorf("evaluate classification validation: %w", err)
+		}
+		fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
+			cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
+		fmt.Printf("  [%s] loaded %d weights from %s\n", cfg.Name, len(loadedWeights), safetensorsLoad)
+		fmt.Printf("  [%s] classification validation: %s examples=%d\n", cfg.Name, metrics.summary(), metrics.Examples)
+		return nil
 	}
 
 	tttSteps := cfg.Training.TTTSteps

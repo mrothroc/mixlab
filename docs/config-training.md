@@ -28,6 +28,7 @@ exact defaults and validation rules.
 | `"hybrid"` | Per-batch mix of causal and MLM/MNTP secondary objective. |
 | `"block_diffusion"` | Block-wise masked diffusion training. |
 | `"multihead"` | Shared-trunk training with named scorer, denoiser, or auxiliary heads. |
+| `"classification"` | Native sequence-level single-label classification over labeled sequence shards. |
 
 Masked objectives use MLM fields such as `mlm_mask_prob`,
 `mlm_mask_token_id`, replacement probabilities, and hybrid fields such as
@@ -38,6 +39,27 @@ Multihead configs use `training.heads`, `export_head`, optional
 `training.minimal_pair`. They are intended for recipes such as an MNTP/BERT-MLM
 scorer head plus a native block-diffusion denoiser, ELECTRA-style RTD detector,
 or native energy/ranking head over the same trunk.
+
+Classification configs use `training.classification`:
+
+```jsonc
+"training": {
+  "objective": "classification",
+  "classification": {
+    "num_labels": 2,
+    "pooling": "last",
+    "classifier_dropout": 0.1
+  }
+}
+```
+
+`pooling` defaults to `"mean"` for a fully bidirectional `plain` stack and
+`"last"` for causal, recurrent, SSM, or mixed stacks. Both modes ignore
+padding: mean pooling divides by the number of valid tokens and last pooling
+selects the final non-padding token. The classifier is a linear projection
+with bias trained jointly with the backbone. V1 supports single-label
+cross-entropy only and requires a labeled one-record-per-row dataset whose
+manifest `task.num_labels` matches the config.
 
 ## Optimizers
 

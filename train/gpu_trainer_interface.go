@@ -89,7 +89,7 @@ func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, 
 	if batch.batchSizeOverride > 0 {
 		batchSize = batch.batchSizeOverride
 	}
-	if batch.lossMask == nil && batch.tttInnerLRScale == nil {
+	if batch.lossMask == nil && batch.tttInnerLRScale == nil && batch.classificationLabels == nil {
 		return trainer.SubmitStepGPU(batch.x, batch.y, batchSize, seqLen, lr)
 	}
 	submitter, ok := trainer.(gpuObjectiveStepSubmitter)

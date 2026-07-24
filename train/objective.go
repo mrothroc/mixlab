@@ -35,6 +35,9 @@ type objectiveBatch struct {
 	rtdGeneratorY         []int
 	rtdGeneratorLossMask  []float32
 	tttInnerLRScale       []float32
+	classificationLabels  []int32
+	classificationMask    []float32
+	classificationPos     []int32
 	mlmMaskStats          mlmMaskStats
 }
 
@@ -79,6 +82,8 @@ func objectiveForStep(spec TrainingSpec, step int) string {
 		return arch.ObjectiveBlockDiffusion
 	case arch.ObjectiveMultihead:
 		return arch.ObjectiveMultihead
+	case arch.ObjectiveClassification:
+		return arch.ObjectiveClassification
 	case arch.ObjectiveHybrid:
 		causalFraction := spec.EffectiveHybridCLMFractionForStep(step)
 		if spec.EffectiveHybridMixGranularity() == arch.HybridMixGranularityExample {
@@ -135,6 +140,8 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 		prepared, err = prepareMultiheadBatch(cfg, batch, step, need, seqLen)
 	case arch.ObjectiveHybridExample:
 		prepared, err = prepareHybridExampleBatch(cfg, batch, step, need, seqLen)
+	case arch.ObjectiveClassification:
+		prepared, err = prepareClassificationBatch(cfg, batch, need, seqLen)
 	default:
 		prepared = objectiveBatch{x: batch.x, y: batch.y, unmaskedX: batch.x[:need]}
 		if len(batch.lossMask) >= need {
@@ -176,9 +183,58 @@ func canonicalObjective(objective string) string {
 		return arch.ObjectiveHybridExample
 	case arch.ObjectiveHybrid:
 		return arch.ObjectiveHybrid
+	case arch.ObjectiveClassification:
+		return arch.ObjectiveClassification
 	default:
 		return arch.ObjectiveCausal
 	}
+}
+
+func prepareClassificationBatch(cfg *ArchConfig, batch trainBatch, need, seqLen int) (objectiveBatch, error) {
+	if cfg == nil || !cfg.ClassificationEnabled() {
+		return objectiveBatch{}, fmt.Errorf("classification batch requires training.objective=%q", arch.ObjectiveClassification)
+	}
+	if seqLen <= 0 || need%seqLen != 0 {
+		return objectiveBatch{}, fmt.Errorf("classification batch_tokens=%d must be divisible by seq_len=%d", need, seqLen)
+	}
+	batchSize := need / seqLen
+	if len(batch.labels) < batchSize {
+		return objectiveBatch{}, fmt.Errorf("classification batch has %d labels, need %d", len(batch.labels), batchSize)
+	}
+	if len(batch.validMask) < need {
+		return objectiveBatch{}, fmt.Errorf("classification batch valid mask has %d entries, need %d", len(batch.validMask), need)
+	}
+	labels := append([]int32(nil), batch.labels[:batchSize]...)
+	for row, label := range labels {
+		if label < 0 || int(label) >= cfg.Training.Classification.NumLabels {
+			return objectiveBatch{}, fmt.Errorf(
+				"classification batch row %d label=%d outside [0,%d)",
+				row, label, cfg.Training.Classification.NumLabels,
+			)
+		}
+	}
+	validMask := append([]float32(nil), batch.validMask[:need]...)
+	positions := make([]int32, batchSize)
+	for row := 0; row < batchSize; row++ {
+		last := -1
+		for pos := 0; pos < seqLen; pos++ {
+			if validMask[row*seqLen+pos] > 0 {
+				last = pos
+			}
+		}
+		if last < 0 {
+			return objectiveBatch{}, fmt.Errorf("classification batch row %d has no valid tokens", row)
+		}
+		positions[row] = int32(row*seqLen + last)
+	}
+	return objectiveBatch{
+		x:                    batch.x[:need],
+		y:                    batch.y[:need],
+		unmaskedX:            batch.x[:need],
+		classificationLabels: labels,
+		classificationMask:   validMask,
+		classificationPos:    positions,
+	}, nil
 }
 
 func prepareMLMBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int) (objectiveBatch, error) {

@@ -26,12 +26,20 @@ from pathlib import Path
 
 import numpy as np
 
-from prepare_records import prepare_text_records, tokenizer_special_token_ids
+from prepare_records import (
+    prepare_labeled_text_records,
+    prepare_text_records,
+    split_labeled_records,
+    tokenizer_special_token_ids,
+    validate_label_space,
+)
 
 SHARD_MAGIC = 20240520
 SHARD_VERSION = 1
 SEQUENCE_SHARD_MAGIC = 20260718
 SEQUENCE_SHARD_VERSION = 1
+LABELED_SEQUENCE_SHARD_MAGIC = 20260724
+LABELED_SEQUENCE_SHARD_VERSION = 1
 CHAR_FEATURE_MAGIC = 20260526
 CHAR_FEATURE_VERSION = 1
 CHAR_FEATURE_ENCODING_BYTELEVEL = 1
@@ -80,6 +88,61 @@ def _read_jsonl(path: Path, text_field: str) -> list[str]:
             if text_field in obj:
                 texts.append(obj[text_field])
     return texts
+
+
+def read_labeled_jsonl_records(input_path: str, text_field: str, label_field: str):
+    path = Path(input_path)
+    files = sorted(path.rglob("*.jsonl")) if path.is_dir() else [path]
+    if not files or any(file.suffix != ".jsonl" for file in files):
+        raise ValueError("--label-field requires JSONL input")
+    records = []
+    for file in files:
+        with open(file, "r", encoding="utf-8", errors="strict") as f:
+            for line_no, raw in enumerate(f, 1):
+                if not raw.strip():
+                    continue
+                try:
+                    obj = json.loads(raw)
+                except json.JSONDecodeError as error:
+                    raise ValueError(f"{file}:{line_no}: invalid JSON: {error}") from error
+                if text_field not in obj:
+                    raise ValueError(f"{file}:{line_no}: missing text field {text_field!r}")
+                if label_field not in obj:
+                    raise ValueError(f"{file}:{line_no}: missing label field {label_field!r}")
+                label = obj[label_field]
+                if isinstance(label, bool) or not isinstance(label, int) or label < 0:
+                    raise ValueError(f"{file}:{line_no}: label must be a non-negative integer")
+                record_id = str(obj.get("id", f"{file.stem}_{line_no:08d}"))
+                text = obj[text_field]
+                if not isinstance(text, str) or not text:
+                    raise ValueError(f"{file}:{line_no}: text field {text_field!r} must be a non-empty string")
+                records.append((record_id, text, label))
+    if not records:
+        raise ValueError(f"No labeled JSONL records found in {input_path}")
+    return records
+
+
+def read_label_tsv(path: str) -> dict[str, int]:
+    labels = {}
+    with open(path, "r", encoding="utf-8", errors="strict") as f:
+        for line_no, raw in enumerate(f, 1):
+            if not raw.strip():
+                continue
+            fields = raw.rstrip("\n").split("\t")
+            if len(fields) != 2 or not fields[0]:
+                raise ValueError(f"{path}:{line_no}: expected id<TAB>label")
+            if fields[0] in labels:
+                raise ValueError(f"{path}:{line_no}: duplicate record ID {fields[0]!r}")
+            try:
+                label = int(fields[1])
+            except ValueError as error:
+                raise ValueError(f"{path}:{line_no}: label must be an integer") from error
+            if label < 0:
+                raise ValueError(f"{path}:{line_no}: label must be non-negative")
+            labels[fields[0]] = label
+    if not labels:
+        raise ValueError(f"No labels found in {path}")
+    return labels
 
 
 def train_bpe_tokenizer(texts: list[str], vocab_size: int, output_dir: str, wwm_compatible: bool = False):
@@ -310,6 +373,26 @@ def write_sequence_shard(path: str, records: list[np.ndarray]):
             f.write(record.tobytes())
 
 
+def write_labeled_sequence_shard(path: str, records):
+    n_tokens = sum(len(record) for record, _ in records)
+    header = np.zeros(HEADER_INTS, dtype=np.int32)
+    header[0] = LABELED_SEQUENCE_SHARD_MAGIC
+    header[1] = LABELED_SEQUENCE_SHARD_VERSION
+    header[2] = n_tokens
+    header[3] = len(records)
+    offsets = np.zeros(len(records) + 1, dtype=np.uint64)
+    labels = np.zeros(len(records), dtype=np.int32)
+    for i, (record, label) in enumerate(records):
+        offsets[i + 1] = offsets[i] + len(record)
+        labels[i] = label
+    with open(path, "wb") as f:
+        f.write(header.tobytes())
+        f.write(offsets.tobytes())
+        f.write(labels.tobytes())
+        for record, _ in records:
+            f.write(record.tobytes())
+
+
 def write_sequence_shards(records: list[tuple[str, np.ndarray]], output_dir: str, prefix: str, tokens_per_shard: int) -> int:
     if not records:
         return 0
@@ -329,6 +412,31 @@ def write_sequence_shards(records: list[tuple[str, np.ndarray]], output_dir: str
         shard_path = os.path.join(output_dir, f"{prefix}_{i:05d}.bin")
         write_sequence_shard(shard_path, shard_records)
         print(f"  {shard_path}: {sum(len(r) for r in shard_records):,} tokens, {len(shard_records):,} sequences")
+    return len(shards)
+
+
+def write_labeled_sequence_shards(records, output_dir: str, prefix: str, tokens_per_shard: int) -> int:
+    if not records:
+        return 0
+    shards = []
+    current = []
+    current_tokens = 0
+    for _, record, label in records:
+        if current and current_tokens + len(record) > tokens_per_shard:
+            shards.append(current)
+            current = []
+            current_tokens = 0
+        current.append((record, label))
+        current_tokens += len(record)
+    if current:
+        shards.append(current)
+    for i, shard_records in enumerate(shards):
+        shard_path = os.path.join(output_dir, f"{prefix}_{i:05d}.bin")
+        write_labeled_sequence_shard(shard_path, shard_records)
+        print(
+            f"  {shard_path}: {sum(len(record) for record, _ in shard_records):,} tokens, "
+            f"{len(shard_records):,} labeled sequences"
+        )
     return len(shards)
 
 
@@ -365,13 +473,126 @@ def write_nucleotide_manifest(vocabulary: dict, output_dir: str, train_records, 
     print(f"Saved dataset manifest to {path}")
 
 
+def apply_labeled_array_overflow(records, seq_len: int, overflow: str, split_name: str):
+    capacity = seq_len - 2
+    output = []
+    dropped = 0
+    truncated = 0
+    for record_id, token_ids, label in records:
+        if len(token_ids) > capacity:
+            if overflow == "error":
+                raise ValueError(
+                    f"{split_name} FASTA record {record_id!r} has {len(token_ids)} tokens but "
+                    f"--record-seq-len={seq_len} permits {capacity}; use --record-overflow=drop or truncate"
+                )
+            if overflow == "drop":
+                dropped += 1
+                continue
+            token_ids = token_ids[:capacity].copy()
+            truncated += 1
+        output.append((record_id, token_ids, label))
+    lengths = [len(tokens) for _, tokens, _ in output]
+    return output, {
+        "input": len(records),
+        "written": len(output),
+        "dropped": dropped,
+        "truncated": truncated,
+        "mean": (sum(lengths) / len(lengths)) if lengths else 0.0,
+        "max": max(lengths, default=0),
+    }
+
+
+def prepare_labeled_fasta(args, vocabulary: dict, encoded_records):
+    if args.record_seq_len < 3:
+        raise ValueError("--label-file requires --record-seq-len >= 3")
+    labels = read_label_tsv(args.label_file)
+    record_ids = [record_id for record_id, _ in encoded_records]
+    if len(set(record_ids)) != len(record_ids):
+        raise ValueError("FASTA record IDs must be unique when --label-file is used")
+    missing = sorted(set(record_ids) - set(labels))
+    extra = sorted(set(labels) - set(record_ids))
+    if missing or extra:
+        raise ValueError(
+            f"FASTA label coverage mismatch: missing={missing[:5]} extra={extra[:5]}"
+        )
+    labeled = [(record_id, tokens, labels[record_id]) for record_id, tokens in encoded_records]
+    num_labels = validate_label_space(labeled)
+    train_raw, val_raw = split_labeled_records(labeled, args.val_split)
+    train_records, train_stats = apply_labeled_array_overflow(
+        train_raw, args.record_seq_len, args.record_overflow, "train"
+    )
+    val_records, val_stats = apply_labeled_array_overflow(
+        val_raw, args.record_seq_len, args.record_overflow, "val"
+    )
+    if sorted({label for _, _, label in train_records}) != list(range(num_labels)):
+        raise ValueError("every class must retain at least one training record after overflow handling")
+    n_train_shards = write_labeled_sequence_shards(
+        train_records, args.output, "train", args.tokens_per_shard
+    )
+    n_val_shards = write_labeled_sequence_shards(
+        val_records, args.output, "val", args.tokens_per_shard
+    )
+    tokens = vocabulary["tokens"]
+
+    def split_entry(records, stats, pattern, shards):
+        counts = Counter(label for _, _, label in records)
+        return {
+            "pattern": pattern,
+            "tokens": sum(len(record) for _, record, _ in records),
+            "shards": shards,
+            "sequences": len(records),
+            "dropped_sequences": stats["dropped"],
+            "truncated_sequences": stats["truncated"],
+            "mean_sequence_tokens": stats["mean"],
+            "max_sequence_tokens": stats["max"],
+            "class_counts": {str(label): int(counts.get(label, 0)) for label in range(num_labels)},
+        }
+
+    manifest = {
+        "format": "mixlab.dataset",
+        "version": 1,
+        "representation": "discrete_tokens",
+        "modality": "nucleotide",
+        "vocab_size": len(tokens),
+        "token_dtype": "uint16",
+        "shard_format": "mixlab_labeled_sequence_shard_v1",
+        "sequence_layout": "one_record_per_row",
+        "record_seq_len": args.record_seq_len,
+        "special_token_ids": {
+            "pad": tokens["<PAD>"],
+            "bos": tokens["<BOS>"],
+            "eos": tokens["<EOS>"],
+            "mask": tokens["<MASK>"],
+        },
+        "artifacts": {"vocabulary": "nucleotide_vocab.json"},
+        "task": {"type": "single_label_classification", "num_labels": num_labels},
+        "splits": {
+            "train": split_entry(train_records, train_stats, "train_*.bin", n_train_shards),
+            "val": split_entry(val_records, val_stats, "val_*.bin", n_val_shards),
+        },
+    }
+    path = os.path.join(args.output, "mixlab.dataset.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, sort_keys=True)
+        f.write("\n")
+    print(
+        f"Prepared labeled FASTA: train={len(train_records):,} val={len(val_records):,} "
+        f"num_labels={num_labels}"
+    )
+    print(f"Saved classification dataset manifest to {path}")
+
+
 def prepare_fasta(args):
-    if args.tokenizer_path or args.wwm_compatible_tokenizer or args.char_vocab_size > 0 or args.minimal_pair_out or args.frame_per_record:
+    if args.tokenizer_path or args.wwm_compatible_tokenizer or args.char_vocab_size > 0 or args.minimal_pair_out or (args.frame_per_record and not args.label_file):
         raise ValueError("FASTA preparation does not accept text tokenizer, whole-word, char-feature, minimal-pair, or per-record text framing flags")
     os.makedirs(args.output, exist_ok=True)
     vocabulary = build_nucleotide_vocabulary(args.nucleotide_alphabet, args.nucleotide_ambiguous_symbols, args.nucleotide_invalid_symbol_policy)
     write_nucleotide_vocabulary(vocabulary, args.output)
     records = encode_fasta_records(read_fasta_records(args.input), vocabulary)
+    if args.label_file:
+        prepare_labeled_fasta(args, vocabulary, records)
+        print(f"Done! Train pattern: {args.output}/train_*.bin")
+        return
     if args.val_split < 0 or args.val_split >= 1:
         raise ValueError("--val-split must be in [0,1) for FASTA preparation")
     if args.val_split > 0 and len(records) < 2:
@@ -875,6 +1096,8 @@ def main():
     parser.add_argument("--tokenizer-path", default="", help="Path to pre-trained tokenizer.json (skip training)")
     parser.add_argument("--wwm-compatible-tokenizer", action="store_true", help="Train or validate tokenizer metadata for whole-word masking")
     parser.add_argument("--text-field", default="text", help="JSON field name for text in JSONL files (default: text)")
+    parser.add_argument("--label-field", default="", help="JSON integer-label field; enables labeled per-record classification shards")
+    parser.add_argument("--label-file", default="", help="FASTA label TSV containing id<TAB>label")
     parser.add_argument("--frame-per-record", action="store_true", help="preserve each text/JSONL record as one framed training row")
     parser.add_argument("--record-seq-len", type=int, default=0, help="fixed training row length for --frame-per-record")
     parser.add_argument("--record-pad-id", type=int, default=-1, help="PAD token ID for --frame-per-record")
@@ -914,12 +1137,21 @@ def main():
     tokens_per_shard = args.tokens_per_shard
 
     if args.input_format == "fasta":
+        if args.label_field:
+            raise ValueError("--label-field is valid only with --input-format=text JSONL")
         prepare_fasta(args)
         return
+    if args.label_file:
+        raise ValueError("--label-file is valid only with --input-format=fasta")
 
     # Read input
     print(f"Reading input from {args.input}...")
-    texts = read_input_texts(args.input, args.text_field)
+    labeled_records = None
+    if args.label_field:
+        labeled_records = read_labeled_jsonl_records(args.input, args.text_field, args.label_field)
+        texts = [text for _, text, _ in labeled_records]
+    else:
+        texts = read_input_texts(args.input, args.text_field)
     print(f"Read {len(texts)} text segment(s)")
 
     # Train or load tokenizer
@@ -951,6 +1183,10 @@ def main():
         args.minimal_pair_sample_out,
         args.minimal_pair_sample_count,
     )
+
+    if labeled_records is not None:
+        prepare_labeled_text_records(args, tokenizer, labeled_records, write_labeled_sequence_shards)
+        return
 
     if args.frame_per_record:
         prepare_text_records(args, tokenizer, texts, write_sequence_shards)
