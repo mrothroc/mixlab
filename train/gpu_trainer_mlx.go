@@ -56,6 +56,9 @@ type mlxGPUTrainer struct {
 	classificationLabelsInput  bool
 	classificationMaskInput    bool
 	classificationPosInput     bool
+	rcTokensInput              bool
+	rcAlignmentInput           bool
+	rcComplementInput          bool
 	tttInnerLRScaleCount       int
 	dropoutKeyCount            int
 	trainingSeed               uint64
@@ -90,6 +93,9 @@ type mlxGPUTrainer struct {
 	classificationLabelBuf []int32
 	classificationMaskBuf  []float32
 	classificationPosBuf   []int32
+	rcTokenBuf             []int32
+	rcAlignmentBuf         []int32
+	rcComplementIDs        []int32
 	charFeatures           []int32
 	firstByteValid         []int32
 	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
@@ -241,6 +247,9 @@ func initMLXGPUTrainer(
 	classificationLabelsInput := false
 	classificationMaskInput := false
 	classificationPosInput := false
+	rcTokensInput := false
+	rcAlignmentInput := false
+	rcComplementInput := false
 	tttInnerLRScaleCount := 0
 	dropoutKeyCount := 0
 	for _, inp := range irProg.Inputs {
@@ -327,6 +336,15 @@ func initMLXGPUTrainer(
 		if inp.Name == "classification_positions" {
 			classificationPosInput = true
 		}
+		if inp.Name == "rc_tokens" {
+			rcTokensInput = true
+		}
+		if inp.Name == "rc_alignment_positions" {
+			rcAlignmentInput = true
+		}
+		if inp.Name == "rc_complement_ids" {
+			rcComplementInput = true
+		}
 	}
 	charFeatures := []int32(nil)
 	if charInput {
@@ -364,6 +382,19 @@ func initMLXGPUTrainer(
 			return nil, fmt.Errorf("first-byte mask size=%d does not match vocab_size=%d", len(firstByteValid), cfg.VocabSize)
 		}
 		firstByteValid = append([]int32(nil), firstByteValid...)
+	}
+	rcComplementIDs := []int32(nil)
+	if rcComplementInput {
+		if len(cfg.Training.DatasetNucleotideComplement) != cfg.VocabSize {
+			gpu.TrainerDestroy(trainerHandle)
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, fmt.Errorf("program requires rc_complement_ids but DNA complement lookup has %d entries, want vocab_size=%d", len(cfg.Training.DatasetNucleotideComplement), cfg.VocabSize)
+		}
+		rcComplementIDs = make([]int32, cfg.VocabSize)
+		for i, tokenID := range cfg.Training.DatasetNucleotideComplement {
+			rcComplementIDs[i] = int32(tokenID)
+		}
 	}
 	rtdGeneratorPosBufSize := rtdGeneratorMaskSlots
 	if rtdGeneratorPosBufSize < 1 {
@@ -413,6 +444,9 @@ func initMLXGPUTrainer(
 		classificationLabelsInput:  classificationLabelsInput,
 		classificationMaskInput:    classificationMaskInput,
 		classificationPosInput:     classificationPosInput,
+		rcTokensInput:              rcTokensInput,
+		rcAlignmentInput:           rcAlignmentInput,
+		rcComplementInput:          rcComplementInput,
 		tttInnerLRScaleCount:       tttInnerLRScaleCount,
 		dropoutKeyCount:            dropoutKeyCount,
 		trainingSeed:               uint64(cfg.Training.Seed),
@@ -445,6 +479,9 @@ func initMLXGPUTrainer(
 		classificationLabelBuf:     make([]int32, declaredBatchSize),
 		classificationMaskBuf:      make([]float32, batchElems),
 		classificationPosBuf:       make([]int32, declaredBatchSize),
+		rcTokenBuf:                 make([]int32, batchElems),
+		rcAlignmentBuf:             make([]int32, batchElems),
+		rcComplementIDs:            rcComplementIDs,
 		charFeatures:               charFeatures,
 		firstByteValid:             firstByteValid,
 		lockedOSThread:             true,
@@ -697,6 +734,9 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.classificationLabelsInput = programDeclaresInput(irProg, "classification_labels")
 	t.classificationMaskInput = programDeclaresInput(irProg, "classification_valid_mask")
 	t.classificationPosInput = programDeclaresInput(irProg, "classification_positions")
+	t.rcTokensInput = programDeclaresInput(irProg, "rc_tokens")
+	t.rcAlignmentInput = programDeclaresInput(irProg, "rc_alignment_positions")
+	t.rcComplementInput = programDeclaresInput(irProg, "rc_complement_ids")
 	t.tttInnerLRScaleCount = 0
 	t.dropoutKeyCount = 0
 	t.rtdGeneratorBatchSize = 0

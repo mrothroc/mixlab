@@ -11,6 +11,9 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 	if cfg == nil {
 		return fmt.Errorf("unsupported HF export: nil config")
 	}
+	if cfg.RCEquivarianceEnabled() {
+		return unsupportedHFExport("rc_equivariant", "shared reverse-complement branches are native-only in v1")
+	}
 	if cfg.BlockScales {
 		return unsupportedHFExport("block_scales", "core HF export does not yet support block scale tensors")
 	}

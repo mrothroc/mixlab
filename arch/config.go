@@ -26,6 +26,7 @@ type ArchConfig struct {
 	ResidMix         bool    `json:"resid_mix,omitempty"`
 	ParallelResidual bool    `json:"parallel_residual,omitempty"`
 	UNet             bool    `json:"unet,omitempty"`
+	RCEquivariant    bool    `json:"rc_equivariant,omitempty"`
 	SmearEmbeddings  bool    `json:"smear_embeddings,omitempty"`
 	// SmearEmbeddingsGateShape selects the learned gate used by embedding smearing.
 	// Empty defaults to "pr130" when smear_embeddings is enabled.
@@ -833,6 +834,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 	if err := validateTrainingObjective(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateRCEquivariance(cfg, source); err != nil {
 		return nil, err
 	}
 	if err := validateTrainingAttentionSegmentMask(cfg, source); err != nil {

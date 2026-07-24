@@ -38,6 +38,8 @@ type objectiveBatch struct {
 	classificationLabels  []int32
 	classificationMask    []float32
 	classificationPos     []int32
+	rcTokens              []int
+	rcAlignmentPositions  []int32
 	mlmMaskStats          mlmMaskStats
 }
 
@@ -164,6 +166,9 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 		if err := attachSegmentIDs(cfg, &prepared, need, seqLen); err != nil {
 			return objectiveBatch{}, err
 		}
+	}
+	if err := attachRCEquivariantInputs(cfg, batch, &prepared, need, seqLen); err != nil {
+		return objectiveBatch{}, err
 	}
 	prepared.tttInnerLRScale = arch.TTTMLPInnerLRScalesForStep(cfg.Blocks, step)
 	return prepared, nil

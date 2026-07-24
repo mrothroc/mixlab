@@ -184,6 +184,12 @@ frames the record as `[BOS] content [EOS] [PAD]...`, and emits a validity mask.
 For `plain` attention, PAD occupies a separate segment so bidirectional
 classification cannot use padding as context.
 
+DNA datasets also carry the complement table used by top-level
+`rc_equivariant: true`. For packed MLM, biological positions reverse only
+inside their original segment. For one-record classification, content bases
+reverse inside the framed record while BOS, EOS, PAD, and MASK remain fixed
+and self-complementary. RNA datasets reject this option.
+
 ## Data/config compatibility
 
 The `vocab_size` in your JSON config must match the tokenizer used to create

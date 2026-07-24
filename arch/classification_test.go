@@ -99,6 +99,13 @@ func TestClassificationWeightsAppendWithoutChangingLMPrefix(t *testing.T) {
 	}
 }
 
+func TestClassificationAllowsReverseComplementAugmentationForRuntimeDNAValidation(t *testing.T) {
+	cfg := classificationTestConfig(BlockSpec{Type: "plain", Heads: 2, AttentionMask: AttentionMaskBidirectional})
+	cfg.Training.Classification.Pooling = ClassificationPoolingMean
+	cfg.Training.ReverseComplementProb = 0.5
+	_ = parseClassificationTestConfig(t, cfg)
+}
+
 func TestClassificationIRUsesPaddingAwarePoolingAndNoLMProjection(t *testing.T) {
 	for _, tt := range []struct {
 		name    string

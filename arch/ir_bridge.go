@@ -83,6 +83,9 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 // before the vocabulary projection so generation reads back [B,V], not
 // [B*T,V].
 func BuildGenerationIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
+	if cfg != nil && cfg.RCEquivarianceEnabled() {
+		return nil, fmt.Errorf("generation is not supported for rc_equivariant checkpoints in v1")
+	}
 	if cfg != nil && cfg.ClassificationEnabled() {
 		return nil, fmt.Errorf("generation is not supported for training.objective=%q checkpoints", ObjectiveClassification)
 	}
@@ -363,6 +366,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		wordStructural,
 		invariance,
 		pllMargin,
+		cfg.RCEquivarianceEnabled(),
 	)
 }
 

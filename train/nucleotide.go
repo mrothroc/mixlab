@@ -9,13 +9,14 @@ import (
 const reverseComplementRNGSalt uint64 = 0xbb67ae8584caa73b
 
 func maybeApplyReverseComplement(cfg *ArchConfig, batch trainBatch, step, need int) (trainBatch, error) {
-	if cfg == nil || !cfg.Training.DatasetSequencePacking || cfg.Training.ReverseComplementProb == 0 || batch.disableAugmentation {
+	if cfg == nil || (!cfg.Training.DatasetSequencePacking && !cfg.Training.DatasetRecordFraming) ||
+		cfg.Training.ReverseComplementProb == 0 || batch.disableAugmentation {
 		return batch, nil
 	}
 	if cfg.Training.DatasetNucleotideAlphabet != "dna" {
 		return trainBatch{}, fmt.Errorf("reverse-complement augmentation requires a DNA dataset")
 	}
-	if len(batch.x) < need || len(batch.y) < need || len(batch.segmentIDs) < need || len(batch.maskEligible) < need {
+	if len(batch.x) < need || len(batch.segmentIDs) < need || len(batch.maskEligible) < need {
 		return trainBatch{}, fmt.Errorf("reverse-complement batch metadata is incomplete: x=%d y=%d segments=%d eligible=%d need=%d",
 			len(batch.x), len(batch.y), len(batch.segmentIDs), len(batch.maskEligible), need)
 	}
@@ -24,7 +25,9 @@ func maybeApplyReverseComplement(cfg *ArchConfig, batch trainBatch, step, need i
 	}
 	out := batch
 	out.x = append([]int(nil), batch.x...)
-	out.y = append([]int(nil), batch.y...)
+	if len(batch.y) >= need {
+		out.y = append([]int(nil), batch.y...)
+	}
 	rng := deterministicObjectiveRNG(cfg.Training.Seed, step, reverseComplementRNGSalt)
 	for rowStart := 0; rowStart < need; rowStart += cfg.SeqLen {
 		rowEnd := rowStart + cfg.SeqLen
@@ -54,13 +57,77 @@ func maybeApplyReverseComplement(cfg *ArchConfig, batch trainBatch, step, need i
 			start = end
 		}
 	}
-	for i := 0; i < need; i++ {
+	for i := 0; i < need && len(out.y) >= need; i++ {
 		if len(batch.lossMask) > i && batch.lossMask[i] > 0 && i+1 < need &&
 			i/cfg.SeqLen == (i+1)/cfg.SeqLen && batch.segmentIDs[i] == batch.segmentIDs[i+1] {
 			out.y[i] = out.x[i+1]
 		}
 	}
 	return out, nil
+}
+
+func attachRCEquivariantInputs(cfg *ArchConfig, batch trainBatch, prepared *objectiveBatch, need, seqLen int) error {
+	if cfg == nil || !cfg.RCEquivarianceEnabled() {
+		return nil
+	}
+	if prepared == nil {
+		return fmt.Errorf("RC-equivariant batch preparation requires an objective batch")
+	}
+	if cfg.Training.DatasetNucleotideAlphabet != "dna" {
+		return fmt.Errorf("rc_equivariant=true requires a DNA dataset")
+	}
+	if len(cfg.Training.DatasetNucleotideComplement) != cfg.VocabSize {
+		return fmt.Errorf("DNA complement lookup has %d entries, want vocab_size=%d", len(cfg.Training.DatasetNucleotideComplement), cfg.VocabSize)
+	}
+	if seqLen <= 0 || need <= 0 || need%seqLen != 0 || len(prepared.x) < need {
+		return fmt.Errorf("invalid RC-equivariant batch shape: tokens=%d need=%d seq_len=%d", len(prepared.x), need, seqLen)
+	}
+	if len(batch.maskEligible) < need {
+		return fmt.Errorf("RC-equivariant batch is missing biological-token eligibility: got=%d need=%d", len(batch.maskEligible), need)
+	}
+
+	rcTokens := append([]int(nil), prepared.x[:need]...)
+	alignment := make([]int32, need)
+	for i := range alignment {
+		alignment[i] = int32(i)
+	}
+	for rowStart := 0; rowStart < need; rowStart += seqLen {
+		rowEnd := rowStart + seqLen
+		for segmentStart := rowStart; segmentStart < rowEnd; {
+			segmentEnd := rowEnd
+			if len(batch.segmentIDs) >= need {
+				segment := batch.segmentIDs[segmentStart]
+				segmentEnd = segmentStart + 1
+				for segmentEnd < rowEnd && batch.segmentIDs[segmentEnd] == segment {
+					segmentEnd++
+				}
+			}
+			positions := make([]int, 0, segmentEnd-segmentStart)
+			for pos := segmentStart; pos < segmentEnd; pos++ {
+				if batch.maskEligible[pos] != 0 {
+					positions = append(positions, pos)
+				}
+			}
+			for left, right := 0, len(positions)-1; left <= right; left, right = left+1, right-1 {
+				dstLeft, srcRight := positions[left], positions[right]
+				dstRight, srcLeft := positions[right], positions[left]
+				rightToken := prepared.x[srcRight]
+				leftToken := prepared.x[srcLeft]
+				if rightToken < 0 || rightToken >= len(cfg.Training.DatasetNucleotideComplement) ||
+					leftToken < 0 || leftToken >= len(cfg.Training.DatasetNucleotideComplement) {
+					return fmt.Errorf("RC-equivariant token id outside complement lookup: left=%d right=%d", leftToken, rightToken)
+				}
+				rcTokens[dstLeft] = cfg.Training.DatasetNucleotideComplement[rightToken]
+				rcTokens[dstRight] = cfg.Training.DatasetNucleotideComplement[leftToken]
+				alignment[dstLeft] = int32(srcRight)
+				alignment[dstRight] = int32(srcLeft)
+			}
+			segmentStart = segmentEnd
+		}
+	}
+	prepared.rcTokens = rcTokens
+	prepared.rcAlignmentPositions = alignment
+	return nil
 }
 
 func selectMaskPositionsForBatch(rng interface{ Float64() float64 }, lossMask []float32, prob float64, n int, eligible []uint8) int {

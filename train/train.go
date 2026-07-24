@@ -50,6 +50,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	if err := configureDatasetForTraining(cfg, trainPattern, name); err != nil {
 		return TrainResult{}, err
 	}
+	if cfg.RCEquivarianceEnabled() {
+		fmt.Printf("  [%s] DNA reverse-complement equivariance: shared weights, branch_dim=%d, paired_backbone_rows=%d\n",
+			name, cfg.ModelDim, 2*batchSize)
+	}
 	for _, msg := range swaOverrideLogs {
 		fmt.Printf("  [%s] %s\n", name, msg)
 	}

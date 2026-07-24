@@ -82,6 +82,9 @@ func convertToClassificationIR(cfg *ArchConfig, state TrainingProgramState, prog
 	prog.DeclareOutput("eval_loss", TensorFloat32, []int{1})
 	prog.DeclareOutput("classification_logits", TensorFloat32, []int{B, N})
 	prog.DeclareOutput("x_hidden", TensorFloat32, []int{B, cfg.SeqLen, D})
+	if cfg.RCEquivarianceEnabled() {
+		prog.DeclareOutput("rc_equivariant_hidden", TensorFloat32, []int{B, cfg.SeqLen, 2 * D})
+	}
 	if moeEnabled {
 		prog.DeclareOutput("moe_aux_loss", TensorFloat32, []int{1})
 		prog.DeclareOutput("moe_router_entropy", TensorFloat32, []int{1})

@@ -103,6 +103,9 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 		forward += 2 * i64(B) * i64(T) * i64(D) // learned scale + residual add
 	}
 	forward += 2 * i64(B) * i64(T) * i64(D) * i64(V)
+	if cfg.RCEquivarianceEnabled() {
+		forward *= 2
+	}
 
 	training := 3 * forward
 	perToken := int64(0)

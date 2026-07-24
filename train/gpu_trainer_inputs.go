@@ -101,6 +101,8 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		t.charBuf = make([]int32, need*t.charMaxPerToken)
 		t.bigramBuf = make([]int32, need)
 		t.trigramBuf = make([]int32, need)
+		t.rcTokenBuf = make([]int32, need)
+		t.rcAlignmentBuf = make([]int32, need)
 	}
 	if t.attentionCausalInput && len(t.attentionCausalBuf) < batchSize {
 		t.attentionCausalBuf = make([]int32, batchSize)
@@ -163,6 +165,40 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 	}
 	inputs := []gpu.TensorInput{
 		{Name: "tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.tokBuf[:need]},
+	}
+	if t.rcTokensInput {
+		if len(batch.rcTokens) < need {
+			return nil, fmt.Errorf("objective batch missing rc_tokens: got=%d need=%d", len(batch.rcTokens), need)
+		}
+		if len(t.rcTokenBuf) < need {
+			t.rcTokenBuf = make([]int32, need)
+		}
+		for i := 0; i < need; i++ {
+			t.rcTokenBuf[i] = int32(batch.rcTokens[i])
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "rc_tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.rcTokenBuf[:need],
+		})
+	}
+	if t.rcAlignmentInput {
+		if len(batch.rcAlignmentPositions) < need {
+			return nil, fmt.Errorf("objective batch missing rc_alignment_positions: got=%d need=%d", len(batch.rcAlignmentPositions), need)
+		}
+		if len(t.rcAlignmentBuf) < need {
+			t.rcAlignmentBuf = make([]int32, need)
+		}
+		copy(t.rcAlignmentBuf[:need], batch.rcAlignmentPositions[:need])
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "rc_alignment_positions", DType: gpu.TensorInt32, Shape: []int{need}, Data: t.rcAlignmentBuf[:need],
+		})
+	}
+	if t.rcComplementInput {
+		if len(t.rcComplementIDs) != t.vocabSize {
+			return nil, fmt.Errorf("trainer DNA complement lookup has %d entries, want vocab_size=%d", len(t.rcComplementIDs), t.vocabSize)
+		}
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "rc_complement_ids", DType: gpu.TensorInt32, Shape: []int{t.vocabSize}, Data: t.rcComplementIDs,
+		})
 	}
 	if targetsInput {
 		for i := 0; i < need; i++ {

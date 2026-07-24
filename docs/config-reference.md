@@ -63,6 +63,7 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 | `resid_mix` | boolean | No | `false` | Adds learned mixing of the current state and original input on `plain` blocks. |
 | `parallel_residual` | boolean | No | `false` | Top-level form: enables parallel residual on every consecutive `(plain or gated_deltanet, swiglu/geglu/moe)` pair. Per-block form: set `parallel_residual: true` on individual pair-start blocks instead (see [`parallel_residual`](#parallel_residual)). Use block-level `parallel_group` for heterogeneous groups of 2+ branches. Cannot be combined with `unet`. |
 | `unet` | boolean | No | `false` | Splits the `blocks` list into encoder/decoder halves with learned skip connections. |
+| `rc_equivariant` | boolean | No | `false` | Native DNA reverse-complement parameter sharing. `model_dim` is the per-orientation width; parameter count is unchanged and backbone compute is approximately doubled. V1 supports bidirectional MLM and mean-pooled classification with `plain`/`gated_deltanet` mixers and pointwise FFNs. Requires manifest-backed DNA data and zero dropout; rejects causal generation, HF export, RC augmentation, feature embeddings, recurrence, parallel composition, and auxiliary/multihead objectives. |
 | `mtp` | object | No | Disabled | Enables parameter-free multi-token prediction during training. See [MTP section](#multi-token-prediction-mtp). |
 | `backout` | object | No | Disabled | Enables final-latent residual subtraction before the final model norm. See [Backout section](#backout). |
 | `blocks` | array | Yes | None | Ordered block list. Must contain at least one block. |
@@ -1134,6 +1135,14 @@ segment-attention machinery automatically and provide exact segment IDs from
 the record packer. Their fixed vocabulary uses `<MASK>=3`, so MLM configs must
 set `training.mlm_mask_token_id: 3`. Causal and MLM/MNTP objectives are
 supported; full continuous-stream BPB evaluation is intentionally disabled.
+
+With `rc_equivariant: true`, Mixlab additionally loads the DNA complement map
+for packed MLM and labeled one-record classification datasets. Every input is
+paired with its segment-local reverse complement and evaluated by the same
+weights. LM logits are position-aligned and vocabulary-complemented before
+averaging; classification averages aligned hidden branches and therefore
+requires padding-aware mean pooling. Special tokens are self-complementary and
+do not move.
 
 Manifest-backed text datasets with
 `sequence_layout: "one_record_per_row"` enable per-record causal framing

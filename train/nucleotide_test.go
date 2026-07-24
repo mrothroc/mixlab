@@ -123,6 +123,84 @@ func TestReverseComplementDoesNotCrossBatchRowsWithRepeatedSegmentIDs(t *testing
 	}
 }
 
+func TestAttachRCEquivariantInputsReversesOnlyBiologicalPositions(t *testing.T) {
+	cfg := nucleotideObjectiveConfig(arch.ObjectiveMLM, 0)
+	cfg.RCEquivariant = true
+	cfg.SeqLen = 7
+	cfg.Training.BatchTokens = 7
+	batch := trainBatch{
+		x:            []int{1, 4, 5, 6, 7, 2, 0}, // BOS A C G T EOS PAD
+		y:            make([]int, 7),
+		maskEligible: []uint8{0, 1, 1, 1, 1, 0, 0},
+		segmentIDs:   []int32{0, 0, 0, 0, 0, 0, 0},
+	}
+	prepared := objectiveBatch{x: append([]int(nil), batch.x...)}
+	if err := attachRCEquivariantInputs(cfg, batch, &prepared, 7, 7); err != nil {
+		t.Fatal(err)
+	}
+	// Reverse(A C G T) then complement -> A C G T for this palindrome.
+	wantTokens := []int{1, 4, 5, 6, 7, 2, 0}
+	wantAlignment := []int32{0, 4, 3, 2, 1, 5, 6}
+	if !reflect.DeepEqual(prepared.rcTokens, wantTokens) {
+		t.Fatalf("rc tokens=%v want=%v", prepared.rcTokens, wantTokens)
+	}
+	if !reflect.DeepEqual(prepared.rcAlignmentPositions, wantAlignment) {
+		t.Fatalf("alignment=%v want=%v", prepared.rcAlignmentPositions, wantAlignment)
+	}
+}
+
+func TestAttachRCEquivariantInputsStaysWithinPackedSegments(t *testing.T) {
+	cfg := nucleotideObjectiveConfig(arch.ObjectiveMLM, 0)
+	cfg.RCEquivariant = true
+	cfg.SeqLen = 8
+	cfg.Training.BatchTokens = 8
+	batch := trainBatch{
+		x:            []int{1, 4, 5, 2, 1, 6, 7, 2},
+		y:            make([]int, 8),
+		maskEligible: []uint8{0, 1, 1, 0, 0, 1, 1, 0},
+		segmentIDs:   []int32{0, 0, 0, 0, 1, 1, 1, 1},
+	}
+	prepared := objectiveBatch{x: append([]int(nil), batch.x...)}
+	if err := attachRCEquivariantInputs(cfg, batch, &prepared, 8, 8); err != nil {
+		t.Fatal(err)
+	}
+	// AC -> GT and GT -> AC. BOS/EOS remain fixed in each packed segment.
+	want := []int{1, 6, 7, 2, 1, 4, 5, 2}
+	if !reflect.DeepEqual(prepared.rcTokens, want) {
+		t.Fatalf("rc tokens=%v want=%v", prepared.rcTokens, want)
+	}
+	wantAlignment := []int32{0, 2, 1, 3, 4, 6, 5, 7}
+	if !reflect.DeepEqual(prepared.rcAlignmentPositions, wantAlignment) {
+		t.Fatalf("alignment=%v want=%v", prepared.rcAlignmentPositions, wantAlignment)
+	}
+}
+
+func TestReverseComplementAugmentationSupportsLabeledRecordClassification(t *testing.T) {
+	cfg := nucleotideObjectiveConfig(arch.ObjectiveClassification, 1)
+	cfg.Training.DatasetSequencePacking = false
+	cfg.Training.DatasetRecordFraming = true
+	cfg.Training.Classification = &arch.ClassificationSpec{NumLabels: 2, Pooling: arch.ClassificationPoolingMean}
+	batch := trainBatch{
+		x:            []int{1, 4, 4, 5, 2},
+		y:            make([]int, 5),
+		segmentIDs:   []int32{0, 0, 0, 0, 0},
+		maskEligible: []uint8{0, 1, 1, 1, 0},
+		labels:       []int32{1},
+		validMask:    []float32{1, 1, 1, 1, 1},
+	}
+	got, err := maybeApplyReverseComplement(cfg, batch, 0, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []int{1, 6, 7, 7, 2}
+	if !reflect.DeepEqual(got.x, want) {
+		t.Fatalf("classification RC augmentation=%v want=%v", got.x, want)
+	}
+	if !reflect.DeepEqual(got.labels, batch.labels) || !reflect.DeepEqual(got.validMask, batch.validMask) {
+		t.Fatal("classification RC augmentation changed labels or validity mask")
+	}
+}
+
 func TestNucleotideMLMMasksOnlyBiologicalTokens(t *testing.T) {
 	cfg := nucleotideObjectiveConfig(arch.ObjectiveMLM, 0)
 	got, err := prepareObjectiveBatch(cfg, nucleotideTrainBatch(), 0, arch.ObjectiveMLM)

@@ -1,0 +1,30 @@
+{
+  "name": "nucleotide_dna_rc_augmented_classification_tiny",
+  "model_dim": 32,
+  "vocab_size": 9,
+  "seq_len": 64,
+  "mlp_mult": 2.0,
+  "tie_embeddings": true,
+  "blocks": [
+    {"type": "gated_deltanet", "heads": 4, "d_k": 8},
+    {"type": "swiglu"},
+    {"type": "gated_deltanet", "heads": 4, "d_k": 8},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {
+      "num_labels": 2,
+      "pooling": "mean",
+      "classifier_dropout": 0.0
+    },
+    "reverse_complement_prob": 0.5,
+    "optimizer": "adamw",
+    "steps": 100,
+    "lr": 0.0003,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "batch_tokens": 256,
+    "seed": 42
+  }
+}

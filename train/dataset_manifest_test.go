@@ -98,6 +98,33 @@ func TestConfigureTextRecordDatasetEnablesMaskedCausalLossWithoutSegmentMask(t *
 	}
 }
 
+func TestConfigureRCEquivariantClassificationLoadsDNAComplementContract(t *testing.T) {
+	dir := t.TempDir()
+	writeNucleotideClassificationDatasetContract(t, dir, data.NucleotideAlphabetDNA, 8, 2)
+	cfg := &ArchConfig{
+		Name: "rc_classification", ModelDim: 8, VocabSize: 9, SeqLen: 8,
+		TieEmbeddings: true, RCEquivariant: true,
+		Blocks: []arch.BlockSpec{{Type: "plain", Heads: 2, AttentionMask: arch.AttentionMaskBidirectional}},
+		Training: TrainingSpec{
+			Objective: arch.ObjectiveClassification, BatchTokens: 16,
+			Classification: &arch.ClassificationSpec{NumLabels: 2, Pooling: arch.ClassificationPoolingMean},
+		},
+	}
+	if err := configureDatasetForTraining(cfg, filepath.Join(dir, "train_*.bin"), cfg.Name); err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Training.DatasetRecordFraming || !cfg.Training.DatasetClassification {
+		t.Fatalf("record/classification metadata=%+v", cfg.Training)
+	}
+	if cfg.Training.DatasetNucleotideAlphabet != data.NucleotideAlphabetDNA ||
+		len(cfg.Training.DatasetNucleotideComplement) != cfg.VocabSize {
+		t.Fatalf("nucleotide runtime metadata=%+v", cfg.Training)
+	}
+	if got := cfg.Training.DatasetNucleotideComplement[4]; got != 7 {
+		t.Fatalf("complement(A)=%d, want T id 7", got)
+	}
+}
+
 func TestConfigureTextRecordDatasetRejectsIncompatibleConfig(t *testing.T) {
 	dir := t.TempDir()
 	writeTextRecordDatasetContract(t, dir, 32, 8)
@@ -206,6 +233,35 @@ func writeNucleotideDatasetContract(t *testing.T, dir, alphabet string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, data.DatasetManifestFilename), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeNucleotideClassificationDatasetContract(t *testing.T, dir, alphabet string, seqLen, numLabels int) {
+	t.Helper()
+	writeNucleotideDatasetContract(t, dir, alphabet)
+	path := filepath.Join(dir, data.DatasetManifestFilename)
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest data.DatasetManifest
+	if err := json.Unmarshal(blob, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.ShardFormat = data.DatasetShardFormatLabeledSequenceV1
+	manifest.SequenceLayout = data.DatasetSequenceLayoutOneRecordRow
+	manifest.RecordSeqLen = seqLen
+	manifest.Task = &data.DatasetTask{Type: data.DatasetTaskSingleLabelClassification, NumLabels: numLabels}
+	manifest.Splits = map[string]data.DatasetSplit{"train": {
+		Pattern: "train_*.bin", Tokens: 8, Shards: 1, Sequences: 2,
+		MaxSequenceTokens: 4, ClassCounts: map[string]int64{"0": 1, "1": 1},
+	}}
+	blob, err = json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, blob, 0o644); err != nil {
 		t.Fatal(err)
 	}
 }

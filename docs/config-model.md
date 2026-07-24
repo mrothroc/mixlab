@@ -33,6 +33,29 @@ This page is the short path through the top-level model fields. Use
 | `mlp_mult` | FFN expansion multiplier used by FFN-style blocks and experts. |
 | `blocks` | Ordered architecture stack. See [config-blocks.md](config-blocks.md). |
 | `training` | Training objective, optimizer, schedule, and runtime settings. See [config-training.md](config-training.md). |
+| `rc_equivariant` | Runs DNA inputs and reverse complements through one shared backbone, producing equivariant MLM logits or invariant mean-pooled classification. Native-only in v1. |
+
+## DNA Reverse-Complement Equivariance
+
+Set top-level `rc_equivariant: true` for architectural reverse-complement
+parameter sharing. `model_dim` remains the width of one strand branch, model
+weights are unchanged, and backbone activation compute is approximately
+doubled. Mixlab derives the complement map from the prepared DNA
+`nucleotide_vocab.json`; special tokens remain fixed while biological bases
+reverse within each record or packed segment.
+
+V1 supports bidirectional MLM and mean-pooled native classification with
+`plain` or `gated_deltanet` token mixers plus pointwise FFN blocks. Exact
+equivariance currently requires dropout to be disabled. Causal generation,
+Hugging Face export, reverse-complement augmentation, and advanced graph
+composition are rejected explicitly.
+
+For a controlled classification comparison, use the same architecture and
+optimizer settings with `rc_equivariant` omitted and
+`training.reverse_complement_prob` enabled. The paired examples
+`nucleotide_dna_rc_augmented_classification_tiny.json` and
+`nucleotide_dna_rc_equivariant_classification_tiny.json` differ only in that
+policy.
 
 ## Embedding Channels
 

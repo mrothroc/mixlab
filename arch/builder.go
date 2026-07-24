@@ -439,6 +439,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		nil,
 		nil,
 		nil,
+		false,
 	)
 }
 
@@ -482,6 +483,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	wordStructural *WordStructuralObjectiveSpec,
 	invariance *InvarianceSpec,
 	pllMargin *PLLMarginSpec,
+	rcEquivariant bool,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -497,6 +499,10 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 
 	B := batchSize
+	backboneB := B
+	if rcEquivariant {
+		backboneB = 2 * B
+	}
 	T := seqLen
 	D := modelDim
 	V := vocabSize
@@ -609,6 +615,11 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	invarianceEnabled := invariance != nil && invariance.Active()
 	pllMarginEnabled := pllMargin != nil && pllMargin.Active()
 	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
+	if rcEquivariant {
+		prog.DeclareInput("rc_tokens", TensorInt32, []int{B, T})
+		prog.DeclareInput("rc_alignment_positions", TensorInt32, []int{B * T})
+		prog.DeclareInput("rc_complement_ids", TensorInt32, []int{V})
+	}
 	prog.DeclareInput("targets", TensorInt32, []int{B * T})
 	if containsTTTMLP(blocks) {
 		prog.DeclareInput("ttt_inner_lr_scale", TensorFloat32, []int{len(blocks)})
@@ -647,24 +658,29 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		prog.DeclareInput("first_byte_valid", TensorInt32, []int{V})
 	}
 
-	wi, err := emitDiscreteTokenInputIR(prog, discreteTokenInputOptions{
-		BatchSize:           B,
-		SeqLen:              T,
-		ModelDim:            D,
-		TokenWeightIndex:    0,
-		NextWeightIndex:     fixedWeightCountWithHeadAndNorm(reserveHead, norm),
-		PositionalEmbedding: positionalEmbedding,
-		MaxPositions:        maxPositions,
-		Smear:               smearOpts,
-		CharVocabSize:       charVocabSize,
-		CharDim:             charDim,
-		CharMaxPerToken:     charMaxPerToken,
-		BigramVocabSize:     bigramVocabSize,
-		BigramDim:           bigramDim,
-		TrigramVocabSize:    trigramVocabSize,
-		TrigramDim:          trigramDim,
-		EmbeddingDropout:    embeddingDropout,
-	})
+	var wi int
+	if rcEquivariant {
+		wi, err = emitRCEquivariantInputIR(prog, B, T, D, fixedWeightCountWithHeadAndNorm(reserveHead, norm))
+	} else {
+		wi, err = emitDiscreteTokenInputIR(prog, discreteTokenInputOptions{
+			BatchSize:           B,
+			SeqLen:              T,
+			ModelDim:            D,
+			TokenWeightIndex:    0,
+			NextWeightIndex:     fixedWeightCountWithHeadAndNorm(reserveHead, norm),
+			PositionalEmbedding: positionalEmbedding,
+			MaxPositions:        maxPositions,
+			Smear:               smearOpts,
+			CharVocabSize:       charVocabSize,
+			CharDim:             charDim,
+			CharMaxPerToken:     charMaxPerToken,
+			BigramVocabSize:     bigramVocabSize,
+			BigramDim:           bigramDim,
+			TrigramVocabSize:    trigramVocabSize,
+			TrigramDim:          trigramDim,
+			EmbeddingDropout:    embeddingDropout,
+		})
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -683,6 +699,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	if residMix {
 		prog.ScalarMul("x", 1.0, "x0")
+	}
+	if rcEquivariant && segmentAttentionMask {
+		prog.Concat("segment_ids", "segment_ids", 0, "segment_ids")
 	}
 	layerAgg := newLayerAggregationBuildState(prog, layerAggregation, layerAggregationWeightStart, "x")
 
@@ -705,7 +724,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	case unet:
 		numEncoder, numSkip := unetLayout(len(blocks))
 		for i := range blocks[:numEncoder] {
-			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, positionalEmbedding, sharedRel, layerAgg, segmentAttentionMask)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, backboneB, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, positionalEmbedding, sharedRel, layerAgg, segmentAttentionMask)
 			if err != nil {
 				return nil, err
 			}
@@ -733,7 +752,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 				prog.Add("x", skipScaled, "x")
 			}
 			blockIdx := numEncoder + decIdx
-			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, blockIdx, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, positionalEmbedding, sharedRel, layerAgg, segmentAttentionMask)
+			wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, blockIdx, "x", "x0", wi, D, T, backboneB, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, positionalEmbedding, sharedRel, layerAgg, segmentAttentionMask)
 			if err != nil {
 				return nil, err
 			}
@@ -741,14 +760,14 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			opIdx++
 		}
 	case len(executionOrder) > 0:
-		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan, norm, normPlacement, ffnInternalNorm, positionalEmbedding, sharedRel, layerAgg, segmentAttentionMask)
+		wi, err = emitSequentialOrderWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, executionOrder, "x", "x0", wi, D, T, backboneB, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan, norm, normPlacement, ffnInternalNorm, positionalEmbedding, sharedRel, layerAgg, segmentAttentionMask)
 		if err != nil {
 			return nil, err
 		}
 	default:
 		if hiddenCapture != nil {
 			for i := 0; i < len(blocks); i++ {
-				wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, positionalEmbedding, sharedRel, layerAgg, segmentAttentionMask)
+				wi, err = emitSequentialBlockWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, i, "x", "x0", wi, D, T, backboneB, V, &opIdx, nil, mlpMult, blockScales, residMix, dropout, attnDropout, norm, normPlacement, ffnInternalNorm, positionalEmbedding, sharedRel, layerAgg, segmentAttentionMask)
 				if err != nil {
 					return nil, err
 				}
@@ -758,7 +777,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			}
 			break
 		}
-		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, B, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan, norm, normPlacement, ffnInternalNorm, positionalEmbedding, sharedRel, layerAgg, segmentAttentionMask)
+		wi, err = emitSequentialRangeWithRecurrenceDropout(prog, blocks, refs, weightStarts, kvCache, 0, len(blocks), "x", "x0", wi, D, T, backboneB, V, &opIdx, nil, mlpMult, blockScales, residMix, parallelResidual, dropout, attnDropout, &backoutPlan, norm, normPlacement, ffnInternalNorm, positionalEmbedding, sharedRel, layerAgg, segmentAttentionMask)
 		if err != nil {
 			return nil, err
 		}
@@ -772,23 +791,41 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 
 	// Final normalization
-	if _, err := emitNamedNormIR(prog, "x", finalNormWeightIndexWithHeadAndNorm(reserveHead, norm), "x_final_norm", norm); err != nil {
+	finalNormState := "x_final_norm"
+	if rcEquivariant {
+		finalNormState = "rc_paired_final_norm"
+	}
+	if _, err := emitNamedNormIR(prog, "x", finalNormWeightIndexWithHeadAndNorm(reserveHead, norm), finalNormState, norm); err != nil {
 		return nil, err
 	}
-	prog.Reshape("x_final_norm", []int{B, T, D}, "x_hidden")
+	headHiddenState := finalNormState
+	if rcEquivariant {
+		headHiddenState = emitRCEquivariantHiddenIR(prog, finalNormState, B, T, D)
+	}
+	prog.Reshape(headHiddenState, []int{B, T, D}, "x_hidden")
 	if data2VecEnabled {
 		wi = emitData2VecPredictorIR(prog, data2vec, wi)
 	}
 
 	// Output head projection
 	logitsState := "logits"
-	if maskedObjective && mlmHead == MLMHeadBERT {
+	switch {
+	case rcEquivariant:
+		var err error
+		logitsState, wi, err = emitRCEquivariantLMHeadIR(
+			prog, wi, D, V, maskedObjective, mlmHead,
+			useTiedHead, norm.Eps, dropout,
+		)
+		if err != nil {
+			return nil, err
+		}
+	case maskedObjective && mlmHead == MLMHeadBERT:
 		var err error
 		logitsState, wi, err = emitBERTMLMHeadIR(prog, "x_final_norm", wi, D, V, norm.Eps, dropout)
 		if err != nil {
 			return nil, err
 		}
-	} else {
+	default:
 		if useTiedHead {
 			prog.Transpose(weightName(0), []int{1, 0}, "tied_head")
 			prog.MatMul("x_final_norm", "tied_head", "logits")
@@ -871,6 +908,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	prog.DeclareOutput("per_token_nll", TensorFloat32, []int{B * T})
 	prog.DeclareOutput("x_hidden", TensorFloat32, []int{B, T, D})
+	if rcEquivariant {
+		prog.DeclareOutput("rc_equivariant_hidden", TensorFloat32, []int{B, T, 2 * D})
+	}
 	prog.DeclareOutput("logits", TensorFloat32, []int{B * T, V})
 	if data2VecEnabled {
 		prog.DeclareOutput("data2vec_loss", TensorFloat32, []int{1})

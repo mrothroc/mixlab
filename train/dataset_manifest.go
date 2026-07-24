@@ -20,6 +20,9 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		if cfg.ClassificationEnabled() {
 			return fmt.Errorf("config %q training.objective=%q requires a labeled mixlab.dataset.json", cfg.Name, arch.ObjectiveClassification)
 		}
+		if cfg.RCEquivarianceEnabled() {
+			return fmt.Errorf("config %q rc_equivariant=true requires a DNA nucleotide mixlab.dataset.json", cfg.Name)
+		}
 		if cfg.Training.ReverseComplementProb > 0 {
 			return fmt.Errorf("config %q training.reverse_complement_prob requires a nucleotide mixlab.dataset.json", cfg.Name)
 		}
@@ -34,12 +37,12 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		if cfg.Training.ReverseComplementProb > 0 {
 			return fmt.Errorf("config %q training.reverse_complement_prob requires shard_format=%q", cfg.Name, data.DatasetShardFormatSequenceV1)
 		}
+		if cfg.RCEquivarianceEnabled() {
+			return fmt.Errorf("config %q rc_equivariant=true requires record-oriented nucleotide sequence shards", cfg.Name)
+		}
 		return nil
 	}
 	if manifest.EffectiveSequenceLayout() == data.DatasetSequenceLayoutOneRecordRow {
-		if cfg.Training.ReverseComplementProb > 0 {
-			return fmt.Errorf("config %q training.reverse_complement_prob requires packed nucleotide sequence data", cfg.Name)
-		}
 		if cfg.SeqLen != manifest.RecordSeqLen {
 			return fmt.Errorf("dataset manifest %q record_seq_len=%d does not match config seq_len=%d", manifestPath, manifest.RecordSeqLen, cfg.SeqLen)
 		}
@@ -59,11 +62,22 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		} else if manifest.ShardFormat == data.DatasetShardFormatLabeledSequenceV1 {
 			return fmt.Errorf("labeled sequence dataset %q requires training.objective=%q", manifestPath, arch.ObjectiveClassification)
 		}
+		if cfg.Training.ReverseComplementProb > 0 && objective != arch.ObjectiveClassification {
+			return fmt.Errorf("config %q training.reverse_complement_prob with one-record-per-row data requires training.objective=%q", cfg.Name, arch.ObjectiveClassification)
+		}
 		if cfg.Training.ExampleFramingEnabled() {
 			return fmt.Errorf("config %q training.example_framing conflicts with manifest-backed one-record-per-row framing", cfg.Name)
 		}
 		if cfg.Training.EffectiveAttentionSegmentMask() != "" {
 			return fmt.Errorf("config %q training.attention_segment_mask is unnecessary and unsupported with one-record-per-row framing", cfg.Name)
+		}
+		if cfg.RCEquivarianceEnabled() || cfg.Training.ReverseComplementProb > 0 {
+			if manifest.Modality != "nucleotide" {
+				return fmt.Errorf("config %q reverse-complement features require a nucleotide dataset; got modality=%q", cfg.Name, manifest.Modality)
+			}
+			if _, _, err := configureNucleotideVocabularyForTraining(cfg, manifest, manifestPath); err != nil {
+				return err
+			}
 		}
 		cfg.Training.DatasetRecordFraming = true
 		cfg.Training.DatasetPADID = manifest.SpecialTokenIDs["pad"]
@@ -74,6 +88,10 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		if cfg.Training.DatasetClassification {
 			fmt.Printf("  [%s] classification dataset: num_labels=%d pooling=%s\n",
 				name, cfg.Training.DatasetNumLabels, cfg.EffectiveClassificationPooling())
+		}
+		if cfg.Training.ReverseComplementProb > 0 {
+			fmt.Printf("  [%s] DNA reverse-complement augmentation: probability=%g seed=%d\n",
+				name, cfg.Training.ReverseComplementProb, cfg.Training.Seed)
 		}
 		return nil
 	}
@@ -86,33 +104,9 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 	if mode := cfg.Training.EffectiveAttentionSegmentMask(); mode != "" && mode != arch.AttentionSegmentMaskBoundaryToken {
 		return fmt.Errorf("config %q training.attention_segment_mask=%q conflicts with manifest-backed sequence packing; omit it", cfg.Name, mode)
 	}
-	if strings.TrimSpace(manifest.Artifacts.Vocabulary) == "" {
-		return fmt.Errorf("nucleotide dataset manifest %q is missing artifacts.vocabulary", manifestPath)
-	}
-	vocabPath := filepath.Join(filepath.Dir(manifestPath), manifest.Artifacts.Vocabulary)
-	vocab, err := data.LoadNucleotideVocabulary(vocabPath)
+	vocab, vocabPath, err := configureNucleotideVocabularyForTraining(cfg, manifest, manifestPath)
 	if err != nil {
 		return err
-	}
-	if vocab.Size() != cfg.VocabSize {
-		return fmt.Errorf("nucleotide vocabulary %q size=%d does not match model vocab_size=%d", vocabPath, vocab.Size(), cfg.VocabSize)
-	}
-	for _, name := range []string{"pad", "bos", "eos", "mask"} {
-		artifactID, ok := vocab.SpecialTokenID(name)
-		if !ok {
-			return fmt.Errorf("nucleotide vocabulary %q is missing %s token", vocabPath, name)
-		}
-		manifestID, ok := manifest.SpecialTokenIDs[name]
-		if !ok || manifestID != artifactID {
-			return fmt.Errorf("nucleotide special token %s mismatch: manifest=%d present=%t vocabulary=%d", name, manifestID, ok, artifactID)
-		}
-	}
-	maskID, _ := vocab.SpecialTokenID("mask")
-	objective := cfg.Training.EffectiveObjective()
-	if objective == arch.ObjectiveMLM || objective == arch.ObjectiveMNTP || objective == arch.ObjectiveHybrid {
-		if cfg.Training.MLMMaskTokenID != maskID {
-			return fmt.Errorf("config %q training.mlm_mask_token_id=%d does not match nucleotide MASK id %d", cfg.Name, cfg.Training.MLMMaskTokenID, maskID)
-		}
 	}
 	padID, _ := vocab.SpecialTokenID("pad")
 	bosID, _ := vocab.SpecialTokenID("bos")
@@ -122,23 +116,6 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 	cfg.Training.DatasetBOSID = bosID
 	cfg.Training.DatasetEOSID = eosID
 	cfg.Training.AttentionSegmentBoundaryTokenID = bosID
-	cfg.Training.DatasetNucleotideAlphabet = vocab.Alphabet
-	cfg.Training.DatasetNucleotideVocabSource = vocabPath
-	cfg.Training.DatasetTokenEligible = make([]uint8, vocab.Size())
-	for token, id := range vocab.Tokens {
-		if !strings.HasPrefix(token, "<") {
-			cfg.Training.DatasetTokenEligible[id] = 1
-		}
-	}
-	if vocab.Alphabet == data.NucleotideAlphabetDNA {
-		complement, err := vocab.ComplementTokenIDs()
-		if err != nil {
-			return err
-		}
-		cfg.Training.DatasetNucleotideComplement = complement
-	} else if cfg.Training.ReverseComplementProb > 0 {
-		return fmt.Errorf("config %q training.reverse_complement_prob is DNA-only; dataset alphabet=%q", cfg.Name, vocab.Alphabet)
-	}
 	if err := arch.ValidateSegmentAttentionCompatibility(cfg, cfg.Name); err != nil {
 		return err
 	}
@@ -152,6 +129,59 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 			name, cfg.Training.ReverseComplementProb, cfg.Training.Seed)
 	}
 	return nil
+}
+
+func configureNucleotideVocabularyForTraining(
+	cfg *ArchConfig,
+	manifest *data.DatasetManifest,
+	manifestPath string,
+) (*data.NucleotideVocabulary, string, error) {
+	if strings.TrimSpace(manifest.Artifacts.Vocabulary) == "" {
+		return nil, "", fmt.Errorf("nucleotide dataset manifest %q is missing artifacts.vocabulary", manifestPath)
+	}
+	vocabPath := filepath.Join(filepath.Dir(manifestPath), manifest.Artifacts.Vocabulary)
+	vocab, err := data.LoadNucleotideVocabulary(vocabPath)
+	if err != nil {
+		return nil, "", err
+	}
+	if vocab.Size() != cfg.VocabSize {
+		return nil, "", fmt.Errorf("nucleotide vocabulary %q size=%d does not match model vocab_size=%d", vocabPath, vocab.Size(), cfg.VocabSize)
+	}
+	for _, name := range []string{"pad", "bos", "eos", "mask"} {
+		artifactID, ok := vocab.SpecialTokenID(name)
+		if !ok {
+			return nil, "", fmt.Errorf("nucleotide vocabulary %q is missing %s token", vocabPath, name)
+		}
+		manifestID, ok := manifest.SpecialTokenIDs[name]
+		if !ok || manifestID != artifactID {
+			return nil, "", fmt.Errorf("nucleotide special token %s mismatch: manifest=%d present=%t vocabulary=%d", name, manifestID, ok, artifactID)
+		}
+	}
+	maskID, _ := vocab.SpecialTokenID("mask")
+	objective := cfg.Training.EffectiveObjective()
+	if objective == arch.ObjectiveMLM || objective == arch.ObjectiveMNTP || objective == arch.ObjectiveHybrid {
+		if cfg.Training.MLMMaskTokenID != maskID {
+			return nil, "", fmt.Errorf("config %q training.mlm_mask_token_id=%d does not match nucleotide MASK id %d", cfg.Name, cfg.Training.MLMMaskTokenID, maskID)
+		}
+	}
+	cfg.Training.DatasetNucleotideAlphabet = vocab.Alphabet
+	cfg.Training.DatasetNucleotideVocabSource = vocabPath
+	cfg.Training.DatasetTokenEligible = make([]uint8, vocab.Size())
+	for token, id := range vocab.Tokens {
+		if !strings.HasPrefix(token, "<") {
+			cfg.Training.DatasetTokenEligible[id] = 1
+		}
+	}
+	if vocab.Alphabet == data.NucleotideAlphabetDNA {
+		complement, err := vocab.ComplementTokenIDs()
+		if err != nil {
+			return nil, "", err
+		}
+		cfg.Training.DatasetNucleotideComplement = complement
+	} else if cfg.Training.ReverseComplementProb > 0 || cfg.RCEquivarianceEnabled() {
+		return nil, "", fmt.Errorf("config %q reverse-complement features are DNA-only; dataset alphabet=%q", cfg.Name, vocab.Alphabet)
+	}
+	return vocab, vocabPath, nil
 }
 
 func validateDatasetManifestForConfig(cfg *ArchConfig, shardPattern string) (*data.DatasetManifest, string, error) {

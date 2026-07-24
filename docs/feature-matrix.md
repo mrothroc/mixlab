@@ -35,6 +35,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Block diffusion | Yes | Native PLL scoring | Native diffusion generation | Pure diffusion is native-only | [block_diffusion_tiny.json](../examples/block_diffusion_tiny.json) |
 | Multihead | Yes | Selected native scorer/detector/denoiser | Selected diffusion head | Exports only `export_head` | [multihead_mntp_diffusion_tiny.json](../examples/multihead_mntp_diffusion_tiny.json) |
 | Sequence classification | Yes | Loss, accuracy, MCC, macro-F1, binary AUROC | No | Native classifier checkpoints are native-only; LM backbone export remains architecture-gated | [sequence_classification_gated_deltanet_tiny.json](../examples/sequence_classification_gated_deltanet_tiny.json) |
+| DNA RC-equivariant MLM/classification | Yes | Native masked eval or classification metrics | No | Native-only in v1; no extra weights, approximately 2x backbone compute | [Augmented control](../examples/nucleotide_dna_rc_augmented_classification_tiny.json), [equivariant](../examples/nucleotide_dna_rc_equivariant_classification_tiny.json) |
 | RTD detector | Multihead auxiliary | `score-electra` | No | Detector and generator are skipped | [multihead_mntp_rtd_tiny.json](../examples/multihead_mntp_rtd_tiny.json) |
 | Native energy head | Multihead auxiliary | `score-ebm` | No | Energy head is skipped | [multihead_mntp_energy_tiny.json](../examples/multihead_mntp_energy_tiny.json) |
 | MLM/MNTP span-PLL ranking | Multihead auxiliary | `score-ebm` | No | Scorer exports normally | [multihead_mntp_span_pll_ranking_tiny.json](../examples/multihead_mntp_span_pll_ranking_tiny.json) |
@@ -51,6 +52,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Word structural objective | Shuffles local spans and reconstructs originals | MLM/MNTP vocab head | [word_structural_mlm_tiny.json](../examples/word_structural_mlm_tiny.json) |
 | Whole-word masking curriculum | Changes host-side mask selection | Compatible `tokenizer.json` beside shards | [mlm_wwm_curriculum_tiny.json](../examples/mlm_wwm_curriculum_tiny.json) |
 | Segment attention masking | Blocks cross-segment attention | Boundary token or manifest-backed record segments | [packed_segment_mask_tiny.json](../examples/packed_segment_mask_tiny.json) |
+| Reverse-complement handling | Augmentation or exact shared-backbone RCPS | Manifest-backed DNA vocabulary; the two modes are mutually exclusive | [RC-equivariant classifier](../examples/nucleotide_dna_rc_equivariant_classification_tiny.json) |
 | Character, bigram, trigram features | Adds token-derived embedding channels | Character features require `char_features.bin` | [char_features_plain.json](../examples/char_features_plain.json) |
 | SWA/EMA checkpoints | Writes live and averaged weights | Configure start, decay, and interval | [swa_ema_tiny.json](../examples/swa_ema_tiny.json) |
 

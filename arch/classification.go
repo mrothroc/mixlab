@@ -119,8 +119,5 @@ func validateTrainingClassification(cfg *ArchConfig, source string) error {
 	if len(t.Heads) > 0 || strings.TrimSpace(t.ExportHead) != "" || strings.TrimSpace(t.DiffusionHead) != "" {
 		return fmt.Errorf("config %q native classification does not use multihead heads/export_head/diffusion_head", source)
 	}
-	if t.ReverseComplementProb != 0 {
-		return fmt.Errorf("config %q native classification does not support reverse_complement_prob in v1", source)
-	}
 	return nil
 }

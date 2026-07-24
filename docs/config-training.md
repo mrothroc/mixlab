@@ -127,6 +127,11 @@ compatible hybrid masked steps. Masked distillation runs teachers on the same
 masked inputs as the student and reduces KL only over masked loss rows; set
 `loss_weight_kl: 0` and `loss_weight_ce: 1` for a graph-identical no-KD
 control.
+
+Top-level `rc_equivariant: true` is an architectural DNA alternative to
+`training.reverse_complement_prob`. It evaluates both orientations with shared
+weights on every step, so the two fields are mutually exclusive. See
+[Config: Model Basics](config-model.md#dna-reverse-complement-equivariance).
 Minimal-pair JSONL can be validated or compiled to `.mpair` shards with
 `mixlab -mode prepare-pairs`; set `training.minimal_pair.source: "bin"` to use
 the compiled artifact. The default `score_source: "energy_scalar"` trains a
