@@ -39,7 +39,7 @@ func (s *ClassificationSpec) effectivePooling(blocks []BlockSpec) string {
 			default:
 				seenCausal = true
 			}
-		case "ttt_mlp", "mamba", "mamba3", "gated_linear_ssm", "rwkv", "retnet",
+		case "ttt_mlp", "legacy_mamba", "mamba3", "gated_linear_ssm", "rwkv", "retnet",
 			"gated_deltanet", "hgrn2", "mlstm":
 			seenCausal = true
 		}

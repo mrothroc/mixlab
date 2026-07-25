@@ -267,7 +267,7 @@ func estimateBlockFLOPs(block BlockSpec, B, T, D, V, ffn int, mlpMult float64, b
 		return estimateSwiGLUBlockFLOPs(B, T, D, ffn)
 	case "moe":
 		return estimateMoEBlockFLOPs(block, B, T, D, mlpMult)
-	case "mamba":
+	case "legacy_mamba":
 		inner := block.InnerDim
 		if inner <= 0 {
 			inner = D

@@ -21,7 +21,7 @@ func TestBlockWeightCount(t *testing.T) {
 		{BlockSpec{Type: "swiglu"}, 4},
 		{BlockSpec{Type: "geglu"}, 4},
 		{BlockSpec{Type: "mlp"}, 3},
-		{BlockSpec{Type: "mamba"}, 4},
+		{BlockSpec{Type: "legacy_mamba"}, 4},
 		{BlockSpec{Type: "token_blend"}, 1},
 	}
 	for _, tt := range tests {

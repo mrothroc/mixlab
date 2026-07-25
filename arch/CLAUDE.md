@@ -6,7 +6,7 @@ This package builds the IR program from a JSON `ArchConfig`. It runs in pure Go 
 - `ir.go` — IR types, op codes, `Program` builder methods. Op codes are stable IDs (don't reuse).
 - `config.go` — `ArchConfig`, `BlockSpec`, validators
 - `registry.go` — block dispatch (`builtinBlockEmitter`) + public delegation API
-- `recurrent_blocks.go` — emit functions for mamba/mamba3-canonical/rwkv/retnet/gated_deltanet
+- `recurrent_blocks.go` — emit functions for legacy_mamba/mamba3-canonical/rwkv/retnet/gated_deltanet
 - `blocks.go` — emit functions for plain/swiglu/mlp/perceiver/bottleneck/etc.
 - `weight_shapes.go` — per-block `WeightMeta` for the optimizer
 - `objective.go` — training objectives + validators (causal/mlm/mntp/hybrid/block-diffusion/multihead/classification)
@@ -39,4 +39,8 @@ arch.BlockWeightShapes(spec, D, T, B, V) ([]WeightMeta, error)
 8. Add a runtime case in `gpu/ir.cpp` for the op (and Metal/CUDA primitive if needed — see `gpu/CLAUDE.md`).
 
 ## Naming gotcha
+`mamba` is retired because its fixed-decay recurrence is not a reference Mamba
+implementation. Existing checkpoints retain the same weight layout under the
+explicit `legacy_mamba` name. Do not restore the ambiguous alias.
+
 `mamba3` is a deprecated alias for `gated_linear_ssm` (the simplified gated-linear-scan, not canonical Mamba-3). The canonical Mamba-3 block is named `mamba3-canonical`. Both `mamba3` and `gated_linear_ssm` resolve to the same emitter; configs using `mamba3` get a one-time deprecation warning. The `mamba3` slot will be reassigned to canonical Mamba-3 in a future release.

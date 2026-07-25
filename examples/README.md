@@ -66,7 +66,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [packed_segment_mask_tiny.json](packed_segment_mask_tiny.json) | Packed segment masking | Block-diagonal plain attention from a boundary token |
 | [nucleotide_dna_causal_tiny.json](nucleotide_dna_causal_tiny.json) | Base-level DNA causal model | Manifest-backed contig packing and deterministic reverse complements |
 | [nucleotide_dna_mlm_tiny.json](nucleotide_dna_mlm_tiny.json) | Base-level DNA MLM | Bidirectional base reconstruction with contig isolation |
-| [nucleotide_dna_mamba_stream_tiny.json](nucleotide_dna_mamba_stream_tiny.json) | Base-level DNA Mamba LM | Continuous FASTA stream framing without attention segment masks |
+| [nucleotide_dna_mamba3_canonical_stream_tiny.json](nucleotide_dna_mamba3_canonical_stream_tiny.json) | Base-level DNA canonical Mamba-3 LM | Continuous FASTA stream framing without attention segment masks |
 | [nucleotide_dna_rc_augmented_classification_tiny.json](nucleotide_dna_rc_augmented_classification_tiny.json) | RC-augmented DNA classifier | Stochastic reverse-complement control for the matching RCPS recipe |
 | [nucleotide_dna_rc_equivariant_classification_tiny.json](nucleotide_dna_rc_equivariant_classification_tiny.json) | RC-equivariant DNA classifier | Shared-weight forward/reverse-complement backbone with invariant mean pooling |
 | [sequence_classification_gated_deltanet_tiny.json](sequence_classification_gated_deltanet_tiny.json) | Native sequence classifier | End-to-end single-label classification on a recurrent Gated DeltaNet backbone |
@@ -97,7 +97,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [parallel_hybrid_branches_tiny.json](parallel_hybrid_branches_tiny.json) | Parallel attention + HGRN2 | Heterogeneous parallel group with a zero-initialized recurrent branch |
 | [lamb_plain_tiny.json](lamb_plain_tiny.json) | LAMB optimizer | Whole-model LAMB optimizer on a tiny transformer |
 | [moe_tiny.json](moe_tiny.json) | Sparse MoE transformer | Top-k routed SwiGLU feed-forward experts |
-| [mamba_2L.json](mamba_2L.json) | Mamba SSM | Gated recurrence, no attention |
+| [mamba3_canonical_2L.json](mamba3_canonical_2L.json) | Canonical Mamba-3 SSM | Paper-aligned recurrent token mixer, no attention |
 | [retnet_2L.json](retnet_2L.json) | RetNet | Exponential decay retention |
 | [rwkv_2L.json](rwkv_2L.json) | RWKV | Linear attention with time decay |
 | [hgrn2_2L.json](hgrn2_2L.json) | HGRN2 mixer | Matrix-state recurrence token mixer |
@@ -112,7 +112,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 
 - **Learning mixlab**: Start with `plain_3L.json` — it trains in seconds.
 - **Masked objectives**: Use `mlm_tiny.json` as the smallest bidirectional MLM starting point.
-- **Nucleotide sequences**: Prepare FASTA with `-input-format fasta`, then use `nucleotide_dna_causal_tiny.json` or `nucleotide_dna_mlm_tiny.json` for record-isolated attention models. For recurrent/SSM causal pretraining, prepare with `-nucleotide-framing stream` and use `nucleotide_dna_mamba_stream_tiny.json`. Match `vocab_size` to the emitted `nucleotide_vocab.json` when enabling ambiguity symbols beyond the default `N`.
+- **Nucleotide sequences**: Prepare FASTA with `-input-format fasta`, then use `nucleotide_dna_causal_tiny.json` or `nucleotide_dna_mlm_tiny.json` for record-isolated attention models. For recurrent/SSM causal pretraining, prepare with `-nucleotide-framing stream` and use `nucleotide_dna_mamba3_canonical_stream_tiny.json`. Match `vocab_size` to the emitted `nucleotide_vocab.json` when enabling ambiguity symbols beyond the default `N`.
 - **Reverse-complement DNA comparison**: Use the matched `nucleotide_dna_rc_augmented_classification_tiny.json` and `nucleotide_dna_rc_equivariant_classification_tiny.json` configs with labeled FASTA data. The native-only equivariant path shares all backbone weights across orientations and requires mean pooling and zero dropout.
 - **Native sequence classification**: Use `sequence_classification_gated_deltanet_tiny.json` with labeled JSONL prepared using `-label-field` or FASTA prepared using `-label-file`. Warm-start from the matching LM architecture with `-safetensors-load`; Mixlab appends a fresh classifier and fine-tunes the full native backbone.
 - **Whole-word MLM**: Use `mlm_wwm_curriculum_tiny.json` with shards prepared using `-wwm-compatible-tokenizer`. Mixlab derives word starts from the shard-adjacent `tokenizer.json` and changes only host-side mask selection.
@@ -135,7 +135,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **Packed document boundaries**: Use `packed_segment_mask_tiny.json` when your packed shards already contain a boundary token and you want block-diagonal attention inside each packed sequence.
 - **Large-batch optimizer**: Use `lamb_plain_tiny.json` as a minimal whole-model LAMB starting point.
 - **Sparse feed-forward experts**: Use `moe_tiny.json` for top-k routed MoE blocks with load balancing.
-- **Exploring block types**: Try `mamba_2L.json`, `retnet_2L.json`, `rwkv_2L.json`, `hgrn2_2L.json`, `ttt_mlp_tiny.json`, or `mlstm_2L.json`.
+- **Exploring block types**: Try `mamba3_canonical_2L.json`, `retnet_2L.json`, `rwkv_2L.json`, `hgrn2_2L.json`, `ttt_mlp_tiny.json`, or `mlstm_2L.json`.
 - **Custom architectures**: See `custom_geglu.json` and [custom_geglu.md](custom_geglu.md).
 - **Advanced features**: `unet_transformer.json` and `recurrent_parallel.json` cover U-Net skips, recurrence, parallel residuals, block scales, residual mixing, tied embeddings, and TTT.
 

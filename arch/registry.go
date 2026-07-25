@@ -208,7 +208,7 @@ func init() {
 			return tttMLPWeightShapesWithOptions(spec, D, opts.BlockScales)
 		},
 	})
-	for _, name := range []string{"mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
+	for _, name := range []string{"legacy_mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
 		RegisterBlock(name, blockRegistration{
 			Emitter:     builtinBlockEmitter,
 			WeightCount: builtinBlockWeightCount,
@@ -295,7 +295,7 @@ func builtinBlockWeightCount(spec BlockSpec, blockScales, residMix bool) (int, e
 		return mlpWeightCount(spec, blockScales, residMix)
 	case "moe":
 		return moeWeightCount(spec, blockScales, residMix)
-	case "mamba":
+	case "legacy_mamba":
 		return 4, nil
 	case "gated_linear_ssm":
 		return 6, nil
@@ -324,12 +324,12 @@ func builtinBlockWeightCount(spec BlockSpec, blockScales, residMix bool) (int, e
 
 func builtinBlockEmitter(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
 	switch blockTypeName(spec.Type) {
-	case "mamba":
+	case "legacy_mamba":
 		inner := spec.InnerDim
 		if inner <= 0 {
 			inner = D
 		}
-		return emitMambaIR(prog, stream, wi, inner, T, B, idx)
+		return emitLegacyMambaIR(prog, stream, wi, inner, T, B, idx)
 	case "gated_linear_ssm":
 		inner := spec.InnerDim
 		if inner <= 0 {

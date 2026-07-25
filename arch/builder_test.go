@@ -75,9 +75,9 @@ func TestCountWeights_RetNet(t *testing.T) {
 	}
 }
 
-func TestCountWeights_WithMamba(t *testing.T) {
+func TestCountWeights_WithLegacyMamba(t *testing.T) {
 	blocks := []BlockSpec{
-		{Type: "mamba"},
+		{Type: "legacy_mamba"},
 		{Type: "plain", Heads: 4},
 		{Type: "swiglu"},
 	}
@@ -739,10 +739,10 @@ func TestBuildIRProgram_RetNet(t *testing.T) {
 	}
 }
 
-func TestBuildIRProgram_MambaSequential(t *testing.T) {
+func TestBuildIRProgram_LegacyMambaSequential(t *testing.T) {
 	blocks := []BlockSpec{
-		{Type: "mamba"},
-		{Type: "mamba"},
+		{Type: "legacy_mamba"},
+		{Type: "legacy_mamba"},
 		{Type: "swiglu"},
 	}
 	prog, err := BuildIRProgram(128, 1024, 64, 1, DefaultFFNMultiplier, false, false, false, false, 0, blocks)
@@ -763,9 +763,9 @@ func TestBuildIRProgram_MambaSequential(t *testing.T) {
 	}
 }
 
-func TestBuildIRProgram_MambaWithCustomInnerDim(t *testing.T) {
+func TestBuildIRProgram_LegacyMambaWithCustomInnerDim(t *testing.T) {
 	blocks := []BlockSpec{
-		{Type: "mamba", InnerDim: 64},
+		{Type: "legacy_mamba", InnerDim: 64},
 	}
 	prog, err := BuildIRProgram(128, 1024, 64, 1, DefaultFFNMultiplier, false, false, false, false, 0, blocks)
 	if err != nil {

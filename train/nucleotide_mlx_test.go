@@ -53,7 +53,7 @@ func TestNucleotideStreamTrainsAttentionAndRecurrentMixers(t *testing.T) {
 		name  string
 		block string
 	}{
-		{name: "mamba", block: `{"type":"mamba","inner_dim":16}`},
+		{name: "legacy_mamba", block: `{"type":"legacy_mamba","inner_dim":16}`},
 		{name: "gated_deltanet", block: `{"type":"gated_deltanet","heads":2,"d_k":4}`},
 		{name: "plain", block: `{"type":"plain","heads":2}`},
 	}

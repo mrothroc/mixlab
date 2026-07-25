@@ -28,7 +28,8 @@ normally paired with FFN/channel mixers such as `swiglu`, `geglu`, `mlp`, or
 | `plain` | Transformer attention block with optional FFN tail. |
 | `swiglu`, `geglu`, `mlp` | Dense FFN/channel mixers. |
 | `moe` | Top-k routed FFN replacement with load-balancing auxiliary loss. |
-| `mamba`, `mamba3-canonical`, `gated_linear_ssm` | State-space token mixers. |
+| `mamba3-canonical`, `gated_linear_ssm` | State-space token mixers. |
+| `legacy_mamba` | Compatibility-only fixed-decay recurrence; not reference Mamba. |
 | `retnet`, `rwkv`, `gated_deltanet` | Retention/recurrent token mixers. |
 | `hgrn2`, `ttt_mlp`, `mlstm` | Correctness-first recurrent token mixers. `ttt_mlp` uses a nonlinear per-sequence inner model and is native causal-only in v1. |
 | `perceiver`, `bottleneck`, `cross_attention`, `token_blend` | Specialized mixing/adapter blocks. |

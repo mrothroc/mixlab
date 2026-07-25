@@ -244,7 +244,7 @@ func TestBlockDiffusionConfigValidation(t *testing.T) {
 		},
 		{
 			name: "unsupported block",
-			body: `"blocks": [{"type": "mamba"}],
+			body: `"blocks": [{"type": "legacy_mamba"}],
 				"training": {
 					"steps": 1, "lr": 0.001, "batch_tokens": 8,
 					"objective": "block_diffusion", "mlm_mask_token_id": 7,

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -47,6 +48,52 @@ func TestValidPlainConfig(t *testing.T) {
 	}
 	if got.Training.Steps != 100 {
 		t.Errorf("steps = %d, want 100", got.Training.Steps)
+	}
+}
+
+func TestMambaNameIsRetiredWithExplicitLegacyMigration(t *testing.T) {
+	raw := []byte(`{
+		"name":"retired_mamba",
+		"model_dim":16,
+		"vocab_size":32,
+		"seq_len":8,
+		"blocks":[{"type":"mamba"}],
+		"training":{"batch_tokens":8}
+	}`)
+	if _, err := ParseArchConfig(raw, "retired_mamba"); err == nil ||
+		!strings.Contains(err.Error(), "legacy_mamba") ||
+		!strings.Contains(err.Error(), "mamba3-canonical") {
+		t.Fatalf("retired mamba error=%v", err)
+	}
+
+	legacy := []byte(`{
+		"name":"explicit_legacy_mamba",
+		"model_dim":16,
+		"vocab_size":32,
+		"seq_len":8,
+		"blocks":[{"type":"legacy_mamba"}],
+		"training":{"batch_tokens":8}
+	}`)
+	cfg, err := ParseArchConfig(legacy, "explicit_legacy_mamba")
+	if err != nil {
+		t.Fatalf("explicit legacy_mamba rejected: %v", err)
+	}
+	if cfg.Blocks[0].Type != "legacy_mamba" {
+		t.Fatalf("block type=%q", cfg.Blocks[0].Type)
+	}
+	metas, err := BlockWeightShapes(cfg.Blocks[0], cfg.ModelDim, cfg.SeqLen, 1, cfg.VocabSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metas) != 4 {
+		t.Fatalf("legacy_mamba weights=%d want 4", len(metas))
+	}
+	wantNames := []string{"in_proj", "conv_w", "out_proj", "scan_decay"}
+	wantShapes := [][]int{{16, 32}, {16, 16}, {16, 16}, {16}}
+	for i := range metas {
+		if metas[i].Name != wantNames[i] || !reflect.DeepEqual(metas[i].Shape, wantShapes[i]) {
+			t.Fatalf("legacy_mamba weight[%d]=%s%v want %s%v", i, metas[i].Name, metas[i].Shape, wantNames[i], wantShapes[i])
+		}
 	}
 }
 

@@ -442,13 +442,22 @@ Examples:
 {"type": "moe", "num_experts": 4, "top_k": 1, "expert_block": {"type": "mlp", "activation": "relu"}}
 ```
 
-### `mamba`
+### `legacy_mamba`
 
-Selective state-space block with input projection, local mixing, scan recurrence, gating, output projection, and residual add.
+Compatibility-only gated fixed-decay recurrence. This implementation was
+formerly exposed as `mamba`, but it is not a reference Mamba implementation:
+its "convolution" is a same-position dense projection and its scan uses a
+fixed learned per-channel decay rather than Mamba's input-dependent selective
+state-space parameters.
+
+The ambiguous `type: "mamba"` spelling is retired and fails validation. To
+load an existing Mixlab checkpoint, change only its config block type from
+`mamba` to `legacy_mamba`; the weight layout is unchanged. For a
+paper-aligned implementation, use `mamba3-canonical`.
 
 Required fields:
 
-- `type: "mamba"`
+- `type: "legacy_mamba"`
 
 Optional fields:
 
@@ -457,7 +466,7 @@ Optional fields:
 Example:
 
 ```json
-{"type": "mamba", "inner_dim": 768}
+{"type": "legacy_mamba", "inner_dim": 768}
 ```
 
 ### `gated_linear_ssm`

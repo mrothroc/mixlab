@@ -99,7 +99,8 @@ func emitCrossAttentionIR(prog *Program, x, kvStream string, wi, H, D, Tq, Tkv, 
 	return wi, nil
 }
 
-// emitMambaIR emits a Mamba selective-scan block.
+// emitLegacyMambaIR emits the legacy Mixlab gated fixed-decay recurrence. It is
+// intentionally exposed as legacy_mamba because it is not reference Mamba.
 //
 // Weight layout (4 weights per block):
 //
@@ -119,9 +120,9 @@ func emitCrossAttentionIR(prog *Program, x, kvStream string, wi, H, D, Tq, Tkv, 
 //	h_gated = h_scan * gate
 //	out = h_gated @ out_proj
 //	x = x + out                               residual
-func emitMambaIR(prog *Program, x string, wi, inner, T, B, idx int) (int, error) {
+func emitLegacyMambaIR(prog *Program, x string, wi, inner, T, B, idx int) (int, error) {
 	if inner <= 0 {
-		return wi, fmt.Errorf("mamba inner_dim must be > 0, got %d", inner)
+		return wi, fmt.Errorf("legacy_mamba inner_dim must be > 0, got %d", inner)
 	}
 
 	prefix := tmpName(x+"_mamba", idx)

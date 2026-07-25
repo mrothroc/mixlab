@@ -1,16 +1,16 @@
 {
-  "name": "mamba_2L",
+  "name": "mamba3_canonical_2L",
 
-  // Two-layer selective state-space example using Mamba blocks.
+  // Two-layer canonical Mamba-3 state-space example.
   "model_dim": 64,
   "vocab_size": 1024,
   "seq_len": 128,
 
-  // Mamba blocks provide sequence mixing; SwiGLU blocks provide channel mixing.
+  // Canonical Mamba-3 blocks provide sequence mixing; SwiGLU provides channel mixing.
   "blocks": [
-    {"type": "mamba"},
+    {"type": "mamba3-canonical"},
     {"type": "swiglu"},
-    {"type": "mamba"},
+    {"type": "mamba3-canonical"},
     {"type": "swiglu"}
   ],
 

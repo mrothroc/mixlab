@@ -134,7 +134,7 @@ func TestExportHFUnsupportedValidation(t *testing.T) {
 			name: "block type",
 			config: `{
 				"model_dim": 4, "vocab_size": 7, "seq_len": 3,
-				"blocks": [{"type": "mamba"}],
+				"blocks": [{"type": "legacy_mamba"}],
 				"training": {"steps": 1, "batch_tokens": 3}
 			}`,
 			wantErr: "blocks[0].type",
@@ -518,7 +518,7 @@ func TestExportHFAdvancedUnsupportedPolicies(t *testing.T) {
 		{name: "hgrn2", block: `{"type": "hgrn2", "heads": 2}`, wantErr: "hgrn2"},
 		{name: "mlstm", block: `{"type": "mlstm", "heads": 2, "d_k": 2, "d_v": 3}`, wantErr: "mlstm"},
 		{name: "gated_deltanet", block: `{"type": "gated_deltanet", "heads": 2, "d_k": 2}`, wantErr: "gated_deltanet"},
-		{name: "mamba", block: `{"type": "mamba"}`, wantErr: "mamba"},
+		{name: "legacy_mamba", block: `{"type": "legacy_mamba"}`, wantErr: "legacy_mamba"},
 		{name: "mamba3_canonical", block: `{"type": "mamba3-canonical", "inner_dim": 8, "state_size": 4, "n_groups": 2}`, wantErr: "mamba3-canonical"},
 		{name: "retnet", block: `{"type": "retnet", "heads": 2}`, wantErr: "retnet"},
 		{name: "custom", block: `{"type": "custom", "weights": [], "ops": []}`, wantErr: "custom"},
@@ -566,7 +566,7 @@ func TestExportHFRecurrentPolicy(t *testing.T) {
 		want  string
 	}{
 		{name: "gated_deltanet", block: `{"type": "gated_deltanet", "heads": 2, "d_k": 2}`, want: "gated_deltanet"},
-		{name: "mamba", block: `{"type": "mamba"}`, want: "mamba"},
+		{name: "legacy_mamba", block: `{"type": "legacy_mamba"}`, want: "legacy_mamba"},
 		{name: "mamba3_canonical", block: `{"type": "mamba3-canonical", "inner_dim": 8, "state_size": 4, "n_groups": 2}`, want: "mamba3-canonical"},
 		{name: "retnet", block: `{"type": "retnet", "heads": 2}`, want: "retnet"},
 	} {

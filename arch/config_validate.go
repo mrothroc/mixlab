@@ -177,7 +177,13 @@ func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, c
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 	switch b.Type {
-	case "plain", "swiglu", "geglu", "mlp", "moe", "mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "hgrn2", "mlstm", "ttt_mlp", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
+	case "mamba":
+		return fmt.Errorf(
+			"config %q %s[%d] type=%q is retired because it is not a reference Mamba implementation; "+
+				"use type=%q only to load a legacy Mixlab checkpoint, or type=%q for canonical Mamba-3",
+			source, groupName, idx, b.Type, "legacy_mamba", "mamba3-canonical",
+		)
+	case "plain", "swiglu", "geglu", "mlp", "moe", "legacy_mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "hgrn2", "mlstm", "ttt_mlp", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
 		// valid
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)

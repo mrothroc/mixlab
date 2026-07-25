@@ -1,14 +1,14 @@
 {
-  "name": "nucleotide_dna_mamba_stream_tiny",
+  "name": "nucleotide_dna_mamba3_canonical_stream_tiny",
   "model_dim": 32,
   "vocab_size": 9,
   "seq_len": 64,
   "mlp_mult": 2.0,
   "tie_embeddings": true,
   "blocks": [
-    {"type": "mamba", "inner_dim": 32},
+    {"type": "mamba3-canonical", "inner_dim": 32},
     {"type": "swiglu"},
-    {"type": "mamba", "inner_dim": 32},
+    {"type": "mamba3-canonical", "inner_dim": 32},
     {"type": "swiglu"}
   ],
   "training": {

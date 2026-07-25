@@ -331,7 +331,7 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			{Name: "wv2", Shape: []int{D, D}},
 		}, nil
 
-	case "mamba":
+	case "legacy_mamba":
 		inner := spec.InnerDim
 		if inner <= 0 {
 			inner = D

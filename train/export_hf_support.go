@@ -50,7 +50,8 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "mlstm", Status: hfExportGated, Reason: "Stabilized matrix-memory scan export is intentionally gated until the PyTorch template has explicit recurrent-state parity coverage."},
 		{Feature: "gated_deltanet", Status: hfExportGated, Reason: "Chunked delta-rule recurrence uses native scan semantics that are not yet mirrored in the HF template."},
 		{Feature: "ttt_mlp", Status: hfExportSupported, Reason: "The nonlinear inner-loop recurrence and request-owned recurrent cache are mirrored with native forward/state parity coverage."},
-		{Feature: "mamba", Status: hfExportGated, Reason: "Mamba-family selective scans and short-conv variants are not yet represented in the HF template."},
+		{Feature: "legacy_mamba", Status: hfExportGated, Reason: "The legacy fixed-decay recurrence is not represented in the HF template."},
+		{Feature: "gated_linear_ssm", Status: hfExportGated, Reason: "The simplified gated linear SSM is not yet represented in the HF template."},
 		{Feature: "mamba3-canonical", Status: hfExportGated, Reason: "Canonical Mamba-3 relies on specialized native scan semantics and CUDA/MLX execution paths."},
 		{Feature: "retnet", Status: hfExportGated, Reason: "Retention recurrence export needs dedicated parity fixtures before it can be enabled."},
 		{Feature: "rwkv", Status: hfExportGated, Reason: "RWKV recurrence export needs dedicated parity fixtures before it can be enabled."},
@@ -96,10 +97,10 @@ func hfExportBlockCapability(block BlockSpec) hfExportCapability {
 			return capabilityByFeature("plain.qk_norm")
 		}
 		return capabilityByFeature("plain")
-	case "swiglu", "geglu", "mlp", "moe", "hgrn2", "mlstm", "gated_deltanet", "ttt_mlp", "mamba", "mamba3", "gated_linear_ssm", "mamba3-canonical", "retnet", "rwkv", "custom":
+	case "swiglu", "geglu", "mlp", "moe", "hgrn2", "mlstm", "gated_deltanet", "ttt_mlp", "legacy_mamba", "mamba3", "gated_linear_ssm", "mamba3-canonical", "retnet", "rwkv", "custom":
 		feature := strings.ToLower(strings.TrimSpace(block.Type))
-		if feature == "mamba3" || feature == "gated_linear_ssm" {
-			feature = "mamba"
+		if feature == "mamba3" {
+			feature = "gated_linear_ssm"
 		}
 		return capabilityByFeature(feature)
 	default:

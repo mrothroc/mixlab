@@ -365,11 +365,11 @@ func TestEmitBlockIR_RetNetDefaultHeads(t *testing.T) {
 
 // --- Mamba block emission ---
 
-func TestEmitMambaIR(t *testing.T) {
+func TestEmitLegacyMambaIR(t *testing.T) {
 	p := NewProgram(4)
-	wi, err := emitMambaIR(p, "x", 0, 128, 64, 1, 0)
+	wi, err := emitLegacyMambaIR(p, "x", 0, 128, 64, 1, 0)
 	if err != nil {
-		t.Fatalf("emitMambaIR: %v", err)
+		t.Fatalf("emitLegacyMambaIR: %v", err)
 	}
 	if wi != 4 {
 		t.Fatalf("expected wi=4, got %d", wi)
@@ -410,11 +410,11 @@ func TestEmitMambaIR(t *testing.T) {
 	}
 }
 
-func TestEmitMambaIR_CustomInnerDim(t *testing.T) {
+func TestEmitLegacyMambaIR_CustomInnerDim(t *testing.T) {
 	p := NewProgram(4)
-	wi, err := emitMambaIR(p, "x", 0, 64, 32, 2, 0)
+	wi, err := emitLegacyMambaIR(p, "x", 0, 64, 32, 2, 0)
 	if err != nil {
-		t.Fatalf("emitMambaIR: %v", err)
+		t.Fatalf("emitLegacyMambaIR: %v", err)
 	}
 	if wi != 4 {
 		t.Fatalf("expected wi=4, got %d", wi)
@@ -426,17 +426,17 @@ func TestEmitMambaIR_CustomInnerDim(t *testing.T) {
 	}
 }
 
-func TestEmitMambaIR_InvalidInnerDim(t *testing.T) {
+func TestEmitLegacyMambaIR_InvalidInnerDim(t *testing.T) {
 	p := NewProgram(4)
-	_, err := emitMambaIR(p, "x", 0, 0, 64, 1, 0)
+	_, err := emitLegacyMambaIR(p, "x", 0, 0, 64, 1, 0)
 	if err == nil {
 		t.Fatal("expected error for inner_dim=0")
 	}
 }
 
-func TestEmitBlockIR_MambaDispatch(t *testing.T) {
+func TestEmitBlockIR_LegacyMambaDispatch(t *testing.T) {
 	p := NewProgram(4)
-	wi, err := emitBlockIR(p, BlockSpec{Type: "mamba"}, "x", 0, 128, 64, 1, 1024, 0, nil, DefaultFFNMultiplier, false)
+	wi, err := emitBlockIR(p, BlockSpec{Type: "legacy_mamba"}, "x", 0, 128, 64, 1, 1024, 0, nil, DefaultFFNMultiplier, false)
 	if err != nil {
 		t.Fatalf("emitBlockIR(mamba): %v", err)
 	}
@@ -445,9 +445,9 @@ func TestEmitBlockIR_MambaDispatch(t *testing.T) {
 	}
 }
 
-func TestEmitBlockIR_MambaDefaultInner(t *testing.T) {
+func TestEmitBlockIR_LegacyMambaDefaultInner(t *testing.T) {
 	p := NewProgram(4)
-	wi, err := emitBlockIR(p, BlockSpec{Type: "mamba", InnerDim: 0}, "x", 0, 128, 64, 1, 1024, 0, nil, DefaultFFNMultiplier, false)
+	wi, err := emitBlockIR(p, BlockSpec{Type: "legacy_mamba", InnerDim: 0}, "x", 0, 128, 64, 1, 1024, 0, nil, DefaultFFNMultiplier, false)
 	if err != nil {
 		t.Fatalf("emitBlockIR(mamba): %v", err)
 	}

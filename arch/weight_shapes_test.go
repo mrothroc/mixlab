@@ -23,8 +23,8 @@ func TestBlockWeightShapes_CountMatchesBlockWeightCount(t *testing.T) {
 		{Type: "swiglu"},
 		{Type: "geglu"},
 		{Type: "mlp"},
-		{Type: "mamba", InnerDim: 32},
-		{Type: "mamba"}, // default inner = D
+		{Type: "legacy_mamba", InnerDim: 32},
+		{Type: "legacy_mamba"}, // default inner = D
 		{Type: "gated_linear_ssm", InnerDim: 32},
 		{Type: "gated_linear_ssm"}, // default inner = D
 		{Type: "mamba3"},           // deprecated alias for gated_linear_ssm

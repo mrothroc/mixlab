@@ -77,7 +77,7 @@ func TestConfigureNucleotideStreamEnablesFramingWithoutSegmentAttention(t *testi
 	dir := t.TempDir()
 	writeNucleotideStreamDatasetContract(t, dir, data.NucleotideAlphabetDNA)
 	for _, blocks := range [][]arch.BlockSpec{
-		{{Type: "mamba", InnerDim: 8}},
+		{{Type: "legacy_mamba", InnerDim: 8}},
 		{{Type: "gated_deltanet", Heads: 2, DK: 4}},
 		{{Type: "plain", Heads: 2}},
 	} {

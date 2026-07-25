@@ -189,13 +189,13 @@ var exampleConfigs = []exampleConfigCase{
 	},
 	// --- New block types (needs block impl) ---
 	{
-		filename:    "mamba_2L.json",
-		wantWeights: 19, // 3 (embed+head+norm) + 2*(4 mamba + 4 swiglu) = 19
+		filename:    "mamba3_canonical_2L.json",
+		wantWeights: 51, // 3 base + 2*(20 canonical Mamba-3 + 4 swiglu)
 		minOps:      8,
 	},
 	{
-		filename:    "nucleotide_dna_mamba_stream_tiny.json",
-		wantWeights: 18, // 2 tied-embed base + 2*(4 mamba + 4 swiglu)
+		filename:    "nucleotide_dna_mamba3_canonical_stream_tiny.json",
+		wantWeights: 50, // 2 tied-embed base + 2*(20 canonical Mamba-3 + 4 swiglu)
 		minOps:      8,
 	},
 	{
