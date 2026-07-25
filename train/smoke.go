@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
 	"time"
 
 	"github.com/mrothroc/mixlab/gpu"
@@ -16,14 +17,28 @@ func runSmoke() error {
 
 	// --- Step 1: Backend availability ---
 	fmt.Println("\n[1/2] Checking MLX backend...")
-	if !gpu.Available() {
+	runtimeInfo := gpu.RuntimeInfo()
+	if !runtimeInfo.Available {
 		fmt.Println("FAIL: MLX backend is not available.")
 		fmt.Println("  -> Rebuild with: CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab")
-		fmt.Println("  -> Ensure MLX is installed (pip install mlx)")
+		fmt.Printf("  -> Ensure MLX >= %s is installed\n", gpu.MinimumMLXVersion)
 		return fmt.Errorf("MLX backend unavailable")
 	}
-	devName := gpu.DeviceName()
-	fmt.Printf("PASS: MLX backend available, device: %s\n", devName)
+	fmt.Printf("PASS: MLX %s available, device: %s\n", runtimeInfo.Version, runtimeInfo.Device)
+	if err := gpu.RequireMinimumRuntime(); err != nil {
+		fmt.Printf("FAIL: %v\n", err)
+		return err
+	}
+
+	requiredDistributedBackend := "ring"
+	if runtime.GOOS == "linux" {
+		requiredDistributedBackend = "nccl"
+	}
+	if err := gpu.RequireDistributedBackend(requiredDistributedBackend); err != nil {
+		fmt.Printf("FAIL: %v\n", err)
+		return err
+	}
+	fmt.Printf("PASS: MLX distributed backend available: %s\n", requiredDistributedBackend)
 
 	// --- Step 2: IR health check + benchmark ---
 	fmt.Println("\n[2/2] IR training + benchmark...")

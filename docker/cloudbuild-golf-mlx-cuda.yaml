@@ -19,13 +19,17 @@
 #   89  RTX 40xx, L4, L40, RTX 4090
 #   90  H100
 #
-# After this build succeeds, trigger the mixlab CI build (or push any commit) so
-# docker/cloudbuild-ci.yaml rebuilds mixlab:latest and mixlab:runpod on top of
-# the updated golf-mlx-cuda:latest.
+# After this build succeeds, use docker/cloudbuild-ci.yaml with this versioned
+# image as _MLX_BASE_IMAGE. Use staging output tags for validation; promote via
+# the normal trigger only after an actual CUDA GPU smoke passes.
 
 substitutions:
   _ARCHS: "80;86;89;90"
   _REGISTRY_PREFIX: "us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf"
+  _BASE_IMAGE: "us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf/golf-mlx-cuda-base:mlx-0.32.0"
+  _IMAGE_TAG: "mlx-0.32.0"
+  _MLX_VERSION: "v0.32.0"
+  _MLX_COMMIT: "7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247"
 
 steps:
   - name: 'gcr.io/cloud-builders/docker'
@@ -34,15 +38,19 @@ steps:
       - '-f'
       - 'docker/addarch.Dockerfile'
       - '--build-arg'
-      - 'BASE_IMAGE=${_REGISTRY_PREFIX}/golf-mlx-cuda:latest'
+      - 'BASE_IMAGE=${_BASE_IMAGE}'
+      - '--build-arg'
+      - 'MLX_VERSION=${_MLX_VERSION}'
+      - '--build-arg'
+      - 'MLX_COMMIT=${_MLX_COMMIT}'
       - '--build-arg'
       - 'ARCHS=${_ARCHS}'
       - '-t'
-      - '${_REGISTRY_PREFIX}/golf-mlx-cuda:latest'
+      - '${_REGISTRY_PREFIX}/golf-mlx-cuda:${_IMAGE_TAG}'
       - '.'
 
 images:
-  - '${_REGISTRY_PREFIX}/golf-mlx-cuda:latest'
+  - '${_REGISTRY_PREFIX}/golf-mlx-cuda:${_IMAGE_TAG}'
 
 options:
   # MLX CUDA build is RAM-hungry — addarch.Dockerfile docs say ~2GB peak per

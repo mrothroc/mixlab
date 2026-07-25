@@ -87,12 +87,13 @@ std::string lookup_cuda_kernel_source(const std::string& kernel_name) {
 mx::cu::JitModule& load_precompiled_or_source_cuda_module(
     mx::Stream stream,
     const std::string& kernel_name) {
+  auto& cuda_device = mx::cu::device(stream.device);
   {
     std::lock_guard<std::mutex> lock(g_cuda_kernel_load_mu);
     if (g_precompiled_cuda_load_failures.find(kernel_name) != g_precompiled_cuda_load_failures.end()) {
       const auto source = lookup_cuda_kernel_source(kernel_name);
       return mx::cu::get_jit_module(
-          stream.device,
+          cuda_device,
           kernel_name + "_source",
           [source, kernel_name]() {
             return std::make_tuple(
@@ -107,7 +108,7 @@ mx::cu::JitModule& load_precompiled_or_source_cuda_module(
   const auto blob = lookup_precompiled_kernel_blob(kernel_name);
   try {
     return mx::cu::get_jit_module(
-        stream.device,
+        cuda_device,
         kernel_name,
         [blob, kernel_name]() {
           return std::make_tuple(
@@ -126,7 +127,7 @@ mx::cu::JitModule& load_precompiled_or_source_cuda_module(
               << kernel_name << " (" << e.what()
               << "); retrying from embedded source" << std::endl;
     return mx::cu::get_jit_module(
-        stream.device,
+        cuda_device,
         kernel_name + "_source",
         [source, kernel_name]() {
           return std::make_tuple(

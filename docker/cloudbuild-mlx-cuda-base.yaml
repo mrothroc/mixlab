@@ -1,0 +1,33 @@
+# Rebuild the CUDA base from the pinned MLX source release.
+#
+# Run this before cloudbuild-golf-mlx-cuda.yaml whenever MLX changes. The
+# add-architecture build deliberately refuses a base with a different MLX
+# version or commit.
+
+substitutions:
+  _REGISTRY_PREFIX: "us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf"
+  _MLX_VERSION: "v0.32.0"
+  _MLX_COMMIT: "7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247"
+
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'docker/base.Dockerfile'
+      - '--build-arg'
+      - 'MLX_VERSION=${_MLX_VERSION}'
+      - '--build-arg'
+      - 'MLX_COMMIT=${_MLX_COMMIT}'
+      - '-t'
+      - '${_REGISTRY_PREFIX}/golf-mlx-cuda-base:mlx-0.32.0'
+      - '.'
+
+images:
+  - '${_REGISTRY_PREFIX}/golf-mlx-cuda-base:mlx-0.32.0'
+
+options:
+  machineType: 'E2_HIGHCPU_32'
+  diskSizeGb: 100
+
+timeout: 14400s

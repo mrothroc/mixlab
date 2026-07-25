@@ -78,7 +78,7 @@ pip install numpy tokenizers datasets
 
 ### Build from source
 
-Requires Go 1.24+ and MLX (`brew install mlx` or `pip install mlx`).
+Requires Go 1.24+ and MLX 0.32.0+ (`brew install mlx` or `pip install mlx`).
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate

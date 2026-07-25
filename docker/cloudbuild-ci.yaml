@@ -5,13 +5,18 @@
 #   _REGISTRY_PREFIX  — e.g. us-central1-docker.pkg.dev/my-project/my-repo
 #   _MLX_BASE_IMAGE   — e.g. us-central1-docker.pkg.dev/my-project/my-repo/mlx-cuda:latest
 #
-# Optional: Docker Hub push requires a secret named "dockerhub-token"
-# and _DOCKERHUB_USER substitution.
+# Optional substitutions:
+#   _IMAGE_TAG        — CLI image tag, defaults to latest
+#   _RUNPOD_TAG       — RunPod image tag, defaults to runpod
+# Docker Hub push requires a secret named "dockerhub-token" and a non-empty
+# _DOCKERHUB_USER substitution.
 
 substitutions:
   _REGISTRY_PREFIX: ''
   _MLX_BASE_IMAGE: ''
   _DOCKERHUB_USER: ''
+  _IMAGE_TAG: 'latest'
+  _RUNPOD_TAG: 'runpod'
 
 steps:
   # Build CLI image
@@ -23,7 +28,7 @@ steps:
       - '--build-arg'
       - 'BASE_IMAGE=${_MLX_BASE_IMAGE}'
       - '-t'
-      - '${_REGISTRY_PREFIX}/mixlab:latest'
+      - '${_REGISTRY_PREFIX}/mixlab:${_IMAGE_TAG}'
       - '.'
 
   # Build RunPod image on top of CLI
@@ -33,9 +38,9 @@ steps:
       - '-f'
       - 'docker/runpod.Dockerfile'
       - '--build-arg'
-      - 'APP_IMAGE=${_REGISTRY_PREFIX}/mixlab:latest'
+      - 'APP_IMAGE=${_REGISTRY_PREFIX}/mixlab:${_IMAGE_TAG}'
       - '-t'
-      - '${_REGISTRY_PREFIX}/mixlab:runpod'
+      - '${_REGISTRY_PREFIX}/mixlab:${_RUNPOD_TAG}'
       - '.'
 
   # Push to Docker Hub (optional — only runs if _DOCKERHUB_USER is set)
@@ -49,15 +54,15 @@ steps:
           exit 0
         fi
         echo "$$DOCKER_TOKEN" | docker login -u ${_DOCKERHUB_USER} --password-stdin
-        docker tag ${_REGISTRY_PREFIX}/mixlab:latest ${_DOCKERHUB_USER}/mixlab:latest
-        docker tag ${_REGISTRY_PREFIX}/mixlab:runpod ${_DOCKERHUB_USER}/mixlab:runpod
-        docker push ${_DOCKERHUB_USER}/mixlab:latest
-        docker push ${_DOCKERHUB_USER}/mixlab:runpod
+        docker tag ${_REGISTRY_PREFIX}/mixlab:${_IMAGE_TAG} ${_DOCKERHUB_USER}/mixlab:${_IMAGE_TAG}
+        docker tag ${_REGISTRY_PREFIX}/mixlab:${_RUNPOD_TAG} ${_DOCKERHUB_USER}/mixlab:${_RUNPOD_TAG}
+        docker push ${_DOCKERHUB_USER}/mixlab:${_IMAGE_TAG}
+        docker push ${_DOCKERHUB_USER}/mixlab:${_RUNPOD_TAG}
     secretEnv: ['DOCKER_TOKEN']
 
 images:
-  - '${_REGISTRY_PREFIX}/mixlab:latest'
-  - '${_REGISTRY_PREFIX}/mixlab:runpod'
+  - '${_REGISTRY_PREFIX}/mixlab:${_IMAGE_TAG}'
+  - '${_REGISTRY_PREFIX}/mixlab:${_RUNPOD_TAG}'
 
 availableSecrets:
   secretManager:

@@ -14,6 +14,11 @@ void mlx_set_cuda_graph_limits(int max_ops, int max_mb);
 // Initialize MLX - returns 0 on success, -1 on failure
 int mlx_init(void);
 
+// Runtime dependency identity and compiled distributed-backend capabilities.
+// Capability checks do not initialize a distributed process group.
+const char* mlx_runtime_version(void);
+int mlx_distributed_backend_available(const char* backend);
+
 // Compile canonical Mamba3 Metal kernels while trainer setup prepares weights.
 int mlx_mamba3_metal_prewarm_start(void);
 int mlx_mamba3_metal_prewarm_wait(void);

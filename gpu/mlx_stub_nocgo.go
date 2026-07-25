@@ -13,6 +13,12 @@ func SetCUDAGraphLimits(maxOps, maxMB int) {
 }
 func Available() bool    { return false }
 func DeviceName() string { return "" }
+func mlxRuntimeVersion() string {
+	return ""
+}
+func mlxDistributedBackendAvailable(backend string) bool {
+	return false
+}
 func StartMamba3MetalPrewarm() error {
 	return nil
 }

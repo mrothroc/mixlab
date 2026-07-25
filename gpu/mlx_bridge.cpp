@@ -5,8 +5,14 @@
 #include "mamba3_metal_primitive.h"
 
 #include <mlx/compile.h>
+#include <mlx/distributed/distributed.h>
 #include <mlx/memory.h>
 #include <mlx/mlx.h>
+#include <mlx/version.h>
+
+#if MLX_VERSION_NUMERIC < 32000
+#error "mixlab requires MLX 0.32.0 or newer; upgrade MLX before building"
+#endif
 
 #include <cstdlib>
 #include <cstring>
@@ -308,6 +314,22 @@ int mlx_init(void) {
     return 0;
   } catch (...) {
     g_device_name.clear();
+    return -1;
+  }
+}
+
+const char* mlx_runtime_version(void) {
+  return mx::version();
+}
+
+int mlx_distributed_backend_available(const char* backend) {
+  if (!backend || backend[0] == '\0') {
+    return 0;
+  }
+  try {
+    return mx::distributed::is_available(std::string(backend)) ? 1 : 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_distributed_backend_available", e);
     return -1;
   }
 }

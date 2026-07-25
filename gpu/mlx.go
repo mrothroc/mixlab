@@ -34,6 +34,16 @@ func mlxDeviceName() string {
 	return C.GoString(C.mlx_device_name())
 }
 
+func mlxRuntimeVersion() string {
+	return C.GoString(C.mlx_runtime_version())
+}
+
+func mlxDistributedBackendAvailable(backend string) bool {
+	cBackend := C.CString(backend)
+	defer C.free(unsafe.Pointer(cBackend))
+	return C.mlx_distributed_backend_available(cBackend) == 1
+}
+
 func mlxStartMamba3MetalPrewarm() error {
 	if C.mlx_mamba3_metal_prewarm_start() != 0 {
 		return fmt.Errorf("start Mamba3 Metal kernel prewarm")

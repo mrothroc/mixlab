@@ -88,7 +88,15 @@ mixlab -mode smoke
 
 ## Known gotchas
 
-- **MLX API drift between Homebrew and the local MLX install.** Homebrew `mlx` may ship a newer version than what `mlx-c` headers expect (e.g. the v0.31.2 Metal `Device::get_command_encoder` → `metal::get_command_encoder` change). Verify the formula install (`brew test mrothroc/mixlab/mixlab` on arm64 Homebrew) before declaring the release done. If it fails, patch the source for compatibility, force-update the tag, refresh the GitHub release notes, and re-verify.
+- **MLX API drift between Homebrew and the local MLX install.** Mixlab requires
+  MLX 0.32.0 or newer. Homebrew may ship a newer version than the currently
+  tested runtime. Verify the formula install (`brew test
+  mrothroc/mixlab/mixlab` on arm64 Homebrew) before declaring the release done.
+  CUDA upgrades must rebuild `docker/base.Dockerfile`; rebuilding only the
+  add-architecture or app layers retains the old MLX source. See
+  `docs/mlx-0.32-upgrade.md` for the dependency and NCCL acceptance contract.
+  If verification fails, patch the source for compatibility, force-update the
+  tag, refresh the GitHub release notes, and re-verify.
 - **Cloud Build can fail Step 13 with `libcuda.so.1 not found`.** The CUDA driver lib is runtime-provided by NVIDIA Container Toolkit on the GPU host, not present at Cloud Build time. The Dockerfile's `ldd` check excludes it; if you add new ldd-sensitive logic, preserve the `grep -qv 'libcuda\.so\.1'` filter.
 - **GitHub CI doesn't have nvcc.** It builds the binary without CUDA kernels (empty registry) and skips MLX-tagged tests (`CGO_ENABLED=0`). CI green only confirms the Go/C++ wiring compiles. CUDA kernel correctness has to be verified by smoke-testing on RunPod after the new image lands. After Cloud Build, autonomously update the RunPod template image SHA (see `docker/README.md`) and cycle workersMax to force fresh worker pulls.
 

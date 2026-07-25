@@ -8,7 +8,7 @@ package gpu
 #cgo CXXFLAGS: -std=c++20 -I.
 #cgo linux CFLAGS: -I/usr/local/include -I/usr/local/cuda/include
 #cgo linux CXXFLAGS: -I/usr/local/include -I/usr/local/cuda/include
-#cgo linux LDFLAGS: -L/usr/local/lib -L/usr/local/cuda/lib64 -L/usr/local/cuda/lib64/stubs -Wl,-rpath,/usr/local/lib -Wl,-rpath,/usr/local/cuda/lib64 -lmlx -lopenblas -llapack -lcublas -lcublasLt -lcudart -lcudnn -lcufft -lcuda -lnvrtc -lstdc++ -lm
+#cgo linux LDFLAGS: -L/usr/local/lib -L/usr/local/cuda/lib64 -L/usr/local/cuda/lib64/stubs -Wl,-rpath,/usr/local/lib -Wl,-rpath,/usr/local/cuda/lib64 -lmlx -lopenblas -llapack -lcublas -lcublasLt -lcudart -lcudnn -lcufft -lcuda -lnvrtc -lnccl -lstdc++ -lm
 
 #include <stdlib.h>
 #include "mlx_bridge.h"
@@ -32,6 +32,16 @@ func mlxInit() int {
 
 func mlxDeviceName() string {
 	return C.GoString(C.mlx_device_name())
+}
+
+func mlxRuntimeVersion() string {
+	return C.GoString(C.mlx_runtime_version())
+}
+
+func mlxDistributedBackendAvailable(backend string) bool {
+	cBackend := C.CString(backend)
+	defer C.free(unsafe.Pointer(cBackend))
+	return C.mlx_distributed_backend_available(cBackend) == 1
 }
 
 func mlxStartMamba3MetalPrewarm() error {

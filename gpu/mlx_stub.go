@@ -13,9 +13,9 @@ package gpu
 /*
 #cgo CFLAGS: -I.
 #cgo CXXFLAGS: -std=c++20 -I.
-#cgo darwin CFLAGS: -I/opt/homebrew/lib/python3.11/site-packages/mlx/include
-#cgo darwin CXXFLAGS: -I/opt/homebrew/lib/python3.11/site-packages/mlx/include -I/opt/homebrew/lib/python3.11/site-packages/mlx/include/metal_cpp
-#cgo darwin LDFLAGS: -L/opt/homebrew/lib/python3.11/site-packages/mlx/lib -Wl,-rpath,/opt/homebrew/lib/python3.11/site-packages/mlx/lib -lmlx -framework Metal -framework Foundation -framework Accelerate
+#cgo darwin CFLAGS: -I/opt/homebrew/opt/mlx/include
+#cgo darwin CXXFLAGS: -I/opt/homebrew/opt/mlx/include -I/opt/homebrew/opt/mlx/include/metal_cpp
+#cgo darwin LDFLAGS: -L/opt/homebrew/opt/mlx/lib -Wl,-rpath,/opt/homebrew/opt/mlx/lib -lmlx -framework Metal -framework Foundation -framework Accelerate
 */
 import "C"
 
@@ -29,6 +29,12 @@ func SetCUDAGraphLimits(maxOps, maxMB int) {
 
 func Available() bool    { return false }
 func DeviceName() string { return "" }
+func mlxRuntimeVersion() string {
+	return ""
+}
+func mlxDistributedBackendAvailable(backend string) bool {
+	return false
+}
 func StartMamba3MetalPrewarm() error {
 	return nil
 }

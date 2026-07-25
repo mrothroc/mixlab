@@ -19,10 +19,16 @@ ARG BASE_IMAGE=mixlab-cuda-base
 FROM ${BASE_IMAGE}
 
 ARG ARCHS="80;86"
+ARG MLX_VERSION=v0.32.0
+ARG MLX_COMMIT=7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247
 
-RUN cd /opt/mlx/build \
+RUN test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}" \
+    && test "${MIXLAB_MLX_BUILD_COMMIT}" = "${MLX_COMMIT}" \
+    && test "$(git -C /opt/mlx rev-parse HEAD)" = "${MLX_COMMIT}" \
+    && cd /opt/mlx/build \
     && cmake .. -DMLX_BUILD_CUDA=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DMLX_BUILD_GGUF=OFF \
        -DMLX_CUDA_ARCHITECTURES="${ARCHS}" -DCMAKE_BUILD_TYPE=Release -G Ninja \
+    && grep -Eq '^NCCL_LIBRARIES:FILEPATH=.*/libnccl' CMakeCache.txt \
     && ninja -j4 \
     && ninja install
 
