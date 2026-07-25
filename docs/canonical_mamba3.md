@@ -45,7 +45,7 @@ Canonical Mamba-3 at competition scale (D=448, T=4096, 8 layers on H100) needed 
 | 3 | Hand-written closed-form VJP | `gpu/ir.cpp::mamba3_selective_scan_canonical_phase6_vjp` | MLX autodiff through the parallel scan creates oversized compiled CUDA graphs |
 | 4 | Mamba-3-aware CUDA graph caps | `gpu/cuda_graph_limits.go` | `MLX_MAX_OPS_PER_BUFFER=64`, `MLX_MAX_MB_PER_BUFFER=128`, `MLX_CUDA_GRAPH_CACHE_SIZE=1024` for any program with the scan or fused block op |
 | 5 | Uncompiled trainer fallback | `gpu/ir_trainer.cpp::use_compiled_training_step` | Even with custom VJP, `mx::compile` over the full step graph fuses everything into one CUDA graph instance — too big at H100 scale |
-| 6 | Native CUDA kernels | `gpu/mamba3_cuda_primitive.{cpp,h}` + `gpu/cuda_kernels/mamba3_selective_scan_*.cu` | `mx::Primitive` subclasses with `eval_gpu` that launch precompiled fatbins. M1/Metal/non-CUDA falls back to the MLX-composed path. |
+| 6 | Native CUDA and Metal kernels | `gpu/mamba3_cuda_primitive.{cpp,h}`, `gpu/cuda_kernels/mamba3_selective_scan_*.cu`, and `gpu/mamba3_metal_primitive.{cpp,h}` | Backend-specific `mx::Primitive` subclasses run the recurrence and its closed-form VJP without materializing Hillis-Steele intermediates. Unsupported shapes and explicitly disabled primitives retain the MLX-composed fallback. |
 | 7 | Fused `OP_MAMBA3_CANONICAL_BLOCK` op | `arch/ir.go` + `gpu/ir.cpp` | Block emitted as a single IR op, not 25 separate ones. The IR-side handler does the entire forward + backward in one C++ function. **Do not wrap it in `mx::custom_vjp`** — that recreates the graph-fusion problem (see "Anti-pattern" below). |
 
 ## Anti-pattern: don't wrap host-side MLX ops in `mx::custom_vjp`
@@ -59,10 +59,11 @@ Past incident: commit `e1899bf` wrapped 20+ MLX ops in `mx::custom_vjp` for the 
 | Var | Default | Effect |
 |---|---|---|
 | `MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE` | unset | Disable the native selective-scan primitive for small debug fallback runs. Unsupported for fused canonical block training unless `MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK=1` is also set. |
+| `MIXLAB_MAMBA3_DISABLE_METAL_PRIMITIVE` | unset | Disable the native Metal forward/VJP primitive and use the MLX-composed fallback. Intended for parity tests and debugging. |
 | `MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK` | unset | Explicitly allow the debug MLX-composed scan fallback inside fused canonical block training. This can create invalid or oversized CUDA graphs at production scale. |
 | `MIXLAB_MAMBA3_SCAN_FWD_CHUNK` | `64` | Time chunk length for the chunked forward CUDA scan. |
-| `MIXLAB_MAMBA3_BWD_WINDOW` | `32` | Time window length for chunked backward. Values up to `64` are supported for comparison; the production sweet spot on H100 was `32`. |
-| `MIXLAB_MAMBA3_CHANNEL_CHUNK` | auto (~16ch at production) | Channels per chunk in the channel-axis chunking |
+| `MIXLAB_MAMBA3_BWD_WINDOW` | `32` | Replay window length for native CUDA and Metal backward. Values up to `64` are supported; `32` bounds per-thread replay state. |
+| `MIXLAB_MAMBA3_CHANNEL_CHUNK` | auto (~16ch at production) | Channels per chunk in the MLX-composed fallback; native CUDA and Metal primitives do not use it. |
 | `MIXLAB_FORCE_COMPILED_STEP` | unset | Force `mx::compile` even for Mamba-3 programs |
 | `MIXLAB_DISABLE_COMPILED_STEP` | unset | Force eager `value_and_grad` for any program |
 | `MIXLAB_DISABLE_TRAINING_CHECKPOINT` | unset | Skip `mx::checkpoint` on the eager path |
@@ -80,8 +81,33 @@ Past incident: commit `e1899bf` wrapped 20+ MLX ops in `mx::custom_vjp` for the 
 - `train/gpu_trainer_mamba3_test.go::TestMamba3SelectiveScanGrad` — analytical CPU oracle vs MLX gradients (~1e-6 relative error) at G ∈ {1,2}, chunk ∈ {0,3}
 - `TestMamba3SelectiveScanGradChannelChunked` — exercises channel-chunking path with `MIXLAB_MAMBA3_CHANNEL_CHUNK=2`
 - `TestMamba3SelectiveScanGradSmallCudaChunks` — exercises small native CUDA forward chunks and backward windows
+- `TestMamba3SelectiveScanMetalMatchesMLXFallback` — compares native Metal loss and all seven gradient families with the MLX-composed fallback
 - `TestMamba3CanonicalBlockGradMatchesExpanded` — fused-op vs expanded-25-op equivalence (loss + all 20 weight gradients within 2e-5)
 - `TestMamba3CanonicalSmokeLossDecreases` — 10-step smoke; loss must monotonically decrease
+
+## Metal performance
+
+The Metal primitive assigns one 32-lane SIMD group to each `(batch, channel)`.
+State pairs remain in registers through the forward recurrence. Backward stores
+only bounded window checkpoints, replays each window, and applies the analytical
+VJP in reverse. Shared grouped B/C gradients use atomic accumulation.
+
+On a 32-core M1 Max, the repository benchmark at `B=2`, `T=1024`, `D=128`,
+`N=16`, `G=4` improved from approximately 24.1 ms/op on the MLX-composed
+fallback to 6.8 ms/op on the native Metal path. A warmed two-block canonical
+training benchmark at `D=128`, `T=512` improved from approximately 21.5 ms/step
+to 16.9 ms/step. The first native step also compiles the embedded Metal library,
+so short one-step processes can be slower even though sustained execution is
+faster. Run the local comparisons with:
+
+```bash
+go test -tags mlx ./train -run '^$' \
+  -bench '^BenchmarkMamba3SelectiveScanForwardBackward$' -benchtime=100x
+MIXLAB_MAMBA3_DISABLE_METAL_PRIMITIVE=1 go test -tags mlx ./train -run '^$' \
+  -bench '^BenchmarkMamba3SelectiveScanForwardBackward$' -benchtime=100x
+go test -tags mlx ./train -run '^$' \
+  -bench '^BenchmarkMamba3CanonicalTrainingStep$' -benchtime=20x
+```
 
 ## Naming history
 

@@ -19,6 +19,87 @@ func BenchmarkMamba3SelectiveScanForwardBackwardColdCompile(b *testing.B) {
 	benchmarkMamba3SelectiveScanForwardBackward(b, false)
 }
 
+func BenchmarkMamba3CanonicalTrainingStep(b *testing.B) {
+	if !gpu.Available() {
+		b.Skip("MLX backend not available")
+	}
+
+	useConv := true
+	chunkSize := 64
+	training := TrainingSpec{
+		Optimizer:   "adamw",
+		Steps:       b.N + 1,
+		LR:          3e-4,
+		BatchTokens: 512,
+		Seed:        17,
+		GradClip:    1,
+	}
+	training.ApplyDefaults()
+	cfg := &ArchConfig{
+		Name:          "mamba3_canonical_training_benchmark",
+		ModelDim:      128,
+		VocabSize:     1024,
+		SeqLen:        512,
+		TieEmbeddings: false,
+		Blocks: []BlockSpec{
+			{
+				Type:          "mamba3-canonical",
+				InnerDim:      128,
+				StateSize:     16,
+				NGroups:       4,
+				DTRank:        8,
+				ConvKernel:    4,
+				UseConv:       &useConv,
+				ScanChunkSize: &chunkSize,
+			},
+			{Type: "swiglu"},
+			{
+				Type:          "mamba3-canonical",
+				InnerDim:      128,
+				StateSize:     16,
+				NGroups:       4,
+				DTRank:        8,
+				ConvKernel:    4,
+				UseConv:       &useConv,
+				ScanChunkSize: &chunkSize,
+			},
+			{Type: "swiglu"},
+		},
+		Training: training,
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		b.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	trainer, err := initGPUTrainer(prog, cfg, nil, nil)
+	if err != nil {
+		b.Fatalf("initGPUTrainer: %v", err)
+	}
+	defer trainer.CloseTrainer()
+
+	xTok := make([]int, cfg.Training.BatchTokens)
+	yTok := make([]int, cfg.Training.BatchTokens)
+	for i := range xTok {
+		xTok[i] = i % cfg.VocabSize
+		yTok[i] = (i + 1) % cfg.VocabSize
+	}
+	runStep := func() {
+		if err := trainer.SubmitStepGPU(xTok, yTok, 1, cfg.SeqLen, float32(cfg.Training.LR)); err != nil {
+			b.Fatalf("SubmitStepGPU: %v", err)
+		}
+		if _, err := trainer.CollectLossGPU(); err != nil {
+			b.Fatalf("CollectLossGPU: %v", err)
+		}
+	}
+	runStep()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		runStep()
+	}
+}
+
 func benchmarkMamba3SelectiveScanForwardBackward(b *testing.B, warmup bool) {
 	if !gpu.Available() {
 		b.Skip("MLX backend not available")

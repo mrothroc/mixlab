@@ -3,6 +3,7 @@
 #include "gated_delta_cuda_primitive.h"
 #include "gated_delta_metal_primitive.h"
 #include "mamba3_cuda_primitive.h"
+#include "mamba3_metal_primitive.h"
 #include "ttt_mlp_cuda_primitive.h"
 
 #include <mlx/device.h>
@@ -1534,6 +1535,9 @@ std::vector<mx::array> mamba3_selective_scan_canonical_phase6_vjp(
   if (mlx_ir::mamba3_selective_scan_cuda_primitive_available(N)) {
     return mlx_ir::mamba3_selective_scan_cuda_vjp(args, cotangents, B, T, D, N, G);
   }
+  if (mlx_ir::mamba3_selective_scan_metal_primitive_available(N)) {
+    return mlx_ir::mamba3_selective_scan_metal_vjp(args, cotangents, B, T, D, N, G);
+  }
 
   const int channel_chunk_size = mamba3_channel_chunk_size(B, T, D, N);
   if (channel_chunk_size > 0 && channel_chunk_size < D) {
@@ -1787,6 +1791,11 @@ mx::array mamba3_selective_scan_canonical_phase6_impl(
 
   if (mlx_ir::mamba3_selective_scan_cuda_primitive_available(N)) {
     return mlx_ir::mamba3_selective_scan_cuda_forward(
+        x_flat, dt_flat, lambda_flat, theta_flat, a_log, b_proj_flat, c_proj_flat,
+        B, T, D, N, G);
+  }
+  if (mlx_ir::mamba3_selective_scan_metal_primitive_available(N)) {
+    return mlx_ir::mamba3_selective_scan_metal_forward(
         x_flat, dt_flat, lambda_flat, theta_flat, a_log, b_proj_flat, c_proj_flat,
         B, T, D, N, G);
   }

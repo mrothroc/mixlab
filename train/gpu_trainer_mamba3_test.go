@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"runtime"
 	"testing"
 
 	"github.com/mrothroc/mixlab/arch"
@@ -47,6 +48,103 @@ func TestMamba3SelectiveScanGradSmallCudaChunks(t *testing.T) {
 	t.Setenv("MIXLAB_MAMBA3_BWD_WINDOW", "3")
 
 	testMamba3SelectiveScanGrad(t, 2, 3)
+}
+
+func TestMamba3SelectiveScanMetalMatchesMLXFallback(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("native Metal primitive is Darwin-only")
+	}
+	if !gpu.Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_MAMBA3_BWD_WINDOW", "3")
+
+	nativeLoss, nativeGrads := evalMamba3SelectiveScanParityFixture(t)
+	t.Setenv("MIXLAB_MAMBA3_DISABLE_METAL_PRIMITIVE", "1")
+	fallbackLoss, fallbackGrads := evalMamba3SelectiveScanParityFixture(t)
+
+	if diff := math.Abs(float64(nativeLoss - fallbackLoss)); diff > 2e-5 {
+		t.Fatalf("native/fallback loss mismatch: native=%g fallback=%g diff=%g", nativeLoss, fallbackLoss, diff)
+	}
+	if len(nativeGrads) != len(fallbackGrads) {
+		t.Fatalf("native/fallback gradient count mismatch: native=%d fallback=%d", len(nativeGrads), len(fallbackGrads))
+	}
+	for i := range nativeGrads {
+		maxRel, maxAbs := maxGradientError(nativeGrads[i], fallbackGrads[i])
+		if maxRel > 3e-3 && maxAbs > 3e-5 {
+			t.Fatalf("gradient %d native/fallback mismatch: max_relative_error=%g max_absolute_error=%g", i, maxRel, maxAbs)
+		}
+	}
+}
+
+func evalMamba3SelectiveScanParityFixture(t *testing.T) (float32, [][]float32) {
+	t.Helper()
+	const (
+		B = 2
+		T = 10
+		D = 4
+		N = 8
+		G = 2
+	)
+	prog := arch.NewProgram(7)
+	prog.DeclareInput("dummy", arch.TensorFloat32, []int{1})
+	prog.DeclareOutput("loss", arch.TensorFloat32, []int{1})
+	prog.Mamba3SelectiveScanChunked("w0", "w1", "w2", "w3", "w4", "w5", "w6", "y", B, T, D, N, G, 3)
+	prog.MeanAxis("y", 1, "loss_rows")
+	prog.MeanAxis("loss_rows", 0, "loss")
+
+	gpuProg, err := gpu.LowerIRProgram(prog)
+	if err != nil {
+		t.Fatalf("LowerIRProgram: %v", err)
+	}
+	defer gpuProg.Destroy()
+
+	rng := rand.New(rand.NewSource(20260725))
+	x := seededFloats(rng, B*T*D, 0.35)
+	dt := seededFloats(rng, B*T*D, 0.2)
+	lambdaInput := seededFloats(rng, B*T*D, 0.2)
+	theta := seededFloats(rng, B*T*D*(N/2), 0.5)
+	aLog := make([]float32, D*N)
+	for d := 0; d < D; d++ {
+		for n := 0; n < N; n++ {
+			aLog[d*N+n] = float32(math.Log(float64(n+1))) - 1.5
+		}
+	}
+	bProj := seededFloats(rng, B*T*G*N, 0.25)
+	cProj := seededFloats(rng, B*T*G*N, 0.25)
+	weights := [][]float32{x, dt, lambdaInput, theta, aLog, bProj, cProj}
+	shapes := [][2]int{
+		{B * T, D},
+		{B * T, D},
+		{B * T, D},
+		{B * T, D * (N / 2)},
+		{D, N},
+		{B * T, G * N},
+		{B * T, G * N},
+	}
+	handles := make([]int64, len(weights))
+	for i := range weights {
+		handles[i], err = gpu.FromData(weights[i], shapes[i][0], shapes[i][1])
+		if err != nil {
+			t.Fatalf("FromData(%d): %v", i, err)
+		}
+		defer gpu.FreeHandle(handles[i])
+	}
+	loss, grads, err := gpu.EvalProgramGradientsForOutput(
+		gpuProg,
+		handles,
+		[]gpu.TensorInput{{
+			Name:  "dummy",
+			DType: gpu.TensorFloat32,
+			Shape: []int{1},
+			Data:  []float32{0},
+		}},
+		"loss",
+	)
+	if err != nil {
+		t.Fatalf("EvalProgramGradientsForOutput: %v", err)
+	}
+	return loss, grads
 }
 
 func TestDepthwiseConv1DGrad(t *testing.T) {

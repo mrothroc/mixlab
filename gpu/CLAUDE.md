@@ -8,6 +8,7 @@ This package executes the IR via MLX (Metal on macOS, CUDA on Linux). Forward + 
 - `mlx_bridge.{cpp,h}` — cgo bridge between Go and MLX C++; manages tensor handles, evals, gradients
 - `gated_delta_cuda_primitive.{cpp,h}` — CUDA primitive for OP_GATED_DELTA_SCAN (reference pattern)
 - `mamba3_cuda_primitive.{cpp,h}` — CUDA primitives for OP_MAMBA3_SELECTIVE_SCAN forward + backward
+- `mamba3_metal_primitive.{cpp,h}` — Metal forward + checkpointed reverse-replay VJP for OP_MAMBA3_SELECTIVE_SCAN
 - `gated_delta_metal_primitive.{cpp,h}` — Metal primitive for the same op (M1/M2)
 - `cuda_graph_limits.go` — CUDA graph batching policy (per-op-type caps); see `train/cuda_graph_limits.go` for the wiring
 - [`cuda_kernels/`](cuda_kernels/README.md) — `.cu` source + build pipeline for embedded fatbins
