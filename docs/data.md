@@ -215,6 +215,13 @@ frames the record as `[BOS] content [EOS] [PAD]...`, and emits a validity mask.
 For `plain` attention, PAD occupies a separate segment so bidirectional
 classification cannot use padding as context.
 
+Standalone classification `-mode eval` traverses matched labeled shards once
+in sorted order and evaluates all records by default. If the final GPU batch is
+partial, Mixlab pads only the fixed-shape runtime batch and excludes those
+padding rows from loss, metrics, and `-classification-out`. Training-time
+validation remains a capped monitoring sample; use standalone eval for
+full-split reporting.
+
 DNA datasets also carry the complement table used by top-level
 `rc_equivariant: true`. For packed MLM, biological positions reverse only
 inside their original segment. For one-record classification, content bases

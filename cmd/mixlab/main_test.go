@@ -132,6 +132,15 @@ func TestClassificationLabelFlagsInPrepareHelpGroup(t *testing.T) {
 	}
 }
 
+func TestClassificationEvalFlagsInHelpGroup(t *testing.T) {
+	groups := modeFlagGroups["eval"]
+	for _, flagName := range []string{"val-batches", "classification-out"} {
+		if !flagGroupContains(groups, flagName) {
+			t.Fatalf("eval help groups missing %s", flagName)
+		}
+	}
+}
+
 func TestSequenceVocabularyFlagsInNativeIOHelpGroups(t *testing.T) {
 	for _, mode := range []string{"generate", "score-ebm"} {
 		if !flagGroupContains(modeFlagGroups[mode], "sequence-vocab") {

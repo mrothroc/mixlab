@@ -32,11 +32,42 @@ Evaluate a checkpoint:
 | `-safetensors-load` | Required. Checkpoint to evaluate. |
 | `-train` | Required. Shard glob used as the eval token stream. |
 | `-lut-dir` | Directory containing BPB lookup tables. Default: `data`. |
+| `-val-batches N` | Classification-only batch cap. `0` (default) evaluates the entire labeled split; a positive cap prints an evaluated/total warning. |
+| `-classification-out PATH` | Classification-only JSONL containing the example index, gold label, prediction, and logits. |
 
 For `training.objective: "classification"`, `eval` consumes labeled
 validation shards and reports cross-entropy loss, accuracy, multiclass MCC,
-macro-F1, and binary AUROC. BPB and per-token LM exports do not apply to this
-objective.
+macro-F1, and binary AUROC over the entire matched split by default. The finite
+classification loader visits every labeled record exactly once and excludes
+fixed-shape padding rows from loss and metrics, so `examples=N` reports the
+true number of matched records even when `N` is not divisible by the GPU batch
+size. Aggregate metrics are independent of shard/record order.
+
+Use a positive `-val-batches` only for an intentional quick sample. Mixlab
+prints a warning with both the evaluated and total example counts whenever the
+cap truncates the split. This standalone behavior does not change training-time
+monitoring, which continues to use its existing fixed 10-batch validation
+sample for speed.
+
+For auditable downstream metrics:
+
+```bash
+./mixlab -mode eval \
+  -config examples/sequence_classification_gated_deltanet_tiny.json \
+  -safetensors-load runs/classifier.safetensors \
+  -train 'data/classification/val_*.bin' \
+  -classification-out runs/classifier.predictions.jsonl
+```
+
+Each line is deterministic labeled-shard order:
+
+```json
+{"index":0,"label":1,"prediction":0,"logits":[0.42,-0.17]}
+```
+
+Prepared classification shards do not retain source record IDs, so `index` is
+the zero-based position in the sorted matched shards. BPB and per-token LM
+exports do not apply to the classification objective.
 
 Per-token export flags can be combined in a single eval pass:
 

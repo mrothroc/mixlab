@@ -1,7 +1,9 @@
 package train
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 
@@ -34,11 +36,41 @@ type classificationOutputEvaluator interface {
 }
 
 func evaluateClassificationValidation(cfg *ArchConfig, valSet *data.ValSet, trainer GPUTrainer, step, batchSize, seqLen int) (ClassificationMetrics, error) {
+	return evaluateClassificationValidationWithPredictions(cfg, valSet, trainer, step, batchSize, seqLen, nil)
+}
+
+type classificationPredictionRecord struct {
+	Index      int       `json:"index"`
+	Label      int       `json:"label"`
+	Prediction int       `json:"prediction"`
+	Logits     []float32 `json:"logits"`
+}
+
+func evaluateClassificationValidationWithPredictions(
+	cfg *ArchConfig,
+	valSet *data.ValSet,
+	trainer GPUTrainer,
+	step, batchSize, seqLen int,
+	predictionsOut io.Writer,
+) (ClassificationMetrics, error) {
+	evaluator, ok := trainer.(classificationOutputEvaluator)
+	if !ok {
+		return ClassificationMetrics{}, fmt.Errorf("trainer does not support classification logits readback")
+	}
+	return evaluateClassificationValidationWithEvaluator(cfg, valSet, evaluator, step, batchSize, seqLen, predictionsOut)
+}
+
+func evaluateClassificationValidationWithEvaluator(
+	cfg *ArchConfig,
+	valSet *data.ValSet,
+	evaluator classificationOutputEvaluator,
+	step, batchSize, seqLen int,
+	predictionsOut io.Writer,
+) (ClassificationMetrics, error) {
 	if cfg == nil || !cfg.ClassificationEnabled() || cfg.Training.Classification == nil {
 		return ClassificationMetrics{}, fmt.Errorf("classification validation requires an active classification config")
 	}
-	evaluator, ok := trainer.(classificationOutputEvaluator)
-	if !ok {
+	if evaluator == nil {
 		return ClassificationMetrics{}, fmt.Errorf("trainer does not support classification logits readback")
 	}
 	if valSet == nil || len(valSet.Batches) == 0 {
@@ -49,7 +81,21 @@ func evaluateClassificationValidation(cfg *ArchConfig, valSet *data.ValSet, trai
 	predictions := make([]int, 0, cap(labels))
 	positiveScores := make([]float64, 0, cap(labels))
 	lossSum := 0.0
+	var predictionEncoder *json.Encoder
+	if predictionsOut != nil {
+		predictionEncoder = json.NewEncoder(predictionsOut)
+	}
 	for batchIndex, vb := range valSet.Batches {
+		realRows := vb.ExampleCount
+		if realRows == 0 {
+			realRows = batchSize
+		}
+		if realRows < 1 || realRows > batchSize {
+			return ClassificationMetrics{}, fmt.Errorf(
+				"classification validation batch %d example_count=%d outside [1,%d]",
+				batchIndex, realRows, batchSize,
+			)
+		}
 		prepared, err := prepareObjectiveBatchWithSeqLen(cfg, trainBatchFromValBatch(vb), step, arch.ObjectiveClassification, seqLen)
 		if err != nil {
 			return ClassificationMetrics{}, fmt.Errorf("prepare classification validation batch %d: %w", batchIndex, err)
@@ -65,13 +111,23 @@ func evaluateClassificationValidation(cfg *ArchConfig, valSet *data.ValSet, trai
 		if len(logits) != batchSize*numLabels {
 			return ClassificationMetrics{}, fmt.Errorf("classification logits size=%d, want %d", len(logits), batchSize*numLabels)
 		}
-		lossSum += float64(loss) * float64(batchSize)
-		for row := 0; row < batchSize; row++ {
+		if realRows == batchSize {
+			// Keep the established training-time validation loss path unchanged.
+			lossSum += float64(loss) * float64(realRows)
+		}
+		for row := 0; row < realRows; row++ {
 			label := int(prepared.classificationLabels[row])
 			if label < 0 || label >= numLabels {
 				return ClassificationMetrics{}, fmt.Errorf("classification label %d outside [0,%d)", label, numLabels)
 			}
 			rowLogits := logits[row*numLabels : (row+1)*numLabels]
+			if realRows != batchSize {
+				rowLoss, err := classificationCrossEntropy(rowLogits, label)
+				if err != nil {
+					return ClassificationMetrics{}, fmt.Errorf("classification validation batch %d row %d: %w", batchIndex, row, err)
+				}
+				lossSum += rowLoss
+			}
 			pred := 0
 			for class := 1; class < numLabels; class++ {
 				if rowLogits[class] > rowLogits[pred] {
@@ -83,11 +139,41 @@ func evaluateClassificationValidation(cfg *ArchConfig, valSet *data.ValSet, trai
 			if numLabels == 2 {
 				positiveScores = append(positiveScores, binarySoftmaxProbability(rowLogits[0], rowLogits[1]))
 			}
+			if predictionEncoder != nil {
+				record := classificationPredictionRecord{
+					Index: len(labels) - 1, Label: label, Prediction: pred,
+					Logits: append([]float32(nil), rowLogits...),
+				}
+				if err := predictionEncoder.Encode(record); err != nil {
+					return ClassificationMetrics{}, fmt.Errorf("write classification prediction %d: %w", record.Index, err)
+				}
+			}
 		}
 	}
 	metrics := classificationMetricsFromPredictions(labels, predictions, positiveScores, numLabels)
 	metrics.Loss = lossSum / float64(len(labels))
 	return metrics, nil
+}
+
+func classificationCrossEntropy(logits []float32, label int) (float64, error) {
+	if label < 0 || label >= len(logits) || len(logits) == 0 {
+		return 0, fmt.Errorf("label %d outside logits width %d", label, len(logits))
+	}
+	maxLogit := float64(logits[0])
+	for _, logit := range logits {
+		value := float64(logit)
+		if math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0, fmt.Errorf("classification logits contain a non-finite value")
+		}
+		if value > maxLogit {
+			maxLogit = value
+		}
+	}
+	expSum := 0.0
+	for _, logit := range logits {
+		expSum += math.Exp(float64(logit) - maxLogit)
+	}
+	return maxLogit + math.Log(expSum) - float64(logits[label]), nil
 }
 
 func binarySoftmaxProbability(negative, positive float32) float64 {

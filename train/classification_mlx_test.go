@@ -3,11 +3,15 @@
 package train
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"testing"
 
 	"github.com/mrothroc/mixlab/arch"
+	"github.com/mrothroc/mixlab/data"
 )
 
 func TestNativeClassificationTinyTrainingPlainAndRecurrent(t *testing.T) {
@@ -84,5 +88,56 @@ func TestNativeClassificationTinyTrainingPlainAndRecurrent(t *testing.T) {
 				t.Fatalf("classification loss did not decrease: first=%g last=%g", first, last)
 			}
 		})
+	}
+}
+
+func TestNativeClassificationValidationAcceptsPartialFinalBatch(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	cfg := nativeClassificationTestConfig()
+	cfg.SeqLen = 6
+	cfg.Training.BatchTokens = 12
+	cfg.Training.DatasetRecordFraming = true
+	cfg.Training.DatasetClassification = true
+	cfg.Training.DatasetNumLabels = 2
+	prog, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainer, err := initGPUTrainer(prog, cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer trainer.CloseTrainer()
+
+	valSet := &data.ValSet{
+		TotalExamples: 3, EvaluatedExamples: 3,
+		Batches: []data.ValBatch{
+			classificationValBatch([]int32{0, 1}, 2),
+			classificationValBatch([]int32{1, 1}, 1),
+		},
+	}
+	var predictions bytes.Buffer
+	metrics, err := evaluateClassificationValidationWithPredictions(cfg, valSet, trainer, 0, 2, 6, &predictions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if metrics.Examples != 3 || math.IsNaN(metrics.Loss) || math.IsInf(metrics.Loss, 0) {
+		t.Fatalf("metrics=%+v", metrics)
+	}
+	dec := json.NewDecoder(&predictions)
+	count := 0
+	for {
+		var record classificationPredictionRecord
+		if err := dec.Decode(&record); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		count++
+	}
+	if count != 3 {
+		t.Fatalf("prediction rows=%d want 3", count)
 	}
 }

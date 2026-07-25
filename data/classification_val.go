@@ -1,0 +1,174 @@
+package data
+
+import (
+	"fmt"
+	"path/filepath"
+	"sort"
+)
+
+// NewClassificationValSet loads a labeled record split exactly once. A
+// maxBatches value of zero evaluates the full split; a positive value caps the
+// number of fixed-shape batches while retaining the split total for reporting.
+func NewClassificationValSet(pattern string, maxBatches, batchTokens, seqLen int) (*ValSet, error) {
+	if maxBatches < 0 {
+		return nil, fmt.Errorf("classification validation batch limit must be >= 0, got %d", maxBatches)
+	}
+	if batchTokens <= 0 || seqLen <= 0 || batchTokens%seqLen != 0 {
+		return nil, fmt.Errorf("invalid classification validation batch shape: batchTokens=%d seqLen=%d", batchTokens, seqLen)
+	}
+
+	manifest, _, found, err := FindDatasetManifest(pattern)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, fmt.Errorf("classification validation requires %s beside the labeled shards", DatasetManifestFilename)
+	}
+	if manifest.ShardFormat != DatasetShardFormatLabeledSequenceV1 ||
+		manifest.EffectiveSequenceLayout() != DatasetSequenceLayoutOneRecordRow {
+		return nil, fmt.Errorf(
+			"classification validation requires shard_format=%q and sequence_layout=%q",
+			DatasetShardFormatLabeledSequenceV1, DatasetSequenceLayoutOneRecordRow,
+		)
+	}
+	if seqLen != manifest.RecordSeqLen {
+		return nil, fmt.Errorf("classification validation requires seq_len=%d, got %d", manifest.RecordSeqLen, seqLen)
+	}
+	padID, padOK := manifest.SpecialTokenIDs["pad"]
+	bosID, bosOK := manifest.SpecialTokenIDs["bos"]
+	eosID, eosOK := manifest.SpecialTokenIDs["eos"]
+	if !padOK || !bosOK || !eosOK {
+		return nil, fmt.Errorf("classification validation manifest requires special_token_ids pad, bos, and eos")
+	}
+
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no classification validation shard files matched %q", pattern)
+	}
+
+	var records [][]uint16
+	var labels []int32
+	for _, file := range files {
+		shardRecords, shardLabels, err := LoadLabeledSequenceShard(file)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, shardRecords...)
+		labels = append(labels, shardLabels...)
+	}
+	if len(records) == 0 {
+		return nil, fmt.Errorf("classification validation split %q contains no records", pattern)
+	}
+	if len(labels) != len(records) {
+		return nil, fmt.Errorf("classification validation split has %d records but %d labels", len(records), len(labels))
+	}
+
+	batchSize := batchTokens / seqLen
+	evaluated := len(records)
+	if maxBatches > 0 && maxBatches*batchSize < evaluated {
+		evaluated = maxBatches * batchSize
+	}
+	batchCount := (evaluated + batchSize - 1) / batchSize
+	vs := &ValSet{
+		Batches:           make([]ValBatch, 0, batchCount),
+		TotalExamples:     len(records),
+		EvaluatedExamples: evaluated,
+	}
+	for start := 0; start < evaluated; start += batchSize {
+		realRows := minInt(batchSize, evaluated-start)
+		batch := newRecordBatch(batchTokens, seqLen, true)
+		for row := 0; row < realRows; row++ {
+			if err := frameRecordRow(&batch, row, records[start+row], labels[start+row], seqLen, padID, bosID, eosID, true); err != nil {
+				return nil, fmt.Errorf("frame classification validation record %d: %w", start+row, err)
+			}
+		}
+		// Fixed-shape GPU programs cannot accept a partial final batch. Duplicate
+		// its first real row, then let ExampleCount exclude those rows.
+		for row := realRows; row < batchSize; row++ {
+			if err := frameRecordRow(&batch, row, records[start], labels[start], seqLen, padID, bosID, eosID, true); err != nil {
+				return nil, fmt.Errorf("pad classification validation batch: %w", err)
+			}
+		}
+		vs.Batches = append(vs.Batches, ValBatch{
+			X: batch.X, Y: batch.Y, LossMask: batch.LossMask,
+			SegmentIDs: batch.SegmentIDs, MaskEligible: batch.MaskEligible,
+			Labels: batch.Labels, ValidMask: batch.ValidMask,
+			ExampleCount: realRows,
+		})
+	}
+	return vs, nil
+}
+
+func newRecordBatch(batchTokens, seqLen int, labeled bool) Batch {
+	batch := Batch{
+		X:            make([]int, batchTokens),
+		Y:            make([]int, batchTokens),
+		LossMask:     make([]float32, batchTokens),
+		MaskEligible: make([]uint8, batchTokens),
+	}
+	if labeled {
+		batch.SegmentIDs = make([]int32, batchTokens)
+		batch.Labels = make([]int32, batchTokens/seqLen)
+		batch.ValidMask = make([]float32, batchTokens)
+	}
+	return batch
+}
+
+func frameRecordRow(batch *Batch, row int, record []uint16, label int32, seqLen, padID, bosID, eosID int, labeled bool) error {
+	if len(record) > seqLen-2 {
+		return fmt.Errorf("record has %d tokens but seq_len=%d permits at most %d", len(record), seqLen, seqLen-2)
+	}
+	rowStart := row * seqLen
+	rowEnd := rowStart + seqLen
+	if row < 0 || rowEnd > len(batch.X) || (labeled && row >= len(batch.Labels)) {
+		return fmt.Errorf("row %d is outside fixed batch shape", row)
+	}
+	for i := rowStart; i < rowEnd; i++ {
+		batch.X[i], batch.Y[i] = padID, padID
+		batch.MaskEligible[i] = 0
+		batch.LossMask[i] = 0
+		if labeled {
+			batch.SegmentIDs[i] = 0
+			batch.ValidMask[i] = 0
+		}
+	}
+	batch.X[rowStart] = bosID
+	if labeled {
+		batch.ValidMask[rowStart] = 1
+	}
+	for i, token := range record {
+		pos := rowStart + i + 1
+		batch.X[pos] = int(token)
+		batch.MaskEligible[pos] = 1
+		if labeled {
+			batch.ValidMask[pos] = 1
+		}
+	}
+	eosInput := rowStart + len(record) + 1
+	batch.X[eosInput] = eosID
+	if labeled {
+		batch.ValidMask[eosInput] = 1
+	}
+	for i := rowStart; i < eosInput; i++ {
+		batch.Y[i] = batch.X[i+1]
+		batch.LossMask[i] = 1
+	}
+	if labeled {
+		for i := eosInput + 1; i < rowEnd; i++ {
+			batch.SegmentIDs[i] = 1
+		}
+		batch.Labels[row] = label
+	}
+	return nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

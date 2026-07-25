@@ -277,61 +277,20 @@ func (l *Loader) nextRecordBatch(batchTokens, seqLen int) (Batch, error) {
 	if seqLen != l.packing.recordSeqLen {
 		return Batch{}, fmt.Errorf("one-record-per-row dataset requires seq_len=%d, got %d", l.packing.recordSeqLen, seqLen)
 	}
-	x := make([]int, batchTokens)
-	y := make([]int, batchTokens)
-	lossMask := make([]float32, batchTokens)
-	maskEligible := make([]uint8, batchTokens)
-	var validMask []float32
-	var segmentIDs []int32
-	var labels []int32
-	if l.sequences.labeled {
-		validMask = make([]float32, batchTokens)
-		segmentIDs = make([]int32, batchTokens)
-		labels = make([]int32, batchTokens/seqLen)
-	}
+	batch := newRecordBatch(batchTokens, seqLen, l.sequences.labeled)
 	for rowStart := 0; rowStart < batchTokens; rowStart += seqLen {
 		record, label, err := l.sequences.takeLabeledRecord()
 		if err != nil {
 			return Batch{}, err
 		}
-		if len(record) > seqLen-2 {
-			return Batch{}, fmt.Errorf("record has %d tokens but seq_len=%d permits at most %d; re-run prepare with an explicit record overflow policy", len(record), seqLen, seqLen-2)
-		}
-		rowEnd := rowStart + seqLen
-		for i := rowStart; i < rowEnd; i++ {
-			x[i], y[i] = l.packing.padID, l.packing.padID
-		}
-		x[rowStart] = l.packing.bosID
-		if l.sequences.labeled {
-			validMask[rowStart] = 1
-		}
-		for i, token := range record {
-			x[rowStart+1+i] = int(token)
-			maskEligible[rowStart+1+i] = 1
-			if l.sequences.labeled {
-				validMask[rowStart+1+i] = 1
-			}
-		}
-		eosInput := rowStart + len(record) + 1
-		x[eosInput] = l.packing.eosID
-		if l.sequences.labeled {
-			validMask[eosInput] = 1
-			labels[rowStart/seqLen] = label
-		}
-		for i := rowStart; i < eosInput; i++ {
-			y[i] = x[i+1]
-			lossMask[i] = 1
-		}
-		if l.sequences.labeled {
-			for i := eosInput + 1; i < rowEnd; i++ {
-				segmentIDs[i] = 1
-			}
+		if err := frameRecordRow(
+			&batch, rowStart/seqLen, record, label, seqLen,
+			l.packing.padID, l.packing.bosID, l.packing.eosID, l.sequences.labeled,
+		); err != nil {
+			return Batch{}, fmt.Errorf("%w; re-run prepare with an explicit record overflow policy", err)
 		}
 	}
-	return Batch{
-		X: x, Y: y, LossMask: lossMask, SegmentIDs: segmentIDs,
-		MaskEligible: maskEligible, Labels: labels, ValidMask: validMask,
-	}, nil
+	return batch, nil
 }
 
 func (l *Loader) nextSequenceBatch(batchTokens, seqLen int) (Batch, error) {
@@ -424,11 +383,16 @@ type ValBatch struct {
 	MaskEligible []uint8
 	Labels       []int32
 	ValidMask    []float32
+	// ExampleCount is the number of real rows in a padded fixed-shape batch.
+	// Zero means all rows are real for backward compatibility.
+	ExampleCount int
 }
 
 // ValSet holds fixed batches for repeatable evaluation.
 type ValSet struct {
-	Batches []ValBatch
+	Batches           []ValBatch
+	TotalExamples     int
+	EvaluatedExamples int
 }
 
 // NewValSet loads nBatches fixed batches from a validation shard.
@@ -454,7 +418,11 @@ func NewValSetWithOptions(pattern string, seed int64, nBatches, batchTokens, seq
 		if err != nil {
 			break
 		}
-		vs.Batches = append(vs.Batches, ValBatch(batch))
+		vs.Batches = append(vs.Batches, ValBatch{
+			X: batch.X, Y: batch.Y, LossMask: batch.LossMask,
+			SegmentIDs: batch.SegmentIDs, MaskEligible: batch.MaskEligible,
+			Labels: batch.Labels, ValidMask: batch.ValidMask,
+		})
 	}
 	if len(vs.Batches) == 0 {
 		return nil, fmt.Errorf("no validation batches loaded from %q; check the validation glob or reduce seq_len/batch_tokens", pattern)

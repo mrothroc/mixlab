@@ -77,6 +77,8 @@ func main() {
 	logitsOut := flag.String("logits-out", "", "write per-token full-vocab logits to a binary file (eval mode); can be combined with -logprobs-out, -ranks-out, -uncertainty-out for a single eval pass")
 	logitsDType := flag.String("logits-dtype", "float16", "on-disk dtype for -logits-out: float16 (default) or float32")
 	logitsForm := flag.String("logits-form", "raw", "encoding for -logits-out rows: raw (default) or logprobs (log_softmax)")
+	valBatches := flag.Int("val-batches", 0, "classification eval batch cap; 0 evaluates the full labeled split")
+	classificationOut := flag.String("classification-out", "", "write standalone classification eval labels, predictions, and logits as JSONL")
 	hfDir := flag.String("hf", "", "Hugging Face export directory to compare against native inference (parity mode)")
 	parityThreshold := flag.Float64("threshold", 0.05, "maximum allowed native-vs-HF mean NLL difference (parity mode)")
 	parityLossThreshold := flag.Float64("parity-loss-threshold", 0.05, "maximum allowed native-vs-HF mean NLL difference; clearer alias for -threshold")
@@ -309,6 +311,9 @@ func main() {
 	case "eval":
 		switch {
 		case *logprobsOut != "" || *ranksOut != "" || *uncertaintyOut != "" || *logitsOut != "":
+			if providedFlags["val-batches"] || *classificationOut != "" {
+				must(fmt.Errorf("-val-batches and -classification-out cannot be combined with per-token language-model eval exports"))
+			}
 			dtype, err := logits.ParseDType(*logitsDType)
 			if err != nil {
 				must(err)
@@ -326,7 +331,9 @@ func main() {
 				LogitsForm:     form,
 			}))
 		default:
-			must(train.RunEvalModeWithLUT(*configPath, *trainPattern, *safetensorsLoad, *lutDir))
+			must(train.RunEvalModeWithOptions(*configPath, *trainPattern, *safetensorsLoad, train.EvalModeOptions{
+				LUTDir: *lutDir, ValBatches: *valBatches, ClassificationOut: *classificationOut,
+			}))
 		}
 	case "hiddenstats":
 		hiddenstatsOutput, err := aliasedStringFlagValue(*prepOutput, "hiddenstats-out", *hiddenstatsOut, providedFlags)
@@ -457,6 +464,7 @@ var modeFlagGroups = map[string][]flagGroup{
 	"eval": {
 		{"Required", []string{"config", "train", "safetensors-load"}},
 		{"Lookup tables", []string{"lut-dir"}},
+		{"Classification evaluation", []string{"val-batches", "classification-out"}},
 		{"Per-token exports", []string{"logprobs-out", "ranks-out", "uncertainty-out", "logits-out", "logits-dtype", "logits-form"}},
 	},
 	"hiddenstats": {
