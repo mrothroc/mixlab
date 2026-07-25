@@ -19,6 +19,16 @@ func DeviceName() string {
 	return mlxDeviceName()
 }
 
+// StartMamba3MetalPrewarm begins best-effort asynchronous Metal pipeline
+// compilation. Call WaitMamba3MetalPrewarm before the first Mamba3 evaluation.
+func StartMamba3MetalPrewarm() error {
+	return mlxStartMamba3MetalPrewarm()
+}
+
+func WaitMamba3MetalPrewarm() error {
+	return mlxWaitMamba3MetalPrewarm()
+}
+
 func FromData(data []float32, rows, cols int) (int64, error) {
 	if rows <= 0 || cols <= 0 {
 		return 0, fmt.Errorf("invalid tensor shape rows=%d cols=%d; pass positive dimensions to gpu.FromData", rows, cols)

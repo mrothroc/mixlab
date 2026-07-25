@@ -81,7 +81,14 @@ func TestMamba3CanonicalFullStepOOMProbe(t *testing.T) {
 	if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
 		t.Fatalf("non-finite loss %g", loss)
 	}
-	t.Logf("loss=%g elapsed=%s", loss, time.Since(start))
+	memory := gpu.MemoryStatsSnapshot()
+	t.Logf(
+		"loss=%g elapsed=%s active_mib=%.2f cache_mib=%.2f peak_mib=%.2f",
+		loss,
+		time.Since(start),
+		float64(memory.ActiveBytes)/(1<<20),
+		float64(memory.CacheBytes)/(1<<20),
+		float64(memory.PeakBytes)/(1<<20))
 }
 
 func mamba3ProbeInt(name string, fallback int) int {

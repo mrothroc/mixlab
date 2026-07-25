@@ -29,6 +29,12 @@ func SetCUDAGraphLimits(maxOps, maxMB int) {
 
 func Available() bool    { return false }
 func DeviceName() string { return "" }
+func StartMamba3MetalPrewarm() error {
+	return nil
+}
+func WaitMamba3MetalPrewarm() error {
+	return nil
+}
 
 func mlxMemoryStats() MemoryStats { return MemoryStats{} }
 

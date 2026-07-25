@@ -8,7 +8,7 @@ This package executes the IR via MLX (Metal on macOS, CUDA on Linux). Forward + 
 - `mlx_bridge.{cpp,h}` — cgo bridge between Go and MLX C++; manages tensor handles, evals, gradients
 - `gated_delta_cuda_primitive.{cpp,h}` — CUDA primitive for OP_GATED_DELTA_SCAN (reference pattern)
 - `mamba3_cuda_primitive.{cpp,h}` — CUDA primitives for OP_MAMBA3_SELECTIVE_SCAN forward + backward
-- `mamba3_metal_primitive.{cpp,h}` — Metal forward + checkpointed reverse-replay VJP for OP_MAMBA3_SELECTIVE_SCAN
+- `mamba3_metal_primitive.{cpp,h}` — Metal forward + CUDA-style parallel-window VJP for OP_MAMBA3_SELECTIVE_SCAN; short sequences retain sequential reverse replay
 - `gated_delta_metal_primitive.{cpp,h}` — Metal primitive for the same op (M1/M2)
 - `cuda_graph_limits.go` — CUDA graph batching policy (per-op-type caps); see `train/cuda_graph_limits.go` for the wiring
 - [`cuda_kernels/`](cuda_kernels/README.md) — `.cu` source + build pipeline for embedded fatbins
@@ -19,7 +19,7 @@ Custom GPU compute is wrapped in an `mx::Primitive` subclass with `eval_gpu()` +
 **Anti-pattern: do NOT wrap a long sequence of host-side MLX ops in `mx::custom_vjp`.** That forces MLX to trace and compile all of them as a single fused custom op on first call — 10+ minute CPU hangs at scale. Past incident: the canonical Mamba-3 fused block (commit `e1899bf`) wrapped 20+ MLX ops in `mx::custom_vjp` and had to be reverted (`3509a87`). Use `mx::Primitive` subclasses for the GPU-specific compute and let MLX autograd handle the host-side composition.
 
 ## Mamba-3 specifics
-The canonical Mamba-3 path has 7 layers of memory/compile pressure mitigation. See [`../docs/canonical_mamba3.md`](../docs/canonical_mamba3.md) for the full architecture, env-var reference, and which file each layer lives in.
+The canonical Mamba-3 path has 7 layers of memory/compile pressure mitigation. On Metal, trainer setup also prewarms the embedded Mamba-3 library while weights initialize/upload, and backward uses parallel window summaries once a sequence spans at least four replay windows. See [`../docs/canonical_mamba3.md`](../docs/canonical_mamba3.md) for the full architecture, env-var reference, and which file each layer lives in.
 
 ## Determinism / keyed RNG
 - `OP_DROPOUT` takes an optional `dropout_keys` input; when present it draws its

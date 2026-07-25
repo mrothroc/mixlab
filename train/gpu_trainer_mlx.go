@@ -121,6 +121,10 @@ func initMLXGPUTrainer(
 	if !gpu.Available() {
 		return nil, fmt.Errorf("MLX backend unavailable; rebuild with: CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab")
 	}
+	prewarmMamba3, err := startMamba3MetalPrewarm(irProg)
+	if err != nil {
+		return nil, err
+	}
 
 	// Compute weight shapes and initialize data
 	shapes, err := computeWeightShapes(cfg)
@@ -202,6 +206,13 @@ func initMLXGPUTrainer(
 		return nil, err
 	}
 	optimizerSpec.ComputeDType = computeDType
+	if prewarmMamba3 {
+		if err := gpu.WaitMamba3MetalPrewarm(); err != nil {
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, fmt.Errorf("complete Mamba3 Metal prewarm: %w", err)
+		}
+	}
 
 	trainerHandle, err := gpu.CreateTrainer(gpuProg, handles, optimizerSpec)
 	if err != nil {
@@ -488,15 +499,6 @@ func initMLXGPUTrainer(
 	}
 	releaseOSThread = false
 	return trainer, nil
-}
-
-func weightIndexByName(shapes []WeightShape, name string) (int, error) {
-	for i, shape := range shapes {
-		if shape.Name == name {
-			return i, nil
-		}
-	}
-	return -1, fmt.Errorf("unknown weight %q", name)
 }
 
 func (t *mlxGPUTrainer) shapesModelDim() int {

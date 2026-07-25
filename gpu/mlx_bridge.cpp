@@ -2,6 +2,7 @@
 #include "mlx_bridge_internal.h"
 #include "ir.h"
 #include "ir_trainer.h"
+#include "mamba3_metal_primitive.h"
 
 #include <mlx/compile.h>
 #include <mlx/memory.h>
@@ -67,6 +68,26 @@ std::string bridge_exception_message(const std::exception& e) {
 
 void log_bridge_exception(const char* fn, const std::exception& e) {
   std::cout << "[mlx_bridge] " << fn << " exception: " << bridge_exception_message(e) << std::endl;
+}
+
+extern "C" int mlx_mamba3_metal_prewarm_start(void) {
+  try {
+    mlx_ir::mamba3_metal_prewarm_start();
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_mamba3_metal_prewarm_start", e);
+    return -1;
+  }
+}
+
+extern "C" int mlx_mamba3_metal_prewarm_wait(void) {
+  try {
+    mlx_ir::mamba3_metal_prewarm_wait();
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_mamba3_metal_prewarm_wait", e);
+    return -1;
+  }
 }
 
 mx::array* get_handle(int64_t handle) {

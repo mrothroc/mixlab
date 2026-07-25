@@ -12,11 +12,15 @@ import (
 )
 
 func BenchmarkMamba3SelectiveScanForwardBackward(b *testing.B) {
-	benchmarkMamba3SelectiveScanForwardBackward(b, true)
+	benchmarkMamba3SelectiveScan(b, true, false)
 }
 
 func BenchmarkMamba3SelectiveScanForwardBackwardColdCompile(b *testing.B) {
-	benchmarkMamba3SelectiveScanForwardBackward(b, false)
+	benchmarkMamba3SelectiveScan(b, false, false)
+}
+
+func BenchmarkMamba3SelectiveScanForward(b *testing.B) {
+	benchmarkMamba3SelectiveScan(b, true, true)
 }
 
 func BenchmarkMamba3CanonicalTrainingStep(b *testing.B) {
@@ -100,7 +104,7 @@ func BenchmarkMamba3CanonicalTrainingStep(b *testing.B) {
 	}
 }
 
-func benchmarkMamba3SelectiveScanForwardBackward(b *testing.B, warmup bool) {
+func benchmarkMamba3SelectiveScan(b *testing.B, warmup, forwardOnly bool) {
 	if !gpu.Available() {
 		b.Skip("MLX backend not available")
 	}
@@ -162,7 +166,11 @@ func benchmarkMamba3SelectiveScanForwardBackward(b *testing.B, warmup bool) {
 
 	inputs := []gpu.TensorInput{{Name: "dummy", DType: gpu.TensorFloat32, Shape: []int{1}, Data: []float32{0}}}
 	if warmup {
-		if _, _, err := gpu.EvalProgramGradientsForOutput(gpuProg, handles, inputs, "loss"); err != nil {
+		if forwardOnly {
+			if _, err := gpu.EvalProgramOutput(gpuProg, handles, inputs, "loss"); err != nil {
+				b.Fatalf("warmup EvalProgramOutput: %v", err)
+			}
+		} else if _, _, err := gpu.EvalProgramGradientsForOutput(gpuProg, handles, inputs, "loss"); err != nil {
 			b.Fatalf("warmup EvalProgramGradientsForOutput: %v", err)
 		}
 	}
@@ -170,7 +178,11 @@ func benchmarkMamba3SelectiveScanForwardBackward(b *testing.B, warmup bool) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, _, err := gpu.EvalProgramGradientsForOutput(gpuProg, handles, inputs, "loss"); err != nil {
+		if forwardOnly {
+			if _, err := gpu.EvalProgramOutput(gpuProg, handles, inputs, "loss"); err != nil {
+				b.Fatalf("EvalProgramOutput iteration %d: %v", i, err)
+			}
+		} else if _, _, err := gpu.EvalProgramGradientsForOutput(gpuProg, handles, inputs, "loss"); err != nil {
 			b.Fatalf("EvalProgramGradientsForOutput iteration %d: %v", i, err)
 		}
 	}

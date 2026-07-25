@@ -14,6 +14,10 @@ void mlx_set_cuda_graph_limits(int max_ops, int max_mb);
 // Initialize MLX - returns 0 on success, -1 on failure
 int mlx_init(void);
 
+// Compile canonical Mamba3 Metal kernels while trainer setup prepares weights.
+int mlx_mamba3_metal_prewarm_start(void);
+int mlx_mamba3_metal_prewarm_wait(void);
+
 // Get device name (e.g. "Apple M1 Max" or "NVIDIA RTX 4090")
 const char* mlx_device_name(void);
 

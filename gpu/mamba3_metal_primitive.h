@@ -9,6 +9,9 @@ namespace mlx_ir {
 
 bool mamba3_selective_scan_metal_primitive_available(int state_size);
 
+void mamba3_metal_prewarm_start();
+void mamba3_metal_prewarm_wait();
+
 mlx::core::array mamba3_selective_scan_metal_forward(
     const mlx::core::array& x_flat,
     const mlx::core::array& dt_flat,

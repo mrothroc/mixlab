@@ -57,35 +57,62 @@ func TestMamba3SelectiveScanMetalMatchesMLXFallback(t *testing.T) {
 	if !gpu.Available() {
 		t.Skip("MLX backend not available")
 	}
-	t.Setenv("MIXLAB_MAMBA3_BWD_WINDOW", "3")
 
-	nativeLoss, nativeGrads := evalMamba3SelectiveScanParityFixture(t)
-	t.Setenv("MIXLAB_MAMBA3_DISABLE_METAL_PRIMITIVE", "1")
-	fallbackLoss, fallbackGrads := evalMamba3SelectiveScanParityFixture(t)
+	for _, tt := range []struct {
+		name       string
+		sequence   int
+		windowSize string
+	}{
+		{name: "short_windows", sequence: 10, windowSize: "3"},
+		{name: "default_windows", sequence: 130, windowSize: "32"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MIXLAB_MAMBA3_BWD_WINDOW", tt.windowSize)
 
-	if diff := math.Abs(float64(nativeLoss - fallbackLoss)); diff > 2e-5 {
-		t.Fatalf("native/fallback loss mismatch: native=%g fallback=%g diff=%g", nativeLoss, fallbackLoss, diff)
+			parallelLoss, parallelGrads := evalMamba3SelectiveScanParityFixture(t, tt.sequence)
+			t.Setenv("MIXLAB_MAMBA3_DISABLE_METAL_PARALLEL_BACKWARD", "1")
+			sequentialLoss, sequentialGrads := evalMamba3SelectiveScanParityFixture(t, tt.sequence)
+			t.Setenv("MIXLAB_MAMBA3_DISABLE_METAL_PRIMITIVE", "1")
+			fallbackLoss, fallbackGrads := evalMamba3SelectiveScanParityFixture(t, tt.sequence)
+
+			assertMamba3ScanParity(t, "parallel/sequential", parallelLoss, parallelGrads, sequentialLoss, sequentialGrads)
+			assertMamba3ScanParity(t, "parallel/fallback", parallelLoss, parallelGrads, fallbackLoss, fallbackGrads)
+		})
 	}
-	if len(nativeGrads) != len(fallbackGrads) {
-		t.Fatalf("native/fallback gradient count mismatch: native=%d fallback=%d", len(nativeGrads), len(fallbackGrads))
+}
+
+func assertMamba3ScanParity(
+	t *testing.T,
+	label string,
+	gotLoss float32,
+	gotGrads [][]float32,
+	wantLoss float32,
+	wantGrads [][]float32,
+) {
+	t.Helper()
+	if diff := math.Abs(float64(gotLoss - wantLoss)); diff > 2e-5 {
+		t.Fatalf("%s loss mismatch: got=%g want=%g diff=%g", label, gotLoss, wantLoss, diff)
 	}
-	for i := range nativeGrads {
-		maxRel, maxAbs := maxGradientError(nativeGrads[i], fallbackGrads[i])
+	if len(gotGrads) != len(wantGrads) {
+		t.Fatalf("%s gradient count mismatch: got=%d want=%d", label, len(gotGrads), len(wantGrads))
+	}
+	for i := range gotGrads {
+		maxRel, maxAbs := maxGradientError(gotGrads[i], wantGrads[i])
 		if maxRel > 3e-3 && maxAbs > 3e-5 {
-			t.Fatalf("gradient %d native/fallback mismatch: max_relative_error=%g max_absolute_error=%g", i, maxRel, maxAbs)
+			t.Fatalf("%s gradient %d mismatch: max_relative_error=%g max_absolute_error=%g", label, i, maxRel, maxAbs)
 		}
 	}
 }
 
-func evalMamba3SelectiveScanParityFixture(t *testing.T) (float32, [][]float32) {
+func evalMamba3SelectiveScanParityFixture(t *testing.T, sequenceLength int) (float32, [][]float32) {
 	t.Helper()
 	const (
 		B = 2
-		T = 10
 		D = 4
 		N = 8
 		G = 2
 	)
+	T := sequenceLength
 	prog := arch.NewProgram(7)
 	prog.DeclareInput("dummy", arch.TensorFloat32, []int{1})
 	prog.DeclareOutput("loss", arch.TensorFloat32, []int{1})

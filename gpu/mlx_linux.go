@@ -34,6 +34,14 @@ func mlxDeviceName() string {
 	return C.GoString(C.mlx_device_name())
 }
 
+func mlxStartMamba3MetalPrewarm() error {
+	return nil
+}
+
+func mlxWaitMamba3MetalPrewarm() error {
+	return nil
+}
+
 func mlxMemoryStats() MemoryStats {
 	return MemoryStats{
 		ActiveBytes: uint64(C.mlx_memory_active()),
