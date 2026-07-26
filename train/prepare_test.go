@@ -672,14 +672,146 @@ func TestPrepareLabeledFASTAKeepsTSVLabelsAtomic(t *testing.T) {
 	}
 }
 
-// TestFindPrepareScript verifies the script locator logic.
-func TestFindPrepareScript(t *testing.T) {
-	// When run from repository root/, should find scripts/prepare.py.
-	scriptPath, err := findPrepareScript()
-	if err != nil {
-		t.Skipf("prepare.py not found (expected when running from a different directory): %v", err)
+func TestResolvePrepareScriptUsesExplicitOverride(t *testing.T) {
+	overrideDir := t.TempDir()
+	overridePath := filepath.Join(overrideDir, "prepare.py")
+	if err := os.WriteFile(overridePath, []byte("# override\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := os.Stat(scriptPath); err != nil {
-		t.Errorf("findPrepareScript returned %q but file doesn't exist: %v", scriptPath, err)
+
+	resolution, err := resolvePrepareScriptAt(
+		overrideDir,
+		filepath.Join(t.TempDir(), "bin", "mixlab"),
+		t.TempDir(),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resolution.close()
+	if resolution.path != overridePath || resolution.source != "MIXLAB_SCRIPTS" {
+		t.Fatalf("resolution=%+v want explicit override %q", resolution, overridePath)
+	}
+}
+
+func TestResolvePrepareScriptFallsBackToEmbeddedBundle(t *testing.T) {
+	isolated := t.TempDir()
+	resolution, err := resolvePrepareScriptAt(
+		"",
+		filepath.Join(isolated, "bin", "mixlab"),
+		filepath.Join(isolated, "working"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.source != "embedded" {
+		resolution.close()
+		t.Fatalf("source=%q want embedded", resolution.source)
+	}
+	scriptDir := filepath.Dir(resolution.path)
+	for _, name := range []string{"prepare.py", "prepare_records.py"} {
+		content, err := os.ReadFile(filepath.Join(scriptDir, name))
+		if err != nil {
+			resolution.close()
+			t.Fatalf("read materialized %s: %v", name, err)
+		}
+		if len(content) == 0 {
+			resolution.close()
+			t.Fatalf("materialized %s is empty", name)
+		}
+	}
+	resolution.close()
+	if _, err := os.Stat(scriptDir); !os.IsNotExist(err) {
+		t.Fatalf("embedded script temp directory still exists after cleanup: %v", err)
+	}
+}
+
+func TestPreparePythonReportsFormatSpecificDependencies(t *testing.T) {
+	binDir := t.TempDir()
+	python := filepath.Join(binDir, "python3")
+	if err := os.WriteFile(python, []byte("#!/bin/sh\necho missing-module >&2\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir)
+
+	_, textErr := preparePython("text")
+	if textErr == nil || !strings.Contains(textErr.Error(), "numpy and tokenizers") {
+		t.Fatalf("text dependency error=%v", textErr)
+	}
+	_, fastaErr := preparePython("fasta")
+	if fastaErr == nil || !strings.Contains(fastaErr.Error(), "packages numpy;") ||
+		strings.Contains(fastaErr.Error(), "tokenizers") {
+		t.Fatalf("FASTA dependency error=%v", fastaErr)
+	}
+}
+
+func TestPreparePythonReportsMissingInterpreter(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	_, err := preparePython("text")
+	if err == nil || !strings.Contains(err.Error(), "requires Python 3 on PATH") {
+		t.Fatalf("missing interpreter error=%v", err)
+	}
+}
+
+func TestEmbeddedPrepareRunsOutsideSourceCheckout(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	if err := exec.Command("python3", "-c", "import numpy, tokenizers").Run(); err != nil {
+		t.Skip("python3 numpy/tokenizers libraries not available")
+	}
+
+	isolated := t.TempDir()
+	originalWorkingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(isolated); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(originalWorkingDir); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	}()
+	t.Setenv("MIXLAB_SCRIPTS", "")
+
+	textInput := filepath.Join(isolated, "corpus.txt")
+	textOutput := filepath.Join(isolated, "text-output")
+	corpus := strings.Repeat("red green blue yellow. ", 100)
+	if err := os.WriteFile(textInput, []byte(corpus), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPrepare(PrepareOptions{
+		Input: textInput, Output: textOutput, InputFormat: "text",
+		VocabSize: 64, ValSplit: 0.1,
+	}); err != nil {
+		t.Fatalf("embedded text prepare: %v", err)
+	}
+	textManifest, err := data.LoadDatasetManifest(filepath.Join(textOutput, data.DatasetManifestFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if textManifest.Modality != "text" {
+		t.Fatalf("text modality=%q", textManifest.Modality)
+	}
+
+	fastaInput := filepath.Join(isolated, "sequences.fasta")
+	fastaOutput := filepath.Join(isolated, "fasta-output")
+	if err := os.WriteFile(fastaInput, []byte(">a\nACGT\n>b\nTGCA\n>c\nAAAA\n>d\nCCCC\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := runPrepare(PrepareOptions{
+		Input: fastaInput, Output: fastaOutput, InputFormat: "fasta",
+		ValSplit: 0.25, NucleotideAlphabet: "dna",
+		NucleotideAmbiguous: "N", NucleotideInvalidPolicy: "error",
+	}); err != nil {
+		t.Fatalf("embedded FASTA prepare: %v", err)
+	}
+	fastaManifest, err := data.LoadDatasetManifest(filepath.Join(fastaOutput, data.DatasetManifestFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fastaManifest.Modality != "nucleotide" {
+		t.Fatalf("FASTA modality=%q", fastaManifest.Modality)
 	}
 }

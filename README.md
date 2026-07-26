@@ -68,8 +68,9 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
 brew install mrothroc/tap/mixlab
 ```
 
-This installs MLX automatically as a dependency. For data preparation and
-FineWeb downloads, also install Python dependencies:
+This installs MLX automatically as a dependency. The binary embeds the scripts
+used by `mixlab -mode prepare`, so no source checkout is needed. For the Python
+runtime dependencies used by data preparation and FineWeb downloads:
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate

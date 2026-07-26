@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mrothroc/mixlab/data"
+	prepareassets "github.com/mrothroc/mixlab/scripts"
 )
 
 // PrepareOptions holds flags for the prepare command.
@@ -46,7 +47,7 @@ type PrepareOptions struct {
 	NucleotideStreamSeparator string
 }
 
-// runPrepare shells out to scripts/prepare.py to tokenize raw text into binary shards.
+// runPrepare invokes the bundled prepare.py to tokenize raw text into binary shards.
 func runPrepare(opts PrepareOptions) error {
 	if opts.Input == "" {
 		return fmt.Errorf("-input is required for prepare mode; pass a text file, JSONL, or directory, e.g.: mixlab -mode prepare -input corpus.jsonl -prepare-output-dir data/")
@@ -118,13 +119,18 @@ func runPrepare(opts PrepareOptions) error {
 		}
 	}
 
-	scriptPath, err := findPrepareScript()
+	python, err := preparePython(inputFormat)
 	if err != nil {
 		return err
 	}
+	script, err := resolvePrepareScript()
+	if err != nil {
+		return err
+	}
+	defer script.close()
 
 	args := []string{
-		scriptPath,
+		script.path,
 		"--input", opts.Input,
 		"--output", opts.Output,
 		"--vocab-size", fmt.Sprintf("%d", opts.VocabSize),
@@ -211,13 +217,13 @@ func runPrepare(opts PrepareOptions) error {
 		args = append(args, "--minimal-pair-sample-count", fmt.Sprintf("%d", opts.MinimalPairSampleCount))
 	}
 
-	fmt.Printf("Running: python3 %s\n", strings.Join(args, " "))
-	cmd := exec.Command("python3", args...)
+	fmt.Printf("Running: %s %s\n", python, strings.Join(args, " "))
+	cmd := exec.Command(python, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("prepare.py failed: %w", err)
+		return fmt.Errorf("prepare.py failed using %s scripts: %w", script.source, err)
 	}
 
 	// Validate output: check that at least one train shard exists.
@@ -243,38 +249,97 @@ func runPrepare(opts PrepareOptions) error {
 	return nil
 }
 
-// findPrepareScript locates scripts/prepare.py relative to the binary,
-// the current working directory, or via MIXLAB_SCRIPTS env var.
-func findPrepareScript() (string, error) {
-	// 1. Check MIXLAB_SCRIPTS env var.
-	if envDir := os.Getenv("MIXLAB_SCRIPTS"); envDir != "" {
+type prepareScriptResolution struct {
+	path    string
+	source  string
+	cleanup func()
+}
+
+func (r prepareScriptResolution) close() {
+	if r.cleanup != nil {
+		r.cleanup()
+	}
+}
+
+// resolvePrepareScript preserves explicit and legacy filesystem overrides,
+// then falls back to the scripts embedded in the installed binary.
+func resolvePrepareScript() (prepareScriptResolution, error) {
+	executable, _ := os.Executable()
+	workingDir, _ := os.Getwd()
+	return resolvePrepareScriptAt(os.Getenv("MIXLAB_SCRIPTS"), executable, workingDir)
+}
+
+func resolvePrepareScriptAt(envDir, executable, workingDir string) (prepareScriptResolution, error) {
+	// 1. Explicit developer override.
+	if envDir != "" {
 		p := filepath.Join(envDir, "prepare.py")
 		if _, err := os.Stat(p); err == nil {
-			return p, nil
+			return prepareScriptResolution{path: p, source: "MIXLAB_SCRIPTS"}, nil
 		}
 	}
 
-	// 2. Relative to the executable.
-	if exe, err := os.Executable(); err == nil {
-		p := filepath.Join(filepath.Dir(exe), "scripts", "prepare.py")
+	// 2. Legacy binary-adjacent bundle.
+	if executable != "" {
+		p := filepath.Join(filepath.Dir(executable), "scripts", "prepare.py")
 		if _, err := os.Stat(p); err == nil {
-			return p, nil
+			return prepareScriptResolution{path: p, source: "binary-adjacent"}, nil
 		}
 	}
 
-	// 3. Relative to current working directory.
-	if wd, err := os.Getwd(); err == nil {
+	// 3. Legacy source-checkout lookup.
+	if workingDir != "" {
 		candidates := []string{
-			filepath.Join(wd, "scripts", "prepare.py"),
-			filepath.Join(wd, "..", "scripts", "prepare.py"),
-			filepath.Join(wd, "cmd", "mixlab", "scripts", "prepare.py"),
+			filepath.Join(workingDir, "scripts", "prepare.py"),
+			filepath.Join(workingDir, "..", "scripts", "prepare.py"),
+			filepath.Join(workingDir, "cmd", "mixlab", "scripts", "prepare.py"),
 		}
 		for _, p := range candidates {
 			if _, err := os.Stat(p); err == nil {
-				return p, nil
+				return prepareScriptResolution{path: p, source: "source-checkout"}, nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("cannot find scripts/prepare.py; run from the repository root or set MIXLAB_SCRIPTS=/path/to/mixlab/scripts")
+	// 4. Installed binaries always carry the canonical prepare bundle.
+	tempDir, err := os.MkdirTemp("", "mixlab-prepare-*")
+	if err != nil {
+		return prepareScriptResolution{}, fmt.Errorf("create temporary directory for embedded prepare scripts: %w", err)
+	}
+	scriptPath, err := prepareassets.Materialize(tempDir)
+	if err != nil {
+		_ = os.RemoveAll(tempDir)
+		return prepareScriptResolution{}, err
+	}
+	return prepareScriptResolution{
+		path:    scriptPath,
+		source:  "embedded",
+		cleanup: func() { _ = os.RemoveAll(tempDir) },
+	}, nil
+}
+
+func preparePython(inputFormat string) (string, error) {
+	python, err := exec.LookPath("python3")
+	if err != nil {
+		return "", fmt.Errorf("prepare requires Python 3 on PATH; install python3 and retry")
+	}
+
+	modules := []string{"numpy"}
+	install := "numpy"
+	if inputFormat != "fasta" {
+		modules = append(modules, "tokenizers")
+		install += " tokenizers"
+	}
+	check := "import " + strings.Join(modules, ", ")
+	cmd := exec.Command(python, "-c", check)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		detail := strings.TrimSpace(string(output))
+		if detail != "" {
+			detail = ": " + detail
+		}
+		return "", fmt.Errorf(
+			"prepare requires Python packages %s; install them in the active environment with `python3 -m pip install %s`%s",
+			strings.Join(modules, " and "), install, detail,
+		)
+	}
+	return python, nil
 }

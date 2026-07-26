@@ -81,6 +81,16 @@ brew upgrade mixlab  # or brew install mrothroc/mixlab/mixlab
 mixlab -mode smoke
 ```
 
+Verify that the installed binary can prepare data outside a source checkout:
+
+```bash
+tmpdir="$(mktemp -d)"
+printf '>a\nACGT\n>b\nTGCA\n>c\nAAAA\n>d\nCCCC\n' > "$tmpdir/input.fasta"
+(cd "$tmpdir" && mixlab -mode prepare \
+  -input input.fasta -input-format fasta \
+  -prepare-output-dir prepared -val-split 0.25)
+```
+
 ### 6. Downstream (if applicable)
 
 - Update `go.mod` in mixlab-jazz: `go get github.com/mrothroc/mixlab@vX.Y.Z`

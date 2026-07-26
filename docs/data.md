@@ -74,7 +74,9 @@ mixlab -mode prepare -input corpus.txt -prepare-output-dir data/my_data \
     -tokenizer-path path/to/tokenizer.json
 ```
 
-`prepare` requires Python 3 with `numpy` and `tokenizers`.
+The installed binary embeds Mixlab's preparation scripts, so `prepare` does not
+require a source checkout. Text preparation requires Python 3 with `numpy` and
+`tokenizers`; FASTA preparation requires Python 3 with `numpy`.
 
 ```bash
 pip install numpy tokenizers

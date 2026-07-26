@@ -4,6 +4,18 @@
 train and evaluate against. See [data.md](data.md) for corpus examples and
 tokenizer compatibility notes.
 
+The installed `mixlab` binary contains the preparation scripts; a Mixlab source
+checkout and `MIXLAB_SCRIPTS` are not required. The scripts run through
+`python3` from `PATH`. Text preparation requires `numpy` and `tokenizers`;
+FASTA preparation requires `numpy`.
+
+```bash
+python3 -m pip install numpy tokenizers
+```
+
+Set `MIXLAB_SCRIPTS=/path/to/scripts` only when intentionally testing modified
+development copies of `prepare.py` and `prepare_records.py`.
+
 ```bash
 ./mixlab -mode prepare \
   -input data/raw/corpus.jsonl \
