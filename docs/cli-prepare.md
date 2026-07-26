@@ -1,13 +1,13 @@
 # CLI: Data Preparation
 
-`prepare` tokenizes raw text or JSONL and writes binary shards that Mixlab can
-train and evaluate against. See [data.md](data.md) for corpus examples and
-tokenizer compatibility notes.
+`prepare` converts text, FASTA, or continuous feature arrays into binary shards
+that Mixlab can train and evaluate against. See [data.md](data.md) for examples
+and representation compatibility notes.
 
 The installed `mixlab` binary contains the preparation scripts; a Mixlab source
 checkout and `MIXLAB_SCRIPTS` are not required. The scripts run through
 `python3` from `PATH`. Text preparation requires `numpy` and `tokenizers`;
-FASTA preparation requires `numpy`.
+FASTA and continuous-array preparation require `numpy`.
 
 ```bash
 python3 -m pip install numpy tokenizers
@@ -26,8 +26,8 @@ development copies of `prepare.py` and `prepare_records.py`.
 
 | Flag | Description |
 |------|-------------|
-| `-input` | Required. Input text file, JSONL file, or directory. |
-| `-input-format` | Input representation: `text` (default) or `fasta`. |
+| `-input` | Required. Input text/JSONL/FASTA path, directory, or continuous `.npy`/`.npz` array. |
+| `-input-format` | Input representation: `text` (default), `fasta`, or `continuous`. |
 | `-prepare-output-dir` | Output directory for shards and tokenizer artifacts. Preferred alias for legacy `-output`. |
 | `-output` | Legacy output directory. |
 | `-vocab-size` | BPE vocabulary size when training a tokenizer. Default: `1024`. |
@@ -36,7 +36,8 @@ development copies of `prepare.py` and `prepare_records.py`.
 | `-wwm-compatible-tokenizer` | Train or validate tokenizer metadata suitable for whole-word MLM. The built-in path uses prefix-space ByteLevel BPE and reserves `[PAD]`, `[CLS]`, `[SEP]`, `[UNK]`, and `[MASK]` as ids `0..4`. |
 | `-text-field` | JSONL field that contains text. Default: `text`. |
 | `-label-field` | JSONL integer-label field. Enables labeled one-record-per-row classification shards. |
-| `-label-file` | FASTA sibling TSV containing exactly one `id<TAB>label` row per FASTA record. |
+| `-label-file` | Label TSV: FASTA `id<TAB>label` or continuous `row_index<TAB>label`. |
+| `-continuous-modality` | Lowercase manifest modality identifier for continuous arrays. Default: `continuous`. |
 | `-frame-per-record` | Preserve each input text/JSONL record and train it as one independently framed row. |
 | `-record-seq-len` | Required with `-frame-per-record`. Fixed row length including BOS/EOS and PAD. |
 | `-record-pad-id` | Required PAD token ID for per-record rows. |
@@ -105,6 +106,28 @@ special tokens fixed. Labeled FASTA classification remains record-only.
 
 Text tokenizer, whole-word, char-feature, and minimal-pair preparation flags
 are rejected with `-input-format fasta` rather than being silently ignored.
+
+## Continuous feature arrays
+
+Use `continuous` input for already-decoded numeric sequences. The source is a
+NumPy `.npy` array shaped `[N,T,F]` or an `.npz` archive with a `features`
+array. A label file must cover every row index exactly once:
+
+```bash
+./mixlab -mode prepare \
+  -input data/features.npy \
+  -input-format continuous \
+  -label-file data/labels.tsv \
+  -continuous-modality waveform \
+  -val-split 0.1 \
+  -prepare-output-dir data/waveform
+```
+
+This path writes atomic float32 frame-plus-label shards and a continuous
+dataset manifest. It does not train or require a tokenizer. The manifest
+records `T`, `F`, dtype, modality, label count, and split class counts; all
+shape/task fields are checked against the model before trainer construction.
+See [Continuous sequence input](continuous-input.md).
 
 ## Per-record causal examples
 

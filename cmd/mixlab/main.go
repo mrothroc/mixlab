@@ -94,7 +94,7 @@ func main() {
 
 	// prepare mode flags
 	prepInput := flag.String("input", "", "input text file, JSONL, or directory (prepare mode)")
-	prepInputFormat := flag.String("input-format", "text", "prepare input representation: text or fasta")
+	prepInputFormat := flag.String("input-format", "text", "prepare input representation: text, fasta, or continuous")
 	prepOutput := flag.String("output", "", "legacy output path for prepare, export-hf, or hiddenstats; prefer mode-specific output aliases in new scripts")
 	prepareOutputDir := flag.String("prepare-output-dir", "", "output directory for shards; clearer alias for -output in prepare mode")
 	exportDir := flag.String("export-dir", "", "Hugging Face output directory; clearer alias for -output in export-hf mode")
@@ -105,7 +105,8 @@ func main() {
 	prepWWMCompatibleTokenizer := flag.Bool("wwm-compatible-tokenizer", false, "train or validate a tokenizer with reliable whole-word boundaries (prepare mode)")
 	prepTextField := flag.String("text-field", "text", "JSON field for text in JSONL (prepare mode)")
 	prepLabelField := flag.String("label-field", "", "JSON integer-label field; emits labeled classification shards (prepare mode)")
-	prepLabelFile := flag.String("label-file", "", "FASTA label TSV containing id<TAB>label (prepare mode)")
+	prepLabelFile := flag.String("label-file", "", "label TSV: FASTA id<TAB>label or continuous row_index<TAB>label (prepare mode)")
+	prepContinuousModality := flag.String("continuous-modality", "continuous", "manifest modality identifier for continuous arrays (prepare mode)")
 	prepFramePerRecord := flag.Bool("frame-per-record", false, "preserve each text/JSONL record as one BOS/EOS/PAD-framed training row")
 	prepRecordSeqLen := flag.Int("record-seq-len", 0, "fixed row length for -frame-per-record")
 	prepRecordPADID := flag.Int("record-pad-id", -1, "PAD token ID for -frame-per-record")
@@ -231,6 +232,7 @@ func main() {
 			NucleotideInvalidPolicy:   *prepNucleotideInvalidPolicy,
 			NucleotideFraming:         *prepNucleotideFraming,
 			NucleotideStreamSeparator: *prepNucleotideStreamSeparator,
+			ContinuousModality:        *prepContinuousModality,
 		}))
 		return
 	}
@@ -445,6 +447,7 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Input and split", []string{"input-format", "val-split"}},
 		{"Text tokenizer/data", []string{"vocab-size", "tokenizer-path", "wwm-compatible-tokenizer", "text-field"}},
 		{"Sequence classification labels", []string{"label-field", "label-file"}},
+		{"Continuous feature arrays", []string{"continuous-modality"}},
 		{"Per-record framing", []string{"frame-per-record", "record-seq-len", "record-pad-id", "record-bos-id", "record-eos-id", "record-overflow"}},
 		{"FASTA nucleotide data", []string{"nucleotide-alphabet", "nucleotide-ambiguous-symbols", "nucleotide-invalid-symbol-policy", "nucleotide-framing", "nucleotide-stream-separator"}},
 		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},

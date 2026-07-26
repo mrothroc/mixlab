@@ -1,0 +1,105 @@
+# Continuous sequence input
+
+Mixlab can train native sequence classifiers directly from fixed-shape
+continuous feature records. The public boundary is modality-neutral:
+
+```text
+float32 [N,T,F] -> linear_frames -> hidden [B,T,D] -> ordinary backbone
+```
+
+Audio decoding, resampling, image patch extraction, and numeric-track
+construction remain outside Mixlab. This release consumes prepared arrays; it
+does not add modality-specific preprocessing.
+
+## Prepare data
+
+Write features as a NumPy `.npy` array with shape `[N,T,F]`, or an `.npz`
+archive containing an array named `features`. Labels use the existing
+`-label-file` surface with exact row indexes:
+
+```text
+0	3
+1	0
+2	3
+```
+
+Every row `0..N-1` must appear exactly once, labels must be contiguous
+non-negative IDs, and at least two classes are required.
+
+```bash
+mixlab -mode prepare \
+  -input features.npy \
+  -input-format continuous \
+  -label-file labels.tsv \
+  -continuous-modality waveform \
+  -val-split 0.1 \
+  -prepare-output-dir data/waveform
+```
+
+`prepare` converts numeric inputs to little-endian float32, rejects non-finite
+values, stratifies labeled records deterministically, and writes
+`mixlab_continuous_sequence_shard_v1` shards. Each shard stores labels and
+frames atomically. The adjacent `mixlab.dataset.json` records:
+
+- `representation: "continuous_frames"`
+- `feature_dtype: "float32"`
+- `feature_dim: F`
+- `record_seq_len: T`
+- classification label count and per-split class counts
+
+The model/data `feature_dim`, `seq_len`, and `num_labels` contract is checked
+before trainer construction.
+
+## Configure a model
+
+```json
+{
+  "name": "continuous_mamba3_classifier",
+  "model_dim": 32,
+  "seq_len": 16000,
+  "positional_embedding": "none",
+  "input_adapter": {
+    "kind": "linear_frames",
+    "feature_dim": 1,
+    "bias": true,
+    "norm": "layernorm"
+  },
+  "blocks": [
+    {
+      "type": "mamba3-canonical",
+      "inner_dim": 32,
+      "state_size": 8,
+      "n_groups": 4,
+      "scan_chunk_size": 64
+    },
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {"num_labels": 10, "pooling": "last"},
+    "batch_tokens": 16000
+  }
+}
+```
+
+`batch_tokens` continues to mean `B*T`, so `16000` is one 16k-timestep
+example per batch. `feature_dim` is the per-timestep channel width, not the
+number of records.
+
+The adapter uses the top-level `positional_embedding` policy. Set `"none"` for
+raw signals whose sequence axis already carries order, or
+`"learned_absolute"` for a learned table. There is no adapter-specific
+position field.
+
+## Current boundary
+
+Continuous v1 supports native `training.objective: "classification"` with
+existing `mean` or `last` pooling. It deliberately rejects:
+
+- language-model, masked, diffusion, and multihead objectives
+- token-derived char, n-gram, smear, framing, and reverse-complement features
+- Hugging Face export and token generation
+- mixed token and continuous inputs in one example
+
+Omitting `input_adapter` preserves the existing token graph and weight layout
+exactly.

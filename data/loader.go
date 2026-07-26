@@ -153,10 +153,11 @@ func (s *tokenStream) TakeAlignedChunk(n int) ([]uint16, error) {
 
 // Loader wraps a TokenStream to produce batches for training.
 type Loader struct {
-	stream    *tokenStream
-	sequences *sequenceStream
-	framing   ExampleFraming
-	packing   *sequencePacking
+	stream     *tokenStream
+	sequences  *sequenceStream
+	continuous *continuousSequenceStream
+	framing    ExampleFraming
+	packing    *sequencePacking
 }
 
 type sequencePacking struct {
@@ -172,6 +173,7 @@ type sequencePacking struct {
 type Batch struct {
 	X            []int
 	Y            []int
+	Frames       []float32
 	LossMask     []float32
 	SegmentIDs   []int32
 	MaskEligible []uint8
@@ -212,6 +214,15 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 	if err != nil {
 		return nil, err
 	}
+	if found && manifest.ShardFormat == DatasetShardFormatContinuousSequenceV1 {
+		continuous, err := newContinuousSequenceStream(
+			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.FeatureDim,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return &Loader{continuous: continuous}, nil
+	}
 	if found && (manifest.ShardFormat == DatasetShardFormatSequenceV1 || manifest.ShardFormat == DatasetShardFormatLabeledSequenceV1) {
 		pad, padOK := manifest.SpecialTokenIDs["pad"]
 		bos, bosOK := manifest.SpecialTokenIDs["bos"]
@@ -250,6 +261,9 @@ func (l *Loader) NextBatchDetailed(batchTokens, seqLen int) (Batch, error) {
 	if batchTokens <= 0 || seqLen <= 0 || batchTokens%seqLen != 0 {
 		return Batch{}, fmt.Errorf("invalid batch shape: batchTokens=%d seqLen=%d; pass positive values with batchTokens divisible by seqLen", batchTokens, seqLen)
 	}
+	if l.continuous != nil {
+		return l.nextContinuousBatch(batchTokens, seqLen)
+	}
 	if l.sequences != nil {
 		if l.packing.layout == DatasetSequenceLayoutOneRecordRow {
 			return l.nextRecordBatch(batchTokens, seqLen)
@@ -271,6 +285,29 @@ func (l *Loader) NextBatchDetailed(batchTokens, seqLen int) (Batch, error) {
 		y[i] = int(tok[i+1])
 	}
 	return Batch{X: x, Y: y}, nil
+}
+
+func (l *Loader) nextContinuousBatch(batchTokens, seqLen int) (Batch, error) {
+	if seqLen != l.continuous.seqLen {
+		return Batch{}, fmt.Errorf("continuous dataset requires seq_len=%d, got %d", l.continuous.seqLen, seqLen)
+	}
+	batchSize := batchTokens / seqLen
+	featureDim := l.continuous.featureDim
+	frames := make([]float32, batchTokens*featureDim)
+	labels := make([]int32, batchSize)
+	validMask := make([]float32, batchTokens)
+	for row := 0; row < batchSize; row++ {
+		record, label, err := l.continuous.takeRecord()
+		if err != nil {
+			return Batch{}, err
+		}
+		copy(frames[row*seqLen*featureDim:], record)
+		labels[row] = label
+		for pos := 0; pos < seqLen; pos++ {
+			validMask[row*seqLen+pos] = 1
+		}
+	}
+	return Batch{Frames: frames, Labels: labels, ValidMask: validMask}, nil
 }
 
 func (l *Loader) nextRecordBatch(batchTokens, seqLen int) (Batch, error) {
@@ -378,6 +415,7 @@ func (l *Loader) nextFramedBatch(batchTokens, seqLen int) (x []int, y []int, err
 type ValBatch struct {
 	X            []int
 	Y            []int
+	Frames       []float32
 	LossMask     []float32
 	SegmentIDs   []int32
 	MaskEligible []uint8
@@ -419,7 +457,7 @@ func NewValSetWithOptions(pattern string, seed int64, nBatches, batchTokens, seq
 			break
 		}
 		vs.Batches = append(vs.Batches, ValBatch{
-			X: batch.X, Y: batch.Y, LossMask: batch.LossMask,
+			X: batch.X, Y: batch.Y, Frames: batch.Frames, LossMask: batch.LossMask,
 			SegmentIDs: batch.SegmentIDs, MaskEligible: batch.MaskEligible,
 			Labels: batch.Labels, ValidMask: batch.ValidMask,
 		})

@@ -1,7 +1,8 @@
 # Data preparation
 
-mixlab trains on binary token shards. Use `prepare` for your own data, or the
-provided scripts for example and FineWeb-Edu data.
+mixlab trains on binary sequence shards. These can contain discrete token IDs
+or fixed-shape continuous feature frames. Use `prepare` for your own data, or
+the provided scripts for example and FineWeb-Edu text data.
 
 ## Example data
 
@@ -76,13 +77,38 @@ mixlab -mode prepare -input corpus.txt -prepare-output-dir data/my_data \
 
 The installed binary embeds Mixlab's preparation scripts, so `prepare` does not
 require a source checkout. Text preparation requires Python 3 with `numpy` and
-`tokenizers`; FASTA preparation requires Python 3 with `numpy`.
+`tokenizers`; FASTA and continuous-array preparation require Python 3 with
+`numpy`.
 
 ```bash
 pip install numpy tokenizers
 ```
 
 Tokens are stored as uint16, so `vocab-size` must be 65,535 or less.
+
+## Continuous feature arrays
+
+Native sequence classifiers can consume fixed-shape `.npy` arrays with shape
+`[N,T,F]`, or `.npz` archives containing an array named `features`. Labels are
+an exact row-index map:
+
+```text
+0	1
+1	0
+2	1
+```
+
+```bash
+mixlab -mode prepare -input features.npy -input-format continuous \
+  -label-file labels.tsv -continuous-modality waveform \
+  -prepare-output-dir data/waveform
+```
+
+Preparation writes labels and little-endian float32 frames atomically in
+`mixlab_continuous_sequence_shard_v1`. It rejects non-finite values, missing or
+duplicate label rows, and non-contiguous label IDs. See
+[Continuous sequence input](continuous-input.md) for model configuration and
+the current native-only compatibility boundary.
 
 ## Nucleotide FASTA
 
@@ -134,14 +160,16 @@ Common flags:
 
 | Flag | Description |
 |------|-------------|
-| `-input` | Input text file, JSONL file, or directory. |
+| `-input` | Input text/JSONL/FASTA path, directory, or continuous `.npy`/`.npz` array. |
+| `-input-format` | `text` (default), `fasta`, or `continuous`. |
 | `-prepare-output-dir` | Output directory for binary shards. Preferred alias for legacy `-output`. |
 | `-vocab-size` | BPE vocabulary size. Default: `1024`. |
 | `-val-split` | Fraction of tokens reserved for validation. Default: `0.1`. |
 | `-tokenizer-path` | Path to a pre-trained `tokenizer.json`. |
 | `-text-field` | JSON field name for text in JSONL input. Default: `text`. |
 | `-label-field` | JSONL integer-label field for sequence classification. |
-| `-label-file` | FASTA sibling `id<TAB>label` TSV for sequence classification. |
+| `-label-file` | FASTA `id<TAB>label` or continuous `row_index<TAB>label` TSV. |
+| `-continuous-modality` | Manifest modality identifier for continuous arrays. Default: `continuous`. |
 | `-char-vocab-size` | Generate tokenizer-level byte/character feature lookup when enabled. |
 | `-char-max-per-token` | Maximum byte/character slots per token for char features. |
 
@@ -170,9 +198,11 @@ modify the binary shard format. A prepared text dataset currently looks like:
 ```
 
 Paths and patterns are relative to the manifest directory. When a manifest is
-present, Mixlab validates its schema and requires its `vocab_size` to match the
-model before constructing a trainer. Existing shard directories without a
-manifest remain supported for backward compatibility.
+present, Mixlab validates its schema before constructing a trainer. Discrete
+data must match model `vocab_size`; continuous data must match adapter
+`feature_dim`, model `seq_len`, and classifier `num_labels`. Existing discrete
+shard directories without a manifest remain supported for backward
+compatibility.
 
 Discrete datasets support `shard_format: "mixlab_token_shard_v1"` for flat
 token streams, including `sequence_layout: "continuous_stream"` nucleotide
@@ -181,9 +211,15 @@ data, `"mixlab_sequence_shard_v1"` for record-oriented sequences, and
 classification data.
 Nucleotide split entries additionally report `sequences`, and the manifest
 points to `artifacts.vocabulary: "nucleotide_vocab.json"`. The `modality` field
-describes the sequence domain without changing the backbone; later releases
-will introduce separate
-versioned representations for continuous features.
+describes the sequence domain without changing the backbone.
+
+Continuous manifests use `representation: "continuous_frames"`,
+`feature_dtype: "float32"`, `feature_dim: F`, and
+`shard_format: "mixlab_continuous_sequence_shard_v1"`. Their split entries
+report records rather than token counts, and task metadata declares
+single-label classification. Each binary record stores one label and one
+`[T,F]` frame matrix together, so shuffle order cannot detach labels from
+features.
 
 Text datasets prepared with `-frame-per-record` also use
 `mixlab_sequence_shard_v1`, with `sequence_layout: "one_record_per_row"` and a

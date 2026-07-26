@@ -79,7 +79,15 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		// trainers always discover the input contract from their IR program.
 		targetsInput = true
 	}
-	if len(batch.x) < need {
+	if t.continuousFramesInput {
+		frameNeed := need * t.continuousFeatureDim
+		if t.continuousFeatureDim <= 0 {
+			return nil, fmt.Errorf("program declares continuous_frames with invalid feature dimension %d", t.continuousFeatureDim)
+		}
+		if len(batch.frames) < frameNeed {
+			return nil, fmt.Errorf("input size mismatch: continuous_frames=%d need=%d", len(batch.frames), frameNeed)
+		}
+	} else if len(batch.x) < need {
 		return nil, fmt.Errorf("input size mismatch: tokens=%d need=%d", len(batch.x), need)
 	}
 	if targetsInput && len(batch.y) < need {
@@ -103,6 +111,10 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		t.trigramBuf = make([]int32, need)
 		t.rcTokenBuf = make([]int32, need)
 		t.rcAlignmentBuf = make([]int32, need)
+	}
+	frameNeed := need * t.continuousFeatureDim
+	if t.continuousFramesInput && len(t.continuousFrameBuf) < frameNeed {
+		t.continuousFrameBuf = make([]float32, frameNeed)
 	}
 	if t.attentionCausalInput && len(t.attentionCausalBuf) < batchSize {
 		t.attentionCausalBuf = make([]int32, batchSize)
@@ -160,11 +172,22 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 			t.rtdGeneratorLossBuf = make([]float32, rtdGeneratorSelectedNeed)
 		}
 	}
-	for i := 0; i < need; i++ {
-		t.tokBuf[i] = int32(batch.x[i])
-	}
-	inputs := []gpu.TensorInput{
-		{Name: "tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.tokBuf[:need]},
+	var inputs []gpu.TensorInput
+	if t.continuousFramesInput {
+		copy(t.continuousFrameBuf[:frameNeed], batch.frames[:frameNeed])
+		inputs = []gpu.TensorInput{{
+			Name:  "continuous_frames",
+			DType: gpu.TensorFloat32,
+			Shape: []int{batchSize, seqLen, t.continuousFeatureDim},
+			Data:  t.continuousFrameBuf[:frameNeed],
+		}}
+	} else {
+		for i := 0; i < need; i++ {
+			t.tokBuf[i] = int32(batch.x[i])
+		}
+		inputs = []gpu.TensorInput{{
+			Name: "tokens", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen}, Data: t.tokBuf[:need],
+		}}
 	}
 	if t.rcTokensInput {
 		if len(batch.rcTokens) < need {

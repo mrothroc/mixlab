@@ -440,6 +440,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		nil,
 		nil,
 		false,
+		nil,
 	)
 }
 
@@ -484,6 +485,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	invariance *InvarianceSpec,
 	pllMargin *PLLMarginSpec,
 	rcEquivariant bool,
+	inputAdapter *InputAdapterSpec,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -506,6 +508,12 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	T := seqLen
 	D := modelDim
 	V := vocabSize
+	linearFrames := normalizeInputAdapterKind(func() string {
+		if inputAdapter == nil {
+			return ""
+		}
+		return inputAdapter.Kind
+	}()) == InputAdapterLinearFrames
 	objective = normalizeTrainingObjective(objective)
 	rootObjective = normalizeTrainingObjective(rootObjective)
 	mlmHead = normalizeMLMHead(mlmHead)
@@ -597,6 +605,13 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		return nil, err
 	}
 	nWeights += len(smearWeights)
+	linearFrameWeights := 0
+	if linearFrames {
+		linearFrameWeights = len(linearFramesExtraWeightShapes(&ArchConfig{
+			ModelDim: D, InputAdapter: inputAdapter,
+		}))
+		nWeights += linearFrameWeights
+	}
 	nWeights += len(backoutWeightShapes(backoutSpec))
 	nWeights += data2VecWeightCount(data2vec)
 	nWeights += mlmHeadWeightCount(D, V, mlmHead)
@@ -614,7 +629,11 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	wordStructuralEnabled := wordStructural != nil && wordStructural.Enabled && (objective == ObjectiveMLM || objective == ObjectiveMNTP || objective == ObjectiveHybridExample)
 	invarianceEnabled := invariance != nil && invariance.Active()
 	pllMarginEnabled := pllMargin != nil && pllMargin.Active()
-	prog.DeclareInput("tokens", TensorInt32, []int{B, T})
+	if linearFrames {
+		prog.DeclareInput("continuous_frames", TensorFloat32, []int{B, T, inputAdapter.FeatureDim})
+	} else {
+		prog.DeclareInput("tokens", TensorInt32, []int{B, T})
+	}
 	if rcEquivariant {
 		prog.DeclareInput("rc_tokens", TensorInt32, []int{B, T})
 		prog.DeclareInput("rc_alignment_positions", TensorInt32, []int{B * T})
@@ -659,9 +678,25 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 
 	var wi int
-	if rcEquivariant {
+	switch {
+	case linearFrames:
+		wi, err = emitLinearFramesInputIR(prog, linearFramesInputOptions{
+			BatchSize:           B,
+			SeqLen:              T,
+			ModelDim:            D,
+			FeatureDim:          inputAdapter.FeatureDim,
+			ProjectionIndex:     0,
+			NextWeightIndex:     fixedWeightCountWithHeadAndNorm(reserveHead, norm),
+			Bias:                inputAdapter.Bias == nil || *inputAdapter.Bias,
+			Norm:                inputAdapter.Norm,
+			NormEps:             norm.Eps,
+			PositionalEmbedding: positionalEmbedding,
+			MaxPositions:        maxPositions,
+			EmbeddingDropout:    embeddingDropout,
+		})
+	case rcEquivariant:
 		wi, err = emitRCEquivariantInputIR(prog, B, T, D, fixedWeightCountWithHeadAndNorm(reserveHead, norm))
-	} else {
+	default:
 		wi, err = emitDiscreteTokenInputIR(prog, discreteTokenInputOptions{
 			BatchSize:           B,
 			SeqLen:              T,

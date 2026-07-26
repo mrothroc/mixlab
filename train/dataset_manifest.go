@@ -17,6 +17,9 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		return err
 	}
 	if manifest == nil {
+		if cfg.LinearFramesEnabled() {
+			return fmt.Errorf("config %q input_adapter.kind=%q requires a continuous mixlab.dataset.json", cfg.Name, arch.InputAdapterLinearFrames)
+		}
 		if cfg.ClassificationEnabled() {
 			return fmt.Errorf("config %q training.objective=%q requires a labeled mixlab.dataset.json", cfg.Name, arch.ObjectiveClassification)
 		}
@@ -26,6 +29,20 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		if cfg.Training.ReverseComplementProb > 0 {
 			return fmt.Errorf("config %q training.reverse_complement_prob requires a nucleotide mixlab.dataset.json", cfg.Name)
 		}
+		return nil
+	}
+	if cfg.LinearFramesEnabled() {
+		fmt.Printf(
+			"  [%s] dataset manifest: modality=%s representation=%s shape=[T=%d,F=%d] dtype=%s (%s)\n",
+			name, manifest.Modality, manifest.Representation, manifest.RecordSeqLen, manifest.FeatureDim, manifest.FeatureDType, manifestPath,
+		)
+		cfg.Training.DatasetClassification = true
+		cfg.Training.DatasetNumLabels = manifest.Task.NumLabels
+		fmt.Printf(
+			"  [%s] continuous input: adapter=%s feature_dim=%d bias=%t norm=%s classification_labels=%d pooling=%s\n",
+			name, arch.InputAdapterLinearFrames, cfg.InputAdapter.FeatureDim, cfg.EffectiveInputAdapterBias(),
+			cfg.EffectiveInputAdapterNorm(), manifest.Task.NumLabels, cfg.EffectiveClassificationPooling(),
+		)
 		return nil
 	}
 	fmt.Printf("  [%s] dataset manifest: modality=%s representation=%s vocab_size=%d (%s)\n",
@@ -238,6 +255,14 @@ func validateDatasetManifestForConfig(cfg *ArchConfig, shardPattern string) (*da
 	}
 	if !found {
 		return nil, "", nil
+	}
+	if cfg.LinearFramesEnabled() {
+		if err := manifest.ValidateContinuousFeatures(
+			cfg.InputAdapter.FeatureDim, cfg.SeqLen, cfg.Training.Classification.NumLabels,
+		); err != nil {
+			return nil, "", fmt.Errorf("dataset manifest %q is incompatible with config %q: %w", path, cfg.Name, err)
+		}
+		return manifest, path, nil
 	}
 	if err := manifest.ValidateModelVocab(cfg.VocabSize); err != nil {
 		return nil, "", fmt.Errorf("dataset manifest %q is incompatible with config %q: %w", path, cfg.Name, err)

@@ -13,18 +13,21 @@ import (
 )
 
 const (
-	DatasetManifestFilename               = "mixlab.dataset.json"
-	DatasetManifestFormat                 = "mixlab.dataset"
-	DatasetManifestVersion                = 1
-	DatasetRepresentationDiscreteTokens   = "discrete_tokens"
-	DatasetTokenDTypeUint16               = "uint16"
-	DatasetShardFormatTokenStreamV1       = "mixlab_token_shard_v1"
-	DatasetShardFormatSequenceV1          = "mixlab_sequence_shard_v1"
-	DatasetShardFormatLabeledSequenceV1   = "mixlab_labeled_sequence_shard_v1"
-	DatasetSequenceLayoutContinuousStream = "continuous_stream"
-	DatasetSequenceLayoutPackedSegments   = "packed_segments"
-	DatasetSequenceLayoutOneRecordRow     = "one_record_per_row"
-	DatasetTaskSingleLabelClassification  = "single_label_classification"
+	DatasetManifestFilename                = "mixlab.dataset.json"
+	DatasetManifestFormat                  = "mixlab.dataset"
+	DatasetManifestVersion                 = 1
+	DatasetRepresentationDiscreteTokens    = "discrete_tokens"
+	DatasetRepresentationContinuousFrames  = "continuous_frames"
+	DatasetTokenDTypeUint16                = "uint16"
+	DatasetFeatureDTypeFloat32             = "float32"
+	DatasetShardFormatTokenStreamV1        = "mixlab_token_shard_v1"
+	DatasetShardFormatSequenceV1           = "mixlab_sequence_shard_v1"
+	DatasetShardFormatLabeledSequenceV1    = "mixlab_labeled_sequence_shard_v1"
+	DatasetShardFormatContinuousSequenceV1 = "mixlab_continuous_sequence_shard_v1"
+	DatasetSequenceLayoutContinuousStream  = "continuous_stream"
+	DatasetSequenceLayoutPackedSegments    = "packed_segments"
+	DatasetSequenceLayoutOneRecordRow      = "one_record_per_row"
+	DatasetTaskSingleLabelClassification   = "single_label_classification"
 )
 
 // DatasetManifest describes the representation shared by a set of Mixlab
@@ -35,8 +38,10 @@ type DatasetManifest struct {
 	Version         int                      `json:"version"`
 	Representation  string                   `json:"representation"`
 	Modality        string                   `json:"modality"`
-	VocabSize       int                      `json:"vocab_size"`
-	TokenDType      string                   `json:"token_dtype"`
+	VocabSize       int                      `json:"vocab_size,omitempty"`
+	TokenDType      string                   `json:"token_dtype,omitempty"`
+	FeatureDType    string                   `json:"feature_dtype,omitempty"`
+	FeatureDim      int                      `json:"feature_dim,omitempty"`
 	ShardFormat     string                   `json:"shard_format"`
 	SequenceLayout  string                   `json:"sequence_layout,omitempty"`
 	RecordSeqLen    int                      `json:"record_seq_len,omitempty"`
@@ -63,6 +68,7 @@ type DatasetManifestArtifacts struct {
 type DatasetSplit struct {
 	Pattern            string           `json:"pattern"`
 	Tokens             int64            `json:"tokens"`
+	Frames             int64            `json:"frames,omitempty"`
 	Shards             int              `json:"shards"`
 	Sequences          int64            `json:"sequences,omitempty"`
 	DroppedSequences   int64            `json:"dropped_sequences,omitempty"`
@@ -134,11 +140,20 @@ func (m *DatasetManifest) Validate() error {
 	if m.Version != DatasetManifestVersion {
 		return fmt.Errorf("version=%d is unsupported; this build supports version %d", m.Version, DatasetManifestVersion)
 	}
-	if m.Representation != DatasetRepresentationDiscreteTokens {
-		return fmt.Errorf("representation=%q is unsupported; this release supports %q", m.Representation, DatasetRepresentationDiscreteTokens)
-	}
 	if !validDatasetIdentifier(m.Modality) {
 		return fmt.Errorf("modality=%q must be a lowercase identifier", m.Modality)
+	}
+	if m.Representation == DatasetRepresentationContinuousFrames {
+		return m.validateContinuousFrames()
+	}
+	if m.Representation != DatasetRepresentationDiscreteTokens {
+		return fmt.Errorf(
+			"representation=%q is unsupported; this release supports %q or %q",
+			m.Representation, DatasetRepresentationDiscreteTokens, DatasetRepresentationContinuousFrames,
+		)
+	}
+	if m.FeatureDType != "" || m.FeatureDim != 0 {
+		return fmt.Errorf("feature_dtype/feature_dim are valid only with representation=%q", DatasetRepresentationContinuousFrames)
 	}
 	if m.VocabSize <= 0 || m.VocabSize > 1<<16 {
 		return fmt.Errorf("vocab_size=%d must be in [1,65536] for uint16 token shards", m.VocabSize)
@@ -221,6 +236,9 @@ func (m *DatasetManifest) Validate() error {
 		if split.Tokens < 0 {
 			return fmt.Errorf("splits.%s.tokens=%d must be >= 0", name, split.Tokens)
 		}
+		if split.Frames != 0 {
+			return fmt.Errorf("splits.%s.frames is valid only with representation=%q", name, DatasetRepresentationContinuousFrames)
+		}
 		if split.Shards < 0 {
 			return fmt.Errorf("splits.%s.shards=%d must be >= 0", name, split.Shards)
 		}
@@ -271,6 +289,12 @@ func (m *DatasetManifest) EffectiveSequenceLayout() string {
 		return ""
 	}
 	layout := strings.ToLower(strings.TrimSpace(m.SequenceLayout))
+	if m.ShardFormat == DatasetShardFormatContinuousSequenceV1 {
+		if layout == "" {
+			return DatasetSequenceLayoutOneRecordRow
+		}
+		return layout
+	}
 	if m.ShardFormat == DatasetShardFormatTokenStreamV1 {
 		return layout
 	}
@@ -295,13 +319,107 @@ func (m *DatasetManifest) ValidateModelVocab(vocabSize int) error {
 	return nil
 }
 
+// ValidateContinuousFeatures checks the model/data contract needed by the
+// linear_frames adapter before any trainer or GPU resources are constructed.
+func (m *DatasetManifest) ValidateContinuousFeatures(featureDim, seqLen, numLabels int) error {
+	if err := m.Validate(); err != nil {
+		return err
+	}
+	if m.Representation != DatasetRepresentationContinuousFrames {
+		return fmt.Errorf("dataset representation=%q does not provide continuous frames", m.Representation)
+	}
+	if featureDim != m.FeatureDim {
+		return fmt.Errorf("dataset feature_dim=%d does not match input_adapter.feature_dim=%d", m.FeatureDim, featureDim)
+	}
+	if seqLen != m.RecordSeqLen {
+		return fmt.Errorf("dataset record_seq_len=%d does not match model seq_len=%d", m.RecordSeqLen, seqLen)
+	}
+	if m.Task == nil || m.Task.NumLabels != numLabels {
+		got := 0
+		if m.Task != nil {
+			got = m.Task.NumLabels
+		}
+		return fmt.Errorf("dataset task.num_labels=%d does not match training.classification.num_labels=%d", got, numLabels)
+	}
+	return nil
+}
+
 func (m *DatasetManifest) normalize() {
 	m.Format = strings.ToLower(strings.TrimSpace(m.Format))
 	m.Representation = strings.ToLower(strings.TrimSpace(m.Representation))
 	m.Modality = strings.ToLower(strings.TrimSpace(m.Modality))
 	m.TokenDType = strings.ToLower(strings.TrimSpace(m.TokenDType))
+	m.FeatureDType = strings.ToLower(strings.TrimSpace(m.FeatureDType))
 	m.ShardFormat = strings.ToLower(strings.TrimSpace(m.ShardFormat))
 	m.SequenceLayout = strings.ToLower(strings.TrimSpace(m.SequenceLayout))
+}
+
+func (m *DatasetManifest) validateContinuousFrames() error {
+	if m.VocabSize != 0 || m.TokenDType != "" {
+		return fmt.Errorf("continuous frame manifests must omit vocab_size and token_dtype")
+	}
+	if m.FeatureDType != DatasetFeatureDTypeFloat32 {
+		return fmt.Errorf("feature_dtype=%q is unsupported; want %q", m.FeatureDType, DatasetFeatureDTypeFloat32)
+	}
+	if m.FeatureDim <= 0 {
+		return fmt.Errorf("feature_dim=%d must be > 0", m.FeatureDim)
+	}
+	if m.ShardFormat != DatasetShardFormatContinuousSequenceV1 {
+		return fmt.Errorf("shard_format=%q is unsupported for continuous frames; want %q", m.ShardFormat, DatasetShardFormatContinuousSequenceV1)
+	}
+	if m.EffectiveSequenceLayout() != DatasetSequenceLayoutOneRecordRow {
+		return fmt.Errorf("continuous frames require sequence_layout=%q", DatasetSequenceLayoutOneRecordRow)
+	}
+	if m.RecordSeqLen <= 0 {
+		return fmt.Errorf("record_seq_len=%d must be > 0 for continuous frames", m.RecordSeqLen)
+	}
+	if len(m.SpecialTokenIDs) != 0 || m.Artifacts.Tokenizer != "" || m.Artifacts.Vocabulary != "" {
+		return fmt.Errorf("continuous frame manifests cannot contain token artifacts or special_token_ids")
+	}
+	if m.Task == nil || m.Task.Type != DatasetTaskSingleLabelClassification || m.Task.NumLabels < 2 {
+		return fmt.Errorf("continuous frame v1 requires task.type=%q with num_labels >= 2", DatasetTaskSingleLabelClassification)
+	}
+	if len(m.Splits) == 0 {
+		return fmt.Errorf("splits must contain at least one dataset split")
+	}
+	for name, split := range m.Splits {
+		if !validDatasetIdentifier(name) {
+			return fmt.Errorf("split name %q must be a lowercase identifier", name)
+		}
+		if err := validateManifestArtifactPath("splits."+name+".pattern", split.Pattern); err != nil {
+			return err
+		}
+		if split.Tokens != 0 {
+			return fmt.Errorf("splits.%s.tokens must be zero/omitted for continuous frames", name)
+		}
+		if split.Frames < 0 || split.Shards < 0 || split.Sequences < 0 {
+			return fmt.Errorf("splits.%s frame/shard/sequence counts must be >= 0", name)
+		}
+		if split.Frames > 0 && split.Shards == 0 {
+			return fmt.Errorf("splits.%s has %d frames but zero shards", name, split.Frames)
+		}
+		if split.Frames != split.Sequences*int64(m.RecordSeqLen) {
+			return fmt.Errorf(
+				"splits.%s.frames=%d does not equal sequences(%d)*record_seq_len(%d)",
+				name, split.Frames, split.Sequences, m.RecordSeqLen,
+			)
+		}
+		var classCount int64
+		for rawLabel, count := range split.ClassCounts {
+			label, err := strconv.Atoi(rawLabel)
+			if err != nil || label < 0 || label >= m.Task.NumLabels {
+				return fmt.Errorf("splits.%s.class_counts contains invalid label %q for num_labels=%d", name, rawLabel, m.Task.NumLabels)
+			}
+			if count < 0 {
+				return fmt.Errorf("splits.%s.class_counts[%q]=%d must be >= 0", name, rawLabel, count)
+			}
+			classCount += count
+		}
+		if classCount != split.Sequences {
+			return fmt.Errorf("splits.%s.class_counts sum=%d does not match sequences=%d", name, classCount, split.Sequences)
+		}
+	}
+	return nil
 }
 
 func validDatasetIdentifier(value string) bool {

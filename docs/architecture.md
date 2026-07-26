@@ -30,17 +30,17 @@ To try a different block family, change the `"type"` field in `blocks`. See
 
 ## Model input boundary
 
-Current models use the discrete-token input adapter: integer token IDs are
-looked up in the model embedding table, optional learned positions and sparse
-feature channels are applied, and the result is flattened to `[B*T, model_dim]`
-before block 0. Single-head and multihead builders share this adapter emitter,
-so their input weight ordering and feature composition cannot drift.
+The default discrete-token input adapter looks up integer token IDs in the
+model embedding table, applies optional learned positions and sparse feature
+channels, and flattens the result to `[B*T, model_dim]` before block 0.
+`input_adapter.kind: "linear_frames"` instead projects float32 `[B,T,F]`
+records directly to the same hidden stream. Backbone blocks remain
+modality-unaware.
 
-There is intentionally no public `input_adapter` config field yet because this
-release has only one useful runtime implementation. The adapter becomes a
-public choice when continuous frame projection is added. Dataset representation
-and modality are recorded independently in the optional
-[`mixlab.dataset.json`](data.md#dataset-manifest) artifact.
+Dataset representation and modality are recorded independently in
+[`mixlab.dataset.json`](data.md#dataset-manifest). The continuous adapter
+requires matching feature width, sequence length, and classification labels
+before trainer setup. See [Continuous input](continuous-input.md).
 
 ## Block families
 

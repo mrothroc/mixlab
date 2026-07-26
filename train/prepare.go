@@ -45,12 +45,13 @@ type PrepareOptions struct {
 	NucleotideInvalidPolicy   string
 	NucleotideFraming         string
 	NucleotideStreamSeparator string
+	ContinuousModality        string
 }
 
 // runPrepare invokes the bundled prepare.py to tokenize raw text into binary shards.
 func runPrepare(opts PrepareOptions) error {
 	if opts.Input == "" {
-		return fmt.Errorf("-input is required for prepare mode; pass a text file, JSONL, or directory, e.g.: mixlab -mode prepare -input corpus.jsonl -prepare-output-dir data/")
+		return fmt.Errorf("-input is required for prepare mode; pass text, JSONL, FASTA, a directory, or a continuous .npy/.npz array")
 	}
 	if opts.Output == "" {
 		return fmt.Errorf("-prepare-output-dir (or legacy -output) is required for prepare mode; pass an output directory, e.g.: mixlab -mode prepare -input corpus.jsonl -prepare-output-dir data/")
@@ -86,11 +87,19 @@ func runPrepare(opts PrepareOptions) error {
 	if opts.LabelFieldName != "" && inputFormat != "text" {
 		return fmt.Errorf("-label-field requires -input-format=text JSONL")
 	}
-	if opts.LabelFile != "" && inputFormat != "fasta" {
-		return fmt.Errorf("-label-file requires -input-format=fasta")
+	if opts.LabelFile != "" && inputFormat != "fasta" && inputFormat != "continuous" {
+		return fmt.Errorf("-label-file requires -input-format=fasta or continuous")
 	}
 	recordIDsRequired := opts.FramePerRecord || opts.LabelFieldName != ""
-	recordLengthRequired := recordIDsRequired || opts.LabelFile != ""
+	recordLengthRequired := recordIDsRequired || (opts.LabelFile != "" && inputFormat == "fasta")
+	if inputFormat == "continuous" {
+		if opts.LabelFile == "" {
+			return fmt.Errorf("-input-format=continuous requires -label-file with row_index<TAB>label")
+		}
+		if opts.FramePerRecord {
+			return fmt.Errorf("-frame-per-record is not used with fixed-shape continuous arrays")
+		}
+	}
 	if opts.FramePerRecord && inputFormat != "text" && opts.LabelFile == "" {
 		return fmt.Errorf("-frame-per-record requires -input-format=text")
 	}
@@ -139,6 +148,9 @@ func runPrepare(opts PrepareOptions) error {
 	if opts.InputFormat != "" {
 		args = append(args, "--input-format", opts.InputFormat)
 	}
+	if opts.ContinuousModality != "" {
+		args = append(args, "--continuous-modality", opts.ContinuousModality)
+	}
 	if opts.NucleotideAlphabet != "" {
 		args = append(args, "--nucleotide-alphabet", opts.NucleotideAlphabet)
 	}
@@ -175,7 +187,7 @@ func runPrepare(opts PrepareOptions) error {
 			"--record-bos-id", fmt.Sprintf("%d", opts.RecordBOSID),
 			"--record-eos-id", fmt.Sprintf("%d", opts.RecordEOSID),
 		)
-	} else if opts.LabelFile != "" {
+	} else if opts.LabelFile != "" && inputFormat == "fasta" {
 		args = append(args, "--record-seq-len", fmt.Sprintf("%d", opts.RecordSeqLen))
 	}
 	if recordLengthRequired {
@@ -243,8 +255,13 @@ func runPrepare(opts PrepareOptions) error {
 	if err != nil {
 		return fmt.Errorf("validate prepared dataset manifest: %w", err)
 	}
-	fmt.Printf("Validation: dataset modality=%s representation=%s vocab_size=%d\n",
-		manifest.Modality, manifest.Representation, manifest.VocabSize)
+	if manifest.Representation == data.DatasetRepresentationContinuousFrames {
+		fmt.Printf("Validation: dataset modality=%s representation=%s shape=[T=%d,F=%d] dtype=%s\n",
+			manifest.Modality, manifest.Representation, manifest.RecordSeqLen, manifest.FeatureDim, manifest.FeatureDType)
+	} else {
+		fmt.Printf("Validation: dataset modality=%s representation=%s vocab_size=%d\n",
+			manifest.Modality, manifest.Representation, manifest.VocabSize)
+	}
 
 	return nil
 }
@@ -325,7 +342,7 @@ func preparePython(inputFormat string) (string, error) {
 
 	modules := []string{"numpy"}
 	install := "numpy"
-	if inputFormat != "fasta" {
+	if inputFormat != "fasta" && inputFormat != "continuous" {
 		modules = append(modules, "tokenizers")
 		install += " tokenizers"
 	}

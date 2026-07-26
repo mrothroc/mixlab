@@ -24,6 +24,9 @@ func NewClassificationValSet(pattern string, maxBatches, batchTokens, seqLen int
 	if !found {
 		return nil, fmt.Errorf("classification validation requires %s beside the labeled shards", DatasetManifestFilename)
 	}
+	if manifest.ShardFormat == DatasetShardFormatContinuousSequenceV1 {
+		return newContinuousClassificationValSet(pattern, manifest, maxBatches, batchTokens, seqLen)
+	}
 	if manifest.ShardFormat != DatasetShardFormatLabeledSequenceV1 ||
 		manifest.EffectiveSequenceLayout() != DatasetSequenceLayoutOneRecordRow {
 		return nil, fmt.Errorf(
@@ -98,6 +101,79 @@ func NewClassificationValSet(pattern string, maxBatches, batchTokens, seqLen int
 			SegmentIDs: batch.SegmentIDs, MaskEligible: batch.MaskEligible,
 			Labels: batch.Labels, ValidMask: batch.ValidMask,
 			ExampleCount: realRows,
+		})
+	}
+	return vs, nil
+}
+
+func newContinuousClassificationValSet(
+	pattern string,
+	manifest *DatasetManifest,
+	maxBatches, batchTokens, seqLen int,
+) (*ValSet, error) {
+	if manifest == nil || manifest.Representation != DatasetRepresentationContinuousFrames {
+		return nil, fmt.Errorf("continuous classification validation requires a continuous frame manifest")
+	}
+	if seqLen != manifest.RecordSeqLen {
+		return nil, fmt.Errorf("continuous classification validation requires seq_len=%d, got %d", manifest.RecordSeqLen, seqLen)
+	}
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no continuous classification validation shard files matched %q", pattern)
+	}
+	featureDim := manifest.FeatureDim
+	var frames []float32
+	var labels []int32
+	for _, file := range files {
+		shard, err := LoadContinuousSequenceShard(file)
+		if err != nil {
+			return nil, err
+		}
+		if shard.SeqLen != seqLen || shard.FeatureDim != featureDim {
+			return nil, fmt.Errorf(
+				"continuous validation shard %q shape [T=%d,F=%d] does not match manifest [T=%d,F=%d]",
+				file, shard.SeqLen, shard.FeatureDim, seqLen, featureDim,
+			)
+		}
+		frames = append(frames, shard.Frames...)
+		labels = append(labels, shard.Labels...)
+	}
+	if len(labels) == 0 {
+		return nil, fmt.Errorf("continuous classification validation split %q contains no records", pattern)
+	}
+	batchSize := batchTokens / seqLen
+	evaluated := len(labels)
+	if maxBatches > 0 && maxBatches*batchSize < evaluated {
+		evaluated = maxBatches * batchSize
+	}
+	batchCount := (evaluated + batchSize - 1) / batchSize
+	vs := &ValSet{
+		Batches: make([]ValBatch, 0, batchCount), TotalExamples: len(labels), EvaluatedExamples: evaluated,
+	}
+	recordWidth := seqLen * featureDim
+	for start := 0; start < evaluated; start += batchSize {
+		realRows := minInt(batchSize, evaluated-start)
+		batchFrames := make([]float32, batchSize*recordWidth)
+		batchLabels := make([]int32, batchSize)
+		validMask := make([]float32, batchTokens)
+		for row := 0; row < realRows; row++ {
+			source := start + row
+			copy(batchFrames[row*recordWidth:], frames[source*recordWidth:(source+1)*recordWidth])
+			batchLabels[row] = labels[source]
+		}
+		for row := realRows; row < batchSize; row++ {
+			copy(batchFrames[row*recordWidth:], batchFrames[:recordWidth])
+			batchLabels[row] = batchLabels[0]
+		}
+		for i := range validMask {
+			validMask[i] = 1
+		}
+		vs.Batches = append(vs.Batches, ValBatch{
+			Frames: batchFrames, Labels: batchLabels, ValidMask: validMask, ExampleCount: realRows,
 		})
 	}
 	return vs, nil

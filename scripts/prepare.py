@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-prepare.py — Tokenize raw text into binary shards for mixlab training.
+prepare.py — Convert raw text, FASTA, or continuous arrays into Mixlab shards.
 
 Shard format (matching cmd/mixlab/data/loader.go):
   256 x int32 header: [magic=20240520, version=1, nTok, 0, ...]
@@ -10,6 +10,7 @@ Usage:
   python3 prepare.py --input data.txt --output shards/ --vocab-size 1024
   python3 prepare.py --input corpus/ --output shards/ --vocab-size 1024 --val-split 0.1
   python3 prepare.py --input data.jsonl --output shards/ --vocab-size 1024 --text-field text
+  python3 prepare.py --input features.npy --input-format continuous --label-file labels.tsv --output shards/
 """
 
 import argparse
@@ -40,6 +41,9 @@ SEQUENCE_SHARD_MAGIC = 20260718
 SEQUENCE_SHARD_VERSION = 1
 LABELED_SEQUENCE_SHARD_MAGIC = 20260724
 LABELED_SEQUENCE_SHARD_VERSION = 1
+CONTINUOUS_SEQUENCE_SHARD_MAGIC = 20260726
+CONTINUOUS_SEQUENCE_SHARD_VERSION = 1
+CONTINUOUS_FEATURE_DTYPE_FLOAT32 = 1
 CHAR_FEATURE_MAGIC = 20260526
 CHAR_FEATURE_VERSION = 1
 CHAR_FEATURE_ENCODING_BYTELEVEL = 1
@@ -143,6 +147,143 @@ def read_label_tsv(path: str) -> dict[str, int]:
     if not labels:
         raise ValueError(f"No labels found in {path}")
     return labels
+
+
+def load_continuous_features(path: str):
+    source = np.load(path, mmap_mode="r", allow_pickle=False)
+    if isinstance(source, np.lib.npyio.NpzFile):
+        if "features" not in source.files:
+            source.close()
+            raise ValueError("continuous .npz input must contain an array named 'features'")
+        features = source["features"]
+    else:
+        features = source
+    if not isinstance(features, np.ndarray) or features.ndim != 3:
+        shape = getattr(features, "shape", None)
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
+        raise ValueError(f"continuous input must have shape [N,T,F], got {shape}")
+    if features.shape[0] <= 0 or features.shape[1] <= 0 or features.shape[2] <= 0:
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
+        raise ValueError(f"continuous input dimensions must be positive, got {features.shape}")
+    if not np.issubdtype(features.dtype, np.number) or np.issubdtype(features.dtype, np.complexfloating):
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
+        raise ValueError(f"continuous input dtype must be real-valued numeric, got {features.dtype}")
+    return source, features
+
+
+def write_continuous_shards(output_dir: str, split: str, features, labels, indexes, records_per_shard: int):
+    os.makedirs(output_dir, exist_ok=True)
+    written = 0
+    shard_count = 0
+    seq_len = int(features.shape[1])
+    feature_dim = int(features.shape[2])
+    for start in range(0, len(indexes), records_per_shard):
+        shard_indexes = indexes[start : start + records_per_shard]
+        shard_frames = np.asarray(features[shard_indexes], dtype="<f4", order="C")
+        if not np.isfinite(shard_frames).all():
+            bad = np.argwhere(~np.isfinite(shard_frames))[0]
+            raise ValueError(
+                f"{split} continuous input contains non-finite value at shard-local index "
+                f"{tuple(int(v) for v in bad)}"
+            )
+        shard_labels = np.asarray([labels[index] for index in shard_indexes], dtype="<i4")
+        header = np.zeros(HEADER_INTS, dtype="<i4")
+        header[0] = CONTINUOUS_SEQUENCE_SHARD_MAGIC
+        header[1] = CONTINUOUS_SEQUENCE_SHARD_VERSION
+        header[2] = len(shard_indexes)
+        header[3] = seq_len
+        header[4] = feature_dim
+        header[5] = CONTINUOUS_FEATURE_DTYPE_FLOAT32
+        header[6] = 1
+        path = os.path.join(output_dir, f"{split}_{shard_count:05d}.bin")
+        with open(path, "wb") as output:
+            output.write(header.tobytes())
+            output.write(shard_labels.tobytes())
+            output.write(shard_frames.tobytes(order="C"))
+        written += len(shard_indexes)
+        shard_count += 1
+    return written, shard_count
+
+
+def prepare_continuous(args):
+    if args.label_field:
+        raise ValueError("--label-field is not valid for continuous arrays; use --label-file with row_index<TAB>label")
+    if not args.label_file:
+        raise ValueError("continuous classification preparation requires --label-file with row_index<TAB>label")
+    if not re.fullmatch(r"[a-z][a-z0-9_-]*", args.continuous_modality):
+        raise ValueError("--continuous-modality must be a lowercase identifier")
+    source, features = load_continuous_features(args.input)
+    try:
+        n_records, seq_len, feature_dim = (int(value) for value in features.shape)
+        label_map = read_label_tsv(args.label_file)
+        expected_ids = {str(index) for index in range(n_records)}
+        actual_ids = set(label_map)
+        missing = sorted(expected_ids - actual_ids, key=int)
+        extra = sorted(actual_ids - expected_ids)
+        if missing or extra:
+            raise ValueError(
+                f"continuous labels must cover row IDs 0..{n_records - 1}; "
+                f"missing={missing[:5]} extra={extra[:5]}"
+            )
+        labels = [label_map[str(index)] for index in range(n_records)]
+        records = [(str(index), "", labels[index]) for index in range(n_records)]
+        num_labels = validate_label_space(records)
+        train_records, val_records = split_labeled_records(records, args.val_split)
+        train_indexes = [int(record[0]) for record in train_records]
+        val_indexes = [int(record[0]) for record in val_records]
+        records_per_shard = max(1, args.tokens_per_shard // seq_len)
+        os.makedirs(args.output, exist_ok=True)
+        train_written, train_shards = write_continuous_shards(
+            args.output, "train", features, labels, train_indexes, records_per_shard
+        )
+        val_written, val_shards = write_continuous_shards(
+            args.output, "val", features, labels, val_indexes, records_per_shard
+        )
+
+        def split_doc(name, indexes, shard_count):
+            counts = Counter(labels[index] for index in indexes)
+            return {
+                "pattern": f"{name}_*.bin",
+                "tokens": 0,
+                "frames": len(indexes) * seq_len,
+                "shards": shard_count,
+                "sequences": len(indexes),
+                "mean_sequence_tokens": float(seq_len),
+                "max_sequence_tokens": seq_len,
+                "class_counts": {str(label): int(counts.get(label, 0)) for label in range(num_labels)},
+            }
+
+        splits = {"train": split_doc("train", train_indexes, train_shards)}
+        if val_indexes:
+            splits["val"] = split_doc("val", val_indexes, val_shards)
+        manifest = {
+            "format": "mixlab.dataset",
+            "version": 1,
+            "representation": "continuous_frames",
+            "modality": args.continuous_modality,
+            "feature_dtype": "float32",
+            "feature_dim": feature_dim,
+            "shard_format": "mixlab_continuous_sequence_shard_v1",
+            "sequence_layout": "one_record_per_row",
+            "record_seq_len": seq_len,
+            "task": {"type": "single_label_classification", "num_labels": num_labels},
+            "splits": splits,
+        }
+        path = os.path.join(args.output, "mixlab.dataset.json")
+        with open(path, "w", encoding="utf-8") as output:
+            json.dump(manifest, output, indent=2, sort_keys=True)
+            output.write("\n")
+        print(
+            f"Saved continuous dataset N={n_records} T={seq_len} F={feature_dim} "
+            f"train={train_written} val={val_written} to {args.output}"
+        )
+        print(f"Saved continuous dataset manifest to {path}")
+    finally:
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
 
 
 def train_bpe_tokenizer(texts: list[str], vocab_size: int, output_dir: str, wwm_compatible: bool = False):
@@ -1167,16 +1308,17 @@ def write_minimal_pairs(
 
 def main():
     parser = argparse.ArgumentParser(description="Prepare binary shards for mixlab training")
-    parser.add_argument("--input", required=True, help="Input text file, JSONL, or directory")
+    parser.add_argument("--input", required=True, help="Input text/JSONL/FASTA path, directory, or continuous .npy/.npz array")
     parser.add_argument("--output", required=True, help="Output directory for shards")
-    parser.add_argument("--input-format", choices=["text", "fasta"], default="text", help="Input representation (default: text)")
+    parser.add_argument("--input-format", choices=["text", "fasta", "continuous"], default="text", help="Input representation (default: text)")
     parser.add_argument("--vocab-size", type=int, default=1024, help="BPE vocabulary size (default: 1024)")
     parser.add_argument("--val-split", type=float, default=0.1, help="Fraction of tokens for validation (default: 0.1)")
     parser.add_argument("--tokenizer-path", default="", help="Path to pre-trained tokenizer.json (skip training)")
     parser.add_argument("--wwm-compatible-tokenizer", action="store_true", help="Train or validate tokenizer metadata for whole-word masking")
     parser.add_argument("--text-field", default="text", help="JSON field name for text in JSONL files (default: text)")
     parser.add_argument("--label-field", default="", help="JSON integer-label field; enables labeled per-record classification shards")
-    parser.add_argument("--label-file", default="", help="FASTA label TSV containing id<TAB>label")
+    parser.add_argument("--label-file", default="", help="Label TSV: FASTA id<TAB>label or continuous row_index<TAB>label")
+    parser.add_argument("--continuous-modality", default="continuous", help="lowercase modality identifier recorded for continuous arrays")
     parser.add_argument("--frame-per-record", action="store_true", help="preserve each text/JSONL record as one framed training row")
     parser.add_argument("--record-seq-len", type=int, default=0, help="fixed training row length for --frame-per-record")
     parser.add_argument("--record-pad-id", type=int, default=-1, help="PAD token ID for --frame-per-record")
@@ -1216,6 +1358,12 @@ def main():
     args = parser.parse_args()
 
     tokens_per_shard = args.tokens_per_shard
+
+    if args.input_format == "continuous":
+        if args.frame_per_record:
+            raise ValueError("--frame-per-record is not used with fixed-shape continuous arrays")
+        prepare_continuous(args)
+        return
 
     if args.input_format == "fasta":
         if args.label_field:

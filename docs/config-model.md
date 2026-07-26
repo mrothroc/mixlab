@@ -28,8 +28,9 @@ This page is the short path through the top-level model fields. Use
 | Field | Purpose |
 |------|---------|
 | `model_dim` | Hidden size used by blocks and embeddings. |
-| `vocab_size` | Token vocabulary size. Mixlab binary shards store token ids as `uint16`. |
-| `seq_len` | Context length in tokens. |
+| `vocab_size` | Token vocabulary size for the default `token_embedding` adapter. Omit for continuous frames. |
+| `seq_len` | Sequence length in tokens or continuous timesteps. |
+| `input_adapter` | Omitted/default `token_embedding`, or native classification `linear_frames` for float32 `[B,T,F]` data. |
 | `mlp_mult` | FFN expansion multiplier used by FFN-style blocks and experts. |
 | `blocks` | Ordered architecture stack. See [config-blocks.md](config-blocks.md). |
 | `training` | Training objective, optimizer, schedule, and runtime settings. See [config-training.md](config-training.md). |
@@ -57,10 +58,23 @@ optimizer settings with `rc_equivariant` omitted and
 `nucleotide_dna_rc_equivariant_classification_tiny.json` differ only in that
 policy.
 
+## Input Adapters
+
+Omitting `input_adapter` preserves the historical token embedding path.
+`{"kind":"linear_frames","feature_dim":F}` replaces it with a dense
+`F -> model_dim` projection for fixed-shape continuous records. Optional
+`bias` defaults to true; `norm` accepts `none` or `layernorm`. The backbone
+still receives the same `[B,T,D]` hidden stream.
+
+Continuous v1 supports native sequence classification and uses the top-level
+`positional_embedding` field for position policy. It does not allocate token
+embeddings or an LM head and is not HF-exportable. See
+[Continuous input](continuous-input.md).
+
 ## Embedding Channels
 
-The base token embedding is always present. Optional channels add into the
-initial hidden state before block 0:
+The default discrete adapter uses a base token embedding. Optional token
+channels add into its initial hidden state before block 0:
 
 | Field | Channel |
 |------|---------|

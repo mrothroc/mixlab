@@ -131,7 +131,7 @@ func TestDatasetManifestValidationErrors(t *testing.T) {
 	}{
 		{name: "format", mutate: func(m *DatasetManifest) { m.Format = "other" }, wantErr: "format"},
 		{name: "version", mutate: func(m *DatasetManifest) { m.Version = 2 }, wantErr: "unsupported"},
-		{name: "representation", mutate: func(m *DatasetManifest) { m.Representation = "continuous_frames" }, wantErr: "representation"},
+		{name: "representation", mutate: func(m *DatasetManifest) { m.Representation = "unknown_frames" }, wantErr: "representation"},
 		{name: "modality", mutate: func(m *DatasetManifest) { m.Modality = "DNA sequence" }, wantErr: "modality"},
 		{name: "vocab", mutate: func(m *DatasetManifest) { m.VocabSize = 65537 }, wantErr: "vocab_size"},
 		{name: "dtype", mutate: func(m *DatasetManifest) { m.TokenDType = "int32" }, wantErr: "token_dtype"},

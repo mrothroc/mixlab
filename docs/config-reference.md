@@ -31,8 +31,9 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 |------|------|----------|---------|-------|
 | `name` | string | No | Source filename/path | Human-readable run name. |
 | `model_dim` | integer | Yes | None | Hidden size `D`. Must be `> 0`. |
-| `vocab_size` | integer | Yes | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` (tokens are stored as uint16 in binary shards). |
+| `vocab_size` | integer | Token inputs only | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` for `token_embedding`. Omit it for `input_adapter.kind: "linear_frames"`. |
 | `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
+| `input_adapter` | object | No | `{"kind":"token_embedding"}` | Selects the model input representation. `linear_frames` accepts float32 `[B,T,F]` data and requires `feature_dim > 0`; optional `bias` defaults to `true`, and `norm` is `"none"` or `"layernorm"`. Continuous v1 is native sequence classification only. |
 | `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `geglu`, `mlp`, `moe` experts, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
 | `smear_embeddings` | boolean | No | `false` | Enables 1-token-lookback smearing on token embeddings before the first block. |
@@ -92,6 +93,46 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
   }
 }
 ```
+
+### Continuous frame input
+
+`input_adapter.kind: "linear_frames"` projects generic float features from
+`[B,T,F]` to `[B,T,model_dim]` before the ordinary backbone. The adapter is
+modality-neutral: waveform samples, numeric sensor channels, and genomic
+tracks use the same representation. It adds `input_adapter_proj: [F,D]`, an
+optional bias, and optional affine LayerNorm. No token embedding, vocabulary
+head, or dummy vocabulary is allocated.
+
+```json
+{
+  "name": "continuous-classifier",
+  "model_dim": 32,
+  "seq_len": 16000,
+  "positional_embedding": "none",
+  "input_adapter": {
+    "kind": "linear_frames",
+    "feature_dim": 1,
+    "bias": true,
+    "norm": "layernorm"
+  },
+  "blocks": [
+    {"type": "mamba3-canonical", "inner_dim": 32, "state_size": 8, "n_groups": 4},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {"num_labels": 10, "pooling": "last"},
+    "batch_tokens": 16000
+  }
+}
+```
+
+Position handling uses the existing top-level `positional_embedding` policy;
+there is intentionally no second `input_adapter.positions` field.
+`"none"` is the normal raw-signal setting, while `"learned_absolute"` adds the
+existing model-level position table. Continuous input requires a
+`continuous_frames` dataset manifest with matching `feature_dim`, `seq_len`,
+and classification label count. See [Continuous input](continuous-input.md).
 
 ## Smear Token Embeddings
 

@@ -274,6 +274,18 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	}
 	reserveHead := cfg.ReservesUntiedHeadWeight()
 	useTiedHead := cfg.TieEmbeddings && !state.HeadUntied
+	builderVocabSize := cfg.VocabSize
+	builderTieEmbeddings := cfg.TieEmbeddings
+	if cfg.LinearFramesEnabled() {
+		// The classification conversion truncates the temporary LM tail. Using
+		// F as the internal projection width lets the shared backbone builder
+		// retain its shape checks without adding any public dummy vocabulary or
+		// token/head weights.
+		builderVocabSize = cfg.InputAdapter.FeatureDim
+		builderTieEmbeddings = true
+		reserveHead = false
+		useTiedHead = true
+	}
 	activeMTP := mtp
 	if state.MTPAuxInactive {
 		activeMTP = nil
@@ -319,11 +331,11 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		cfg.ModelDim,
-		cfg.VocabSize,
+		builderVocabSize,
 		cfg.SeqLen,
 		batchSize,
 		cfg.EffectiveMLPMult(),
-		cfg.TieEmbeddings,
+		builderTieEmbeddings,
 		cfg.BlockScales,
 		cfg.ResidMix,
 		cfg.UNet,
@@ -367,6 +379,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		invariance,
 		pllMargin,
 		cfg.RCEquivarianceEnabled(),
+		cfg.InputAdapter,
 	)
 }
 

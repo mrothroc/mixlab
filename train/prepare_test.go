@@ -815,3 +815,99 @@ func TestEmbeddedPrepareRunsOutsideSourceCheckout(t *testing.T) {
 		t.Fatalf("FASTA modality=%q", fastaManifest.Modality)
 	}
 }
+
+func TestPrepareContinuousArrayWithAtomicLabels(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not found")
+	}
+	if err := exec.Command("python3", "-c", "import numpy").Run(); err != nil {
+		t.Skip("python3 numpy library not available")
+	}
+
+	dir := t.TempDir()
+	input := filepath.Join(dir, "features.npy")
+	labels := filepath.Join(dir, "labels.tsv")
+	output := filepath.Join(dir, "prepared")
+	frames := make([]float32, 6*3)
+	for i := range frames {
+		frames[i] = float32(i) / 10
+	}
+	writeNPYFloat32(t, input, []int{6, 3, 1}, frames)
+	if err := os.WriteFile(labels, []byte(
+		"0\t0\n1\t1\n2\t0\n3\t1\n4\t0\n5\t1\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := runPrepare(PrepareOptions{
+		Input: input, Output: output, InputFormat: "continuous",
+		LabelFile: labels, ContinuousModality: "waveform", ValSplit: 0.34,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := data.LoadDatasetManifest(filepath.Join(output, data.DatasetManifestFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Representation != data.DatasetRepresentationContinuousFrames ||
+		manifest.Modality != "waveform" ||
+		manifest.FeatureDim != 1 ||
+		manifest.RecordSeqLen != 3 ||
+		manifest.FeatureDType != data.DatasetFeatureDTypeFloat32 {
+		t.Fatalf("manifest=%+v", manifest)
+	}
+	if manifest.Splits["train"].Sequences != 4 || manifest.Splits["val"].Sequences != 2 {
+		t.Fatalf("splits=%+v", manifest.Splits)
+	}
+	trainShards, err := filepath.Glob(filepath.Join(output, "train_*.bin"))
+	if err != nil || len(trainShards) != 1 {
+		t.Fatalf("train shards=%v err=%v", trainShards, err)
+	}
+	shard, err := data.LoadContinuousSequenceShard(trainShards[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shard.Records != 4 || shard.SeqLen != 3 || shard.FeatureDim != 1 ||
+		!reflect.DeepEqual(shard.Labels, []int32{0, 1, 0, 1}) ||
+		!reflect.DeepEqual(shard.Frames, frames[:12]) {
+		t.Fatalf("train shard=%+v", shard)
+	}
+}
+
+func writeNPYFloat32(t *testing.T, path string, shape []int, values []float32) {
+	t.Helper()
+	count := 1
+	parts := make([]string, len(shape))
+	for i, dim := range shape {
+		if dim <= 0 {
+			t.Fatalf("invalid NPY shape %v", shape)
+		}
+		count *= dim
+		parts[i] = strconv.Itoa(dim)
+	}
+	if len(values) != count {
+		t.Fatalf("NPY values=%d shape=%v product=%d", len(values), shape, count)
+	}
+	shapeText := strings.Join(parts, ", ")
+	if len(shape) == 1 {
+		shapeText += ","
+	}
+	header := "{'descr': '<f4', 'fortran_order': False, 'shape': (" + shapeText + "), }"
+	padding := (16 - ((10 + len(header) + 1) % 16)) % 16
+	header += strings.Repeat(" ", padding) + "\n"
+
+	var output bytes.Buffer
+	output.Write([]byte{0x93, 'N', 'U', 'M', 'P', 'Y', 1, 0})
+	if err := binary.Write(&output, binary.LittleEndian, uint16(len(header))); err != nil {
+		t.Fatal(err)
+	}
+	output.WriteString(header)
+	for _, value := range values {
+		if err := binary.Write(&output, binary.LittleEndian, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, output.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

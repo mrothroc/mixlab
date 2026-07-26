@@ -13,6 +13,7 @@ import (
 type objectiveBatch struct {
 	x                     []int
 	y                     []int
+	frames                []float32
 	batchSizeOverride     int
 	lossMask              []float32
 	wordStructTargets     []int
@@ -122,7 +123,12 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 	if need <= 0 {
 		return objectiveBatch{}, fmt.Errorf("invalid batch_tokens=%d", need)
 	}
-	if len(batch.x) < need || len(batch.y) < need {
+	if cfg.LinearFramesEnabled() {
+		frameNeed := need * cfg.InputAdapter.FeatureDim
+		if len(batch.frames) < frameNeed {
+			return objectiveBatch{}, fmt.Errorf("input size mismatch: continuous_frames=%d need=%d", len(batch.frames), frameNeed)
+		}
+	} else if len(batch.x) < need || len(batch.y) < need {
 		return objectiveBatch{}, fmt.Errorf("input size mismatch: tokens=%d targets=%d need=%d", len(batch.x), len(batch.y), need)
 	}
 	var err error
@@ -233,13 +239,28 @@ func prepareClassificationBatch(cfg *ArchConfig, batch trainBatch, need, seqLen 
 		positions[row] = int32(row*seqLen + last)
 	}
 	return objectiveBatch{
-		x:                    batch.x[:need],
-		y:                    batch.y[:need],
-		unmaskedX:            batch.x[:need],
+		x:                    sliceIntsIfAvailable(batch.x, need),
+		y:                    sliceIntsIfAvailable(batch.y, need),
+		frames:               sliceFloat32IfAvailable(batch.frames, need*cfg.InputFeatureDim()),
+		unmaskedX:            sliceIntsIfAvailable(batch.x, need),
 		classificationLabels: labels,
 		classificationMask:   validMask,
 		classificationPos:    positions,
 	}, nil
+}
+
+func sliceIntsIfAvailable(values []int, count int) []int {
+	if count <= 0 || len(values) < count {
+		return nil
+	}
+	return values[:count]
+}
+
+func sliceFloat32IfAvailable(values []float32, count int) []float32 {
+	if count <= 0 || len(values) < count {
+		return nil
+	}
+	return values[:count]
 }
 
 func prepareMLMBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int) (objectiveBatch, error) {

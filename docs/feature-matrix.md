@@ -16,6 +16,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Per-record text framing | Yes | `mixlab -mode prepare -frame-per-record` | One BOS/EOS/PAD-framed record per sequence row. |
 | Labeled sequence preparation | Yes | `mixlab -mode prepare -label-field` / `-label-file` | Writes atomic labeled sequence shards and task metadata. |
 | FASTA preparation | Yes | `mixlab -mode prepare -input-format fasta` | Produces record-oriented nucleotide shards by default, or recurrent-compatible token streams with `-nucleotide-framing stream`. |
+| Continuous feature preparation | Yes | `mixlab -mode prepare -input-format continuous` | Ingests float `.npy`/`.npz` `[N,T,F]` arrays plus row-index label TSV and writes atomic continuous classification shards. |
 | Training and races | Yes | `mixlab -mode arch` / `arch_race` | Periodic checkpoints can be resumed with `-resume`. |
 | Native evaluation | Yes | `mixlab -mode eval` | Supports loss plus optional aligned logprob, rank, uncertainty, and logits exports. |
 | Causal generation | Yes | `mixlab -mode generate` | Supports batching, deterministic seeds, sequence vocabularies, and grammar constraints. |
@@ -35,6 +36,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Block diffusion | Yes | Native PLL scoring | Native diffusion generation | Pure diffusion is native-only | [block_diffusion_tiny.json](../examples/block_diffusion_tiny.json) |
 | Multihead | Yes | Selected native scorer/detector/denoiser | Selected diffusion head | Exports only `export_head` | [multihead_mntp_diffusion_tiny.json](../examples/multihead_mntp_diffusion_tiny.json) |
 | Sequence classification | Yes | Loss, accuracy, MCC, macro-F1, binary AUROC | No | Trained classifier export is supported on HF-covered custom-code backbones; gated mixers such as Gated DeltaNet remain explicit errors | [sequence_classification_gated_deltanet_tiny.json](../examples/sequence_classification_gated_deltanet_tiny.json) |
+| Continuous sequence classification | Yes | Same native classification metrics | No | `linear_frames` v1 is native-only and requires a matching continuous manifest; no token embedding or LM head | [continuous_mamba3_classification_tiny.json](../examples/continuous_mamba3_classification_tiny.json) |
 | DNA RC-equivariant MLM/classification | Yes | Native masked eval or classification metrics | No | Native-only in v1; no extra weights, approximately 2x backbone compute | [Augmented control](../examples/nucleotide_dna_rc_augmented_classification_tiny.json), [equivariant](../examples/nucleotide_dna_rc_equivariant_classification_tiny.json) |
 | RTD detector | Multihead auxiliary | `score-electra` | No | Detector and generator are skipped | [multihead_mntp_rtd_tiny.json](../examples/multihead_mntp_rtd_tiny.json) |
 | Native energy head | Multihead auxiliary | `score-ebm` | No | Energy head is skipped | [multihead_mntp_energy_tiny.json](../examples/multihead_mntp_energy_tiny.json) |

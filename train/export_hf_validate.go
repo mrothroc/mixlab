@@ -11,6 +11,12 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 	if cfg == nil {
 		return fmt.Errorf("unsupported HF export: nil config")
 	}
+	if cfg.LinearFramesEnabled() {
+		return unsupportedHFExport(
+			"input_adapter.kind",
+			"linear_frames checkpoints are native continuous-classification models in v1",
+		)
+	}
 	if cfg.RCEquivarianceEnabled() {
 		return unsupportedHFExport("rc_equivariant", "shared reverse-complement branches are native-only in v1")
 	}

@@ -18,7 +18,14 @@ type FLOPsEstimate struct {
 
 // EstimateFLOPs returns an analytical FLOPs estimate for one configured batch.
 func EstimateFLOPs(cfg *ArchConfig) FLOPsEstimate {
-	if cfg == nil || cfg.ModelDim <= 0 || cfg.VocabSize <= 0 || cfg.SeqLen <= 0 || cfg.Training.BatchTokens <= 0 {
+	if cfg == nil || cfg.ModelDim <= 0 || cfg.SeqLen <= 0 || cfg.Training.BatchTokens <= 0 {
+		return FLOPsEstimate{}
+	}
+	if cfg.LinearFramesEnabled() {
+		if cfg.InputFeatureDim() <= 0 {
+			return FLOPsEstimate{}
+		}
+	} else if cfg.VocabSize <= 0 {
 		return FLOPsEstimate{}
 	}
 	paramCount, expandedParamCount, err := ParameterCountsFromConfig(cfg)
@@ -69,6 +76,9 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 	T := cfg.SeqLen
 	D := cfg.ModelDim
 	V := cfg.VocabSize
+	if cfg.LinearFramesEnabled() {
+		V = cfg.InputFeatureDim()
+	}
 	ffn := ffnDim(D, cfg.MLPMult)
 
 	forward := int64(0)
@@ -92,7 +102,21 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 		}
 	}
 
-	// Embedding lookup is indexing only; LM head projection produces logits.
+	// Token embedding lookup is indexing only. Continuous adapters perform a
+	// dense frame projection before the shared backbone.
+	if cfg.LinearFramesEnabled() {
+		F := cfg.InputFeatureDim()
+		forward += 2 * i64(B) * i64(T) * i64(F) * i64(D)
+		if cfg.EffectiveInputAdapterBias() {
+			forward += i64(B) * i64(T) * i64(D)
+		}
+		if cfg.EffectiveInputAdapterNorm() == InputAdapterNormLayerNorm {
+			forward += 7 * i64(B) * i64(T) * i64(D)
+		}
+		if cfg.EffectivePositionalEmbedding() == PositionalEmbeddingLearnedAbsolute {
+			forward += i64(B) * i64(T) * i64(D)
+		}
+	}
 	if cfg.CharVocabSize > 0 {
 		charDim := cfg.EffectiveCharDim()
 		charSlots := cfg.EffectiveCharMaxPerToken()
@@ -102,7 +126,11 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 		}
 		forward += 2 * i64(B) * i64(T) * i64(D) // learned scale + residual add
 	}
-	forward += 2 * i64(B) * i64(T) * i64(D) * i64(V)
+	if cfg.LinearFramesEnabled() && cfg.ClassificationEnabled() {
+		forward += 2 * i64(B) * i64(D) * i64(cfg.Training.Classification.NumLabels)
+	} else {
+		forward += 2 * i64(B) * i64(T) * i64(D) * i64(V)
+	}
 	if cfg.RCEquivarianceEnabled() {
 		forward *= 2
 	}
@@ -133,6 +161,17 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 	uniqueRefs, err := normalizeWeightRefs(cfg.Blocks, cfg.Recurrence)
 	if err != nil {
 		return 0, 0, err
+	}
+	if cfg.LinearFramesEnabled() {
+		uniqueShapes, err := collectLinearFramesWeightShapesWithRefs(cfg, uniqueRefs)
+		if err != nil {
+			return 0, 0, err
+		}
+		expandedShapes, err := collectLinearFramesWeightShapesWithRefs(cfg, identityWeightRefs(cfg.Blocks))
+		if err != nil {
+			return 0, 0, err
+		}
+		return countWeightMetaElements(uniqueShapes), countWeightMetaElements(expandedShapes), nil
 	}
 	uniqueShapes, err := collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 		cfg.ModelDim,

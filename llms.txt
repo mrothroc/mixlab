@@ -1,8 +1,9 @@
 # Mixlab
 
-Mixlab is a JSON-configured language and discrete-sequence model research tool.
-It trains through native MLX on Apple Silicon or CUDA and exports supported
-model surfaces to Hugging Face.
+Mixlab is a JSON-configured language and sequence-model research tool. It
+supports discrete tokens and native continuous-frame classification, trains
+through native MLX on Apple Silicon or CUDA, and exports supported model
+surfaces to Hugging Face.
 
 ## Canonical documentation
 
@@ -41,6 +42,7 @@ model surfaces to Hugging Face.
 ## Task routing
 
 - Data and artifacts: `docs/data.md`, `docs/cli-prepare.md`
+- Continuous frame classification: `docs/continuous-input.md`
 - Architecture and blocks: `docs/architecture.md`, `docs/config-blocks.md`
 - Objectives and optimizers: `docs/config-training.md`
 - Training and resume: `docs/cli-train.md`

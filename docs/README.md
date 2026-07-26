@@ -7,7 +7,7 @@ Use this page to choose the shortest path for the task at hand. The root
 
 | Task | Start here | Then use |
 |------|------------|----------|
-| Prepare text, JSONL, records, or FASTA | [Data preparation](data.md) | [Prepare CLI](cli-prepare.md) |
+| Prepare text, JSONL, records, FASTA, or continuous arrays | [Data preparation](data.md) | [Prepare CLI](cli-prepare.md) and [continuous input](continuous-input.md) |
 | Choose an architecture or objective | [Architecture guide](architecture.md) | [Model](config-model.md), [blocks](config-blocks.md), and [training](config-training.md) guides |
 | Check a config without a GPU | `mixlab -mode validate -config model.json` | [Configuration reference](config-reference.md) |
 | Count parameters and estimated compute | `mixlab -mode count -config model.json` | [Count and eval CLI](cli-eval.md) |
@@ -40,6 +40,7 @@ mixlab -mode MODE -h
 ## Specialized Guides
 
 - [Canonical Mamba-3](canonical_mamba3.md)
+- [Continuous sequence input](continuous-input.md)
 - [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md)
 - [Block-diffusion experiments](diffusion-experiments.md)
 - [Grammar-constrained generation](grammar-constrained-generation.md)
