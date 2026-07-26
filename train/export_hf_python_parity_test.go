@@ -3,6 +3,7 @@
 package train
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -60,6 +61,33 @@ func TestExportHFNativePythonParity(t *testing.T) {
 				"training": {"steps": 1, "batch_tokens": 6, "seed": 10091}
 			}`,
 			compareTTTState: true,
+		},
+		{
+			// Canonical Mamba-3 complex-pair exponential-trapezoidal scan,
+			// including the short causal depthwise convolution and a pointwise
+			// SwiGLU block. The exported path is intentionally non-cached.
+			name: "mamba3_canonical_forward",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "mamba3-canonical", "inner_dim": 8, "state_size": 4, "n_groups": 2, "dt_rank": 2, "conv_kernel": 3},
+					{"type": "swiglu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 20260726}
+			}`,
+		},
+		{
+			// Paper-style canonical Mamba-3 variant without the optional short
+			// causal convolution. This also locks the 19-weight export layout.
+			name: "mamba3_canonical_no_short_conv",
+			config: `{
+				"model_dim": 8, "vocab_size": 11, "seq_len": 6, "mlp_mult": 2.0,
+				"blocks": [
+					{"type": "mamba3-canonical", "inner_dim": 8, "state_size": 4, "n_groups": 2, "dt_rank": 2, "use_conv": false},
+					{"type": "mlp", "activation": "silu"}
+				],
+				"training": {"steps": 1, "batch_tokens": 6, "seed": 20260727}
+			}`,
 		},
 		{
 			// DIFF Transformer two-softmax plain attention in the normal causal
@@ -528,6 +556,131 @@ func TestExportHFNativePythonParity(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runNativePythonParityCase(t, python, script, tc.config, tc.compareMaskedLogits, tc.compareTTTState, caseIndex == 0)
 		})
+	}
+}
+
+func TestExportHFNativeMamba3ClassificationPythonParity(t *testing.T) {
+	if os.Getenv("HF_PARITY") != "1" {
+		t.Skip("set HF_PARITY=1 to run native Mamba-3 classification parity")
+	}
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	python := os.Getenv("HF_PARITY_PYTHON")
+	if python == "" {
+		python = "python3"
+	}
+	if err := exec.Command(python, "-c", "import torch, transformers, safetensors").Run(); err != nil {
+		t.Skipf("python HF dependencies unavailable via %q: %v", python, err)
+	}
+
+	dir := t.TempDir()
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, `{
+		"name": "mamba3_native_classifier_parity",
+		"model_dim": 8,
+		"vocab_size": 11,
+		"seq_len": 6,
+		"mlp_mult": 2.0,
+		"tie_embeddings": true,
+		"blocks": [
+			{"type": "mamba3-canonical", "inner_dim": 8, "state_size": 4, "n_groups": 2, "dt_rank": 2, "conv_kernel": 3},
+			{"type": "swiglu"}
+		],
+		"training": {
+			"objective": "classification",
+			"classification": {"num_labels": 3, "pooling": "mean", "classifier_dropout": 0.2},
+			"steps": 1,
+			"batch_tokens": 6,
+			"seed": 20260726
+		}
+	}`, scaleHFExportWeightsToTrainedMagnitude)
+	cfg, err := LoadArchConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadArchConfig: %v", err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	weights, err := loadSafetensorsWeights(weightsPath, shapes)
+	if err != nil {
+		t.Fatalf("load native weights: %v", err)
+	}
+	prog, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildEvalIRProgramFromConfig: %v", err)
+	}
+	trainerInterface, err := initGPUTrainer(prog, cfg, weights, nil)
+	if err != nil {
+		t.Fatalf("initGPUTrainer: %v", err)
+	}
+	trainer := trainerInterface.(*mlxGPUTrainer)
+	defer trainer.CloseTrainer()
+
+	tokens := []int{3, 4, 5, 2, 0, 0}
+	raw := trainBatch{
+		x:          append([]int(nil), tokens...),
+		y:          make([]int, len(tokens)),
+		labels:     []int32{1},
+		validMask:  []float32{1, 1, 1, 1, 0, 0},
+		segmentIDs: make([]int32, len(tokens)),
+	}
+	batch, err := prepareClassificationBatch(cfg, raw, len(tokens), cfg.SeqLen)
+	if err != nil {
+		t.Fatalf("prepareClassificationBatch: %v", err)
+	}
+	if _, err := trainer.EvaluateObjectiveGPUWithOutputs(batch, 1, cfg.SeqLen, []string{"classification_logits"}); err != nil {
+		t.Fatalf("native classifier forward: %v", err)
+	}
+	nativeLogits, err := readTrainerOutput(trainer, "classification_logits", []int{1, 3})
+	if err != nil {
+		t.Fatalf("read native classifier logits: %v", err)
+	}
+
+	outDir := filepath.Join(dir, "hf_out")
+	if err := RunExportHF(ExportHFOptions{
+		ConfigPath: cfgPath, SafetensorsLoad: weightsPath, OutputDir: outDir, TokenizerSource: tokenizerDir,
+	}); err != nil {
+		t.Fatalf("RunExportHF: %v", err)
+	}
+	expectedJSON, err := json.Marshal(nativeLogits)
+	if err != nil {
+		t.Fatalf("marshal native logits: %v", err)
+	}
+	tokensJSON, err := json.Marshal(tokens)
+	if err != nil {
+		t.Fatalf("marshal tokens: %v", err)
+	}
+	maskJSON, err := json.Marshal([]int{1, 1, 1, 1, 0, 0})
+	if err != nil {
+		t.Fatalf("marshal attention mask: %v", err)
+	}
+	script := `
+import json
+import sys
+import torch
+from transformers import AutoModelForSequenceClassification
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    sys.argv[1], trust_remote_code=True
+)
+model.eval()
+tokens = torch.tensor([json.loads(sys.argv[2])], dtype=torch.long)
+mask = torch.tensor([json.loads(sys.argv[3])], dtype=torch.long)
+expected = torch.tensor(json.loads(sys.argv[4]), dtype=torch.float64).reshape(1, -1)
+with torch.no_grad():
+    actual = model(input_ids=tokens, attention_mask=mask).logits.to(torch.float64)
+diff = (actual - expected).abs().max().item()
+print(f"mamba3_native_classifier_parity: max_logit_diff={diff:.3e}")
+if diff >= 1e-3:
+    raise SystemExit(f"native classifier diff {diff:.3e} >= 1.000e-03")
+`
+	output, err := exec.Command(
+		python, "-c", script, outDir, string(tokensJSON), string(maskJSON), string(expectedJSON),
+	).CombinedOutput()
+	t.Logf("native Mamba-3 classifier parity output:\n%s", output)
+	if err != nil {
+		t.Fatalf("native Mamba-3 classifier parity failed: %v", err)
 	}
 }
 

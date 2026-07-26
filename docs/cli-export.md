@@ -32,6 +32,11 @@ meet the strict GPT-2 compatibility rules. See [hf-export.md](hf-export.md)
 for supported features, special-token resolution, sequence-classification
 pooling, and load examples.
 
+Canonical Mamba-3 export supports full-sequence, non-cached causal and
+sequence-classification forwards. A native `training.objective:
+"classification"` checkpoint exports its trained classifier head; it is not
+reinitialized on Hugging Face load.
+
 ## `parity`
 
 Compare a Hugging Face export against native Mixlab inference:

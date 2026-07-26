@@ -42,7 +42,7 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 		return unsupportedHFExport("training.objective", "pure block_diffusion has native-only generation semantics; export the causal view of a hybrid checkpoint instead")
 	}
 	switch cfg.Training.EffectiveObjective() {
-	case "causal", "hybrid", "mlm", "mntp":
+	case "causal", "hybrid", "mlm", "mntp", arch.ObjectiveClassification:
 	default:
 		return unsupportedHFExport("training.objective", fmt.Sprintf("unknown objective %q", cfg.Training.EffectiveObjective()))
 	}
@@ -122,9 +122,35 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 			if err := validateHFTTTMLPComposition(cfg, field, block); err != nil {
 				return err
 			}
+		case "mamba3-canonical":
+			if err := validateHFMamba3CanonicalComposition(cfg, field); err != nil {
+				return err
+			}
 		default:
 			capability := hfExportBlockCapability(block)
 			return unsupportedHFExport(field+".type", fmt.Sprintf("%s: %s", capability.Feature, capability.Reason))
+		}
+	}
+	return nil
+}
+
+func validateHFMamba3CanonicalComposition(cfg *ArchConfig, field string) error {
+	switch cfg.Training.EffectiveObjective() {
+	case arch.ObjectiveCausal, arch.ObjectiveClassification:
+	default:
+		return unsupportedHFExport(field+".type", "mamba3-canonical export supports causal and native sequence-classification checkpoints")
+	}
+	if cfg.CharVocabSize > 0 || cfg.BigramVocabSize > 0 || cfg.TrigramVocabSize > 0 || cfg.SmearEmbeddings {
+		return unsupportedHFExport("feature_embeddings", "mamba3-canonical HF parity does not yet cover embedding feature channels")
+	}
+	for i, candidate := range cfg.Blocks {
+		switch strings.ToLower(strings.TrimSpace(candidate.Type)) {
+		case "mamba3-canonical", "swiglu", "geglu", "mlp":
+		default:
+			return unsupportedHFExport(
+				fmt.Sprintf("blocks[%d].type", i),
+				"mamba3-canonical export supports only canonical Mamba-3 plus pointwise swiglu/geglu/mlp blocks",
+			)
 		}
 	}
 	return nil

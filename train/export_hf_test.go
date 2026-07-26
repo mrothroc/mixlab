@@ -519,7 +519,6 @@ func TestExportHFAdvancedUnsupportedPolicies(t *testing.T) {
 		{name: "mlstm", block: `{"type": "mlstm", "heads": 2, "d_k": 2, "d_v": 3}`, wantErr: "mlstm"},
 		{name: "gated_deltanet", block: `{"type": "gated_deltanet", "heads": 2, "d_k": 2}`, wantErr: "gated_deltanet"},
 		{name: "legacy_mamba", block: `{"type": "legacy_mamba"}`, wantErr: "legacy_mamba"},
-		{name: "mamba3_canonical", block: `{"type": "mamba3-canonical", "inner_dim": 8, "state_size": 4, "n_groups": 2}`, wantErr: "mamba3-canonical"},
 		{name: "retnet", block: `{"type": "retnet", "heads": 2}`, wantErr: "retnet"},
 		{name: "custom", block: `{"type": "custom", "weights": [], "ops": []}`, wantErr: "custom"},
 		{name: "unsupported_moe_expert", block: `{"type": "moe", "num_experts": 2, "expert_block": {"type": "plain", "heads": 2}}`, wantErr: "expert_block.type"},
@@ -567,7 +566,6 @@ func TestExportHFRecurrentPolicy(t *testing.T) {
 	}{
 		{name: "gated_deltanet", block: `{"type": "gated_deltanet", "heads": 2, "d_k": 2}`, want: "gated_deltanet"},
 		{name: "legacy_mamba", block: `{"type": "legacy_mamba"}`, want: "legacy_mamba"},
-		{name: "mamba3_canonical", block: `{"type": "mamba3-canonical", "inner_dim": 8, "state_size": 4, "n_groups": 2}`, want: "mamba3-canonical"},
 		{name: "retnet", block: `{"type": "retnet", "heads": 2}`, want: "retnet"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -14,6 +14,7 @@ from transformers.modeling_outputs import (
 
 from .configuration_mixlab import MixlabConfig
 from .pooling_mixlab import pool_sequence
+from .mamba3_mixlab import MixlabMamba3CanonicalBlock
 from .ttt_mlp_mixlab import (
     MixlabTTTMLPBlock,
     MixlabTTTMLPState,
@@ -928,6 +929,8 @@ class MixlabModel(PreTrainedModel):
                 modules.append(MixlabMoEBlock(config, block))
             elif block_type == "ttt_mlp":
                 modules.append(MixlabTTTMLPBlock(config, block))
+            elif block_type == "mamba3-canonical":
+                modules.append(MixlabMamba3CanonicalBlock(config, block))
             else:
                 raise ValueError(f"unsupported exported Mixlab block type {block_type!r}")
         self.blocks = nn.ModuleList(modules)
@@ -1027,6 +1030,13 @@ class MixlabModel(PreTrainedModel):
         if relative_embeddings is not None and self.relative_layer_norm is not None:
             relative_embeddings = self.relative_layer_norm(relative_embeddings)
         ttt_blocks = sum(isinstance(block, MixlabTTTMLPBlock) for block in self.blocks)
+        mamba3_blocks = sum(
+            isinstance(block, MixlabMamba3CanonicalBlock) for block in self.blocks
+        )
+        if mamba3_blocks and (use_cache or ttt_state is not None):
+            raise ValueError(
+                "mamba3-canonical HF export supports non-cached forward only"
+            )
         if ttt_blocks:
             require_right_padded_ttt_batch(attention_mask)
         if ttt_state is None:
@@ -1048,6 +1058,8 @@ class MixlabModel(PreTrainedModel):
                 if use_cache:
                     next_ttt_state.append(block_state)
                 ttt_index += 1
+            elif isinstance(block, MixlabMamba3CanonicalBlock):
+                x = block(x, attention_mask=attention_mask, dwa=dwa)
             else:
                 x = block(x, dwa)
         if dwa is not None:

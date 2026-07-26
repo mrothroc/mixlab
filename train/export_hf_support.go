@@ -52,7 +52,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "ttt_mlp", Status: hfExportSupported, Reason: "The nonlinear inner-loop recurrence and request-owned recurrent cache are mirrored with native forward/state parity coverage."},
 		{Feature: "legacy_mamba", Status: hfExportGated, Reason: "The legacy fixed-decay recurrence is not represented in the HF template."},
 		{Feature: "gated_linear_ssm", Status: hfExportGated, Reason: "The simplified gated linear SSM is not yet represented in the HF template."},
-		{Feature: "mamba3-canonical", Status: hfExportGated, Reason: "Canonical Mamba-3 relies on specialized native scan semantics and CUDA/MLX execution paths."},
+		{Feature: "mamba3-canonical", Status: hfExportSupported, Reason: "The canonical complex-pair exponential-trapezoidal scan is mirrored by a maintained non-cached PyTorch inference reference with native parity coverage."},
 		{Feature: "retnet", Status: hfExportGated, Reason: "Retention recurrence export needs dedicated parity fixtures before it can be enabled."},
 		{Feature: "rwkv", Status: hfExportGated, Reason: "RWKV recurrence export needs dedicated parity fixtures before it can be enabled."},
 		{Feature: "custom", Status: hfExportUnsupported, Reason: "Arbitrary JSON custom blocks cannot be converted into a static HF template safely."},

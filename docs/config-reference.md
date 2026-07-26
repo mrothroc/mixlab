@@ -25,7 +25,7 @@ mixlab -mode validate -config model.json
 
 These fields live at the root of the config object.
 
-For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal and masked-LM heads for supported sequential `plain` attention stacks plus `swiglu`/`geglu`/`mlp`/`moe` blocks, cache-safe causal `ttt_mlp` stacks, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, DeBERTa relative attention, `plain` gated FFN tails, configurable RMSNorm/LayerNorm for core GPT-style blocks, and embedding feature channels; unsupported blocks or config features fail explicitly.
+For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The current `export-hf` core path supports causal and masked-LM heads for supported sequential `plain` attention stacks plus `swiglu`/`geglu`/`mlp`/`moe` blocks, cache-safe causal `ttt_mlp` stacks, non-cached canonical Mamba-3 causal/classification stacks, trained native classification heads, GQA, `qk_norm`, `qk_gain`, causal windowing, mask variants, DeBERTa relative attention, `plain` gated FFN tails, configurable RMSNorm/LayerNorm for core GPT-style blocks, and embedding feature channels; unsupported blocks or config features fail explicitly.
 
 | Field | Type | Required | Default | Notes |
 |------|------|----------|---------|-------|
@@ -1095,8 +1095,11 @@ Classification requires a manifest-backed
 single-label cross-entropy only. Masked-objective auxiliaries, diffusion,
 segment packing, sequence-length schedules, and reverse-complement augmentation
 are rejected rather than silently composed. Native classification checkpoints
-are not exported to Hugging Face in v1; export a supported LM checkpoint before
-HF-side classifier fine-tuning when that workflow is required.
+export through `AutoModelForSequenceClassification` when their backbone/config
+surface is HF supported. The trained projection and bias, `num_labels`, pooling
+mode, and classifier dropout are preserved. Export still fails explicitly for
+a gated backbone such as `gated_deltanet` or for native-only composition such
+as `rc_equivariant`.
 
 `objective: "causal"` preserves the existing shifted next-token objective. `objective: "mlm"` masks selected input positions and trains only those positions to predict the original token. `objective: "mntp"` predicts next tokens from bidirectional context while masking the corresponding next-token input position so the answer is not visible. `objective: "hybrid"` deterministically mixes causal and the configured secondary objective from `training.seed` and the step index. Hybrid secondary objectives can be `"mlm"`, `"mntp"`, or `"block_diffusion"`. `objective: "block_diffusion"` trains block-wise masked diffusion: each example masks a randomly selected active block under a prefix-plus-block attention mask, and the masked cross-entropy loss is taken over the masked positions. `objective: "multihead"` trains one shared trunk over expanded rows with distinct named heads, currently intended for scorer-plus-denoiser recipes such as MNTP/BERT-MLM scoring plus block-diffusion denoising. Sample from a trained diffusion checkpoint with `-mode generate-diffusion` (see [cli.md](cli.md#generate-diffusion)). The default `hybrid_mix_granularity: "batch"` chooses one objective per batch. `hybrid_mix_granularity: "example"` chooses independently per sequence inside the batch for MLM/MNTP secondary objectives, so `hybrid_clm_fraction: 0.0625` gives approximately 6.25% causal sequences and 93.75% masked sequences over time.
 

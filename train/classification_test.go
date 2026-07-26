@@ -7,7 +7,6 @@ import (
 	"math"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 
 	"github.com/mrothroc/mixlab/arch"
@@ -154,10 +153,9 @@ func TestClassificationMetricsAreOrderInvariant(t *testing.T) {
 	}
 }
 
-func TestNativeClassificationHFExportFailsExplicitly(t *testing.T) {
-	err := validateHFExportConfig(nativeClassificationTestConfig())
-	if err == nil || !strings.Contains(err.Error(), "training.objective") {
-		t.Fatalf("error=%v", err)
+func TestNativeClassificationHFExportIsSupportedForCoveredBackbones(t *testing.T) {
+	if err := validateHFExportConfig(nativeClassificationTestConfig()); err != nil {
+		t.Fatalf("validateHFExportConfig: %v", err)
 	}
 }
 

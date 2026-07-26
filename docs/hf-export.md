@@ -23,7 +23,7 @@ mixlab -mode export-hf \
 The exported directory contains:
 
 - `config.json` with `auto_map` entries for `AutoConfig`, `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForSequenceClassification`; masked-capable exports also include `AutoModelForMaskedLM`
-- `configuration_mixlab.py`, `modeling_mixlab.py`, `pooling_mixlab.py`, and `ttt_mlp_mixlab.py` static maintained templates
+- `configuration_mixlab.py`, `modeling_mixlab.py`, `pooling_mixlab.py`, `ttt_mlp_mixlab.py`, and `mamba3_mixlab.py` static maintained templates
 - `model.safetensors` with Hugging Face state-dict keys
 - `weight_map.json` mapping Mixlab `w{index}_{name}` tensors to Hugging Face tensor names
 - `tokenizer.json`, plus `tokenizer_config.json` and `special_tokens_map.json`
@@ -66,11 +66,19 @@ tokenizer = AutoTokenizer.from_pretrained("runs/plain_3L/hf", trust_remote_code=
 # Present for MLM/MNTP/hybrid exports.
 masked = AutoModelForMaskedLM.from_pretrained("runs/masked_model/hf", trust_remote_code=True)
 
-# The classification weights are freshly initialized for downstream fine-tuning.
+# For an LM checkpoint, classification weights are freshly initialized for
+# downstream fine-tuning.
 classifier = AutoModelForSequenceClassification.from_pretrained(
     "runs/plain_3L/hf",
     trust_remote_code=True,
     num_labels=3,
+)
+
+# For a native training.objective="classification" checkpoint, num_labels,
+# pooling, dropout, and the trained classifier weights come from the export.
+classifier = AutoModelForSequenceClassification.from_pretrained(
+    "runs/dna_mamba3_cls/hf",
+    trust_remote_code=True,
 )
 ```
 
@@ -78,19 +86,30 @@ classifier = AutoModelForSequenceClassification.from_pretrained(
 
 ## Sequence Classification
 
-`MixlabForSequenceClassification` owns padding-aware pooling and a freshly initialized
-linear classifier. The task head is intentionally not present in the Mixlab
-pretraining checkpoint; Hugging Face reports its weights as newly initialized, and
-downstream fine-tuning trains and saves them normally. Standard Hugging Face
-single-label, multi-label, and regression losses are selected from `num_labels`, label
-dtype, and `problem_type`. `classifier_dropout` defaults to the exported
-`hidden_dropout` when it is not supplied.
+`MixlabForSequenceClassification` owns padding-aware pooling and a linear
+classifier. For LM/pretraining checkpoints the classifier is freshly initialized;
+Hugging Face reports its weights as new, and downstream fine-tuning trains and
+saves them normally. For a native `training.objective: "classification"`
+checkpoint, the exporter writes the trained `head_classifier_proj` and
+`head_classifier_bias` as `classifier.weight` and `classifier.bias`, and carries
+the checkpoint's `num_labels`, pooling mode, and classifier dropout into
+`config.json`. Loading that directory therefore reproduces the native classifier
+instead of replacing its task head.
+
+Standard Hugging Face single-label, multi-label, and regression losses are
+selected from `num_labels`, label dtype, and `problem_type`.
+`classifier_dropout` defaults to the exported `hidden_dropout` for a fresh
+downstream head; native classifier exports preserve their configured effective
+dropout.
 
 The exporter derives `sequence_classification_pooling` from the concrete `AutoModel`
 backbone:
 
-- `last` for causal and TTT-MLP backbones, gathering the final non-padding token in each row;
+- `last` for causal, TTT-MLP, and canonical Mamba-3 backbones, gathering the final non-padding token in each row;
 - `mean` for masked/bidirectional backbones, averaging only non-padding tokens.
+
+Native classification exports use the explicit/defaulted
+`training.classification.pooling` from the training config.
 
 Mixed causal/bidirectional graphs are ambiguous. They continue to export normally,
 but loading the classification class requires an explicit policy:
@@ -171,12 +190,14 @@ HF export supports next-token and masked-LM checkpoints using sequential blocks:
 - `swiglu`, `geglu`, and `mlp` FFN blocks, including MLP activation variants `silu`, `gelu`, `relu`, and `leaky_relu_sq`
 - sequential `moe` blocks with a linear router, top-k token routing, and `swiglu`, `geglu`, or `mlp` experts
 - causal `ttt_mlp` stacks composed only with pointwise `swiglu`, `geglu`, or `mlp`; the exported model carries request-owned recurrent state through `past_key_values`
+- causal or native-classification `mamba3-canonical` stacks composed only with pointwise `swiglu`, `geglu`, or `mlp`; the maintained PyTorch path mirrors the complete canonical scan for non-cached forwards
 - embedding-time `char`, `bigram`, and `trigram` feature channels
 - tied embeddings; the exporter materializes `lm_head_weight = embed_tokens.weight.T` for Hugging Face consumers
 - data2vec-trained checkpoints; the training-only predictor weights and `training.data2vec` spec are stripped, exporting the student/base inference model
 - distillation-trained checkpoints; fixed-teacher configs are training-only and are stripped, exporting the student/base inference model
 - `training.objective: "mlm"` and `"mntp"` configs; these export both the standard causal head and a masked-LM head whose plain attention blocks are bidirectional
 - `training.objective: "hybrid"` configs with MLM/MNTP secondary objectives for causal and masked evaluation; the causal head uses causal plain attention while `AutoModel` and the masked-LM head use bidirectional plain attention
+- `training.objective: "classification"` configs on supported backbones; the trained native classifier head and its pooling/dropout metadata are exported
 - `hf_export_format: "gpt2"` for strict GPT-2-compatible configs, exported without custom Mixlab Python code
 
 The generated `modeling_mixlab.py` consumes Hugging Face `attention_mask` in `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForMaskedLM`, so padded batches mask pad-token keys instead of letting padding leak into hidden states.
@@ -281,6 +302,25 @@ than eager. Set `HF_TTT_MLP_MIN_COMPILE_SPEEDUP` to a hardware-specific ratio
 for release infrastructure. GPU utilization is diagnostic rather than a hard
 cross-hardware threshold.
 
+### Canonical Mamba-3 execution path
+
+`mamba3-canonical` export uses a maintained PyTorch reference implementation of
+Mixlab's fused block: internal RMSNorm, optional short causal depthwise
+convolution, low-rank delta/lambda/theta projections, normalized grouped B/C,
+cumulative complex-pair rotation, exponential-trapezoidal recurrence, SiLU
+gate, output projection, and residual. It accepts stacks composed from
+`mamba3-canonical` plus pointwise `swiglu`, `geglu`, or `mlp` blocks.
+
+The exported scan is sequential over sequence positions and vectorized over
+batch, channels, and state. It is intended for portable inference and
+classification parity, not as a replacement training kernel for Mixlab's
+native Metal/CUDA paths. Cached/streaming continuation is not implemented:
+ordinary full-sequence `AutoModel`, `AutoModelForCausalLM`, and
+`AutoModelForSequenceClassification` forwards work, while a request for
+`past_key_values`/`use_cache` fails explicitly. `attention_mask` treats masked
+positions as recurrent no-ops, so padding-aware classification works without
+letting pad tokens advance state.
+
 Tokenizer artifacts must come from an explicit `-tokenizer-path`, or from `tokenizer.json` next to the config/checkpoint. If the tokenizer source is missing or unreachable, export fails before writing an incomplete Hugging Face directory. Mixlab writes `tokenizer_config.json` and `special_tokens_map.json` by merging any source sidecars with special-token metadata derived from `tokenizer.json`, and writes matching `pad/eos/bos/unk_token_id` fields to `config.json` when the tokens are present. For masked-capable checkpoints (`mlm`/`mntp`, or `hybrid` with `hybrid_clm_fraction < 1`), it also sets the tokenizer `mask_token`/`mask_token_id` — resolved from `training.mlm_mask_token_id` against the tokenizer vocab — so masked/MNTP eval works without manually patching the tokenizer.
 
 When `char_vocab_size > 0`, `export-hf` also requires `char_features.bin` next to the config, checkpoint, or tokenizer source. The file is copied into the HF directory and loaded by the exported Python model so generated token IDs use the same token-id lookup as Mixlab inference.
@@ -289,7 +329,7 @@ When `char_vocab_size > 0`, `export-hf` also requires `char_features.bin` next t
 
 The detailed support matrix is maintained in [hf-export-support-matrix.md](hf-export-support-matrix.md). It distinguishes supported, gated, unsupported, and training-only features.
 
-Unsupported features fail fast with an error naming the field or block type. The current advanced export path intentionally gates HGRN2, mLSTM, Mamba-family blocks, RetNet/RWKV, `gated_deltanet`, `custom` blocks, `kv_source`, recurrence, U-Net, parallel residual, backout, MTP, block diffusion, and first-byte masked loss. TTT-MLP export rejects mixed attention/SSM trunks because those branches do not yet have a cache contract that composes with TTT continuation.
+Unsupported features fail fast with an error naming the field or block type. The current advanced export path intentionally gates HGRN2, mLSTM, legacy/simplified Mamba-family blocks, RetNet/RWKV, `gated_deltanet`, `custom` blocks, `kv_source`, recurrence, U-Net, parallel residual, backout, MTP, block diffusion, and first-byte masked loss. Canonical Mamba-3 and TTT-MLP each reject mixed attention/SSM trunks outside their parity-covered pointwise compositions.
 
 These guards are part of the export contract: a missing feature should be visible as an actionable error, not as a Hugging Face model that loads but computes different logits.
 
@@ -297,9 +337,9 @@ These guards are part of the export contract: a missing feature should be visibl
 
 Two layers of parity coverage exist:
 
-1. **Go oracle parity** (default suite, no extra deps). Verifies metadata, tokenizer handling, weight mapping, unsupported-feature errors, and deterministic native-vs-HF fixtures by comparing a native-forward oracle against an HF-forward oracle. Coverage includes GEGLU/MLP, `plain` gated FFN tails, configurable LayerNorm/no-affine export metadata, BERT-style masked-LM heads, GQA, attention post-norm placement, `qk_norm`, `qk_gain`, XSA, sparse attention gates, masks, causal windowing, DeBERTa relative attention, shared relative embedding LayerNorm, MoE routing and expert variants, feature channels, hybrid causal export semantics, gated recurrent policies, and a deterministically scaled trained-magnitude fixture with RMS assertions.
+1. **Go oracle and static-reference parity** (default Go suite; PyTorch reference fixture gated with `HF_PARITY=1`). Verifies metadata, tokenizer handling, weight mapping, unsupported-feature errors, and deterministic native-vs-HF fixtures. Coverage includes GEGLU/MLP, `plain` gated FFN tails, configurable LayerNorm/no-affine export metadata, BERT-style masked-LM heads, GQA, attention post-norm placement, `qk_norm`, `qk_gain`, XSA, sparse attention gates, masks, causal windowing, DeBERTa relative attention, shared relative embedding LayerNorm, MoE routing and expert variants, feature channels, hybrid causal export semantics, gated recurrent policies, trained native-classifier mapping, and the canonical Mamba-3 PyTorch block against the independent scalar full-block fixture (tolerance `2e-5`).
 
-2. **Native-vs-Python parity** (`TestExportHFNativePythonParity`, gated on `HF_PARITY=1` + MLX + the Python toolchain). This is the load-bearing FR-1 check: it exports deterministic trained-magnitude fixtures, loads each through the real Hugging Face auto classes, runs the *actual* embedded Python forward, checks padded-tokenizer batching where supported, and asserts the CausalLM logits agree with the *actual* native MLX forward (max per-logit abs diff < 1e-3, mean next-token loss diff < 1e-4). Every custom export case also loads `AutoModelForSequenceClassification`, compares its result with an identity-head pooling oracle, checks padded-batch versus independent-row behavior where the backbone is row-independent, and exercises missing-mask/empty-row failures. One case covers classification fine-tune loss, save, and reload. Cases include partial/full RoPE, `qk_norm`, sigmoid SwiGLU, tanh-approx GELU, `plain` gated FFN tails, GQA + `qk_gain` + sliding window, DeBERTa relative attention, XSA + sparse attention gates, top-k MoE (geglu/mlp experts), bigram/trigram/char feature channels, and TTT-MLP full-forward plus split recurrent-state parity.
+2. **Native-vs-Python parity** (`TestExportHFNativePythonParity`, gated on `HF_PARITY=1` + MLX + the Python toolchain). This is the load-bearing FR-1 check: it exports deterministic trained-magnitude fixtures, loads each through the real Hugging Face auto classes, runs the *actual* embedded Python forward, checks padded-tokenizer batching where supported, and asserts the CausalLM logits agree with the *actual* native MLX forward (max per-logit abs diff < 1e-3, mean next-token loss diff < 1e-4). Every custom export case also loads `AutoModelForSequenceClassification`, compares its result with an identity-head pooling oracle, checks padded-batch versus independent-row behavior where the backbone is row-independent, and exercises missing-mask/empty-row failures. One case covers classification fine-tune loss, save, and reload. Cases include partial/full RoPE, `qk_norm`, sigmoid SwiGLU, tanh-approx GELU, `plain` gated FFN tails, GQA + `qk_gain` + sliding window, DeBERTa relative attention, XSA + sparse attention gates, top-k MoE (geglu/mlp experts), bigram/trigram/char feature channels, TTT-MLP full-forward plus split recurrent-state parity, and canonical Mamba-3 full-forward parity. `TestExportHFNativeMamba3ClassificationPythonParity` separately compares the real trained native classifier head, mask-weighted mean pooling, and exported HF logits.
 
 Python/HF parity dependencies are declared in `requirements-hf.txt` (verified against torch 2.12 / transformers 5.10). The gated `.github/workflows/hf-parity.yml` workflow installs those dependencies and uses `macos-latest` with Homebrew MLX so the native-vs-Python check runs on an MLX-capable runner, keeping the default Linux CI lightweight.
 

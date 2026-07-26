@@ -34,6 +34,21 @@ Config knobs (all optional):
 - `use_conv` (default `true`)
 - `scan_chunk_size` (default 64; `0` = full-sequence scan)
 
+## Hugging Face export
+
+`mixlab -mode export-hf` supports sequential stacks composed from
+`mamba3-canonical` and pointwise `swiglu`, `geglu`, or `mlp` blocks. The
+exported `mamba3_mixlab.py` is a portable PyTorch reference for the complete
+block and supports full-sequence `AutoModel`, `AutoModelForCausalLM`, and
+`AutoModelForSequenceClassification` inference. Native
+`training.objective: "classification"` checkpoints preserve their trained
+classifier head and pooling metadata.
+
+The first release is intentionally non-cached: requesting `use_cache` or
+supplying `past_key_values` fails explicitly. Other recurrent/SSM families
+remain gated independently. See [Hugging Face export](hf-export.md) and the
+[support matrix](hf-export-support-matrix.md).
+
 ## Production-readiness stack
 
 Canonical Mamba-3 at competition scale (D=448, T=4096, 8 layers on H100) needed seven layers of memory/compile-pressure mitigation. Each layer addresses a distinct bottleneck.
@@ -85,6 +100,9 @@ Past incident: commit `e1899bf` wrapped 20+ MLX ops in `mx::custom_vjp` for the 
 - `TestMamba3SelectiveScanGradSmallCudaChunks` — exercises small native CUDA forward chunks and backward windows
 - `TestMamba3SelectiveScanMetalMatchesMLXFallback` — compares native Metal loss and all seven gradient families with the MLX-composed fallback
 - `TestMamba3CanonicalBlockGradMatchesExpanded` — fused-op vs expanded-25-op equivalence (loss + all 20 weight gradients within 2e-5)
+- `TestExportHFMamba3ReferenceFixture` — exported PyTorch block vs the independent scalar full-block fixture (hidden-state max diff < 2e-5)
+- `TestExportHFNativePythonParity/mamba3_canonical_forward` — actual exported HF causal logits vs native MLX (max diff < 1e-3)
+- `TestExportHFNativeMamba3ClassificationPythonParity` — trained native classifier head and mask-weighted mean pooling vs exported HF logits (max diff < 1e-3)
 - `TestMamba3CanonicalSmokeLossDecreases` — 10-step smoke; loss must monotonically decrease
 
 ## Metal performance

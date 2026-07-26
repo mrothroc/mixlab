@@ -14,7 +14,7 @@ import (
 	"github.com/mrothroc/mixlab/arch"
 )
 
-//go:embed hf_templates/configuration_mixlab.py hf_templates/modeling_mixlab.py hf_templates/pooling_mixlab.py hf_templates/ttt_mlp_mixlab.py
+//go:embed hf_templates/configuration_mixlab.py hf_templates/modeling_mixlab.py hf_templates/pooling_mixlab.py hf_templates/ttt_mlp_mixlab.py hf_templates/mamba3_mixlab.py
 var hfTemplateFS embed.FS
 
 // ExportHFOptions describes a Hugging Face export operation.
@@ -49,6 +49,8 @@ type hfConfigJSON struct {
 	LayerAggregation              string            `json:"layer_aggregation,omitempty"`
 	LayerAggregationScope         string            `json:"layer_aggregation_scope,omitempty"`
 	SequenceClassificationPooling string            `json:"sequence_classification_pooling,omitempty"`
+	NumLabels                     int               `json:"num_labels,omitempty"`
+	ClassifierDropout             *float32          `json:"classifier_dropout,omitempty"`
 	HiddenDropout                 float32           `json:"hidden_dropout,omitempty"`
 	EmbeddingDropout              float32           `json:"embedding_dropout,omitempty"`
 	PositionalEmbedding           string            `json:"positional_embedding,omitempty"`
@@ -212,63 +214,8 @@ func hfExportInferenceConfig(cfg *ArchConfig) *ArchConfig {
 	return &out
 }
 
-func materializeHFExportWeights(cfg, sourceCfg *ArchConfig, shapes []WeightShape, weights [][]float32) ([]WeightShape, [][]float32, error) {
-	if cfg == nil {
-		return nil, nil, fmt.Errorf("nil config")
-	}
-	if len(shapes) != len(weights) {
-		return nil, nil, fmt.Errorf("weight shape/data count mismatch: shapes=%d weights=%d", len(shapes), len(weights))
-	}
-	if sourceCfg != nil && sourceCfg.Training.MultiheadEnabled() {
-		return materializeMultiheadHFExportWeights(cfg, sourceCfg, shapes, weights)
-	}
-	if hasWeightShapeName(shapes, "head") {
-		return shapes, weights, nil
-	}
-	if !cfg.TieEmbeddings {
-		return nil, nil, fmt.Errorf("HF export requires head weight for untied embeddings")
-	}
-	embedIdx := weightShapeIndex(shapes, "embed")
-	if embedIdx < 0 {
-		return nil, nil, fmt.Errorf("HF export requires base weight %q", "embed")
-	}
-	embedShape := shapes[embedIdx].Shape
-	if len(embedShape) != 2 || embedShape[0] != cfg.VocabSize || embedShape[1] != cfg.ModelDim {
-		return nil, nil, fmt.Errorf("embed shape=%v does not match vocab/model dims [%d,%d]", embedShape, cfg.VocabSize, cfg.ModelDim)
-	}
-	head := transposeEmbeddingToHead(weights[embedIdx], cfg.VocabSize, cfg.ModelDim)
-	outShapes := append([]WeightShape(nil), shapes...)
-	outWeights := append([][]float32(nil), weights...)
-	outShapes = append(outShapes, WeightShape{Name: "head", Shape: []int{cfg.ModelDim, cfg.VocabSize}})
-	outWeights = append(outWeights, head)
-	return outShapes, outWeights, nil
-}
-
-func transposeEmbeddingToHead(embed []float32, vocab, dim int) []float32 {
-	head := make([]float32, dim*vocab)
-	for v := 0; v < vocab; v++ {
-		for d := 0; d < dim; d++ {
-			head[d*vocab+v] = embed[v*dim+d]
-		}
-	}
-	return head
-}
-
-func hasWeightShapeName(shapes []WeightShape, name string) bool {
-	return weightShapeIndex(shapes, name) >= 0
-}
-
-func weightShapeIndex(shapes []WeightShape, name string) int {
-	for i, shape := range shapes {
-		if shape.Name == name {
-			return i
-		}
-	}
-	return -1
-}
-
 func writeHFTemplates(outputDir string) error {
-	for _, name := range []string{"configuration_mixlab.py", "modeling_mixlab.py", "pooling_mixlab.py", "ttt_mlp_mixlab.py"} {
+	for _, name := range []string{"configuration_mixlab.py", "modeling_mixlab.py", "pooling_mixlab.py", "ttt_mlp_mixlab.py", "mamba3_mixlab.py"} {
 		data, err := hfTemplateFS.ReadFile(filepath.Join("hf_templates", name))
 		if err != nil {
 			return fmt.Errorf("read HF template %s: %w", name, err)
@@ -670,6 +617,42 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 				}
 				wi = firstUnmappedWeight(used, wi+1)
 			}
+		case "mamba3-canonical":
+			names := []hfBlockWeightName{
+				{mixlab: "pre_norm_scale", hf: "pre_norm.weight"},
+				{mixlab: "w_x", hf: "w_x.weight"},
+			}
+			if block.UseConv == nil || *block.UseConv {
+				names = append(names, hfBlockWeightName{mixlab: "conv_w", hf: "conv_weight"})
+			}
+			names = append(names,
+				hfBlockWeightName{mixlab: "w_dt_low", hf: "w_dt_low.weight"},
+				hfBlockWeightName{mixlab: "w_dt_high", hf: "w_dt_high.weight"},
+				hfBlockWeightName{mixlab: "w_lambda_low", hf: "w_lambda_low.weight"},
+				hfBlockWeightName{mixlab: "w_lambda_high", hf: "w_lambda_high.weight"},
+				hfBlockWeightName{mixlab: "w_theta_low", hf: "w_theta_low.weight"},
+				hfBlockWeightName{mixlab: "w_theta_high", hf: "w_theta_high.weight"},
+				hfBlockWeightName{mixlab: "w_B", hf: "w_B.weight"},
+				hfBlockWeightName{mixlab: "w_C", hf: "w_C.weight"},
+				hfBlockWeightName{mixlab: "B_norm_scale", hf: "B_norm.weight"},
+				hfBlockWeightName{mixlab: "C_norm_scale", hf: "C_norm.weight"},
+				hfBlockWeightName{mixlab: "B_bias", hf: "B_bias"},
+				hfBlockWeightName{mixlab: "C_bias", hf: "C_bias"},
+				hfBlockWeightName{mixlab: "A_log", hf: "A_log"},
+				hfBlockWeightName{mixlab: "dt_bias", hf: "dt_bias"},
+				hfBlockWeightName{mixlab: "post_norm_scale", hf: "post_norm.weight"},
+				hfBlockWeightName{mixlab: "w_gate", hf: "w_gate.weight"},
+				hfBlockWeightName{mixlab: "w_out", hf: "w_out.weight"},
+			)
+			for _, name := range names {
+				if wi >= len(shapes) {
+					return nil, fmt.Errorf("weight map exhausted while mapping mamba3-canonical block %d", blockIdx)
+				}
+				if err := addExpected(wi, name.mixlab, prefix+"."+name.hf); err != nil {
+					return nil, err
+				}
+				wi = firstUnmappedWeight(used, wi+1)
+			}
 		default:
 			return nil, fmt.Errorf("unsupported HF export block type %q", block.Type)
 		}
@@ -705,6 +688,20 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 			wi = firstUnmappedWeight(used, wi+1)
 		}
 	}
+	if cfg.ClassificationEnabled() {
+		for _, name := range []hfBlockWeightName{
+			{mixlab: "head_classifier_proj", hf: "classifier.weight"},
+			{mixlab: "head_classifier_bias", hf: "classifier.bias"},
+		} {
+			if wi >= len(shapes) {
+				return nil, fmt.Errorf("weight map exhausted while mapping native classifier")
+			}
+			if err := addExpected(wi, name.mixlab, name.hf); err != nil {
+				return nil, err
+			}
+			wi = firstUnmappedWeight(used, wi+1)
+		}
+	}
 	if wi != len(shapes) {
 		return nil, fmt.Errorf("HF weight map did not consume all weights: next_unmapped=%d total=%d", wi, len(shapes))
 	}
@@ -720,7 +717,7 @@ func hfLayerAggregationPointCount(cfg *ArchConfig) (int, error) {
 		switch strings.ToLower(strings.TrimSpace(block.Type)) {
 		case "plain":
 			count += 2
-		case "swiglu", "geglu", "mlp", "moe":
+		case "swiglu", "geglu", "mlp", "moe", "mamba3-canonical":
 			count++
 		default:
 			return 0, fmt.Errorf("HF export DWA does not support blocks[%d].type=%q", i, block.Type)

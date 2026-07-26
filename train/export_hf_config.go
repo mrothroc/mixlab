@@ -18,6 +18,9 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 	blocks := hfBlockEntries(cfg, false)
 	maskedBlocks := []map[string]any(nil)
 	architectures := []string{"MixlabForCausalLM"}
+	if cfg.ClassificationEnabled() {
+		architectures = []string{"MixlabForSequenceClassification"}
+	}
 	autoMap := map[string]string{
 		"AutoConfig":                         "configuration_mixlab.MixlabConfig",
 		"AutoModel":                          "modeling_mixlab.MixlabModel",
@@ -50,6 +53,8 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 		LayerAggregation:              hfExportLayerAggregation(cfg),
 		LayerAggregationScope:         normalizeHFLayerAggregationScope(opts.LayerAggregationScope),
 		SequenceClassificationPooling: hfSequenceClassificationPooling(cfg, maskedBlocks),
+		NumLabels:                     hfSequenceClassificationNumLabels(cfg),
+		ClassifierDropout:             hfSequenceClassificationDropout(cfg),
 		HiddenDropout:                 cfg.EffectiveHiddenDropout(),
 		EmbeddingDropout:              cfg.EffectiveEmbeddingDropout(),
 		PositionalEmbedding:           cfg.EffectivePositionalEmbedding(),
@@ -68,12 +73,13 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 		Blocks:                        blocks,
 		MaskedBlocks:                  maskedBlocks,
 		Mixlab: map[string]any{
-			"format":            "mixlab_hf_export_v1",
-			"source":            "mixlab",
-			"weight_map":        "weight_map.json",
-			"requires_trust":    "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":  []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.differential_attention", "plain.ffn_activation=gelu", "plain.ffn_activation=gelu_new", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.ffn_pre_norm", "plain.ffn_bias", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "positional_embedding=learned_absolute", "positional_embedding=none", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe", "ttt_mlp"},
-			"unsupported_fails": true,
+			"format":                     "mixlab_hf_export_v1",
+			"source":                     "mixlab",
+			"weight_map":                 "weight_map.json",
+			"requires_trust":             "trust_remote_code=True loads repository-provided Python modeling code",
+			"supported_blocks":           []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.differential_attention", "plain.ffn_activation=gelu", "plain.ffn_activation=gelu_new", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.ffn_pre_norm", "plain.ffn_bias", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "positional_embedding=learned_absolute", "positional_embedding=none", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe", "ttt_mlp", "mamba3-canonical"},
+			"native_sequence_classifier": cfg.ClassificationEnabled(),
+			"unsupported_fails":          true,
 		},
 	}
 	return writeJSONFile(path, doc)
@@ -82,6 +88,9 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 func hfSequenceClassificationPooling(cfg *ArchConfig, maskedBlocks []map[string]any) string {
 	if cfg == nil {
 		return ""
+	}
+	if cfg.ClassificationEnabled() {
+		return cfg.EffectiveClassificationPooling()
 	}
 	// AutoModel and the classification head use masked_blocks when they are
 	// exported, so derive the default from that concrete backbone view.
@@ -102,7 +111,7 @@ func hfSequenceClassificationPooling(cfg *ArchConfig, maskedBlocks []map[string]
 			default:
 				return ""
 			}
-		case "ttt_mlp":
+		case "ttt_mlp", "mamba3-canonical":
 			seenCausal = true
 		}
 	}
@@ -113,6 +122,21 @@ func hfSequenceClassificationPooling(cfg *ArchConfig, maskedBlocks []map[string]
 		return "mean"
 	}
 	return "last"
+}
+
+func hfSequenceClassificationNumLabels(cfg *ArchConfig) int {
+	if cfg == nil || !cfg.ClassificationEnabled() || cfg.Training.Classification == nil {
+		return 0
+	}
+	return cfg.Training.Classification.NumLabels
+}
+
+func hfSequenceClassificationDropout(cfg *ArchConfig) *float32 {
+	if cfg == nil || !cfg.ClassificationEnabled() {
+		return nil
+	}
+	value := cfg.EffectiveClassifierDropout()
+	return &value
 }
 
 func normalizeHFLayerAggregationScope(raw string) string {
@@ -272,6 +296,46 @@ func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 			}
 			if block.InnerLRBase > 0 {
 				entry["inner_lr_base"] = block.InnerLRBase
+			}
+			blocks = append(blocks, entry)
+		case "mamba3-canonical":
+			innerDim := block.InnerDim
+			if innerDim <= 0 {
+				innerDim = cfg.ModelDim
+			}
+			stateSize := block.StateSize
+			if stateSize <= 0 {
+				stateSize = 16
+			}
+			nGroups := block.NGroups
+			if nGroups <= 0 {
+				nGroups = 4
+			}
+			dtRank := block.DTRank
+			if dtRank <= 0 {
+				dtRank = innerDim / 16
+				if dtRank < 1 {
+					dtRank = 1
+				}
+			}
+			convKernel := block.ConvKernel
+			if convKernel <= 0 {
+				convKernel = 4
+			}
+			useConv := block.UseConv == nil || *block.UseConv
+			entry := map[string]any{
+				"type":       "mamba3-canonical",
+				"inner_dim":  innerDim,
+				"state_size": stateSize,
+				"n_groups":   nGroups,
+				"dt_rank":    dtRank,
+				"use_conv":   useConv,
+			}
+			if useConv {
+				entry["conv_kernel"] = convKernel
+			}
+			if block.ScanChunkSize != nil {
+				entry["scan_chunk_size"] = *block.ScanChunkSize
 			}
 			blocks = append(blocks, entry)
 		}
