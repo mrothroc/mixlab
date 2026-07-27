@@ -1,6 +1,7 @@
 #ifndef MLX_IR_TRAINER_H
 #define MLX_IR_TRAINER_H
 
+#include "distributed_step.h"
 #include "ir.h"
 
 #include <mlx/mlx.h>
@@ -130,6 +131,10 @@ struct IRTrainer {
   std::vector<TensorDesc::DType> cached_named_step_input_dtypes;
   std::vector<std::vector<int>> cached_named_step_input_shapes;
   std::string cached_named_step_signature;
+  std::vector<mlx::core::array> cached_named_step_ordered_inputs;
+  std::vector<mlx::core::array> cached_named_step_args;
+  std::string cached_named_step_argument_layout_signature;
+  uint64_t cached_named_step_argument_layout_rebuilds = 0;
   std::function<std::vector<mlx::core::array>(const std::vector<mlx::core::array>&)> compiled_named_step;
   std::string compiled_named_step_signature;
   std::unordered_map<
@@ -182,6 +187,15 @@ struct IRTrainer {
   int distributed_rank = 0;
   int distributed_world_size = 1;
   std::optional<mlx::core::distributed::Group> distributed_group;
+  size_t distributed_gradient_bucket_bytes = kDefaultGradientBucketBytes;
+  GradientBucketPlan distributed_gradient_bucket_plan;
+  int distributed_accumulation_steps = 1;
+  int distributed_accumulation_position = 0;
+  uint64_t distributed_microstep_count = 0;
+  double distributed_accumulated_denominator = 0.0;
+  bool distributed_accumulated_bad = false;
+  bool distributed_test_pre_update_bad = false;
+  std::vector<mlx::core::array> distributed_accumulated_gradients;
   float next_loss_normalizer = 1.0f;
   std::vector<std::string> last_step_stage_trace;
 
@@ -191,7 +205,6 @@ struct IRTrainer {
   QATMode qat_mode = QATMode::None;
   ComputeDType compute_dtype = ComputeDType::Float32;
 
-  float step(const mlx::core::array& tokens, const mlx::core::array& targets);
   float step_named(const TensorMap& inputs);
   void submit_step(const TensorMap& inputs);
   float collect_loss();

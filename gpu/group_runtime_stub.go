@@ -14,4 +14,10 @@ func mlxGroupRuntimeValidateIdentity(
 ) int {
 	return -1
 }
+func mlxGroupRuntimeValidateManifest(int64, []uint64) (int, int, int) {
+	return -1, -1, -1
+}
+func mlxGroupRuntimeBroadcastControl(int64, int, []int32) ([]int32, int) {
+	return nil, -1
+}
 func mlxGroupRuntimeDestroy(int64) {}

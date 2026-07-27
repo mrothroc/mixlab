@@ -157,11 +157,53 @@ func CreateTrainerWithGroup(
 	spec TrainerOptimizerSpec,
 	group *GroupRuntime,
 ) (TrainerHandle, error) {
+	return CreateTrainerWithGroupOptions(
+		program,
+		weightHandles,
+		spec,
+		group,
+		DistributedTrainerOptions{},
+	)
+}
+
+const DefaultGradientBucketBytes uint64 = 32 * 1024 * 1024
+
+type DistributedTrainerOptions struct {
+	GradientBucketBytes uint64
+	AccumulationSteps   int
+}
+
+func (o DistributedTrainerOptions) withDefaults() DistributedTrainerOptions {
+	if o.GradientBucketBytes == 0 {
+		o.GradientBucketBytes = DefaultGradientBucketBytes
+	}
+	if o.AccumulationSteps == 0 {
+		o.AccumulationSteps = 1
+	}
+	return o
+}
+
+func CreateTrainerWithGroupOptions(
+	program *Program,
+	weightHandles []int64,
+	spec TrainerOptimizerSpec,
+	group *GroupRuntime,
+	options DistributedTrainerOptions,
+) (TrainerHandle, error) {
 	if group == nil {
 		return CreateTrainer(program, weightHandles, spec)
 	}
+	options = options.withDefaults()
 	trainer, err := CreateTrainer(program, weightHandles, spec)
 	if err != nil {
+		return 0, err
+	}
+	if err := TrainerSetDistributedOptions(
+		trainer,
+		options.GradientBucketBytes,
+		options.AccumulationSteps,
+	); err != nil {
+		TrainerDestroy(trainer)
 		return 0, err
 	}
 	if err := group.attachTrainer(trainer); err != nil {
@@ -169,6 +211,49 @@ func CreateTrainerWithGroup(
 		return 0, err
 	}
 	return trainer, nil
+}
+
+func TrainerSetDistributedOptions(
+	trainer TrainerHandle,
+	gradientBucketBytes uint64,
+	accumulationSteps int,
+) error {
+	if trainer == 0 {
+		return fmt.Errorf("invalid trainer handle")
+	}
+	if gradientBucketBytes == 0 {
+		return fmt.Errorf("gradient bucket bytes must be positive")
+	}
+	if accumulationSteps <= 0 {
+		return fmt.Errorf("gradient accumulation steps must be positive")
+	}
+	return mlxTrainerSetDistributedOptions(trainer, gradientBucketBytes, accumulationSteps)
+}
+
+func TrainerDistributedBucketMetadata(
+	trainer TrainerHandle,
+) (DistributedBucketMetadata, error) {
+	if trainer == 0 {
+		return DistributedBucketMetadata{}, fmt.Errorf("invalid trainer handle")
+	}
+	return mlxTrainerDistributedBucketMetadata(trainer)
+}
+
+func TrainerArgumentLayoutRebuilds(trainer TrainerHandle) (uint64, error) {
+	if trainer == 0 {
+		return 0, fmt.Errorf("invalid trainer handle")
+	}
+	return mlxTrainerArgumentLayoutRebuilds(trainer)
+}
+
+func TrainerSetDistributedTestPreUpdateBad(
+	trainer TrainerHandle,
+	enabled bool,
+) error {
+	if trainer == 0 {
+		return fmt.Errorf("invalid trainer handle")
+	}
+	return mlxTrainerSetTestPreUpdateBad(trainer, enabled)
 }
 
 func TrainerSetProgram(t TrainerHandle, program *Program) error {

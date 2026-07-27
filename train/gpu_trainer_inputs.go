@@ -286,7 +286,25 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		if len(t.dropoutKeyBuf) < needKeys {
 			t.dropoutKeyBuf = make([]int32, needKeys)
 		}
-		fillDropoutKeys(t.dropoutKeyBuf[:needKeys], t.trainingSeed, t.trainingStep)
+		rank := 0
+		microstep := 0
+		optimizerAttempt := t.trainingStep
+		if t.distributed != nil {
+			rank = t.distributed.LocalView.LocalRank
+			accumulationSteps := t.distributed.AccumulationSteps
+			if accumulationSteps <= 0 {
+				accumulationSteps = 1
+			}
+			microstep = t.trainingStep % accumulationSteps
+			optimizerAttempt = t.trainingStep / accumulationSteps
+		}
+		fillDistributedDropoutKeys(
+			t.dropoutKeyBuf[:needKeys],
+			t.trainingSeed,
+			optimizerAttempt,
+			rank,
+			microstep,
+		)
 		inputs = append(inputs, gpu.TensorInput{
 			Name: ir.DropoutKeysInput, DType: gpu.TensorInt32, Shape: []int{t.dropoutKeyCount, 2}, Data: t.dropoutKeyBuf[:needKeys],
 		})

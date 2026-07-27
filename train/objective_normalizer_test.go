@@ -56,3 +56,47 @@ func TestLossNormalizerMatchesCausalDenominator(t *testing.T) {
 		)
 	}
 }
+
+func TestLossNormalizerMatchesMaskedObjectiveDenominator(t *testing.T) {
+	for _, objective := range []string{arch.ObjectiveMLM, arch.ObjectiveMNTP} {
+		t.Run(objective, func(t *testing.T) {
+			cfg := &ArchConfig{
+				ModelDim:  8,
+				VocabSize: 16,
+				SeqLen:    4,
+				Training: arch.TrainingSpec{
+					Objective:        objective,
+					BatchTokens:      8,
+					MLMMaskProb:      1,
+					MLMMaskTokenID:   1,
+					MLMMaskTokenProb: 1,
+				},
+			}
+			batch := trainBatch{
+				x: []int{2, 3, 4, 5, 6, 7, 8, 9},
+				y: []int{3, 4, 5, 6, 7, 8, 9, 10},
+			}
+			prepared, err := prepareObjectiveBatch(cfg, batch, 0, objective)
+			if err != nil {
+				t.Fatalf("prepareObjectiveBatch: %v", err)
+			}
+			var want float32
+			for _, value := range prepared.lossMask {
+				if value > 0 {
+					want += value
+				}
+			}
+			if !prepared.lossNormalizerSet || prepared.lossNormalizer != want {
+				t.Fatalf(
+					"loss normalizer set=%v value=%g, want true/%g",
+					prepared.lossNormalizerSet,
+					prepared.lossNormalizer,
+					want,
+				)
+			}
+			if want == 0 {
+				t.Fatal("test fixture produced no masked positions")
+			}
+		})
+	}
+}

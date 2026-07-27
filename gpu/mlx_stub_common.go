@@ -1,7 +1,7 @@
-//go:build !cgo || (!darwin && !linux)
+//go:build !mlx || !cgo || (!darwin && !linux)
 
 // Package gpu provides the MLX Metal backend for mixlab's IR execution.
-// This stub is used when CGO is disabled entirely or on unsupported platforms.
+// This shared stub is used whenever the MLX backend cannot be built.
 package gpu
 
 import "fmt"
@@ -70,6 +70,41 @@ func CreateTrainer(program *Program, weightHandles []int64, spec TrainerOptimize
 
 func CreateTrainerWithGroup(program *Program, weightHandles []int64, spec TrainerOptimizerSpec, group *GroupRuntime) (TrainerHandle, error) {
 	return 0, errNotBuilt
+}
+
+const DefaultGradientBucketBytes uint64 = 32 * 1024 * 1024
+
+type DistributedTrainerOptions struct {
+	GradientBucketBytes uint64
+	AccumulationSteps   int
+}
+
+func CreateTrainerWithGroupOptions(
+	*Program,
+	[]int64,
+	TrainerOptimizerSpec,
+	*GroupRuntime,
+	DistributedTrainerOptions,
+) (TrainerHandle, error) {
+	return 0, errNotBuilt
+}
+
+type DistributedBucketMetadata struct {
+	TargetBytes uint64
+	TotalBytes  uint64
+	Digest      uint64
+	BucketCount int
+}
+
+func TrainerSetDistributedOptions(TrainerHandle, uint64, int) error { return errNotBuilt }
+func TrainerDistributedBucketMetadata(TrainerHandle) (DistributedBucketMetadata, error) {
+	return DistributedBucketMetadata{}, errNotBuilt
+}
+func TrainerArgumentLayoutRebuilds(TrainerHandle) (uint64, error) {
+	return 0, errNotBuilt
+}
+func TrainerSetDistributedTestPreUpdateBad(TrainerHandle, bool) error {
+	return errNotBuilt
 }
 
 func TrainerSetProgram(t TrainerHandle, program *Program) error {

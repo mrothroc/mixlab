@@ -31,6 +31,18 @@ int mlx_group_runtime_validate_identity(
     const uint32_t* expected_member_digests,
     int n_members,
     const uint32_t* local_member_digest);
+int mlx_group_runtime_validate_manifest(
+    int64_t handle,
+    const uint64_t* words,
+    int n_words,
+    int* mismatch_rank,
+    int* mismatch_word);
+int mlx_group_runtime_broadcast_control(
+    int64_t handle,
+    int root_rank,
+    const int32_t* local_values,
+    int n_values,
+    int32_t* out_values);
 void mlx_group_runtime_destroy(int64_t handle);
 
 // Compile canonical Mamba3 Metal kernels while trainer setup prepares weights.
@@ -208,13 +220,26 @@ int64_t mlx_ir_create_trainer_v2(
     int compute_dtype);
 int mlx_ir_trainer_set_program(int64_t trainer, int64_t program);
 int mlx_ir_trainer_set_group_runtime(int64_t trainer, int64_t group_runtime);
+int mlx_ir_trainer_set_distributed_options(
+    int64_t trainer,
+    uint64_t gradient_bucket_bytes,
+    int accumulation_steps);
+int mlx_ir_trainer_distributed_bucket_metadata(
+    int64_t trainer,
+    uint64_t* target_bytes,
+    uint64_t* total_bytes,
+    uint64_t* digest,
+    int* bucket_count);
+int mlx_ir_trainer_argument_layout_rebuilds(
+    int64_t trainer,
+    uint64_t* rebuilds);
+int mlx_ir_trainer_set_test_pre_update_bad(int64_t trainer, int enabled);
 int mlx_ir_trainer_set_next_loss_normalizer(int64_t trainer, float loss_normalizer);
 int mlx_ir_trainer_last_stage_trace(int64_t trainer, char* out, int out_size);
 int mlx_ir_trainer_set_step_output_names(
     int64_t trainer,
     const char** output_names,
     int n_outputs);
-float mlx_ir_trainer_step(int64_t trainer, const int* tokens, const int* targets, int B, int T);
 float mlx_ir_trainer_step_named(
     int64_t trainer,
     const mlx_tensor_input* inputs,

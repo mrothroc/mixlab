@@ -1,5 +1,7 @@
 #include "optimizer_step_guard.h"
 
+#include <mlx/distributed/ops.h>
+
 #include <cmath>
 #include <iostream>
 #include <stdexcept>
@@ -149,7 +151,20 @@ bool OptimizerStepTransaction::finish() {
   const float gradient_bad = evaluated_count(gradient_nonfinite_count_, "gradient non-finite");
   const float state_bad = evaluated_count(state_nonfinite_count_, "state non-finite");
   loss_was_nonfinite_ = loss_bad > 0.0f;
-  const bool valid = loss_bad == 0.0f && gradient_bad == 0.0f && state_bad == 0.0f;
+  const bool local_valid =
+      loss_bad == 0.0f && gradient_bad == 0.0f && state_bad == 0.0f;
+  bool valid = local_valid;
+  if (trainer_.distributed_context_active) {
+    if (!trainer_.distributed_group.has_value()) {
+      throw std::runtime_error("distributed optimizer transaction has no MLX group");
+    }
+    trainer_.last_step_stage_trace.push_back("all_max_candidate_bad");
+    auto global_bad = mx::distributed::all_max(
+        mx::array(local_valid ? 0.0f : 1.0f, mx::float32),
+        *trainer_.distributed_group);
+    mx::eval(global_bad);
+    valid = global_bad.item<float>() == 0.0f;
+  }
   if (valid) {
     trainer_.optimizer_step_count++;
     trainer_.consecutive_skipped_optimizer_steps = 0;

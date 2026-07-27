@@ -47,6 +47,9 @@ func mlxGroupRuntimeValidateIdentity(
 	expectedMemberDigests []uint32,
 	localMemberDigest [8]uint32,
 ) int {
+	if len(expectedMemberDigests) == 0 || len(expectedMemberDigests)%8 != 0 {
+		return -1
+	}
 	return int(C.mlx_group_runtime_validate_identity(
 		C.int64_t(handle),
 		C.uint64_t(generation),
@@ -55,6 +58,44 @@ func mlxGroupRuntimeValidateIdentity(
 		C.int(len(expectedMemberDigests)/8),
 		(*C.uint32_t)(unsafe.Pointer(&localMemberDigest[0])),
 	))
+}
+
+func mlxGroupRuntimeValidateManifest(
+	handle int64,
+	words []uint64,
+) (status, mismatchRank, mismatchWord int) {
+	if len(words) == 0 {
+		return -1, -1, -1
+	}
+	var cRank C.int
+	var cWord C.int
+	status = int(C.mlx_group_runtime_validate_manifest(
+		C.int64_t(handle),
+		(*C.uint64_t)(unsafe.Pointer(&words[0])),
+		C.int(len(words)),
+		&cRank,
+		&cWord,
+	))
+	return status, int(cRank), int(cWord)
+}
+
+func mlxGroupRuntimeBroadcastControl(
+	handle int64,
+	rootRank int,
+	localValues []int32,
+) ([]int32, int) {
+	if len(localValues) == 0 {
+		return nil, -1
+	}
+	out := make([]int32, len(localValues))
+	status := int(C.mlx_group_runtime_broadcast_control(
+		C.int64_t(handle),
+		C.int(rootRank),
+		(*C.int32_t)(unsafe.Pointer(&localValues[0])),
+		C.int(len(localValues)),
+		(*C.int32_t)(unsafe.Pointer(&out[0])),
+	))
+	return out, status
 }
 
 func mlxGroupRuntimeDestroy(handle int64) {
@@ -73,12 +114,81 @@ func (r *GroupRuntime) attachTrainer(trainer TrainerHandle) error {
 	return mlxTrainerSetGroupRuntime(trainer, r.handle)
 }
 
+func mlxTrainerSetDistributedOptions(
+	trainer TrainerHandle,
+	gradientBucketBytes uint64,
+	accumulationSteps int,
+) error {
+	if C.mlx_ir_trainer_set_distributed_options(
+		C.int64_t(trainer),
+		C.uint64_t(gradientBucketBytes),
+		C.int(accumulationSteps),
+	) != 0 {
+		return fmt.Errorf("mlx_ir_trainer_set_distributed_options failed")
+	}
+	return nil
+}
+
 func mlxTrainerSetGroupRuntime(trainer TrainerHandle, groupRuntime int64) error {
 	if C.mlx_ir_trainer_set_group_runtime(
 		C.int64_t(trainer),
 		C.int64_t(groupRuntime),
 	) != 0 {
 		return fmt.Errorf("mlx_ir_trainer_set_group_runtime failed")
+	}
+	return nil
+}
+
+type DistributedBucketMetadata struct {
+	TargetBytes uint64
+	TotalBytes  uint64
+	Digest      uint64
+	BucketCount int
+}
+
+func mlxTrainerDistributedBucketMetadata(trainer TrainerHandle) (DistributedBucketMetadata, error) {
+	var targetBytes C.uint64_t
+	var totalBytes C.uint64_t
+	var digest C.uint64_t
+	var bucketCount C.int
+	if C.mlx_ir_trainer_distributed_bucket_metadata(
+		C.int64_t(trainer),
+		&targetBytes,
+		&totalBytes,
+		&digest,
+		&bucketCount,
+	) != 0 {
+		return DistributedBucketMetadata{}, fmt.Errorf("mlx_ir_trainer_distributed_bucket_metadata failed")
+	}
+	return DistributedBucketMetadata{
+		TargetBytes: uint64(targetBytes),
+		TotalBytes:  uint64(totalBytes),
+		Digest:      uint64(digest),
+		BucketCount: int(bucketCount),
+	}, nil
+}
+
+func mlxTrainerArgumentLayoutRebuilds(trainer TrainerHandle) (uint64, error) {
+	var rebuilds C.uint64_t
+	if C.mlx_ir_trainer_argument_layout_rebuilds(
+		C.int64_t(trainer),
+		&rebuilds,
+	) != 0 {
+		return 0, fmt.Errorf("mlx_ir_trainer_argument_layout_rebuilds failed")
+	}
+	return uint64(rebuilds), nil
+}
+
+func mlxTrainerSetTestPreUpdateBad(trainer TrainerHandle, enabled bool) error {
+	value := C.int(0)
+	if enabled {
+		value = 1
+	}
+	if C.mlx_ir_trainer_set_test_pre_update_bad(
+		C.int64_t(trainer),
+		value,
+	) != 0 {
+		return fmt.Errorf("mlx_ir_trainer_set_test_pre_update_bad failed")
 	}
 	return nil
 }

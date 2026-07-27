@@ -26,6 +26,11 @@ type GroupRuntime struct {
 	world   int
 }
 
+type InitializationAgreementField struct {
+	Name  string
+	Value uint64
+}
+
 // NewGroupRuntime strictly initializes the configured MLX backend and verifies
 // the expected membership before any trainer or sampler is created.
 func NewGroupRuntime(ctx context.Context, view mixdist.LocalGroupView) (*GroupRuntime, error) {
@@ -114,6 +119,77 @@ func (r *GroupRuntime) LocalView() mixdist.LocalGroupView {
 		r.view.Membership.OrderedMembers...,
 	)
 	return view
+}
+
+func (r *GroupRuntime) ValidateInitializationAgreement(
+	fields []InitializationAgreementField,
+) error {
+	if r == nil {
+		return fmt.Errorf("distributed group runtime is nil")
+	}
+	if len(fields) == 0 {
+		return fmt.Errorf("initialization agreement requires at least one field")
+	}
+	words := make([]uint64, len(fields))
+	for i, field := range fields {
+		if field.Name == "" {
+			return fmt.Errorf("initialization agreement field %d has no name", i)
+		}
+		words[i] = field.Value
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.handle == 0 {
+		return fmt.Errorf("distributed group runtime is closed")
+	}
+	status, mismatchRank, mismatchWord := mlxGroupRuntimeValidateManifest(r.handle, words)
+	if status < 0 {
+		return fmt.Errorf("initialization agreement collective failed (status=%d)", status)
+	}
+	if status > 0 {
+		if mismatchWord < 0 || mismatchWord >= len(fields) {
+			return fmt.Errorf(
+				"initialization agreement mismatch at rank %d field index %d",
+				mismatchRank,
+				mismatchWord,
+			)
+		}
+		return fmt.Errorf(
+			"initialization agreement mismatch at rank %d field %q",
+			mismatchRank,
+			fields[mismatchWord].Name,
+		)
+	}
+	return nil
+}
+
+func (r *GroupRuntime) BroadcastControl(
+	rootRank int,
+	localValues []int32,
+) ([]int32, error) {
+	if r == nil {
+		return nil, fmt.Errorf("distributed group runtime is nil")
+	}
+	if len(localValues) == 0 {
+		return nil, fmt.Errorf("distributed control tensor must not be empty")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.handle == 0 {
+		return nil, fmt.Errorf("distributed group runtime is closed")
+	}
+	values, status := mlxGroupRuntimeBroadcastControl(
+		r.handle,
+		rootRank,
+		localValues,
+	)
+	if status != 0 {
+		return nil, fmt.Errorf(
+			"broadcast distributed control tensor failed (status=%d)",
+			status,
+		)
+	}
+	return values, nil
 }
 
 // Close releases the native group handle. It is idempotent.

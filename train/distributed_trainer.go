@@ -16,8 +16,12 @@ const phase1DistributedOptimizer = "adamw"
 // DistributedTrainerContext is the internal Phase 1 assembly boundary. Public
 // launcher and config integration is intentionally deferred.
 type DistributedTrainerContext struct {
-	GroupRuntime *gpu.GroupRuntime
-	LocalView    mixdist.LocalGroupView
+	GroupRuntime        *gpu.GroupRuntime
+	LocalView           mixdist.LocalGroupView
+	GradientBucketBytes uint64
+	AccumulationSteps   int
+	DatasetHash         string
+	ScheduledPhase      string
 }
 
 func (c *DistributedTrainerContext) validate(cfg *ArchConfig) error {
@@ -43,11 +47,16 @@ func (c *DistributedTrainerContext) validate(cfg *ArchConfig) error {
 	if cfg == nil {
 		return fmt.Errorf("distributed trainer requires a config")
 	}
-	if cfg.Training.EffectiveObjective() != arch.ObjectiveCausal {
+	if c.AccumulationSteps < 0 {
+		return fmt.Errorf("distributed accumulation steps must be positive")
+	}
+	objective := cfg.Training.EffectiveObjective()
+	if objective != arch.ObjectiveCausal &&
+		objective != arch.ObjectiveMLM &&
+		objective != arch.ObjectiveMNTP {
 		return fmt.Errorf(
-			"R1 Phase 1 distributed training supports objective=%q only, got %q",
-			arch.ObjectiveCausal,
-			cfg.Training.EffectiveObjective(),
+			"R1 distributed training supports causal, mlm, and mntp objectives, got %q",
+			objective,
 		)
 	}
 	if strings.ToLower(strings.TrimSpace(cfg.Training.Optimizer)) != phase1DistributedOptimizer {
@@ -65,7 +74,7 @@ func (c *DistributedTrainerContext) validate(cfg *ArchConfig) error {
 		cfg.Training.FirstByteMask ||
 		cfg.Training.ExampleFramingEnabled() ||
 		cfg.Training.AttentionSegmentMaskEnabled() {
-		return fmt.Errorf("R1 Phase 1 distributed training supports the fixed causal loss only")
+		return fmt.Errorf("R1 distributed training does not support auxiliary loss features")
 	}
 	return nil
 }

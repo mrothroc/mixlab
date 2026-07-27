@@ -222,20 +222,6 @@ int64_t mlx_ir_create_trainer_v2(
   }
 }
 
-float mlx_ir_trainer_step(int64_t trainer, const int* tokens, const int* targets, int B, int T) {
-  if (!tokens || !targets || B <= 0 || T <= 0) {
-    return std::nanf("");
-  }
-  const size_t n_tok = static_cast<size_t>(B) * static_cast<size_t>(T);
-  const int tok_shape[2] = {B, T};
-  const int tgt_shape[1] = {static_cast<int>(n_tok)};
-  mlx_tensor_input inputs[2] = {
-      mlx_tensor_input{"tokens", 0, tok_shape, 2, tokens, static_cast<int>(n_tok * sizeof(int32_t))},
-      mlx_tensor_input{"targets", 0, tgt_shape, 1, targets, static_cast<int>(n_tok * sizeof(int32_t))},
-  };
-  return mlx_ir_trainer_step_named(trainer, inputs, 2);
-}
-
 float mlx_ir_trainer_step_named(int64_t trainer, const mlx_tensor_input* inputs, int n_inputs) {
   if (!inputs || n_inputs <= 0) {
     return std::nanf("");
@@ -300,6 +286,70 @@ int mlx_ir_trainer_set_group_runtime(int64_t trainer, int64_t group_runtime) {
     std::cerr << "[mlx_bridge] mlx_ir_trainer_set_group_runtime unknown exception" << std::endl;
     return -1;
   }
+}
+
+int mlx_ir_trainer_set_distributed_options(
+    int64_t trainer,
+    uint64_t gradient_bucket_bytes,
+    int accumulation_steps) {
+  try {
+    auto t = get_ir_trainer(trainer);
+    if (!t || t->step_count != 0 || t->distributed_context_active ||
+        gradient_bucket_bytes == 0 || accumulation_steps <= 0) {
+      return -1;
+    }
+    t->distributed_gradient_bucket_bytes =
+        static_cast<size_t>(gradient_bucket_bytes);
+    t->distributed_accumulation_steps = accumulation_steps;
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_set_distributed_options", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_set_distributed_options unknown exception" << std::endl;
+    return -1;
+  }
+}
+
+int mlx_ir_trainer_distributed_bucket_metadata(
+    int64_t trainer,
+    uint64_t* target_bytes,
+    uint64_t* total_bytes,
+    uint64_t* digest,
+    int* bucket_count) {
+  auto t = get_ir_trainer(trainer);
+  if (!t || !t->distributed_context_active || !target_bytes || !total_bytes ||
+      !digest || !bucket_count) {
+    return -1;
+  }
+  *target_bytes = static_cast<uint64_t>(
+      t->distributed_gradient_bucket_plan.target_bytes);
+  *total_bytes = static_cast<uint64_t>(
+      t->distributed_gradient_bucket_plan.total_bytes);
+  *digest = t->distributed_gradient_bucket_plan.digest;
+  *bucket_count = static_cast<int>(
+      t->distributed_gradient_bucket_plan.buckets.size());
+  return 0;
+}
+
+int mlx_ir_trainer_argument_layout_rebuilds(
+    int64_t trainer,
+    uint64_t* rebuilds) {
+  auto t = get_ir_trainer(trainer);
+  if (!t || !rebuilds) {
+    return -1;
+  }
+  *rebuilds = t->cached_named_step_argument_layout_rebuilds;
+  return 0;
+}
+
+int mlx_ir_trainer_set_test_pre_update_bad(int64_t trainer, int enabled) {
+  auto t = get_ir_trainer(trainer);
+  if (!t || !t->distributed_context_active) {
+    return -1;
+  }
+  t->distributed_test_pre_update_bad = enabled != 0;
+  return 0;
 }
 
 int mlx_ir_trainer_set_next_loss_normalizer(

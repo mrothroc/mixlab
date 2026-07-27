@@ -122,6 +122,46 @@ int validate_identity_exchange(
   return 0;
 }
 
+int validate_manifest_exchange(
+    const mlx_ir::GroupRuntime& runtime,
+    const uint64_t* words,
+    int n_words,
+    int* mismatch_rank,
+    int* mismatch_word) {
+  if (!words || n_words <= 0 || !mismatch_rank || !mismatch_word) {
+    return -1;
+  }
+  std::vector<int32_t> local(static_cast<size_t>(n_words) * 2);
+  for (int i = 0; i < n_words; ++i) {
+    local[static_cast<size_t>(i) * 2] =
+        static_cast<int32_t>(static_cast<uint32_t>(words[i]));
+    local[static_cast<size_t>(i) * 2 + 1] =
+        static_cast<int32_t>(static_cast<uint32_t>(words[i] >> 32));
+  }
+  auto local_array = mx::array(local.data(), {n_words * 2}, mx::int32);
+  auto gathered = mx::distributed::all_gather(local_array, runtime.group());
+  mx::eval(gathered);
+  if (gathered.size() != runtime.world_size() * n_words * 2) {
+    return -2;
+  }
+  const auto* values = gathered.data<int32_t>();
+  const auto* expected = values;
+  for (int word = 0; word < n_words; ++word) {
+    for (int rank = 1; rank < runtime.world_size(); ++rank) {
+      const auto row = values + rank * n_words * 2;
+      if (row[word * 2] != expected[word * 2] ||
+          row[word * 2 + 1] != expected[word * 2 + 1]) {
+        *mismatch_rank = rank;
+        *mismatch_word = word;
+        return 1;
+      }
+    }
+  }
+  *mismatch_rank = -1;
+  *mismatch_word = -1;
+  return 0;
+}
+
 } // namespace
 
 extern "C" {
@@ -183,6 +223,68 @@ int mlx_group_runtime_validate_identity(
   } catch (...) {
     std::cerr << "[mlx_bridge] mlx_group_runtime_validate_identity unknown exception" << std::endl;
     return -8;
+  }
+}
+
+int mlx_group_runtime_validate_manifest(
+    int64_t handle,
+    const uint64_t* words,
+    int n_words,
+    int* mismatch_rank,
+    int* mismatch_word) {
+  auto* runtime = mlx_ir::group_runtime_from_handle(handle);
+  if (!runtime) {
+    return -1;
+  }
+  try {
+    return validate_manifest_exchange(
+        *runtime,
+        words,
+        n_words,
+        mismatch_rank,
+        mismatch_word);
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_group_runtime_validate_manifest", e);
+    return -3;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_group_runtime_validate_manifest unknown exception" << std::endl;
+    return -3;
+  }
+}
+
+int mlx_group_runtime_broadcast_control(
+    int64_t handle,
+    int root_rank,
+    const int32_t* local_values,
+    int n_values,
+    int32_t* out_values) {
+  auto* runtime = mlx_ir::group_runtime_from_handle(handle);
+  if (!runtime || !local_values || !out_values || n_values <= 0 ||
+      root_rank < 0 || root_rank >= runtime->world_size()) {
+    return -1;
+  }
+  try {
+    std::vector<int32_t> contribution(static_cast<size_t>(n_values), 0);
+    if (runtime->rank() == root_rank) {
+      std::copy(
+          local_values,
+          local_values + n_values,
+          contribution.begin());
+    }
+    auto local = mx::array(contribution.data(), {n_values}, mx::int32);
+    auto result = mx::distributed::all_sum(local, runtime->group());
+    mx::eval(result);
+    std::copy(
+        result.data<int32_t>(),
+        result.data<int32_t>() + n_values,
+        out_values);
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_group_runtime_broadcast_control", e);
+    return -2;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_group_runtime_broadcast_control unknown exception" << std::endl;
+    return -2;
   }
 }
 

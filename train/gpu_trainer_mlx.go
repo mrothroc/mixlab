@@ -244,11 +244,42 @@ func initMLXGPUTrainerWithDistributedContext(
 		}
 		groupRuntime = distributedContext.GroupRuntime
 	}
-	trainerHandle, err := gpu.CreateTrainerWithGroup(
+	distributedOptions := gpu.DistributedTrainerOptions{}
+	if distributedContext != nil {
+		distributedOptions.GradientBucketBytes = distributedContext.GradientBucketBytes
+		distributedOptions.AccumulationSteps = distributedContext.AccumulationSteps
+		if distributedOptions.GradientBucketBytes == 0 {
+			distributedOptions.GradientBucketBytes = gpu.DefaultGradientBucketBytes
+		}
+		if distributedOptions.AccumulationSteps == 0 {
+			distributedOptions.AccumulationSteps = 1
+		}
+		fields, agreementErr := distributedInitializationFields(
+			cfg,
+			irProg,
+			shapes,
+			optimizerSpec,
+			weightData,
+			distributedContext,
+			distributedOptions,
+		)
+		if agreementErr != nil {
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, agreementErr
+		}
+		if agreementErr = groupRuntime.ValidateInitializationAgreement(fields); agreementErr != nil {
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, agreementErr
+		}
+	}
+	trainerHandle, err := gpu.CreateTrainerWithGroupOptions(
 		gpuProg,
 		handles,
 		optimizerSpec,
 		groupRuntime,
+		distributedOptions,
 	)
 	if err != nil {
 		gpuProg.Destroy()
@@ -646,63 +677,6 @@ func (t *mlxGPUTrainer) TrainObjectiveStepGPU(batch objectiveBatch, batchSize, s
 		t.trainingStep++
 	}
 	return loss, err
-}
-
-// SubmitStepGPU submits one training step without blocking on loss readback.
-func (t *mlxGPUTrainer) SubmitStepGPU(xTok, yTok []int, batchSize, seqLen int, lr float32) error {
-	t.setLRScale(lr)
-	inputs, err := t.makeInputs(xTok, yTok, batchSize, seqLen)
-	if err != nil {
-		return err
-	}
-	if t.distributed != nil {
-		if err := gpu.TrainerSubmitStepWithNormalizer(
-			t.handle,
-			inputs,
-			float32(batchSize*seqLen),
-		); err != nil {
-			return err
-		}
-	} else if err := gpu.TrainerSubmitStep(t.handle, inputs); err != nil {
-		return err
-	}
-	t.trainingStep++
-	return nil
-}
-
-func (t *mlxGPUTrainer) SubmitObjectiveStepGPU(batch objectiveBatch, batchSize, seqLen int, lr float32) error {
-	t.setLRScale(lr)
-	inputs, err := t.makeObjectiveInputs(batch, batchSize, seqLen)
-	if err != nil {
-		return err
-	}
-	if t.distributed != nil {
-		if !batch.lossNormalizerSet {
-			return fmt.Errorf("distributed objective batch is missing loss_normalizer")
-		}
-		if err := gpu.TrainerSubmitStepWithNormalizer(
-			t.handle,
-			inputs,
-			batch.lossNormalizer,
-		); err != nil {
-			return err
-		}
-	} else if err := gpu.TrainerSubmitStep(t.handle, inputs); err != nil {
-		return err
-	}
-	t.trainingStep++
-	return nil
-}
-
-func (t *mlxGPUTrainer) DistributedContextActiveGPU() bool {
-	return t != nil && t.distributed != nil
-}
-
-func (t *mlxGPUTrainer) DistributedStageTraceGPU() ([]string, error) {
-	if t == nil || t.distributed == nil {
-		return nil, nil
-	}
-	return gpu.TrainerLastStageTrace(t.handle)
 }
 
 // CollectLossGPU blocks until the oldest uncollected submitted step completes.

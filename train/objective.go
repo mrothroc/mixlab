@@ -178,15 +178,16 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 	if err := attachRCEquivariantInputs(cfg, batch, &prepared, need, seqLen); err != nil {
 		return objectiveBatch{}, err
 	}
-	if canonicalObjective(objective) == arch.ObjectiveCausal {
-		prepared.lossNormalizer = causalLossNormalizer(prepared, need)
+	switch canonicalObjective(objective) {
+	case arch.ObjectiveCausal, arch.ObjectiveMLM, arch.ObjectiveMNTP:
+		prepared.lossNormalizer = lossMaskNormalizer(prepared, need)
 		prepared.lossNormalizerSet = true
 	}
 	prepared.tttInnerLRScale = arch.TTTMLPInnerLRScalesForStep(cfg.Blocks, step)
 	return prepared, nil
 }
 
-func causalLossNormalizer(batch objectiveBatch, need int) float32 {
+func lossMaskNormalizer(batch objectiveBatch, need int) float32 {
 	if need <= 0 {
 		return 0
 	}
@@ -767,11 +768,24 @@ func deterministicObjectiveRNG(seed int64, step int, salt uint64) *rand.Rand {
 	return rand.New(rand.NewSource(int64(deterministicObjectiveSeed(seed, step, salt))))
 }
 
+func deterministicDistributedObjectiveRNG(
+	seed int64,
+	step, rank, microstep int,
+	salt uint64,
+) *rand.Rand {
+	if rank == 0 && microstep == 0 {
+		return deterministicObjectiveRNG(seed, step, salt)
+	}
+	keyedSalt := salt ^
+		(uint64(rank)+1)*0x94d049bb133111eb ^
+		(uint64(microstep)+1)*0xbf58476d1ce4e5b9
+	return deterministicObjectiveRNG(seed, step, keyedSalt)
+}
 func deterministicObjectiveSeed(seed int64, step int, salt uint64) uint64 {
-	return splitmix64(uint64(seed) ^ uint64(step+1)*0x9e3779b97f4a7c15 ^ salt)
+	return splitMix64(uint64(seed) ^ uint64(step+1)*0x9e3779b97f4a7c15 ^ salt)
 }
 
-func splitmix64(x uint64) uint64 {
+func splitMix64(x uint64) uint64 {
 	x += 0x9e3779b97f4a7c15
 	x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9
 	x = (x ^ (x >> 27)) * 0x94d049bb133111eb

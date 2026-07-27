@@ -1990,50 +1990,6 @@ IRTrainer::IRTrainer()
     : pending_loss_(mx::array(0.0f, mx::float32)),
       ready_loss_(mx::array(0.0f, mx::float32)) {}
 
-float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
-  flush();
-  if (weights.empty()) {
-    throw std::runtime_error("IR trainer has no weights");
-  }
-  if (!model_buffer_updates.empty()) {
-    throw std::runtime_error("model buffer updates require a named trainer step");
-  }
-  step_count++;
-
-  std::vector<int> argnums(weights.size());
-  std::iota(argnums.begin(), argnums.end(), 0);
-  auto fn = mx::value_and_grad(
-      [this, tokens, targets](const std::vector<mx::array>& w) {
-        auto effective = effective_training_weights(w, qat_mode, compute_dtype, weight_optimizers);
-        return ir_interpret(program, effective, tokens, targets, true);
-      },
-      argnums);
-
-  auto out = fn(weights);
-  auto loss = out.first;
-  auto grads = std::move(out.second);
-  OptimizerStepTransaction transaction(*this);
-  auto raw_gradient_nonfinite = sanitize_and_clip_gradients(grads, max_grad_norm);
-  apply_optimizer_updates(grads);
-
-  std::vector<mx::array> eval_arrays;
-  eval_arrays.reserve(
-      1 + weights.size() + adam_m.size() * 2 + muon_momentum.size() + muon_second_moment.size() + sgd_momentum.size());
-  eval_arrays.push_back(loss);
-  collect_state_for_eval(*this, eval_arrays, false);
-  transaction.append_validation_arrays(loss, grads, eval_arrays, raw_gradient_nonfinite);
-  mx::eval(eval_arrays);
-  const bool committed = transaction.finish();
-  if (!committed) {
-    std::unordered_map<std::string, mx::array> outputs;
-    sanitize_skipped_step_reporting(loss, outputs, transaction.loss_was_nonfinite());
-  }
-  loss.detach();
-  detach_trainer_state(*this);
-  report_gated_delta_timing_summary("step", step_count);
-  return loss.item<float>();
-}
-
 void IRTrainer::apply_optimizer_updates(const std::vector<mx::array>& grads) {
   if (grads.size() != weights.size()) {
     throw std::runtime_error("gradient/weight size mismatch");
@@ -2184,13 +2140,22 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   if (has_pending_step_) {
     move_pending_step_to_ready(*this);
   }
-  const float step_loss_normalizer = next_loss_normalizer;
+  float step_loss_normalizer = next_loss_normalizer;
   next_loss_normalizer = 1.0f;
   if (!std::isfinite(step_loss_normalizer) || step_loss_normalizer < 0.0f) {
     throw std::runtime_error("loss_normalizer must be finite and non-negative");
   }
   last_step_stage_trace.clear();
-  step_count++;
+  const bool final_distributed_microstep =
+      !distributed_context_active ||
+      distributed_accumulation_steps <= 1 ||
+      distributed_accumulation_position + 1 >= distributed_accumulation_steps;
+  if (final_distributed_microstep) {
+    step_count++;
+  }
+  if (distributed_context_active) {
+    distributed_microstep_count++;
+  }
   validate_fused_mamba3_cuda_primitive_config(program);
   const bool timing_enabled =
       program_has_fused_canonical_mamba3_block(program) &&
@@ -2228,12 +2193,22 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   const auto& signature = cached_named_step_signature;
 
   auto input_arrays_by_name = tensor_map_to_arrays(inputs);
-  std::vector<mx::array> ordered_input_arrays;
+  if (cached_named_step_argument_layout_signature != signature) {
+    cached_named_step_ordered_inputs.clear();
+    cached_named_step_args.clear();
+    cached_named_step_ordered_inputs.reserve(input_names.size());
+    cached_named_step_args.reserve(weights.size() + input_names.size());
+    cached_named_step_argument_layout_signature = signature;
+    cached_named_step_argument_layout_rebuilds++;
+  }
+  auto& ordered_input_arrays = cached_named_step_ordered_inputs;
+  ordered_input_arrays.clear();
   ordered_input_arrays.reserve(input_names.size());
   for (const auto& name : input_names) {
     ordered_input_arrays.push_back(input_arrays_by_name.at(name));
   }
-  std::vector<mx::array> args;
+  auto& args = cached_named_step_args;
+  args.clear();
   args.reserve(weights.size() + input_names.size());
   args.insert(args.end(), weights.begin(), weights.end());
   args.insert(args.end(), ordered_input_arrays.begin(), ordered_input_arrays.end());
@@ -2872,6 +2847,84 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   for (size_t i = 0; i < weights.size(); ++i) {
     grads.push_back(step_out[output_names.size() + i]);
   }
+  if (distributed_context_active && distributed_accumulation_steps > 1) {
+    auto microstep_bad = mx::logical_not(mx::isfinite(loss));
+    const bool denominator_bad =
+        !std::isfinite(step_loss_normalizer) || step_loss_normalizer < 0.0f;
+    if (denominator_bad) {
+      microstep_bad = mx::array(true);
+      step_loss_normalizer = 0.0f;
+    }
+    std::vector<mx::array> numerator_grads;
+    numerator_grads.reserve(grads.size());
+    for (const auto& grad : grads) {
+      auto value = mx::astype(grad, mx::float32);
+      auto finite = mx::isfinite(value);
+      microstep_bad = mx::logical_or(
+          microstep_bad,
+          mx::any(mx::logical_not(finite)));
+      numerator_grads.push_back(
+          mx::where(finite, value, mx::zeros_like(value)) * step_loss_normalizer);
+    }
+    if (step_loss_normalizer > 0.0f) {
+      mx::eval(microstep_bad);
+      distributed_accumulated_bad =
+          distributed_accumulated_bad || microstep_bad.item<bool>();
+    } else if (denominator_bad) {
+      distributed_accumulated_bad = true;
+    }
+    if (distributed_accumulated_gradients.empty()) {
+      distributed_accumulated_gradients = std::move(numerator_grads);
+    } else {
+      for (size_t i = 0; i < numerator_grads.size(); ++i) {
+        distributed_accumulated_gradients[i] =
+            distributed_accumulated_gradients[i] + numerator_grads[i];
+      }
+    }
+    distributed_accumulated_denominator +=
+        static_cast<double>(step_loss_normalizer);
+    distributed_accumulation_position++;
+    std::vector<mx::array> accumulation_eval;
+    accumulation_eval.reserve(
+        1 + outputs.size() + distributed_accumulated_gradients.size());
+    accumulation_eval.push_back(loss);
+    for (const auto& [_, output] : outputs) {
+      accumulation_eval.push_back(output);
+    }
+    accumulation_eval.insert(
+        accumulation_eval.end(),
+        distributed_accumulated_gradients.begin(),
+        distributed_accumulated_gradients.end());
+    mx::eval(accumulation_eval);
+    for (auto& grad : distributed_accumulated_gradients) {
+      grad.detach();
+    }
+    if (!final_distributed_microstep) {
+      last_step_stage_trace.push_back(
+          "accumulate_microstep_" +
+          std::to_string(distributed_accumulation_position));
+      loss.detach();
+      detach_output_map(outputs);
+      pending_loss_ = loss;
+      pending_outputs_ = std::move(outputs);
+      has_pending_step_ = true;
+      pending_step_index_ = step_count;
+      return;
+    }
+    step_loss_normalizer =
+        static_cast<float>(distributed_accumulated_denominator);
+    grads.clear();
+    grads.reserve(distributed_accumulated_gradients.size());
+    if (step_loss_normalizer > 0.0f) {
+      for (const auto& numerator : distributed_accumulated_gradients) {
+        grads.push_back(numerator / step_loss_normalizer);
+      }
+    } else {
+      for (const auto& numerator : distributed_accumulated_gradients) {
+        grads.push_back(mx::zeros_like(numerator));
+      }
+    }
+  }
   auto run_compiled_fused_mamba3_adamw_optimizer_update = [&]() -> bool {
     if (distributed_context_active) {
       return false;
@@ -3039,11 +3092,46 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       false,
   };
   if (distributed_context_active) {
-    staged_result = prepare_singleton_staged_gradients(
+    if (!distributed_group.has_value()) {
+      throw std::runtime_error("distributed trainer has no MLX group");
+    }
+    staged_result = prepare_distributed_staged_gradients(
         grads,
+        (distributed_accumulated_bad || distributed_test_pre_update_bad)
+            ? mx::array(std::numeric_limits<float>::quiet_NaN(), mx::float32)
+            : loss,
         step_loss_normalizer,
         max_grad_norm,
+        *distributed_group,
+        distributed_gradient_bucket_plan,
         last_step_stage_trace);
+    if (staged_result.globally_bad) {
+      last_step_stage_trace.push_back("skip_pre_update_bad");
+      last_optimizer_step_skipped = true;
+      skipped_optimizer_steps++;
+      consecutive_skipped_optimizer_steps++;
+      last_optimizer_loss_nonfinite = 1;
+      last_optimizer_gradient_nonfinite = 1;
+      last_optimizer_state_nonfinite = 0;
+      sanitize_skipped_step_reporting(loss, outputs, true);
+      loss.detach();
+      detach_output_map(outputs);
+      pending_loss_ = loss;
+      pending_outputs_ = std::move(outputs);
+      has_pending_step_ = true;
+      pending_step_index_ = step_count;
+      distributed_accumulated_gradients.clear();
+      distributed_accumulated_denominator = 0.0;
+      distributed_accumulated_bad = false;
+      distributed_accumulation_position = 0;
+      if (consecutive_skipped_optimizer_steps >= kMaxConsecutiveSkippedOptimizerSteps) {
+        throw OptimizerStepCircuitBreaker(
+            "distributed optimizer safety circuit breaker: rejected " +
+            std::to_string(consecutive_skipped_optimizer_steps) +
+            " consecutive globally non-finite updates");
+      }
+      return;
+    }
     if (staged_result.zero_denominator) {
       last_step_stage_trace.push_back("skip_zero_denominator");
       last_optimizer_step_skipped = true;
@@ -3062,13 +3150,17 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       pending_outputs_ = std::move(outputs);
       has_pending_step_ = true;
       pending_step_index_ = step_count;
+      distributed_accumulated_gradients.clear();
+      distributed_accumulated_denominator = 0.0;
+      distributed_accumulated_bad = false;
+      distributed_accumulation_position = 0;
       return;
     }
   }
   OptimizerStepTransaction transaction(*this);
   const auto opt_t0 = HostClock::now();
-  auto raw_gradient_nonfinite = distributed_context_active
-      ? staged_result.raw_gradient_nonfinite
+  auto validated_gradient_nonfinite = distributed_context_active
+      ? staged_result.gradient_nonfinite
       : sanitize_and_clip_gradients(grads, max_grad_norm);
   if (distributed_context_active) {
     last_step_stage_trace.push_back("candidate");
@@ -3089,7 +3181,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     eval_arrays.push_back(output);
   }
   collect_state_for_eval(*this, eval_arrays, false);
-  transaction.append_validation_arrays(loss, grads, eval_arrays, raw_gradient_nonfinite);
+  transaction.append_validation_arrays(loss, grads, eval_arrays, validated_gradient_nonfinite);
   if (backward_trace) {
     backward_trace->append_evaluation_arrays(eval_arrays);
   }
@@ -3129,6 +3221,12 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   pending_outputs_ = std::move(outputs);
   has_pending_step_ = true;
   pending_step_index_ = step_count;
+  if (distributed_context_active) {
+    distributed_accumulated_gradients.clear();
+    distributed_accumulated_denominator = 0.0;
+    distributed_accumulated_bad = false;
+    distributed_accumulation_position = 0;
+  }
   log_timing(use_compiled_step ? "compiled-gradient+host-update" : "eager-gradient+host-update");
 }
 
@@ -3148,6 +3246,9 @@ void IRTrainer::set_distributed_group(
   distributed_group = group;
   distributed_rank = rank;
   distributed_world_size = world_size;
+  distributed_gradient_bucket_plan = build_gradient_bucket_plan(
+      weights,
+      distributed_gradient_bucket_bytes);
   distributed_context_active = true;
 }
 
