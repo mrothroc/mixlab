@@ -13,17 +13,6 @@ import (
 
 const phase1DistributedOptimizer = "adamw"
 
-// DistributedTrainerContext is the internal Phase 1 assembly boundary. Public
-// launcher and config integration is intentionally deferred.
-type DistributedTrainerContext struct {
-	GroupRuntime        *gpu.GroupRuntime
-	LocalView           mixdist.LocalGroupView
-	GradientBucketBytes uint64
-	AccumulationSteps   int
-	DatasetHash         string
-	ScheduledPhase      string
-}
-
 func (c *DistributedTrainerContext) validate(cfg *ArchConfig) error {
 	if c == nil || c.GroupRuntime == nil {
 		return fmt.Errorf("distributed trainer context requires a group runtime")
@@ -48,7 +37,9 @@ func (c *DistributedTrainerContext) validate(cfg *ArchConfig) error {
 		return fmt.Errorf("distributed trainer requires a config")
 	}
 	if c.AccumulationSteps < 0 {
-		return fmt.Errorf("distributed accumulation steps must be positive")
+		return fmt.Errorf(
+			"distributed accumulation steps must be non-negative; zero selects the default of one",
+		)
 	}
 	objective := cfg.Training.EffectiveObjective()
 	if objective != arch.ObjectiveCausal &&

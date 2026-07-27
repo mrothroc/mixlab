@@ -96,9 +96,22 @@ type DistributedBucketMetadata struct {
 	BucketCount int
 }
 
+type DistributedStepMetrics struct {
+	TotalUS             uint64
+	ComputeUS           uint64
+	WaitUS              uint64
+	CollectiveUS        uint64
+	GradientAllReduceUS uint64
+	Microsteps          uint64
+	OptimizerAttempts   uint64
+}
+
 func TrainerSetDistributedOptions(TrainerHandle, uint64, int) error { return errNotBuilt }
 func TrainerDistributedBucketMetadata(TrainerHandle) (DistributedBucketMetadata, error) {
 	return DistributedBucketMetadata{}, errNotBuilt
+}
+func TrainerDistributedStepMetrics(TrainerHandle) (DistributedStepMetrics, error) {
+	return DistributedStepMetrics{}, errNotBuilt
 }
 func TrainerArgumentLayoutRebuilds(TrainerHandle) (uint64, error) {
 	return 0, errNotBuilt

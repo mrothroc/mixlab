@@ -146,6 +146,16 @@ type DistributedBucketMetadata struct {
 	BucketCount int
 }
 
+type DistributedStepMetrics struct {
+	TotalUS             uint64
+	ComputeUS           uint64
+	WaitUS              uint64
+	CollectiveUS        uint64
+	GradientAllReduceUS uint64
+	Microsteps          uint64
+	OptimizerAttempts   uint64
+}
+
 func mlxTrainerDistributedBucketMetadata(trainer TrainerHandle) (DistributedBucketMetadata, error) {
 	var targetBytes C.uint64_t
 	var totalBytes C.uint64_t
@@ -165,6 +175,41 @@ func mlxTrainerDistributedBucketMetadata(trainer TrainerHandle) (DistributedBuck
 		TotalBytes:  uint64(totalBytes),
 		Digest:      uint64(digest),
 		BucketCount: int(bucketCount),
+	}, nil
+}
+
+func mlxTrainerDistributedStepMetrics(
+	trainer TrainerHandle,
+) (DistributedStepMetrics, error) {
+	var totalUS C.uint64_t
+	var computeUS C.uint64_t
+	var waitUS C.uint64_t
+	var collectiveUS C.uint64_t
+	var gradientAllReduceUS C.uint64_t
+	var microsteps C.uint64_t
+	var optimizerAttempts C.uint64_t
+	if C.mlx_ir_trainer_distributed_step_telemetry(
+		C.int64_t(trainer),
+		&totalUS,
+		&computeUS,
+		&waitUS,
+		&collectiveUS,
+		&gradientAllReduceUS,
+		&microsteps,
+		&optimizerAttempts,
+	) != 0 {
+		return DistributedStepMetrics{}, fmt.Errorf(
+			"mlx_ir_trainer_distributed_step_telemetry failed",
+		)
+	}
+	return DistributedStepMetrics{
+		TotalUS:             uint64(totalUS),
+		ComputeUS:           uint64(computeUS),
+		WaitUS:              uint64(waitUS),
+		CollectiveUS:        uint64(collectiveUS),
+		GradientAllReduceUS: uint64(gradientAllReduceUS),
+		Microsteps:          uint64(microsteps),
+		OptimizerAttempts:   uint64(optimizerAttempts),
 	}, nil
 }
 

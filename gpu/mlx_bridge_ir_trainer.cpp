@@ -332,6 +332,32 @@ int mlx_ir_trainer_distributed_bucket_metadata(
   return 0;
 }
 
+int mlx_ir_trainer_distributed_step_telemetry(
+    int64_t trainer,
+    uint64_t* total_us,
+    uint64_t* compute_us,
+    uint64_t* wait_us,
+    uint64_t* collective_us,
+    uint64_t* gradient_all_reduce_us,
+    uint64_t* microsteps,
+    uint64_t* optimizer_attempts) {
+  auto t = get_ir_trainer(trainer);
+  if (!t || !t->distributed_context_active || !total_us || !compute_us ||
+      !wait_us || !collective_us || !gradient_all_reduce_us || !microsteps ||
+      !optimizer_attempts) {
+    return -1;
+  }
+  *total_us = t->last_distributed_total_us;
+  *compute_us = t->last_distributed_compute_us;
+  *wait_us = t->last_distributed_wait_us;
+  *collective_us = t->last_distributed_collective_us;
+  *gradient_all_reduce_us =
+      t->last_distributed_gradient_all_reduce_us;
+  *microsteps = t->distributed_microstep_count;
+  *optimizer_attempts = static_cast<uint64_t>(t->step_count);
+  return 0;
+}
+
 int mlx_ir_trainer_argument_layout_rebuilds(
     int64_t trainer,
     uint64_t* rebuilds) {

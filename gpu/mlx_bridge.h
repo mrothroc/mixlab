@@ -230,6 +230,15 @@ int mlx_ir_trainer_distributed_bucket_metadata(
     uint64_t* total_bytes,
     uint64_t* digest,
     int* bucket_count);
+int mlx_ir_trainer_distributed_step_telemetry(
+    int64_t trainer,
+    uint64_t* total_us,
+    uint64_t* compute_us,
+    uint64_t* wait_us,
+    uint64_t* collective_us,
+    uint64_t* gradient_all_reduce_us,
+    uint64_t* microsteps,
+    uint64_t* optimizer_attempts);
 int mlx_ir_trainer_argument_layout_rebuilds(
     int64_t trainer,
     uint64_t* rebuilds);

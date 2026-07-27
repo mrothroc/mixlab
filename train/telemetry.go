@@ -31,27 +31,28 @@ type telemetryState struct {
 }
 
 type telemetryRunState struct {
-	Model                 string             `json:"model,omitempty"`
-	Step                  int                `json:"step"`
-	TotalSteps            int                `json:"total_steps"`
-	Loss                  *float64           `json:"loss,omitempty"`
-	ValLoss               *float64           `json:"val_loss,omitempty"`
-	LR                    float64            `json:"lr"`
-	Objective             string             `json:"objective,omitempty"`
-	SeqLen                int                `json:"seq_len"`
-	BatchTokens           int                `json:"batch_tokens"`
-	ElapsedSeconds        float64            `json:"elapsed_seconds"`
-	SteadyElapsedSeconds  float64            `json:"steady_elapsed_seconds"`
-	TokensPerSec          float64            `json:"tokens_per_sec"`
-	Timing                *telemetryTiming   `json:"timing,omitempty"`
-	UpdatedAt             string             `json:"updated_at,omitempty"`
-	ComponentLosses       map[string]float64 `json:"component_losses,omitempty"`
-	Extra                 map[string]float64 `json:"extra,omitempty"`
-	OptimizerSteps        uint64             `json:"optimizer_steps"`
-	SkippedOptimizerSteps uint64             `json:"skipped_optimizer_steps"`
-	ConsecutiveSkipped    uint64             `json:"consecutive_skipped_optimizer_steps"`
-	OptimizerStepSkipped  bool               `json:"optimizer_step_skipped,omitempty"`
-	Masking               *telemetryMasking  `json:"masking,omitempty"`
+	Model                 string                        `json:"model,omitempty"`
+	Step                  int                           `json:"step"`
+	TotalSteps            int                           `json:"total_steps"`
+	Loss                  *float64                      `json:"loss,omitempty"`
+	ValLoss               *float64                      `json:"val_loss,omitempty"`
+	LR                    float64                       `json:"lr"`
+	Objective             string                        `json:"objective,omitempty"`
+	SeqLen                int                           `json:"seq_len"`
+	BatchTokens           int                           `json:"batch_tokens"`
+	ElapsedSeconds        float64                       `json:"elapsed_seconds"`
+	SteadyElapsedSeconds  float64                       `json:"steady_elapsed_seconds"`
+	TokensPerSec          float64                       `json:"tokens_per_sec"`
+	Timing                *telemetryTiming              `json:"timing,omitempty"`
+	UpdatedAt             string                        `json:"updated_at,omitempty"`
+	ComponentLosses       map[string]float64            `json:"component_losses,omitempty"`
+	Extra                 map[string]float64            `json:"extra,omitempty"`
+	OptimizerSteps        uint64                        `json:"optimizer_steps"`
+	SkippedOptimizerSteps uint64                        `json:"skipped_optimizer_steps"`
+	ConsecutiveSkipped    uint64                        `json:"consecutive_skipped_optimizer_steps"`
+	OptimizerStepSkipped  bool                          `json:"optimizer_step_skipped,omitempty"`
+	Masking               *telemetryMasking             `json:"masking,omitempty"`
+	Distributed           *distributedTrainingTelemetry `json:"distributed,omitempty"`
 }
 
 type telemetryMasking struct {
@@ -73,6 +74,23 @@ type telemetryTiming struct {
 	GPUMS        float64 `json:"gpu_ms"`
 	ValidationMS float64 `json:"validation_ms"`
 	LogMS        float64 `json:"log_ms"`
+}
+
+type distributedTrainingTelemetry struct {
+	ComputeMS                float64 `json:"compute_ms"`
+	WaitMS                   float64 `json:"wait_ms"`
+	CollectiveMS             float64 `json:"collective_ms"`
+	AllReduceMS              float64 `json:"all_reduce_ms"`
+	EffectiveBandwidthGBSec  float64 `json:"effective_bandwidth_gb_per_sec"`
+	GlobalTokensPerSec       float64 `json:"global_tokens_per_sec"`
+	Microsteps               uint64  `json:"microsteps"`
+	OptimizerAttempts        uint64  `json:"optimizer_attempts"`
+	EffectiveGlobalTokens    uint64  `json:"effective_global_tokens"`
+	EffectiveTokensPerUpdate uint64  `json:"effective_tokens_per_update"`
+	GradientBytes            uint64  `json:"gradient_bytes"`
+	BucketCount              int     `json:"bucket_count"`
+	WorldSize                int     `json:"world_size"`
+	AccumulationSteps        int     `json:"accumulation_steps"`
 }
 
 type telemetryUpdate struct {
@@ -99,6 +117,7 @@ type telemetryUpdate struct {
 	ConsecutiveSkipped    uint64
 	OptimizerStepSkipped  bool
 	Masking               *telemetryMasking
+	Distributed           *distributedTrainingTelemetry
 }
 
 type telemetrySnapshot struct {
@@ -262,6 +281,7 @@ func (s *telemetryState) update(u telemetryUpdate) {
 		ConsecutiveSkipped:    u.ConsecutiveSkipped,
 		OptimizerStepSkipped:  u.OptimizerStepSkipped,
 		Masking:               cloneTelemetryMasking(u.Masking),
+		Distributed:           cloneDistributedTrainingTelemetry(u.Distributed),
 	}
 	if u.HasLoss {
 		loss := u.Loss
@@ -278,6 +298,16 @@ func (s *telemetryState) update(u telemetryUpdate) {
 	s.mu.Lock()
 	s.s = next
 	s.mu.Unlock()
+}
+
+func cloneDistributedTrainingTelemetry(
+	telemetry *distributedTrainingTelemetry,
+) *distributedTrainingTelemetry {
+	if telemetry == nil {
+		return nil
+	}
+	cloned := *telemetry
+	return &cloned
 }
 
 func cloneTelemetryMasking(masking *telemetryMasking) *telemetryMasking {
@@ -341,6 +371,21 @@ func formatTelemetryLine(s telemetrySnapshot) string {
 	}
 	if s.Masking != nil {
 		line += fmt.Sprintf(" mask_unit=%s mask_target=%.3f mask_actual=%.3f", s.Masking.Unit, s.Masking.TargetProb, s.Masking.RealizedRate)
+	}
+	if s.Distributed != nil {
+		line += fmt.Sprintf(
+			" compute_ms=%.2f wait_ms=%.2f collective_ms=%.2f all_reduce_ms=%.2f effective_bandwidth_gb_per_sec=%.3f global_tokens_per_sec=%.0f microsteps=%d effective_global_tokens=%d gradient_bytes=%d buckets=%d",
+			s.Distributed.ComputeMS,
+			s.Distributed.WaitMS,
+			s.Distributed.CollectiveMS,
+			s.Distributed.AllReduceMS,
+			s.Distributed.EffectiveBandwidthGBSec,
+			s.Distributed.GlobalTokensPerSec,
+			s.Distributed.Microsteps,
+			s.Distributed.EffectiveGlobalTokens,
+			s.Distributed.GradientBytes,
+			s.Distributed.BucketCount,
+		)
 	}
 	return line
 }

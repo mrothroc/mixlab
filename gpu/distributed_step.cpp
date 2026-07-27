@@ -5,6 +5,7 @@
 #include <mlx/distributed/ops.h>
 
 #include <cmath>
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
@@ -14,6 +15,15 @@ namespace mx = mlx::core;
 namespace mlx_ir {
 
 namespace {
+
+using TelemetryClock = std::chrono::steady_clock;
+
+uint64_t elapsed_us(
+    const TelemetryClock::time_point& start,
+    const TelemetryClock::time_point& end) {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(end - start).count());
+}
 
 mx::array any_nonfinite(const std::vector<mx::array>& values) {
   auto any_nonfinite = mx::array(false);
@@ -111,6 +121,7 @@ StagedGradientResult prepare_distributed_staged_gradients(
     std::vector<mx::array>& gradients,
     const mx::array& loss,
     float loss_normalizer,
+    bool gradients_are_numerators,
     float max_grad_norm,
     const mx::distributed::Group& group,
     const GradientBucketPlan& bucket_plan,
@@ -121,6 +132,9 @@ StagedGradientResult prepare_distributed_staged_gradients(
   const bool denominator_valid =
       std::isfinite(loss_normalizer) && loss_normalizer >= 0.0f;
   const float safe_normalizer = denominator_valid ? loss_normalizer : 0.0f;
+  uint64_t collective_us = 0;
+  uint64_t wait_us = 0;
+  uint64_t gradient_all_reduce_us = 0;
 
   stage_trace.push_back("numerator_conversion");
   auto raw_gradient_bad = mx::array(0.0f, mx::float32);
@@ -130,8 +144,10 @@ StagedGradientResult prepare_distributed_staged_gradients(
     raw_gradient_bad = mx::maximum(
         raw_gradient_bad,
         mx::astype(mx::any(mx::logical_not(finite)), mx::float32));
-    gradient = mx::where(finite, value, mx::zeros_like(value)) *
-        safe_normalizer;
+    gradient = mx::where(finite, value, mx::zeros_like(value));
+    if (!gradients_are_numerators) {
+      gradient = gradient * safe_normalizer;
+    }
   }
 
   stage_trace.push_back("pre_update_finite");
@@ -142,21 +158,36 @@ StagedGradientResult prepare_distributed_staged_gradients(
     local_bad = mx::array(1.0f, mx::float32);
   }
   stage_trace.push_back("all_max_pre_update_bad");
+  const auto bad_collective_start = TelemetryClock::now();
   auto global_bad = mx::distributed::all_max(local_bad, group);
+  const auto bad_wait_start = TelemetryClock::now();
   mx::eval(global_bad);
+  const auto bad_collective_end = TelemetryClock::now();
+  collective_us += elapsed_us(bad_collective_start, bad_collective_end);
+  wait_us += elapsed_us(bad_wait_start, bad_collective_end);
   if (global_bad.item<float>() > 0.0f) {
     return {
         global_bad,
         false,
         true,
+        collective_us,
+        wait_us,
+        gradient_all_reduce_us,
     };
   }
 
   stage_trace.push_back("all_sum_denominator");
+  const auto denominator_collective_start = TelemetryClock::now();
   auto global_denominator = mx::distributed::all_sum(
       mx::array(safe_normalizer, mx::float32),
       group);
+  const auto denominator_wait_start = TelemetryClock::now();
   mx::eval(global_denominator);
+  const auto denominator_collective_end = TelemetryClock::now();
+  collective_us += elapsed_us(
+      denominator_collective_start,
+      denominator_collective_end);
+  wait_us += elapsed_us(denominator_wait_start, denominator_collective_end);
   const float denominator = global_denominator.item<float>();
   if (!std::isfinite(denominator) || denominator < 0.0f) {
     throw std::runtime_error("distributed global loss denominator is invalid");
@@ -166,9 +197,13 @@ StagedGradientResult prepare_distributed_staged_gradients(
         mx::array(0.0f, mx::float32),
         true,
         false,
+        collective_us,
+        wait_us,
+        gradient_all_reduce_us,
     };
   }
 
+  const auto gradient_collective_start = TelemetryClock::now();
   std::vector<mx::array> reduced_buckets;
   reduced_buckets.reserve(bucket_plan.buckets.size());
   for (size_t bucket_index = 0; bucket_index < bucket_plan.buckets.size(); ++bucket_index) {
@@ -186,7 +221,14 @@ StagedGradientResult prepare_distributed_staged_gradients(
     stage_trace.push_back("all_sum_bucket_" + std::to_string(bucket_index));
     reduced_buckets.push_back(mx::distributed::all_sum(flat, group));
   }
+  const auto gradient_wait_start = TelemetryClock::now();
   mx::eval(reduced_buckets);
+  const auto gradient_collective_end = TelemetryClock::now();
+  gradient_all_reduce_us = elapsed_us(
+      gradient_collective_start,
+      gradient_collective_end);
+  collective_us += gradient_all_reduce_us;
+  wait_us += elapsed_us(gradient_wait_start, gradient_collective_end);
   for (size_t bucket_index = 0; bucket_index < bucket_plan.buckets.size(); ++bucket_index) {
     restore_bucket_views(
         gradients,
@@ -200,6 +242,9 @@ StagedGradientResult prepare_distributed_staged_gradients(
       post_reduce_nonfinite,
       false,
       false,
+      collective_us,
+      wait_us,
+      gradient_all_reduce_us,
   };
 }
 

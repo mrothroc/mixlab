@@ -37,6 +37,9 @@ struct StagedGradientResult {
   mlx::core::array gradient_nonfinite;
   bool zero_denominator = false;
   bool globally_bad = false;
+  uint64_t collective_us = 0;
+  uint64_t wait_us = 0;
+  uint64_t gradient_all_reduce_us = 0;
 };
 
 GradientBucketPlan build_gradient_bucket_plan(
@@ -47,6 +50,7 @@ StagedGradientResult prepare_distributed_staged_gradients(
     std::vector<mlx::core::array>& gradients,
     const mlx::core::array& loss,
     float loss_normalizer,
+    bool gradients_are_numerators,
     float max_grad_norm,
     const mlx::core::distributed::Group& group,
     const GradientBucketPlan& bucket_plan,

@@ -239,6 +239,15 @@ func TrainerDistributedBucketMetadata(
 	return mlxTrainerDistributedBucketMetadata(trainer)
 }
 
+func TrainerDistributedStepMetrics(
+	trainer TrainerHandle,
+) (DistributedStepMetrics, error) {
+	if trainer == 0 {
+		return DistributedStepMetrics{}, fmt.Errorf("invalid trainer handle")
+	}
+	return mlxTrainerDistributedStepMetrics(trainer)
+}
+
 func TrainerArgumentLayoutRebuilds(trainer TrainerHandle) (uint64, error) {
 	if trainer == 0 {
 		return 0, fmt.Errorf("invalid trainer handle")

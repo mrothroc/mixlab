@@ -192,8 +192,17 @@ struct IRTrainer {
   int distributed_accumulation_steps = 1;
   int distributed_accumulation_position = 0;
   uint64_t distributed_microstep_count = 0;
+  uint64_t last_distributed_total_us = 0;
+  uint64_t last_distributed_compute_us = 0;
+  uint64_t last_distributed_wait_us = 0;
+  uint64_t last_distributed_collective_us = 0;
+  uint64_t last_distributed_gradient_all_reduce_us = 0;
+  uint64_t distributed_cycle_total_us = 0;
+  uint64_t distributed_cycle_wait_us = 0;
+  uint64_t distributed_cycle_collective_us = 0;
+  uint64_t distributed_cycle_gradient_all_reduce_us = 0;
   double distributed_accumulated_denominator = 0.0;
-  bool distributed_accumulated_bad = false;
+  mlx::core::array distributed_accumulated_bad{false};
   bool distributed_test_pre_update_bad = false;
   std::vector<mlx::core::array> distributed_accumulated_gradients;
   float next_loss_normalizer = 1.0f;

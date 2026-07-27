@@ -18,6 +18,7 @@ import (
 )
 
 const twoRankCaseEnv = "MIXLAB_DDP_TWO_RANK_CASE"
+const distributedResumeDirEnv = "MIXLAB_DDP_RESUME_DIR"
 
 func TestTwoRankRingMatchesSingleProcessAdamW(t *testing.T) {
 	runTwoRankCase(t, "adamw_parity", runTwoRankAdamWParityChild)
@@ -39,6 +40,14 @@ func TestUnequalDenominatorWeightedReduction(t *testing.T) {
 	runTwoRankCase(t, "unequal_denominator", runUnequalDenominatorChild)
 }
 
+func TestDistributedResumeMatchesUninterrupted(t *testing.T) {
+	runTwoRankCase(t, "resume_exact", runDistributedResumeExactChild)
+}
+
+func TestDDPTelemetryFields(t *testing.T) {
+	runTwoRankCase(t, "telemetry_fields", runDDPTelemetryFieldsChild)
+}
+
 func runTwoRankCase(t *testing.T, name string, child func(*testing.T, int)) {
 	t.Helper()
 	if os.Getenv(twoRankCaseEnv) == name {
@@ -54,25 +63,316 @@ func runTwoRankCase(t *testing.T, name string, child func(*testing.T, int)) {
 	port := reserveRingPortPair(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	command := exec.CommandContext(
-		ctx,
-		"mlx.launch",
+	args := []string{
 		"--hosts", "127.0.0.1",
 		"--repeat-hosts", "2",
 		"--backend", "ring",
 		"--starting-port", strconv.Itoa(port),
-		"--env", twoRankCaseEnv+"="+name,
+		"--env", twoRankCaseEnv + "=" + name,
+	}
+	if name == "resume_exact" {
+		args = append(
+			args,
+			"--env",
+			distributedResumeDirEnv+"="+t.TempDir(),
+		)
+	}
+	args = append(
+		args,
 		"--",
 		os.Args[0],
 		"-test.run", "^"+t.Name()+"$",
 		"-test.count=1",
 	)
+	command := exec.CommandContext(ctx, "mlx.launch", args...)
 	output, err := command.CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatalf("two-rank case %s timed out: %v\n%s", name, ctx.Err(), output)
 	}
 	if err != nil {
 		t.Fatalf("two-rank case %s failed: %v\n%s", name, err, output)
+	}
+}
+
+func runDistributedResumeExactChild(t *testing.T, rank int) {
+	runtime, view := newTwoRankRuntime(t, rank)
+	cfg := mustParseDistributedAccumulationConfig(t, 8)
+	cfg.Dropout = 0.1
+	cfg.Training.Steps = 4
+	program, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatalf("computeWeightShapes: %v", err)
+	}
+	distContext := &DistributedTrainerContext{
+		GroupRuntime:      runtime,
+		LocalView:         view,
+		AccumulationSteps: 1,
+		DatasetHash:       "distributed-resume-fixture",
+	}
+	uninterrupted, err := initGPUTrainerWithDistributedContext(
+		program,
+		cfg,
+		nil,
+		nil,
+		distContext,
+	)
+	if err != nil {
+		t.Fatalf("init uninterrupted trainer: %v", err)
+	}
+	defer uninterrupted.CloseTrainer()
+	interrupted, err := initGPUTrainerWithDistributedContext(
+		program,
+		cfg,
+		nil,
+		nil,
+		distContext,
+	)
+	if err != nil {
+		t.Fatalf("init interrupted trainer: %v", err)
+	}
+	defer interrupted.CloseTrainer()
+	setDistributedResumeTrainingStep(t, uninterrupted, 0)
+	setDistributedResumeTrainingStep(t, interrupted, 0)
+
+	for step := 0; step < 4; step++ {
+		runDistributedResumeStep(t, uninterrupted, cfg, rank, step)
+	}
+	for step := 0; step < 2; step++ {
+		runDistributedResumeStep(t, interrupted, cfg, rank, step)
+	}
+	scheduler, totalSteps := buildTrainingScheduler(cfg.Training)
+	schedule, err := resumeScheduleFrom(
+		cfg.Training,
+		scheduler,
+		totalSteps,
+	)
+	if err != nil {
+		t.Fatalf("resumeScheduleFrom: %v", err)
+	}
+	checkpointDir := os.Getenv(distributedResumeDirEnv)
+	if checkpointDir == "" {
+		t.Fatal("distributed resume checkpoint directory is unset")
+	}
+	_, manifestPath, err := writeDistributedResumableCheckpoint(
+		cfg,
+		interrupted,
+		shapes,
+		checkpointDir,
+		distributedResumableCheckpointContext{
+			Control:           runtime,
+			DatasetHash:       distContext.DatasetHash,
+			Program:           program,
+			Schedule:          schedule,
+			LocalBatchTokens:  cfg.Training.BatchTokens,
+			AccumulationSteps: 1,
+			Sampler: distributedResumeSamplerState{
+				LocalBatchCursor:        2,
+				LocalMicrostepsConsumed: 2,
+			},
+			EffectiveGlobalTokens: uint64(
+				2 * cfg.Training.BatchTokens * runtime.WorldSize(),
+			),
+			EffectiveGlobalExamples: uint64(
+				2 * (cfg.Training.BatchTokens / cfg.SeqLen) *
+					runtime.WorldSize(),
+			),
+		},
+	)
+	if err != nil {
+		t.Fatalf("write distributed checkpoint: %v", err)
+	}
+	specReader, ok := interrupted.(gpuOptimizerSpecReader)
+	if !ok {
+		t.Fatal("distributed trainer does not expose optimizer spec")
+	}
+	setup, err := PrepareDistributedResume(
+		manifestPath,
+		cfg,
+		program,
+		shapes,
+		specReader.OptimizerSpec(),
+		distContext,
+		cfg.Training.BatchTokens,
+	)
+	if err != nil {
+		t.Fatalf("PrepareDistributedResume: %v", err)
+	}
+	loadedWeights, err := LoadDistributedResumeModelWeights(setup, shapes)
+	if err != nil {
+		t.Fatalf("load resumed weights: %v", err)
+	}
+	resumed, err := initGPUTrainerWithDistributedContext(
+		program,
+		cfg,
+		loadedWeights,
+		nil,
+		distContext,
+	)
+	if err != nil {
+		t.Fatalf("init resumed trainer: %v", err)
+	}
+	defer resumed.CloseTrainer()
+	setDistributedResumeTrainingStep(
+		t,
+		resumed,
+		int(setup.StartOptimizerAttempt),
+	)
+	if err := RestoreDistributedResumableTrainerState(resumed, setup); err != nil {
+		t.Fatalf("restore distributed trainer state: %v", err)
+	}
+	for step := 2; step < 4; step++ {
+		runDistributedResumeStep(t, resumed, cfg, rank, step)
+	}
+	fullWeights, err := readTrainerWeights(uninterrupted)
+	if err != nil {
+		t.Fatalf("read uninterrupted weights: %v", err)
+	}
+	resumedWeights, err := readTrainerWeights(resumed)
+	if err != nil {
+		t.Fatalf("read resumed weights: %v", err)
+	}
+	if diff := maxWeightDifference(fullWeights, resumedWeights); diff > 1e-6 {
+		t.Fatalf(
+			"distributed resumed parameter max diff=%g, want <=1e-6",
+			diff,
+		)
+	}
+	stats, err := readOptimizerStats(resumed)
+	if err != nil {
+		t.Fatalf("read resumed optimizer stats: %v", err)
+	}
+	if stats.AttemptedSteps != 4 || stats.CommittedSteps != 4 {
+		t.Fatalf("resumed optimizer stats=%+v, want four committed attempts", stats)
+	}
+}
+
+func runDDPTelemetryFieldsChild(t *testing.T, rank int) {
+	runtime, view := newTwoRankRuntime(t, rank)
+	cfg := mustParseDistributedAccumulationConfig(t, 8)
+	program, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatalf("BuildIRProgramFromConfig: %v", err)
+	}
+	trainer, err := initGPUTrainerWithDistributedContext(
+		program,
+		cfg,
+		nil,
+		nil,
+		&DistributedTrainerContext{
+			GroupRuntime:      runtime,
+			LocalView:         view,
+			AccumulationSteps: 2,
+		},
+	)
+	if err != nil {
+		t.Fatalf("init distributed trainer: %v", err)
+	}
+	defer trainer.CloseTrainer()
+	runDistributedResumeStep(t, trainer, cfg, rank, 0)
+	runDistributedResumeStep(t, trainer, cfg, rank, 1)
+	raw := trainer.(*mlxGPUTrainer)
+	telemetry, err := raw.DistributedStepTelemetryGPU()
+	if err != nil {
+		t.Fatalf("DistributedStepTelemetryGPU: %v", err)
+	}
+	if telemetry == nil {
+		t.Fatal("distributed step did not emit telemetry")
+	}
+	if telemetry.ComputeMS <= 0 ||
+		telemetry.WaitMS <= 0 ||
+		telemetry.CollectiveMS <= 0 ||
+		telemetry.AllReduceMS <= 0 ||
+		telemetry.EffectiveBandwidthGBSec <= 0 ||
+		telemetry.GlobalTokensPerSec <= 0 {
+		t.Fatalf("distributed timing fields are not independently populated: %+v", telemetry)
+	}
+	if telemetry.Microsteps != 2 ||
+		telemetry.OptimizerAttempts != 1 ||
+		telemetry.EffectiveGlobalTokens != 32 ||
+		telemetry.EffectiveTokensPerUpdate != 32 ||
+		telemetry.GradientBytes == 0 ||
+		telemetry.BucketCount == 0 ||
+		telemetry.WorldSize != 2 ||
+		telemetry.AccumulationSteps != 2 {
+		t.Fatalf("unexpected distributed counters: %+v", telemetry)
+	}
+	line := formatTelemetryLine(telemetrySnapshot{
+		telemetryRunState: telemetryRunState{
+			Step:        1,
+			TotalSteps:  1,
+			Distributed: telemetry,
+		},
+	})
+	for _, field := range []string{
+		"compute_ms=",
+		"wait_ms=",
+		"collective_ms=",
+		"all_reduce_ms=",
+		"effective_bandwidth_gb_per_sec=",
+		"global_tokens_per_sec=",
+		"microsteps=2",
+		"effective_global_tokens=32",
+		"gradient_bytes=",
+		"buckets=",
+	} {
+		if !strings.Contains(line, field) {
+			t.Fatalf("telemetry line %q missing %q", line, field)
+		}
+	}
+}
+
+func setDistributedResumeTrainingStep(
+	t *testing.T,
+	trainer GPUTrainer,
+	step int,
+) {
+	t.Helper()
+	setter, ok := trainer.(gpuTrainingStepSetter)
+	if !ok {
+		t.Fatal("distributed trainer does not expose deterministic step setter")
+	}
+	if err := setter.SetTrainingStepGPU(step); err != nil {
+		t.Fatalf("set distributed training step %d: %v", step, err)
+	}
+}
+
+func runDistributedResumeStep(
+	t *testing.T,
+	trainer GPUTrainer,
+	cfg *ArchConfig,
+	rank, step int,
+) {
+	t.Helper()
+	x := make([]int, cfg.Training.BatchTokens)
+	y := make([]int, cfg.Training.BatchTokens)
+	for index := range x {
+		x[index] = 1 + (rank*11+step*5+index)%28
+		y[index] = 1 + (rank*11+step*5+index+1)%28
+	}
+	prepared, err := prepareObjectiveBatch(
+		cfg,
+		trainBatch{x: x, y: y},
+		step,
+		"causal",
+	)
+	if err != nil {
+		t.Fatalf("prepare distributed resume step %d: %v", step, err)
+	}
+	if err := submitPreparedStepGPU(
+		trainer,
+		prepared,
+		cfg.Training.BatchTokens/cfg.SeqLen,
+		cfg.SeqLen,
+		float32(cfg.Training.LR),
+	); err != nil {
+		t.Fatalf("submit distributed resume step %d: %v", step, err)
+	}
+	if _, err := trainer.CollectLossGPU(); err != nil {
+		t.Fatalf("collect distributed resume step %d: %v", step, err)
 	}
 }
 
