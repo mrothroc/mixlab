@@ -16,6 +16,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <atomic>
 #include <optional>
 #include <cstdint>
 #include <functional>
@@ -29,17 +30,21 @@
 #include <vector>
 #include <cmath>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 
 std::string g_device_name;
-bool g_initialized = false;
+std::atomic<bool> g_initialized{false};
+std::mutex g_init_mutex;
+std::recursive_mutex g_bridge_pool_mutex;
+thread_local std::optional<mx::Stream> g_bridge_thread_stream;
 std::vector<std::optional<mx::array>> g_handle_pool;
-std::vector<std::unique_ptr<mlx_ir::IRProgram>> g_ir_program_pool;
-std::vector<std::unique_ptr<mlx_ir::IRTrainer>> g_ir_trainer_pool;
-std::unordered_map<std::string, std::function<std::vector<mx::array>(const std::vector<mx::array>&)>>
-    g_compiled_ir_grad_pool;
-std::unordered_map<std::string, std::function<std::vector<mx::array>(const std::vector<mx::array>&)>>
-    g_compiled_ir_eval_pool;
+std::vector<std::shared_ptr<mlx_ir::IRProgram>> g_ir_program_pool;
+std::vector<std::shared_ptr<mlx_ir::IRTrainer>> g_ir_trainer_pool;
+using CompiledArrayFunction =
+    std::function<std::vector<mx::array>(const std::vector<mx::array>&)>;
+std::unordered_map<std::string, CompiledArrayFunction> g_compiled_ir_grad_pool;
+std::unordered_map<std::string, CompiledArrayFunction> g_compiled_ir_eval_pool;
 
 namespace {
 
@@ -96,18 +101,20 @@ extern "C" int mlx_mamba3_metal_prewarm_wait(void) {
   }
 }
 
-mx::array* get_handle(int64_t handle) {
+std::optional<mx::array> get_handle(int64_t handle) {
+  std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
   if (handle <= 0) {
-    return nullptr;
+    return std::nullopt;
   }
   const size_t idx = static_cast<size_t>(handle - 1);
   if (idx >= g_handle_pool.size() || !g_handle_pool[idx].has_value()) {
-    return nullptr;
+    return std::nullopt;
   }
-  return &g_handle_pool[idx].value();
+  return g_handle_pool[idx].value();
 }
 
 int64_t alloc_handle(mx::array&& arr) {
+  std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
   for (size_t i = 0; i < g_handle_pool.size(); ++i) {
     if (!g_handle_pool[i].has_value()) {
       g_handle_pool[i] = std::move(arr);
@@ -118,18 +125,20 @@ int64_t alloc_handle(mx::array&& arr) {
   return static_cast<int64_t>(g_handle_pool.size());
 }
 
-mlx_ir::IRProgram* get_ir_program(int64_t handle) {
+std::shared_ptr<mlx_ir::IRProgram> get_ir_program(int64_t handle) {
+  std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
   if (handle <= 0) {
-    return nullptr;
+    return {};
   }
   const size_t idx = static_cast<size_t>(handle - 1);
   if (idx >= g_ir_program_pool.size() || !g_ir_program_pool[idx]) {
-    return nullptr;
+    return {};
   }
-  return g_ir_program_pool[idx].get();
+  return g_ir_program_pool[idx];
 }
 
 int64_t alloc_ir_program(std::unique_ptr<mlx_ir::IRProgram>&& program) {
+  std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
   for (size_t i = 0; i < g_ir_program_pool.size(); ++i) {
     if (!g_ir_program_pool[i]) {
       g_ir_program_pool[i] = std::move(program);
@@ -140,18 +149,20 @@ int64_t alloc_ir_program(std::unique_ptr<mlx_ir::IRProgram>&& program) {
   return static_cast<int64_t>(g_ir_program_pool.size());
 }
 
-mlx_ir::IRTrainer* get_ir_trainer(int64_t handle) {
+std::shared_ptr<mlx_ir::IRTrainer> get_ir_trainer(int64_t handle) {
+  std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
   if (handle <= 0) {
-    return nullptr;
+    return {};
   }
   const size_t idx = static_cast<size_t>(handle - 1);
   if (idx >= g_ir_trainer_pool.size() || !g_ir_trainer_pool[idx]) {
-    return nullptr;
+    return {};
   }
-  return g_ir_trainer_pool[idx].get();
+  return g_ir_trainer_pool[idx];
 }
 
 int64_t alloc_ir_trainer(std::unique_ptr<mlx_ir::IRTrainer>&& trainer) {
+  std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
   for (size_t i = 0; i < g_ir_trainer_pool.size(); ++i) {
     if (!g_ir_trainer_pool[i]) {
       g_ir_trainer_pool[i] = std::move(trainer);
@@ -252,6 +263,7 @@ std::string tensor_input_signature(const mlx_tensor_input* inputs, int n_inputs)
 }
 
 void erase_compiled_ir_grad_cache_for_program(int64_t program) {
+  std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
   const std::string prefix = std::to_string(program) + "|";
   for (auto it = g_compiled_ir_grad_pool.begin(); it != g_compiled_ir_grad_pool.end();) {
     if (it->first.rfind(prefix, 0) == 0) {
@@ -263,6 +275,7 @@ void erase_compiled_ir_grad_cache_for_program(int64_t program) {
 }
 
 void erase_compiled_ir_eval_cache_for_program(int64_t program) {
+  std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
   const std::string prefix = std::to_string(program) + "|";
   for (auto it = g_compiled_ir_eval_pool.begin(); it != g_compiled_ir_eval_pool.end();) {
     if (it->first.rfind(prefix, 0) == 0) {
@@ -285,35 +298,42 @@ void mlx_set_cuda_graph_limits(int max_ops, int max_mb) {
 }
 
 int mlx_init(void) {
-  if (g_initialized) {
-    return 0;
-  }
   try {
-    if (!mx::is_available(mx::Device::gpu)) {
-      return -1;
-    }
-    mx::set_default_device(mx::Device(mx::Device::gpu));
+    const auto device = mx::Device(mx::Device::gpu);
+    if (!g_initialized.load(std::memory_order_acquire)) {
+      std::lock_guard<std::mutex> lock(g_init_mutex);
+      if (!g_initialized.load(std::memory_order_relaxed)) {
+        if (!mx::is_available(mx::Device::gpu)) {
+          return -1;
+        }
+        mx::set_default_device(device);
 
-    // Force backend initialization.
-    auto x = mx::ones({1});
-    mx::eval(x);
+        // Force backend and stream zero initialization once.
+        auto x = mx::ones({1});
+        mx::eval(x);
 
-    const auto& dev = mx::default_device();
-    const auto& info = mx::device_info(dev);
-    auto it = info.find("device_name");
-    if (it != info.end()) {
-      if (auto p = std::get_if<std::string>(&it->second)) {
-        g_device_name = *p;
+        const auto& info = mx::device_info(device);
+        auto it = info.find("device_name");
+        if (it != info.end()) {
+          if (auto p = std::get_if<std::string>(&it->second)) {
+            g_device_name = *p;
+          }
+        }
+        if (g_device_name.empty()) {
+          g_device_name = "MLX GPU";
+        }
+        g_initialized.store(true, std::memory_order_release);
       }
     }
-    if (g_device_name.empty()) {
-      g_device_name = (dev.type == mx::Device::gpu) ? "MLX GPU" : "MLX CPU";
+    // MLX streams are registered per thread. Go may enter the bridge from any
+    // OS thread, so lazily create and retain one stream for each calling thread.
+    mx::set_default_device(device);
+    if (!g_bridge_thread_stream.has_value()) {
+      g_bridge_thread_stream = mx::new_stream(device);
     }
-
-    g_initialized = true;
+    mx::set_default_stream(*g_bridge_thread_stream);
     return 0;
   } catch (...) {
-    g_device_name.clear();
     return -1;
   }
 }
@@ -390,7 +410,7 @@ int mlx_sgemm(const float* A, const float* B, float* C, int m, int k, int n) {
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
 
@@ -421,7 +441,7 @@ int mlx_sgemm_transA(const float* A, const float* B, float* C, int m, int k, int
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
 
@@ -452,7 +472,7 @@ int mlx_sgemm_transB(const float* A, const float* B, float* C, int m, int k, int
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
 
@@ -483,7 +503,7 @@ int64_t mlx_from_data(const float* data, int rows, int cols) {
     return 0;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return 0;
     }
     const size_t total = static_cast<size_t>(rows) * static_cast<size_t>(cols);
@@ -508,7 +528,7 @@ int64_t mlx_from_data_shape(const float* data, const int* shape, int ndim) {
     return 0;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return 0;
     }
     mx::Shape mx_shape;
@@ -542,7 +562,7 @@ int64_t mlx_from_data_nocopy(const float* data, int rows, int cols) {
     return 0;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return 0;
     }
     auto arr = mx::array(
@@ -558,11 +578,11 @@ int64_t mlx_from_data_nocopy(const float* data, int rows, int cols) {
 
 int64_t mlx_lazy_matmul(int64_t A, int64_t B) {
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return 0;
     }
-    auto* a = get_handle(A);
-    auto* b = get_handle(B);
+    auto a = get_handle(A);
+    auto b = get_handle(B);
     if (!a || !b) {
       return 0;
     }
@@ -575,11 +595,11 @@ int64_t mlx_lazy_matmul(int64_t A, int64_t B) {
 
 int64_t mlx_lazy_add(int64_t A, int64_t B) {
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return 0;
     }
-    auto* a = get_handle(A);
-    auto* b = get_handle(B);
+    auto a = get_handle(A);
+    auto b = get_handle(B);
     if (!a || !b) {
       return 0;
     }
@@ -592,11 +612,11 @@ int64_t mlx_lazy_add(int64_t A, int64_t B) {
 
 int64_t mlx_lazy_mul(int64_t A, int64_t B) {
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return 0;
     }
-    auto* a = get_handle(A);
-    auto* b = get_handle(B);
+    auto a = get_handle(A);
+    auto b = get_handle(B);
     if (!a || !b) {
       return 0;
     }
@@ -609,10 +629,10 @@ int64_t mlx_lazy_mul(int64_t A, int64_t B) {
 
 int64_t mlx_lazy_sigmoid(int64_t A) {
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return 0;
     }
-    auto* a = get_handle(A);
+    auto a = get_handle(A);
     if (!a) {
       return 0;
     }
@@ -628,13 +648,13 @@ void mlx_eval_handles(int64_t* handles, int count) {
     return;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return;
     }
     std::vector<mx::array> eval_arrays;
     eval_arrays.reserve(static_cast<size_t>(count));
     for (int i = 0; i < count; ++i) {
-      auto* arr = get_handle(handles[i]);
+      auto arr = get_handle(handles[i]);
       if (arr) {
         eval_arrays.push_back(*arr);
       }
@@ -651,10 +671,10 @@ void mlx_read_handle(int64_t handle, float* out, int size) {
     return;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return;
     }
-    auto* arr = get_handle(handle);
+    auto arr = get_handle(handle);
     if (!arr) {
       return;
     }
@@ -668,6 +688,7 @@ void mlx_free_handle(int64_t handle) {
     return;
   }
   const size_t idx = static_cast<size_t>(handle - 1);
+  std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
   if (idx >= g_handle_pool.size()) {
     return;
   }
@@ -702,7 +723,7 @@ void mlx_ir_program_add_op(
     const char** outputs, int n_outputs,
     const float* float_params, int n_float_params,
     const int* int_params, int n_int_params) {
-  auto* p = get_ir_program(prog);
+  auto p = get_ir_program(prog);
   if (!p) {
     return;
   }
@@ -743,6 +764,7 @@ void mlx_ir_program_destroy(int64_t prog) {
     return;
   }
   const size_t idx = static_cast<size_t>(prog - 1);
+  std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
   if (idx >= g_ir_program_pool.size()) {
     return;
   }
@@ -793,10 +815,10 @@ int mlx_ir_eval_program_output_size_named_for_output(
     return -10;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -11;
     }
-    auto* prog = get_ir_program(program);
+    auto prog = get_ir_program(program);
     if (!prog || prog->n_weights != n_weights) {
       return -12;
     }
@@ -804,7 +826,7 @@ int mlx_ir_eval_program_output_size_named_for_output(
     std::vector<mx::array> weights;
     weights.reserve(static_cast<size_t>(n_weights));
     for (int i = 0; i < n_weights; ++i) {
-      auto* w = get_handle(weight_handles[i]);
+      auto w = get_handle(weight_handles[i]);
       if (!w) {
         return -13;
       }
@@ -873,10 +895,10 @@ int mlx_ir_eval_program_named_for_output(
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
-    auto* prog = get_ir_program(program);
+    auto prog = get_ir_program(program);
     if (!prog || prog->n_weights != n_weights) {
       return -1;
     }
@@ -884,7 +906,7 @@ int mlx_ir_eval_program_named_for_output(
     std::vector<mx::array> weights;
     weights.reserve(static_cast<size_t>(n_weights));
     for (int i = 0; i < n_weights; ++i) {
-      auto* w = get_handle(weight_handles[i]);
+      auto w = get_handle(weight_handles[i]);
       if (!w) {
         return -1;
       }
@@ -924,10 +946,10 @@ int mlx_ir_eval_program_named_outputs(
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
-    auto* prog = get_ir_program(program);
+    auto prog = get_ir_program(program);
     if (!prog || prog->n_weights != n_weights) {
       return -1;
     }
@@ -935,7 +957,7 @@ int mlx_ir_eval_program_named_outputs(
     std::vector<mx::array> weights;
     weights.reserve(static_cast<size_t>(n_weights));
     for (int i = 0; i < n_weights; ++i) {
-      auto* w = get_handle(weight_handles[i]);
+      auto w = get_handle(weight_handles[i]);
       if (!w) {
         return -1;
       }
@@ -995,10 +1017,10 @@ int mlx_ir_eval_program_handle_outputs(
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
-    auto* prog = get_ir_program(program);
+    auto prog = get_ir_program(program);
     if (!prog || prog->n_weights != n_weights) {
       return -1;
     }
@@ -1006,7 +1028,7 @@ int mlx_ir_eval_program_handle_outputs(
     std::vector<mx::array> weights;
     weights.reserve(static_cast<size_t>(n_weights));
     for (int i = 0; i < n_weights; ++i) {
-      auto* weight = get_handle(weight_handles[i]);
+      auto weight = get_handle(weight_handles[i]);
       if (!weight) {
         return -1;
       }
@@ -1027,7 +1049,7 @@ int mlx_ir_eval_program_handle_outputs(
       if (!handle_input_names[i] || handle_input_names[i][0] == '\0') {
         return -1;
       }
-      auto* input = get_handle(handle_inputs[i]);
+      auto input = get_handle(handle_inputs[i]);
       if (!input) {
         return -1;
       }
@@ -1049,7 +1071,7 @@ int mlx_ir_eval_program_handle_outputs(
     key << program << "|" << ir_program_fingerprint(*prog)
         << "|handle_eval|nw=" << n_weights << tensor_input_signature(inputs, n_inputs);
     for (int i = 0; i < n_handle_inputs; ++i) {
-      auto* input = get_handle(handle_inputs[i]);
+      auto input = get_handle(handle_inputs[i]);
       key << "|hi=" << handle_input_names[i] << ":";
       for (auto dim : input->shape()) {
         key << dim << ",";
@@ -1059,35 +1081,40 @@ int mlx_ir_eval_program_handle_outputs(
     for (const auto& name : names) {
       key << "|out=" << name;
     }
-    auto compiled_it = g_compiled_ir_eval_pool.find(key.str());
-    if (compiled_it == g_compiled_ir_eval_pool.end()) {
-      auto compiled = mx::compile(
-          [prog, input_names, names, n_weights](const std::vector<mx::array>& fn_args) {
-            if (fn_args.size() != static_cast<size_t>(n_weights) + input_names.size()) {
-              throw std::runtime_error("compiled handle evaluation argument count mismatch");
-            }
-            std::vector<mx::array> local_weights;
-            local_weights.reserve(static_cast<size_t>(n_weights));
-            for (int i = 0; i < n_weights; ++i) {
-              local_weights.push_back(fn_args[static_cast<size_t>(i)]);
-            }
-            mlx_ir::ArrayMap local_inputs;
-            local_inputs.reserve(input_names.size());
-            for (size_t i = 0; i < input_names.size(); ++i) {
-              local_inputs.emplace(input_names[i], fn_args[static_cast<size_t>(n_weights) + i]);
-            }
-            auto local_outputs = mlx_ir::ir_interpret_outputs(*prog, local_weights, local_inputs, names);
-            std::vector<mx::array> values;
-            values.reserve(names.size());
-            for (const auto& name : names) {
-              values.push_back(local_outputs.at(name));
-            }
-            return values;
-          },
-          false);
-      compiled_it = g_compiled_ir_eval_pool.emplace(key.str(), std::move(compiled)).first;
+    CompiledArrayFunction compiled_eval;
+    {
+      std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
+      auto compiled_it = g_compiled_ir_eval_pool.find(key.str());
+      if (compiled_it == g_compiled_ir_eval_pool.end()) {
+        auto compiled = mx::compile(
+            [prog, input_names, names, n_weights](const std::vector<mx::array>& fn_args) {
+              if (fn_args.size() != static_cast<size_t>(n_weights) + input_names.size()) {
+                throw std::runtime_error("compiled handle evaluation argument count mismatch");
+              }
+              std::vector<mx::array> local_weights;
+              local_weights.reserve(static_cast<size_t>(n_weights));
+              for (int i = 0; i < n_weights; ++i) {
+                local_weights.push_back(fn_args[static_cast<size_t>(i)]);
+              }
+              mlx_ir::ArrayMap local_inputs;
+              local_inputs.reserve(input_names.size());
+              for (size_t i = 0; i < input_names.size(); ++i) {
+                local_inputs.emplace(input_names[i], fn_args[static_cast<size_t>(n_weights) + i]);
+              }
+              auto local_outputs = mlx_ir::ir_interpret_outputs(*prog, local_weights, local_inputs, names);
+              std::vector<mx::array> values;
+              values.reserve(names.size());
+              for (const auto& name : names) {
+                values.push_back(local_outputs.at(name));
+              }
+              return values;
+            },
+            false);
+        compiled_it = g_compiled_ir_eval_pool.emplace(key.str(), std::move(compiled)).first;
+      }
+      compiled_eval = compiled_it->second;
     }
-    auto evaluated = compiled_it->second(args);
+    auto evaluated = compiled_eval(args);
     if (evaluated.size() != names.size()) {
       return -1;
     }
@@ -1127,10 +1154,10 @@ int mlx_ir_eval_program_grads_named_for_output(
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
-    auto* prog = get_ir_program(program);
+    auto prog = get_ir_program(program);
     if (!prog || prog->n_weights != n_weights) {
       return -1;
     }
@@ -1138,7 +1165,7 @@ int mlx_ir_eval_program_grads_named_for_output(
     std::vector<mx::array> weights;
     weights.reserve(static_cast<size_t>(n_weights));
     for (int i = 0; i < n_weights; ++i) {
-      auto* w = get_handle(weight_handles[i]);
+      auto w = get_handle(weight_handles[i]);
       if (!w) {
         return -1;
       }
@@ -1173,47 +1200,52 @@ int mlx_ir_eval_program_grads_named_for_output(
     const std::string cache_key = std::to_string(program) + "|" + ir_program_fingerprint(*prog) +
         "|out=" + requested_output + "|nw=" + std::to_string(n_weights) +
         tensor_input_signature(inputs, n_inputs);
-    auto compiled_it = g_compiled_ir_grad_pool.find(cache_key);
-    if (compiled_it == g_compiled_ir_grad_pool.end()) {
-      auto grad_fn = mx::value_and_grad(
-          [prog, input_names, requested_output, n_weights](const std::vector<mx::array>& fn_args) {
-            if (static_cast<int>(fn_args.size()) < n_weights + static_cast<int>(input_names.size())) {
-              throw std::runtime_error("compiled IR gradient argument count mismatch");
-            }
-            std::vector<mx::array> w;
-            w.reserve(static_cast<size_t>(n_weights));
-            for (int i = 0; i < n_weights; ++i) {
-              w.push_back(fn_args[static_cast<size_t>(i)]);
-            }
-            mlx_ir::ArrayMap input_map;
-            input_map.reserve(input_names.size());
-            for (size_t i = 0; i < input_names.size(); ++i) {
-              input_map.emplace(input_names[i], fn_args[static_cast<size_t>(n_weights) + i]);
-            }
-            auto out = requested_output.empty()
-                ? mlx_ir::ir_interpret(*prog, w, input_map)
-                : mlx_ir::ir_interpret(*prog, w, input_map, requested_output);
-            if (out.size() != 1) {
-              throw std::runtime_error("IR gradient output must be scalar");
-            }
-            return mx::reshape(out, {});
-          },
-          argnums);
+    CompiledArrayFunction compiled_grad;
+    {
+      std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
+      auto compiled_it = g_compiled_ir_grad_pool.find(cache_key);
+      if (compiled_it == g_compiled_ir_grad_pool.end()) {
+        auto grad_fn = mx::value_and_grad(
+            [prog, input_names, requested_output, n_weights](const std::vector<mx::array>& fn_args) {
+              if (static_cast<int>(fn_args.size()) < n_weights + static_cast<int>(input_names.size())) {
+                throw std::runtime_error("compiled IR gradient argument count mismatch");
+              }
+              std::vector<mx::array> w;
+              w.reserve(static_cast<size_t>(n_weights));
+              for (int i = 0; i < n_weights; ++i) {
+                w.push_back(fn_args[static_cast<size_t>(i)]);
+              }
+              mlx_ir::ArrayMap input_map;
+              input_map.reserve(input_names.size());
+              for (size_t i = 0; i < input_names.size(); ++i) {
+                input_map.emplace(input_names[i], fn_args[static_cast<size_t>(n_weights) + i]);
+              }
+              auto out = requested_output.empty()
+                  ? mlx_ir::ir_interpret(*prog, w, input_map)
+                  : mlx_ir::ir_interpret(*prog, w, input_map, requested_output);
+              if (out.size() != 1) {
+                throw std::runtime_error("IR gradient output must be scalar");
+              }
+              return mx::reshape(out, {});
+            },
+            argnums);
 
-      auto compiled = mx::compile(
-          [grad_fn](const std::vector<mx::array>& fn_args) {
-            auto result = grad_fn(fn_args);
-            std::vector<mx::array> out;
-            out.reserve(result.second.size() + 1);
-            out.push_back(result.first);
-            out.insert(out.end(), result.second.begin(), result.second.end());
-            return out;
-          },
-          false);
-      compiled_it = g_compiled_ir_grad_pool.emplace(cache_key, std::move(compiled)).first;
+        auto compiled = mx::compile(
+            [grad_fn](const std::vector<mx::array>& fn_args) {
+              auto result = grad_fn(fn_args);
+              std::vector<mx::array> out;
+              out.reserve(result.second.size() + 1);
+              out.push_back(result.first);
+              out.insert(out.end(), result.second.begin(), result.second.end());
+              return out;
+            },
+            false);
+        compiled_it = g_compiled_ir_grad_pool.emplace(cache_key, std::move(compiled)).first;
+      }
+      compiled_grad = compiled_it->second;
     }
 
-    auto compiled_out = compiled_it->second(args);
+    auto compiled_out = compiled_grad(args);
     if (static_cast<int>(compiled_out.size()) != n_weights + 1) {
       return -1;
     }
@@ -1239,11 +1271,14 @@ int mlx_ir_eval_program_grads_named_for_output(
 }
 
 void mlx_shutdown(void) {
+  std::lock_guard<std::mutex> init_lock(g_init_mutex);
+  std::lock_guard<std::recursive_mutex> pool_lock(g_bridge_pool_mutex);
   g_compiled_ir_grad_pool.clear();
+  g_compiled_ir_eval_pool.clear();
   g_ir_trainer_pool.clear();
   g_ir_program_pool.clear();
   g_handle_pool.clear();
-  g_initialized = false;
+  g_initialized.store(false, std::memory_order_release);
   g_device_name.clear();
 }
 

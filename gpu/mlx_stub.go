@@ -84,6 +84,10 @@ func CreateTrainer(program *Program, weightHandles []int64, spec TrainerOptimize
 	return 0, errNotBuilt
 }
 
+func CreateTrainerWithGroup(program *Program, weightHandles []int64, spec TrainerOptimizerSpec, group *GroupRuntime) (TrainerHandle, error) {
+	return 0, errNotBuilt
+}
+
 func TrainerSetProgram(t TrainerHandle, program *Program) error {
 	return errNotBuilt
 }
@@ -92,9 +96,19 @@ func TrainerStep(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return 0, errNotBuilt
 }
 
+func TrainerStepWithNormalizer(t TrainerHandle, inputs []TensorInput, lossNormalizer float32) (float32, error) {
+	return 0, errNotBuilt
+}
+
 func TrainerSubmitStep(t TrainerHandle, inputs []TensorInput) error {
 	return errNotBuilt
 }
+
+func TrainerSubmitStepWithNormalizer(t TrainerHandle, inputs []TensorInput, lossNormalizer float32) error {
+	return errNotBuilt
+}
+
+func TrainerLastStageTrace(t TrainerHandle) ([]string, error) { return nil, errNotBuilt }
 
 func TrainerCollectLoss(t TrainerHandle) (float32, error) {
 	return 0, errNotBuilt

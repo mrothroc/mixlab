@@ -1,4 +1,5 @@
 #include "ir_trainer.h"
+#include "distributed_step.h"
 #include "backward_trace.h"
 #include "optimizer_step_guard.h"
 
@@ -2183,6 +2184,12 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   if (has_pending_step_) {
     move_pending_step_to_ready(*this);
   }
+  const float step_loss_normalizer = next_loss_normalizer;
+  next_loss_normalizer = 1.0f;
+  if (!std::isfinite(step_loss_normalizer) || step_loss_normalizer < 0.0f) {
+    throw std::runtime_error("loss_normalizer must be finite and non-negative");
+  }
+  last_step_stage_trace.clear();
   step_count++;
   validate_fused_mamba3_cuda_primitive_config(program);
   const bool timing_enabled =
@@ -2866,6 +2873,9 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     grads.push_back(step_out[output_names.size() + i]);
   }
   auto run_compiled_fused_mamba3_adamw_optimizer_update = [&]() -> bool {
+    if (distributed_context_active) {
+      return false;
+    }
     if (!supports_compiled_fused_mamba3_adamw_optimizer_update(*this)) {
       return false;
     }
@@ -3024,9 +3034,45 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     return;
   }
   auto preclip_grads = grads;
+  mlx_ir::StagedGradientResult staged_result{
+      mx::array(0.0f, mx::float32),
+      false,
+  };
+  if (distributed_context_active) {
+    staged_result = prepare_singleton_staged_gradients(
+        grads,
+        step_loss_normalizer,
+        max_grad_norm,
+        last_step_stage_trace);
+    if (staged_result.zero_denominator) {
+      last_step_stage_trace.push_back("skip_zero_denominator");
+      last_optimizer_step_skipped = true;
+      skipped_optimizer_steps++;
+      // A zero-denominator batch is an intentional no-op. It neither adds to
+      // nor clears the circuit-breaker streak of rejected non-finite updates.
+      last_optimizer_loss_nonfinite = 0;
+      last_optimizer_gradient_nonfinite = 0;
+      last_optimizer_state_nonfinite = 0;
+      // A fully masked local batch may have produced NaN before its zero
+      // normalizer was known. Report a finite no-op loss and outputs.
+      sanitize_skipped_step_reporting(loss, outputs, true);
+      loss.detach();
+      detach_output_map(outputs);
+      pending_loss_ = loss;
+      pending_outputs_ = std::move(outputs);
+      has_pending_step_ = true;
+      pending_step_index_ = step_count;
+      return;
+    }
+  }
   OptimizerStepTransaction transaction(*this);
   const auto opt_t0 = HostClock::now();
-  auto raw_gradient_nonfinite = sanitize_and_clip_gradients(grads, max_grad_norm);
+  auto raw_gradient_nonfinite = distributed_context_active
+      ? staged_result.raw_gradient_nonfinite
+      : sanitize_and_clip_gradients(grads, max_grad_norm);
+  if (distributed_context_active) {
+    last_step_stage_trace.push_back("candidate");
+  }
   apply_optimizer_updates(grads);
   apply_model_buffer_updates(*this, outputs);
   if (timing_enabled) {
@@ -3065,7 +3111,13 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   if (timing_enabled) {
     timing_eval_us = elapsed_us(eval_t0, HostClock::now());
   }
+  if (distributed_context_active) {
+    last_step_stage_trace.push_back("candidate_finite");
+  }
   const bool committed = transaction.finish();
+  if (distributed_context_active) {
+    last_step_stage_trace.push_back(committed ? "commit" : "rollback");
+  }
   if (!committed) {
     sanitize_skipped_step_reporting(loss, outputs, transaction.loss_was_nonfinite());
   }
@@ -3078,6 +3130,32 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   has_pending_step_ = true;
   pending_step_index_ = step_count;
   log_timing(use_compiled_step ? "compiled-gradient+host-update" : "eager-gradient+host-update");
+}
+
+void IRTrainer::set_distributed_group(
+    const mx::distributed::Group& group,
+    int rank,
+    int world_size) {
+  if (step_count != 0 || has_pending_step_ || has_ready_step_) {
+    throw std::runtime_error("distributed group must be configured before the first trainer step");
+  }
+  if (distributed_context_active) {
+    throw std::runtime_error("distributed group is already configured");
+  }
+  if (rank != group.rank() || world_size != group.size() || rank < 0 || world_size <= 0) {
+    throw std::runtime_error("distributed group rank/world metadata mismatch");
+  }
+  distributed_group = group;
+  distributed_rank = rank;
+  distributed_world_size = world_size;
+  distributed_context_active = true;
+}
+
+void IRTrainer::set_next_loss_normalizer(float loss_normalizer) {
+  if (!std::isfinite(loss_normalizer) || loss_normalizer < 0.0f) {
+    throw std::runtime_error("loss_normalizer must be finite and non-negative");
+  }
+  next_loss_normalizer = loss_normalizer;
 }
 
 float IRTrainer::collect_loss() {

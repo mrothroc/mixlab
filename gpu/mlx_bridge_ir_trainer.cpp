@@ -1,4 +1,5 @@
 #include "mlx_bridge_internal.h"
+#include "group_runtime.h"
 
 #include <algorithm>
 #include <cmath>
@@ -13,7 +14,7 @@ std::vector<mx::array> read_weight_arrays(int64_t* weight_handles, int n_weights
   std::vector<mx::array> weights;
   weights.reserve(static_cast<size_t>(n_weights));
   for (int i = 0; i < n_weights; ++i) {
-    auto* w = get_handle(weight_handles[i]);
+    auto w = get_handle(weight_handles[i]);
     if (!w) {
       throw std::runtime_error("invalid weight handle");
     }
@@ -199,10 +200,10 @@ int64_t mlx_ir_create_trainer_v2(
     return 0;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return 0;
     }
-    auto* prog = get_ir_program(program);
+    auto prog = get_ir_program(program);
     if (!prog || prog->n_weights != n_weights) {
       return 0;
     }
@@ -240,10 +241,10 @@ float mlx_ir_trainer_step_named(int64_t trainer, const mlx_tensor_input* inputs,
     return std::nanf("");
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return std::nanf("");
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return std::nanf("");
     }
@@ -263,11 +264,11 @@ int mlx_ir_trainer_set_program(int64_t trainer, int64_t program) {
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
-    auto* t = get_ir_trainer(trainer);
-    auto* prog = get_ir_program(program);
+    auto t = get_ir_trainer(trainer);
+    auto prog = get_ir_program(program);
     if (!t || !prog) {
       return -1;
     }
@@ -282,6 +283,67 @@ int mlx_ir_trainer_set_program(int64_t trainer, int64_t program) {
   }
 }
 
+int mlx_ir_trainer_set_group_runtime(int64_t trainer, int64_t group_runtime) {
+  try {
+    auto t = get_ir_trainer(trainer);
+    auto* runtime = mlx_ir::group_runtime_from_handle(group_runtime);
+    if (!t || !runtime) {
+      return -1;
+    }
+    t->set_distributed_group(
+        runtime->group(), runtime->rank(), runtime->world_size());
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_set_group_runtime", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_set_group_runtime unknown exception" << std::endl;
+    return -1;
+  }
+}
+
+int mlx_ir_trainer_set_next_loss_normalizer(
+    int64_t trainer,
+    float loss_normalizer) {
+  try {
+    auto t = get_ir_trainer(trainer);
+    if (!t) {
+      return -1;
+    }
+    t->set_next_loss_normalizer(loss_normalizer);
+    return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_trainer_set_next_loss_normalizer", e);
+    return -1;
+  } catch (...) {
+    std::cerr << "[mlx_bridge] mlx_ir_trainer_set_next_loss_normalizer unknown exception" << std::endl;
+    return -1;
+  }
+}
+
+int mlx_ir_trainer_last_stage_trace(int64_t trainer, char* out, int out_size) {
+  auto t = get_ir_trainer(trainer);
+  if (!t) {
+    return -1;
+  }
+  std::string trace;
+  for (size_t i = 0; i < t->last_step_stage_trace.size(); ++i) {
+    if (i > 0) {
+      trace.push_back(',');
+    }
+    trace += t->last_step_stage_trace[i];
+  }
+  const int required = static_cast<int>(trace.size()) + 1;
+  if (!out || out_size <= 0) {
+    return required;
+  }
+  if (out_size < required) {
+    return -1;
+  }
+  std::memcpy(out, trace.c_str(), static_cast<size_t>(required));
+  return required;
+}
+
 int mlx_ir_trainer_set_step_output_names(
     int64_t trainer,
     const char** output_names,
@@ -290,7 +352,7 @@ int mlx_ir_trainer_set_step_output_names(
     return -1;
   }
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return -1;
     }
@@ -318,10 +380,10 @@ int mlx_ir_trainer_submit_step(int64_t trainer, const mlx_tensor_input* inputs, 
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return -1;
     }
@@ -339,10 +401,10 @@ int mlx_ir_trainer_submit_step(int64_t trainer, const mlx_tensor_input* inputs, 
 
 float mlx_ir_trainer_collect_loss(int64_t trainer) {
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return std::nanf("");
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return std::nanf("");
     }
@@ -358,10 +420,10 @@ float mlx_ir_trainer_collect_loss(int64_t trainer) {
 
 void mlx_ir_trainer_flush(int64_t trainer) {
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return;
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return;
     }
@@ -375,10 +437,10 @@ void mlx_ir_trainer_flush(int64_t trainer) {
 
 float mlx_ir_trainer_evaluate_named(int64_t trainer, const mlx_tensor_input* inputs, int n_inputs) {
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return std::nanf("");
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t || !inputs || n_inputs <= 0) {
       return std::nanf("");
     }
@@ -400,10 +462,10 @@ float mlx_ir_trainer_evaluate_named_with_outputs(
     const char** output_names,
     int n_outputs) {
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return std::nanf("");
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t || !inputs || n_inputs <= 0 || !output_names || n_outputs <= 0) {
       return std::nanf("");
     }
@@ -432,10 +494,10 @@ float mlx_ir_trainer_compute_mean_square_grads_named(
     int n_inputs,
     const char* output_name) {
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return std::nanf("");
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t || !inputs || n_inputs <= 0 || !output_name || output_name[0] == '\0') {
       return std::nanf("");
     }
@@ -462,10 +524,10 @@ int mlx_ir_trainer_evaluate_per_token(
   }
   *actual_nlls = 0;
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t || !inputs || n_inputs <= 0) {
       return -1;
     }
@@ -494,10 +556,10 @@ float mlx_ir_trainer_evaluate_lora_named(
     int steps,
     float lr) {
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return std::nanf("");
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t || !inputs || n_inputs <= 0 || rank <= 0 || steps < 0) {
       return std::nanf("");
     }
@@ -517,10 +579,10 @@ int mlx_ir_trainer_read_output(int64_t trainer, const char* output_name, float* 
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return -1;
     }
@@ -546,10 +608,10 @@ int mlx_ir_trainer_read_cached_output(int64_t trainer, const char* output_name, 
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return -1;
     }
@@ -612,10 +674,10 @@ int mlx_ir_trainer_sample_categorical_output_with_options(
     return -1;
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return -1;
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return -1;
     }
@@ -656,7 +718,7 @@ int mlx_ir_trainer_compile_stats(
     return -1;
   }
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return -1;
     }
@@ -688,7 +750,7 @@ int mlx_ir_trainer_optimizer_stats(
     return -1;
   }
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return -1;
     }
@@ -721,7 +783,7 @@ int mlx_ir_trainer_backward_trace_stats(
     return -1;
   }
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return -1;
     }
@@ -743,10 +805,10 @@ float mlx_ir_trainer_evaluate(int64_t trainer, const int* tokens, const int* tar
     return std::nanf("");
   }
   try {
-    if (!g_initialized && mlx_init() != 0) {
+    if (mlx_init() != 0) {
       return std::nanf("");
     }
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return std::nanf("");
     }
@@ -772,7 +834,7 @@ float mlx_ir_trainer_evaluate(int64_t trainer, const int* tokens, const int* tar
 
 int mlx_ir_trainer_num_weights(int64_t trainer) {
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return -1;
     }
@@ -784,7 +846,7 @@ int mlx_ir_trainer_num_weights(int64_t trainer) {
 
 int mlx_ir_trainer_weight_size(int64_t trainer, int weight_idx) {
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t || weight_idx < 0 || static_cast<size_t>(weight_idx) >= t->weights.size()) {
       return -1;
     }
@@ -799,7 +861,7 @@ int mlx_ir_trainer_read_weight(int64_t trainer, int weight_idx, float* out, int 
     return -1;
   }
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t || weight_idx < 0 || static_cast<size_t>(weight_idx) >= t->weights.size()) {
       return -1;
     }
@@ -823,7 +885,7 @@ int mlx_ir_trainer_read_grad(int64_t trainer, int weight_idx, float* out, int si
     return -1;
   }
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) {
       return -1;
     }
@@ -848,7 +910,7 @@ int mlx_ir_trainer_set_weight(int64_t trainer, int weight_idx, const float* data
     return -1;
   }
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t || weight_idx < 0 || static_cast<size_t>(weight_idx) >= t->weights.size()) {
       return -1;
     }
@@ -868,7 +930,7 @@ int mlx_ir_trainer_set_weight(int64_t trainer, int weight_idx, const float* data
 }
 
 void mlx_ir_trainer_set_lr(int64_t trainer, float lr) {
-  auto* t = get_ir_trainer(trainer);
+  auto t = get_ir_trainer(trainer);
   if (!t) {
     return;
   }
@@ -876,7 +938,7 @@ void mlx_ir_trainer_set_lr(int64_t trainer, float lr) {
 }
 
 void mlx_ir_trainer_set_lr_scale(int64_t trainer, float lr_scale) {
-  auto* t = get_ir_trainer(trainer);
+  auto t = get_ir_trainer(trainer);
   if (!t) {
     return;
   }
@@ -884,7 +946,7 @@ void mlx_ir_trainer_set_lr_scale(int64_t trainer, float lr_scale) {
 }
 
 void mlx_ir_trainer_set_qat(int64_t trainer, const char* mode) {
-  auto* t = get_ir_trainer(trainer);
+  auto t = get_ir_trainer(trainer);
   if (!t) {
     return;
   }
@@ -913,13 +975,17 @@ void mlx_ir_trainer_destroy(int64_t trainer) {
     return;
   }
   const size_t idx = static_cast<size_t>(trainer - 1);
-  if (idx >= g_ir_trainer_pool.size()) {
-    return;
+  std::shared_ptr<mlx_ir::IRTrainer> owned;
+  {
+    std::lock_guard<std::recursive_mutex> lock(g_bridge_pool_mutex);
+    if (idx >= g_ir_trainer_pool.size()) {
+      return;
+    }
+    owned = std::move(g_ir_trainer_pool[idx]);
   }
-  if (g_ir_trainer_pool[idx]) {
-    g_ir_trainer_pool[idx]->flush();
+  if (owned) {
+    owned->flush();
   }
-  g_ir_trainer_pool[idx].reset();
 }
 
 } // extern "C"

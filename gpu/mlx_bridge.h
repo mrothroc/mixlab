@@ -19,6 +19,20 @@ int mlx_init(void);
 const char* mlx_runtime_version(void);
 int mlx_distributed_backend_available(const char* backend);
 
+// Opaque MLX distributed-group runtime. The returned handle owns one immutable
+// group and is safe to pass into trainer creation after identity validation.
+int64_t mlx_group_runtime_create(const char* backend, int strict);
+int mlx_group_runtime_rank(int64_t handle);
+int mlx_group_runtime_world_size(int64_t handle);
+int mlx_group_runtime_validate_identity(
+    int64_t handle,
+    uint64_t generation,
+    const uint32_t* membership_digest,
+    const uint32_t* expected_member_digests,
+    int n_members,
+    const uint32_t* local_member_digest);
+void mlx_group_runtime_destroy(int64_t handle);
+
 // Compile canonical Mamba3 Metal kernels while trainer setup prepares weights.
 int mlx_mamba3_metal_prewarm_start(void);
 int mlx_mamba3_metal_prewarm_wait(void);
@@ -193,6 +207,9 @@ int64_t mlx_ir_create_trainer_v2(
     float default_base_lr,
     int compute_dtype);
 int mlx_ir_trainer_set_program(int64_t trainer, int64_t program);
+int mlx_ir_trainer_set_group_runtime(int64_t trainer, int64_t group_runtime);
+int mlx_ir_trainer_set_next_loss_normalizer(int64_t trainer, float loss_normalizer);
+int mlx_ir_trainer_last_stage_trace(int64_t trainer, char* out, int out_size);
 int mlx_ir_trainer_set_step_output_names(
     int64_t trainer,
     const char** output_names,

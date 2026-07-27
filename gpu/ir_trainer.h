@@ -5,6 +5,7 @@
 
 #include <mlx/mlx.h>
 #include <mlx/random.h>
+#include <mlx/distributed/distributed.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -177,6 +178,13 @@ struct IRTrainer {
   bool mamba3_single_backward_disabled = false;
   bool mamba3_single_backward_fallback_logged = false;
 
+  bool distributed_context_active = false;
+  int distributed_rank = 0;
+  int distributed_world_size = 1;
+  std::optional<mlx::core::distributed::Group> distributed_group;
+  float next_loss_normalizer = 1.0f;
+  std::vector<std::string> last_step_stage_trace;
+
   float max_grad_norm = 0.0f;
   float lr_scale = 1.0f;
   float default_base_lr = 0.0f;
@@ -208,6 +216,11 @@ struct IRTrainer {
   mlx::core::array read_grad(int weight_idx) const;
   void set_training_step_extra_output_names(const std::vector<std::string>& output_names);
   void set_program(const IRProgram& new_program);
+  void set_distributed_group(
+      const mlx::core::distributed::Group& group,
+      int rank,
+      int world_size);
+  void set_next_loss_normalizer(float loss_normalizer);
   void apply_optimizer_updates(const std::vector<mlx::core::array>& grads);
   void apply_weight_optimizer_update(size_t weight_index, const mlx::core::array& grad);
   void collect_weight_state_for_eval(size_t weight_index, std::vector<mlx::core::array>& eval_arrays) const;

@@ -2,7 +2,11 @@
 
 package gpu
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"strings"
+)
 
 // SetCUDAGraphLimits configures MLX's CUDA graph batch size.
 // Must be called before Available() or any other GPU function.
@@ -145,6 +149,28 @@ func CreateTrainer(program *Program, weightHandles []int64, spec TrainerOptimize
 	return mlxCreateTrainer(program.handle, weightHandles, spec)
 }
 
+// CreateTrainerWithGroup creates a trainer and attaches an already-validated
+// immutable group runtime before the first step.
+func CreateTrainerWithGroup(
+	program *Program,
+	weightHandles []int64,
+	spec TrainerOptimizerSpec,
+	group *GroupRuntime,
+) (TrainerHandle, error) {
+	if group == nil {
+		return CreateTrainer(program, weightHandles, spec)
+	}
+	trainer, err := CreateTrainer(program, weightHandles, spec)
+	if err != nil {
+		return 0, err
+	}
+	if err := group.attachTrainer(trainer); err != nil {
+		TrainerDestroy(trainer)
+		return 0, err
+	}
+	return trainer, nil
+}
+
 func TrainerSetProgram(t TrainerHandle, program *Program) error {
 	if t == 0 {
 		return fmt.Errorf("invalid trainer handle; create the trainer successfully before switching programs")
@@ -201,11 +227,63 @@ func TrainerStep(t TrainerHandle, inputs []TensorInput) (float32, error) {
 	return mlxTrainerStep(t, inputs)
 }
 
+func TrainerStepWithNormalizer(
+	t TrainerHandle,
+	inputs []TensorInput,
+	lossNormalizer float32,
+) (float32, error) {
+	if !isFiniteNonNegative(lossNormalizer) {
+		return 0, fmt.Errorf("loss_normalizer must be finite and non-negative, got %g", lossNormalizer)
+	}
+	if err := mlxTrainerSetNextLossNormalizer(t, lossNormalizer); err != nil {
+		return 0, err
+	}
+	return TrainerStep(t, inputs)
+}
+
 func TrainerSubmitStep(t TrainerHandle, inputs []TensorInput) error {
 	if t == 0 {
 		return fmt.Errorf("invalid trainer handle; create the trainer successfully before submitting a step")
 	}
 	return mlxTrainerSubmitStep(t, inputs)
+}
+
+// TrainerSubmitStepWithNormalizer attaches optimizer-step metadata without
+// exposing gradients or adding a model-graph input.
+func TrainerSubmitStepWithNormalizer(
+	t TrainerHandle,
+	inputs []TensorInput,
+	lossNormalizer float32,
+) error {
+	if !isFiniteNonNegative(lossNormalizer) {
+		return fmt.Errorf("loss_normalizer must be finite and non-negative, got %g", lossNormalizer)
+	}
+	if err := mlxTrainerSetNextLossNormalizer(t, lossNormalizer); err != nil {
+		return err
+	}
+	return TrainerSubmitStep(t, inputs)
+}
+
+func TrainerLastStageTrace(t TrainerHandle) ([]string, error) {
+	if t == 0 {
+		return nil, fmt.Errorf("invalid trainer handle")
+	}
+	return mlxTrainerLastStageTrace(t)
+}
+
+func isFiniteNonNegative(value float32) bool {
+	return !float32IsNaNOrInf(value) && value >= 0
+}
+
+func float32IsNaNOrInf(value float32) bool {
+	return math.IsNaN(float64(value)) || math.IsInf(float64(value), 0)
+}
+
+func splitStageTrace(trace string) []string {
+	if trace == "" {
+		return nil
+	}
+	return strings.Split(trace, ",")
 }
 
 func TrainerCollectLoss(t TrainerHandle) (float32, error) {

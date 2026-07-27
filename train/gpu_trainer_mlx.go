@@ -104,6 +104,7 @@ type mlxGPUTrainer struct {
 	firstByteValid         []int32
 	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
 	lockedOSThread bool
+	distributed    *DistributedTrainerContext
 }
 
 // initMLXGPUTrainer creates a GPU trainer backed by the MLX IR interpreter.
@@ -113,6 +114,22 @@ func initMLXGPUTrainer(
 	cfg *ArchConfig,
 	loadedWeights [][]float32,
 	optimizerOverride func(gpu.TrainerOptimizerSpec, []WeightShape) (gpu.TrainerOptimizerSpec, error),
+) (*mlxGPUTrainer, error) {
+	return initMLXGPUTrainerWithDistributedContext(
+		irProg,
+		cfg,
+		loadedWeights,
+		optimizerOverride,
+		nil,
+	)
+}
+
+func initMLXGPUTrainerWithDistributedContext(
+	irProg *ir.Program,
+	cfg *ArchConfig,
+	loadedWeights [][]float32,
+	optimizerOverride func(gpu.TrainerOptimizerSpec, []WeightShape) (gpu.TrainerOptimizerSpec, error),
+	distributedContext *DistributedTrainerContext,
 ) (*mlxGPUTrainer, error) {
 	runtime.LockOSThread()
 	releaseOSThread := true
@@ -218,7 +235,21 @@ func initMLXGPUTrainer(
 		}
 	}
 
-	trainerHandle, err := gpu.CreateTrainer(gpuProg, handles, optimizerSpec)
+	var groupRuntime *gpu.GroupRuntime
+	if distributedContext != nil {
+		if err := distributedContext.validate(cfg); err != nil {
+			gpuProg.Destroy()
+			gpu.FreeHandles(handles)
+			return nil, err
+		}
+		groupRuntime = distributedContext.GroupRuntime
+	}
+	trainerHandle, err := gpu.CreateTrainerWithGroup(
+		gpuProg,
+		handles,
+		optimizerSpec,
+		groupRuntime,
+	)
 	if err != nil {
 		gpuProg.Destroy()
 		gpu.FreeHandles(handles)
@@ -513,6 +544,7 @@ func initMLXGPUTrainer(
 		charFeatures:               charFeatures,
 		firstByteValid:             firstByteValid,
 		lockedOSThread:             true,
+		distributed:                distributedContext,
 	}
 	releaseOSThread = false
 	return trainer, nil
@@ -583,7 +615,12 @@ func (t *mlxGPUTrainer) TrainStepGPU(xTok, yTok []int, batchSize, seqLen int, lr
 	if err != nil {
 		return 0, err
 	}
-	loss, err := gpu.TrainerStep(t.handle, inputs)
+	var loss float32
+	if t.distributed != nil {
+		loss, err = gpu.TrainerStepWithNormalizer(t.handle, inputs, float32(batchSize*seqLen))
+	} else {
+		loss, err = gpu.TrainerStep(t.handle, inputs)
+	}
 	if err == nil {
 		t.trainingStep++
 	}
@@ -596,7 +633,15 @@ func (t *mlxGPUTrainer) TrainObjectiveStepGPU(batch objectiveBatch, batchSize, s
 	if err != nil {
 		return 0, err
 	}
-	loss, err := gpu.TrainerStep(t.handle, inputs)
+	var loss float32
+	if t.distributed != nil {
+		if !batch.lossNormalizerSet {
+			return 0, fmt.Errorf("distributed objective batch is missing loss_normalizer")
+		}
+		loss, err = gpu.TrainerStepWithNormalizer(t.handle, inputs, batch.lossNormalizer)
+	} else {
+		loss, err = gpu.TrainerStep(t.handle, inputs)
+	}
 	if err == nil {
 		t.trainingStep++
 	}
@@ -610,7 +655,15 @@ func (t *mlxGPUTrainer) SubmitStepGPU(xTok, yTok []int, batchSize, seqLen int, l
 	if err != nil {
 		return err
 	}
-	if err := gpu.TrainerSubmitStep(t.handle, inputs); err != nil {
+	if t.distributed != nil {
+		if err := gpu.TrainerSubmitStepWithNormalizer(
+			t.handle,
+			inputs,
+			float32(batchSize*seqLen),
+		); err != nil {
+			return err
+		}
+	} else if err := gpu.TrainerSubmitStep(t.handle, inputs); err != nil {
 		return err
 	}
 	t.trainingStep++
@@ -623,11 +676,33 @@ func (t *mlxGPUTrainer) SubmitObjectiveStepGPU(batch objectiveBatch, batchSize, 
 	if err != nil {
 		return err
 	}
-	if err := gpu.TrainerSubmitStep(t.handle, inputs); err != nil {
+	if t.distributed != nil {
+		if !batch.lossNormalizerSet {
+			return fmt.Errorf("distributed objective batch is missing loss_normalizer")
+		}
+		if err := gpu.TrainerSubmitStepWithNormalizer(
+			t.handle,
+			inputs,
+			batch.lossNormalizer,
+		); err != nil {
+			return err
+		}
+	} else if err := gpu.TrainerSubmitStep(t.handle, inputs); err != nil {
 		return err
 	}
 	t.trainingStep++
 	return nil
+}
+
+func (t *mlxGPUTrainer) DistributedContextActiveGPU() bool {
+	return t != nil && t.distributed != nil
+}
+
+func (t *mlxGPUTrainer) DistributedStageTraceGPU() ([]string, error) {
+	if t == nil || t.distributed == nil {
+		return nil, nil
+	}
+	return gpu.TrainerLastStageTrace(t.handle)
 }
 
 // CollectLossGPU blocks until the oldest uncollected submitted step completes.

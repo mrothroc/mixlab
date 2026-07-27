@@ -583,7 +583,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			return time.Since(submitStart), nil
 		}
 		canSubmitNextBeforeCollect := func(step int) bool {
-			if !stepLookaheadEnabled ||
+			if !trainerAllowsStepLookahead(trainer, stepLookaheadEnabled) ||
 				data2vec != nil ||
 				distiller != nil ||
 				rtdActive(cfg) ||

@@ -42,6 +42,8 @@ type objectiveBatch struct {
 	rcTokens              []int
 	rcAlignmentPositions  []int32
 	mlmMaskStats          mlmMaskStats
+	lossNormalizer        float32
+	lossNormalizerSet     bool
 }
 
 type mlmMaskStats struct {
@@ -176,8 +178,28 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 	if err := attachRCEquivariantInputs(cfg, batch, &prepared, need, seqLen); err != nil {
 		return objectiveBatch{}, err
 	}
+	if canonicalObjective(objective) == arch.ObjectiveCausal {
+		prepared.lossNormalizer = causalLossNormalizer(prepared, need)
+		prepared.lossNormalizerSet = true
+	}
 	prepared.tttInnerLRScale = arch.TTTMLPInnerLRScalesForStep(cfg.Blocks, step)
 	return prepared, nil
+}
+
+func causalLossNormalizer(batch objectiveBatch, need int) float32 {
+	if need <= 0 {
+		return 0
+	}
+	if len(batch.lossMask) < need {
+		return float32(need)
+	}
+	var count float32
+	for _, value := range batch.lossMask[:need] {
+		if value > 0 {
+			count += value
+		}
+	}
+	return count
 }
 
 func canonicalObjective(objective string) string {

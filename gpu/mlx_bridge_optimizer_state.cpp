@@ -61,7 +61,7 @@ extern "C" {
 
 int mlx_ir_trainer_optimizer_state_count(int64_t trainer) {
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) return -1;
     t->flush();
     return static_cast<int>(optimizer_state_refs(*t).size());
@@ -75,7 +75,7 @@ int mlx_ir_trainer_optimizer_state_info(
     int* shape, int max_ndim, int* size) {
   if (!kind || !weight_idx || !ndim || !shape || max_ndim <= 0 || !size) return -1;
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) return -1;
     t->flush();
     auto refs = optimizer_state_refs(*t);
@@ -97,7 +97,7 @@ int mlx_ir_trainer_optimizer_state_info(
 int mlx_ir_trainer_read_optimizer_state(int64_t trainer, int kind, int weight_idx, float* out, int size) {
   if (!out || size <= 0) return -1;
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) return -1;
     t->flush();
     auto* state = optimizer_state_value(*t, kind, weight_idx);
@@ -114,7 +114,7 @@ int mlx_ir_trainer_read_optimizer_state(int64_t trainer, int kind, int weight_id
 int mlx_ir_trainer_set_optimizer_state(int64_t trainer, int kind, int weight_idx, const float* data, int size) {
   if (!data || size <= 0) return -1;
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t) return -1;
     t->flush();
     auto* state = optimizer_state_value(*t, kind, weight_idx);
@@ -133,7 +133,7 @@ int mlx_ir_trainer_set_optimizer_counters(
     uint64_t skipped_steps, uint64_t consecutive_skipped_steps, int last_step_skipped,
     uint64_t last_loss_nonfinite, uint64_t last_gradient_nonfinite, uint64_t last_state_nonfinite) {
   try {
-    auto* t = get_ir_trainer(trainer);
+    auto t = get_ir_trainer(trainer);
     if (!t || attempted_steps > static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
         committed_steps > attempted_steps || committed_steps > static_cast<uint64_t>(std::numeric_limits<int>::max()) ||
         skipped_steps > attempted_steps || consecutive_skipped_steps > skipped_steps) {
