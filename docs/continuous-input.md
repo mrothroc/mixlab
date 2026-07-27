@@ -86,6 +86,16 @@ before trainer construction.
 example per batch. `feature_dim` is the per-timestep channel width, not the
 number of records.
 
+For a linear time-invariant FFT-convolution baseline, replace the canonical
+Mamba block with:
+
+```json
+{"type":"s4d","state_size":64,"init":"s4d-lin"}
+```
+
+See [S4D](s4d.md) and
+[`continuous_s4d_classification_tiny.json`](../examples/continuous_s4d_classification_tiny.json).
+
 The adapter uses the top-level `positional_embedding` policy. Set `"none"` for
 raw signals whose sequence axis already carries order, or
 `"learned_absolute"` for a learned table. There is no adapter-specific

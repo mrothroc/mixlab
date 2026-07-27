@@ -318,9 +318,32 @@ func estimateBlockFLOPs(block BlockSpec, B, T, D, V, ffn int, mlpMult float64, b
 		return estimateMLSTMBlockFLOPs(block, B, T, D)
 	case "ttt_mlp":
 		return estimateTTTMLPBlockFLOPs(block, B, T, D)
+	case "s4d":
+		return estimateS4DBlockFLOPs(block, B, T, D)
 	default:
 		return estimateWeightShapeFLOPs(block, B, T, D, V, mlpMult, blockScales, residMix)
 	}
+}
+
+func estimateS4DBlockFLOPs(block BlockSpec, B, T, D int) int64 {
+	statePairs := effectiveS4DStateSize(block) / 2
+	if statePairs <= 0 || T <= 0 {
+		return 0
+	}
+	fftLen := 1
+	for fftLen < 2*T {
+		fftLen <<= 1
+	}
+	logFFT := 0
+	for n := fftLen; n > 1; n >>= 1 {
+		logFFT++
+	}
+	// Kernel materialization plus input/kernel RFFT, pointwise complex
+	// multiplication, IRFFT, direct term, GELU, and residual add.
+	kernel := 16 * i64(D) * i64(statePairs) * i64(T)
+	fft := 5 * i64(fftLen) * i64(logFFT) * i64(D) * i64(B+1)
+	pointwise := 8 * i64(B) * i64(T) * i64(D)
+	return kernel + fft + pointwise
 }
 
 func estimatePlainBlockFLOPs(block BlockSpec, B, T, D, ffn int) int64 {

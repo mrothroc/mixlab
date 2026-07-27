@@ -39,7 +39,7 @@ func validateResidualScaleInits(cfg *ArchConfig, source string) error {
 			return fmt.Errorf("config %q blocks[%d].residual_scale_init requires block_scales=true", source, i)
 		}
 		switch blockTypeKey(block) {
-		case "plain", "swiglu", "geglu", "moe", "gated_deltanet", "hgrn2":
+		case "plain", "swiglu", "geglu", "moe", "gated_deltanet", "hgrn2", "s4d":
 		default:
 			return fmt.Errorf("config %q blocks[%d].residual_scale_init is not supported for type=%q", source, i, block.Type)
 		}
@@ -60,7 +60,7 @@ func validateNormPolicy(cfg *ArchConfig, source string) error {
 	}
 	for i, block := range cfg.Blocks {
 		switch blockTypeKey(block) {
-		case "plain", "swiglu", "geglu", "mlp":
+		case "plain", "swiglu", "geglu", "mlp", "s4d":
 			// supported by the configurable normalization path.
 		default:
 			return fmt.Errorf("config %q non-default norm settings are not supported with blocks[%d].type=%q in this release", source, i, block.Type)
@@ -176,6 +176,14 @@ func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, c
 
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
+	if blockTypeKey(b) != "s4d" {
+		if strings.TrimSpace(b.Init) != "" {
+			return fmt.Errorf("config %q %s[%d] init is valid only for type=s4d", source, groupName, idx)
+		}
+		if b.Bidirectional {
+			return fmt.Errorf("config %q %s[%d] bidirectional is valid only for type=s4d", source, groupName, idx)
+		}
+	}
 	switch b.Type {
 	case "mamba":
 		return fmt.Errorf(
@@ -183,7 +191,7 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 				"use type=%q only to load a legacy Mixlab checkpoint, or type=%q for canonical Mamba-3",
 			source, groupName, idx, b.Type, "legacy_mamba", "mamba3-canonical",
 		)
-	case "plain", "swiglu", "geglu", "mlp", "moe", "legacy_mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "gated_deltanet", "hgrn2", "mlstm", "ttt_mlp", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
+	case "plain", "swiglu", "geglu", "mlp", "moe", "legacy_mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "s4d", "gated_deltanet", "hgrn2", "mlstm", "ttt_mlp", "rwkv", "retnet", "perceiver", "bottleneck", "cross_attention", "token_blend":
 		// valid
 	case "custom":
 		return validateCustomBlockSpec(b, source, groupName, idx)
@@ -347,6 +355,26 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if b.DTMin < 0 || b.DTMax < 0 || (b.DTMin > 0 && b.DTMax > 0 && b.DTMax <= b.DTMin) {
 			return fmt.Errorf("config %q %s[%d] type=mamba3-canonical requires 0 < dt_min < dt_max when set", source, groupName, idx)
+		}
+	}
+	if blockTypeKey(b) == "s4d" {
+		stateSize := effectiveS4DStateSize(b)
+		if stateSize <= 0 || stateSize%2 != 0 {
+			return fmt.Errorf("config %q %s[%d] type=s4d requires a positive even state_size (got %d)", source, groupName, idx, stateSize)
+		}
+		switch effectiveS4DInit(b) {
+		case S4DInitLin:
+			// Reference-locked v1 initialization.
+		default:
+			return fmt.Errorf("config %q %s[%d] type=s4d has invalid init=%q (v1 supports %q)", source, groupName, idx, b.Init, S4DInitLin)
+		}
+		dtMin, dtMax := effectiveS4DDTRange(b)
+		if !(dtMin > 0) || !(dtMax > dtMin) || math.IsNaN(dtMin) || math.IsNaN(dtMax) ||
+			math.IsInf(dtMin, 0) || math.IsInf(dtMax, 0) {
+			return fmt.Errorf("config %q %s[%d] type=s4d requires 0 < dt_min < dt_max", source, groupName, idx)
+		}
+		if b.Bidirectional {
+			return fmt.Errorf("config %q %s[%d] type=s4d bidirectional=true is not supported in v1", source, groupName, idx)
 		}
 	}
 	if (b.Type == "perceiver" || b.Type == "bottleneck") && b.Heads <= 0 {

@@ -43,6 +43,7 @@ surfaces to Hugging Face.
 
 - Data and artifacts: `docs/data.md`, `docs/cli-prepare.md`
 - Continuous frame classification: `docs/continuous-input.md`
+- LTI S4D sequence mixer: `docs/s4d.md`
 - Architecture and blocks: `docs/architecture.md`, `docs/config-blocks.md`
 - Objectives and optimizers: `docs/config-training.md`
 - Training and resume: `docs/cli-train.md`

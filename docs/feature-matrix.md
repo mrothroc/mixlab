@@ -69,6 +69,7 @@ The config validator is authoritative for combinations.
 | `plain` attention and FFN/MoE blocks | Broad support | Broad but feature-gated support |
 | DeBERTa and differential `plain` variants | Native causal/masked support | Supported combinations have parity coverage |
 | `ttt_mlp` | Native causal training and stateful generation | Supported only for cache-safe TTT stacks |
+| S4D | Native differentiable FFT-convolution path | Gated; no maintained HF implementation yet |
 | HGRN2, mLSTM, RetNet, RWKV, Mamba, Gated DeltaNet | Native correctness-first paths | Generally gated or unsupported |
 | Parallel groups, recurrence, U-Net, custom blocks | Native under documented restrictions | Generally unsupported |
 

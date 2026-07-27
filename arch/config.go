@@ -146,6 +146,8 @@ type BlockSpec struct {
 	UseConv                           *bool        `json:"use_conv,omitempty"`                            // Mamba-3 canonical short conv toggle; defaults to true.
 	DTMin                             float64      `json:"dt_min,omitempty"`                              // Mamba-3 canonical dt init lower bound; defaults to 0.001.
 	DTMax                             float64      `json:"dt_max,omitempty"`                              // Mamba-3 canonical dt init upper bound; defaults to 0.1.
+	Init                              string       `json:"init,omitempty"`                                // S4D initialization; v1 supports "s4d-lin".
+	Bidirectional                     bool         `json:"bidirectional,omitempty"`                       // S4D reserved direction flag; v1 supports unidirectional only.
 	NumLatents                        int          `json:"num_latents,omitempty"`                         // Perceiver/bottleneck latent count.
 	SourceStream                      string       `json:"source_stream,omitempty"`                       // cross_attention: stream providing K/V.
 	Decay                             float64      `json:"decay,omitempty"`                               // RetNet: initial decay rate in (0,1); defaults to 0.95.

@@ -1,0 +1,138 @@
+//go:build mlx && cgo && (darwin || linux)
+
+package train
+
+import (
+	"math"
+	"testing"
+
+	"github.com/mrothroc/mixlab/arch"
+)
+
+func TestS4DTinyDiscreteClassificationTraining(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	cfg, err := ParseArchConfig([]byte(`{
+		"name":"s4d_discrete_smoke",
+		"model_dim":8,
+		"vocab_size":8,
+		"seq_len":8,
+		"positional_embedding":"none",
+		"blocks":[{"type":"s4d","state_size":8},{"type":"swiglu"}],
+		"training":{
+			"objective":"classification",
+			"classification":{"num_labels":2,"pooling":"last","classifier_dropout":0},
+			"optimizer":"adamw",
+			"batch_tokens":16,
+			"steps":40,
+			"lr":0.003,
+			"scalar_lr":0.001,
+			"grad_clip":1,
+			"weight_decay":0,
+			"seed":19
+		}
+	}`), "s4d_discrete_smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawBatch := trainBatch{
+		x: []int{
+			1, 2, 2, 2, 2, 2, 2, 2,
+			1, 6, 6, 6, 6, 6, 6, 6,
+		},
+		y:          make([]int, 16),
+		labels:     []int32{0, 1},
+		validMask:  repeatFloat32Train(16, 1),
+		segmentIDs: make([]int32, 16),
+	}
+	batch, err := prepareObjectiveBatch(cfg, rawBatch, 0, arch.ObjectiveClassification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertS4DTrainingDecreases(t, cfg, batch, 2, 8)
+}
+
+func TestS4DTinyContinuousClassificationTraining(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	cfg, err := ParseArchConfig([]byte(`{
+		"name":"s4d_continuous_smoke",
+		"model_dim":8,
+		"seq_len":16,
+		"positional_embedding":"none",
+		"input_adapter":{"kind":"linear_frames","feature_dim":1,"bias":true,"norm":"layernorm"},
+		"blocks":[{"type":"s4d","state_size":8},{"type":"swiglu"}],
+		"training":{
+			"objective":"classification",
+			"classification":{"num_labels":2,"pooling":"last","classifier_dropout":0},
+			"optimizer":"adamw",
+			"batch_tokens":32,
+			"steps":40,
+			"lr":0.003,
+			"scalar_lr":0.001,
+			"grad_clip":1,
+			"weight_decay":0,
+			"seed":23
+		}
+	}`), "s4d_continuous_smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := make([]float32, 32)
+	for pos := 0; pos < 16; pos++ {
+		noise := float32((pos%5)-2) * 0.02
+		frames[pos] = -1 + noise
+		frames[16+pos] = 1 + noise
+	}
+	batch := objectiveBatch{
+		frames:               frames,
+		classificationLabels: []int32{0, 1},
+		classificationMask:   repeatFloat32Train(32, 1),
+		classificationPos:    []int32{15, 15},
+	}
+	assertS4DTrainingDecreases(t, cfg, batch, 2, 16)
+}
+
+func assertS4DTrainingDecreases(t *testing.T, cfg *ArchConfig, batch objectiveBatch, batchSize, seqLen int) {
+	t.Helper()
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainerInterface, err := initGPUTrainer(prog, cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainer := trainerInterface.(*mlxGPUTrainer)
+	defer trainer.CloseTrainer()
+	first, err := trainer.EvaluateObjectiveGPU(batch, batchSize, seqLen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for step := 0; step < cfg.Training.Steps; step++ {
+		loss, err := trainer.TrainObjectiveStepGPU(batch, batchSize, seqLen, float32(cfg.Training.LR))
+		if err != nil {
+			t.Fatalf("step %d: %v", step, err)
+		}
+		if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
+			t.Fatalf("step %d non-finite loss=%g", step, loss)
+		}
+	}
+	last, err := trainer.EvaluateObjectiveGPU(batch, batchSize, seqLen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(last < first) {
+		t.Fatalf("S4D classification loss did not decrease: first=%g last=%g", first, last)
+	}
+}
+
+func repeatFloat32Train(n int, value float32) []float32 {
+	out := make([]float32, n)
+	for i := range out {
+		out[i] = value
+	}
+	return out
+}

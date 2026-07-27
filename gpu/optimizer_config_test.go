@@ -115,6 +115,40 @@ func TestBuildTrainerOptimizerSpec_BackoutLambdaUsesScalarGroup(t *testing.T) {
 	}
 }
 
+func TestBuildTrainerOptimizerSpec_S4DParametersUseScalarAdamGroup(t *testing.T) {
+	names := []string{
+		"s4d_log_dt", "s4d_log_A_real", "s4d_A_imag",
+		"s4d_C_real", "s4d_C_imag", "s4d_D",
+	}
+	weights := make([]OptimizerWeightMetadata, len(names))
+	for i, name := range names {
+		shape := []int{8, 32}
+		if name == "s4d_log_dt" || name == "s4d_D" {
+			shape = []int{8}
+		}
+		weights[i] = OptimizerWeightMetadata{Name: name, Shape: shape}
+	}
+	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
+		Weights: weights,
+		Embed:   OptimizerSettings{Name: "adamw", LR: 1},
+		Head:    OptimizerSettings{Name: "adamw", LR: 2},
+		Scalar:  OptimizerSettings{Name: "adamw", LR: 3, WeightDecay: 0.7},
+		Matrix:  OptimizerSettings{Name: "muon", LR: 4, WeightDecay: 0.8},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, weight := range spec.Weights {
+		group := spec.Groups[weight.GroupIndex]
+		if group.Kind != OptimizerAdamW || group.LR != 3 {
+			t.Fatalf("%s group=%+v want scalar AdamW LR 3", names[i], group)
+		}
+		if weight.Decay {
+			t.Fatalf("%s unexpectedly enables weight decay", names[i])
+		}
+	}
+}
+
 func TestBuildTrainerOptimizerSpec_SmearGateUsesScalarGroup(t *testing.T) {
 	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
 		Weights: []OptimizerWeightMetadata{

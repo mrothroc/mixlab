@@ -96,6 +96,7 @@ const (
 	OpMaskedZLoss          = 102
 	OpTTTMLPScan           = 103
 	OpTTTMLPStatefulScan   = 104
+	OpS4D                  = 105
 )
 
 // HandleInput binds an existing GPU array handle to a declared IR input.

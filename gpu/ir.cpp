@@ -2580,6 +2580,155 @@ mx::array hgrn2_scan_naive(
   return mx::reshape(out, {B * T * H, Dv});
 }
 
+struct S4DResult {
+  mx::array output;
+  mx::array kernel;
+};
+
+struct S4DDiscreteParameters {
+  mx::array a_real;
+  mx::array a_imag;
+  mx::array b_real;
+  mx::array b_imag;
+  mx::array log_magnitude;
+  mx::array phase;
+};
+
+S4DDiscreteParameters s4d_discretize(
+    const mx::array& log_dt_raw,
+    const mx::array& log_a_real_raw,
+    const mx::array& a_imag_raw,
+    int D,
+    int state_pairs) {
+  auto dt = mx::reshape(mx::exp(mx::astype(log_dt_raw, mx::float32)), {D, 1});
+  auto a_real = -mx::exp(mx::reshape(mx::astype(log_a_real_raw, mx::float32), {D, state_pairs}));
+  auto a_imag = mx::reshape(mx::astype(a_imag_raw, mx::float32), {D, state_pairs});
+  auto dt_a_real = dt * a_real;
+  auto dt_a_imag = dt * a_imag;
+  auto magnitude = mx::exp(dt_a_real);
+  auto exp_real = magnitude * mx::cos(dt_a_imag);
+  auto exp_imag = magnitude * mx::sin(dt_a_imag);
+
+  // ZOH B-bar = (exp(dt*A)-1)/A. B is fixed to one and is absorbed into C,
+  // matching the official minimal S4D parameterization.
+  auto numerator_real = exp_real - mx::array(1.0f, mx::float32);
+  auto denominator = mx::square(a_real) + mx::square(a_imag);
+  auto b_real = (numerator_real * a_real + exp_imag * a_imag) / denominator;
+  auto b_imag = (exp_imag * a_real - numerator_real * a_imag) / denominator;
+  return {exp_real, exp_imag, b_real, b_imag, dt_a_real, dt_a_imag};
+}
+
+mx::array s4d_materialize_kernel(
+    const S4DDiscreteParameters& discrete,
+    const mx::array& c_real_raw,
+    const mx::array& c_imag_raw,
+    int D,
+    int T,
+    int state_pairs) {
+  auto c_real = mx::reshape(mx::astype(c_real_raw, mx::float32), {D, state_pairs});
+  auto c_imag = mx::reshape(mx::astype(c_imag_raw, mx::float32), {D, state_pairs});
+  auto gamma_real = c_real * discrete.b_real - c_imag * discrete.b_imag;
+  auto gamma_imag = c_real * discrete.b_imag + c_imag * discrete.b_real;
+
+  auto positions = mx::reshape(mx::astype(mx::arange(T), mx::float32), {1, 1, T});
+  // exp(dt*A)^l = exp(l*Re(dt*A)) * (cos(l*Im(dt*A)) + i*sin(...)).
+  // Retaining the pre-exponentiation terms avoids atan2 branch cuts and the
+  // log(sqrt(...)) round trip in both the forward and gradient graphs.
+  auto magnitude_powers =
+      mx::exp(mx::expand_dims(discrete.log_magnitude, 2) * positions);
+  auto phases = mx::expand_dims(discrete.phase, 2) * positions;
+  auto power_real = magnitude_powers * mx::cos(phases);
+  auto power_imag = magnitude_powers * mx::sin(phases);
+  auto terms =
+      mx::expand_dims(gamma_real, 2) * power_real -
+      mx::expand_dims(gamma_imag, 2) * power_imag;
+  return mx::array(2.0f, mx::float32) * mx::sum(terms, 1);
+}
+
+mx::array s4d_fft_convolution(
+    const mx::array& x_raw,
+    const mx::array& kernel,
+    const mx::array& direct_raw,
+    int B,
+    int T,
+    int D) {
+  auto x = mx::reshape(mx::astype(x_raw, mx::float32), {B, T, D});
+  int fft_len = 1;
+  while (fft_len < 2 * T) {
+    fft_len <<= 1;
+  }
+  auto x_freq = mx::fft::rfft(x, fft_len, 1);
+  auto kernel_freq = mx::fft::rfft(kernel, fft_len, 1);
+  auto kernel_broadcast = mx::reshape(
+      mx::transpose(kernel_freq, {1, 0}),
+      {1, kernel_freq.shape(1), D});
+  auto full = mx::fft::irfft(x_freq * kernel_broadcast, fft_len, 1);
+  auto convolved = mx::slice(full, {0, 0, 0}, {B, T, D});
+  auto direct = mx::reshape(mx::astype(direct_raw, mx::float32), {1, 1, D});
+  return mx::reshape(convolved + x * direct, {B * T, D});
+}
+
+mx::array s4d_recurrent(
+    const mx::array& x_raw,
+    const S4DDiscreteParameters& discrete,
+    const mx::array& c_real_raw,
+    const mx::array& c_imag_raw,
+    const mx::array& direct_raw,
+    int B,
+    int T,
+    int D,
+    int state_pairs) {
+  auto x = mx::reshape(mx::astype(x_raw, mx::float32), {B, T, D});
+  auto c_real = mx::reshape(mx::astype(c_real_raw, mx::float32), {1, D, state_pairs});
+  auto c_imag = mx::reshape(mx::astype(c_imag_raw, mx::float32), {1, D, state_pairs});
+  auto a_real = mx::reshape(discrete.a_real, {1, D, state_pairs});
+  auto a_imag = mx::reshape(discrete.a_imag, {1, D, state_pairs});
+  auto b_real = mx::reshape(discrete.b_real, {1, D, state_pairs});
+  auto b_imag = mx::reshape(discrete.b_imag, {1, D, state_pairs});
+  auto direct = mx::reshape(mx::astype(direct_raw, mx::float32), {1, D});
+  auto state_real = mx::zeros({B, D, state_pairs}, mx::float32);
+  auto state_imag = mx::zeros({B, D, state_pairs}, mx::float32);
+  auto out = mx::zeros({B, T, D}, mx::float32);
+  for (int t = 0; t < T; ++t) {
+    auto xt = mx::reshape(mx::slice(x, {0, t, 0}, {B, t + 1, D}), {B, D});
+    auto u = mx::expand_dims(xt, 2);
+    auto next_real = a_real * state_real - a_imag * state_imag + b_real * u;
+    auto next_imag = a_imag * state_real + a_real * state_imag + b_imag * u;
+    state_real = next_real;
+    state_imag = next_imag;
+    auto yt = mx::array(2.0f, mx::float32) *
+        mx::sum(c_real * state_real - c_imag * state_imag, 2) + xt * direct;
+    out = mx::slice_update(
+        out,
+        mx::reshape(yt, {B, 1, D}),
+        mx::Shape{0, t, 0},
+        mx::Shape{B, t + 1, D});
+  }
+  return mx::reshape(out, {B * T, D});
+}
+
+S4DResult s4d_forward(
+    const mx::array& x,
+    const mx::array& log_dt,
+    const mx::array& log_a_real,
+    const mx::array& a_imag,
+    const mx::array& c_real,
+    const mx::array& c_imag,
+    const mx::array& direct,
+    int B,
+    int T,
+    int D,
+    int state_size,
+    int mode) {
+  int state_pairs = state_size / 2;
+  auto discrete = s4d_discretize(log_dt, log_a_real, a_imag, D, state_pairs);
+  auto kernel = s4d_materialize_kernel(discrete, c_real, c_imag, D, T, state_pairs);
+  auto output = mode == 1
+      ? s4d_recurrent(x, discrete, c_real, c_imag, direct, B, T, D, state_pairs)
+      : s4d_fft_convolution(x, kernel, direct, B, T, D);
+  return {output, kernel};
+}
+
 struct TTTMLPScanResult {
   mx::array output;
   mx::array loss_before;
@@ -4263,6 +4412,29 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 1, result.state);
         set_out(op, 2, result.gradient_state);
         set_out(op, 3, result.conv_state);
+        break;
+      }
+      case OP_S4D: {
+        if (op.n_inputs != 7 || op.n_outputs != 2 || op.n_int_params < 5) {
+          throw std::runtime_error("OP_S4D requires 7 inputs, 2 outputs, and B,T,D,state_size,mode");
+        }
+        int B = op.int_params[0];
+        int T = op.int_params[1];
+        int D = op.int_params[2];
+        int state_size = op.int_params[3];
+        int mode = op.int_params[4];
+        if (B <= 0 || T <= 0 || D <= 0 || state_size <= 0 || state_size % 2 != 0) {
+          throw std::runtime_error("OP_S4D received invalid dimensions");
+        }
+        if (mode != 0 && mode != 1) {
+          throw std::runtime_error("OP_S4D mode must be 0 (FFT) or 1 (recurrent)");
+        }
+        auto result = s4d_forward(
+            get(op, 0), get(op, 1), get(op, 2), get(op, 3),
+            get(op, 4), get(op, 5), get(op, 6),
+            B, T, D, state_size, mode);
+        set_out(op, 0, result.output);
+        set_out(op, 1, result.kernel);
         break;
       }
       case OP_DEBERTA_RELATIVE_BIAS: {

@@ -192,7 +192,8 @@ func shouldDecayOptimizerWeight(shape []int, class optimizerClass) bool {
 
 func isScalarOptimizerName(name string) bool {
 	switch name {
-	case "bigram_scale", "trigram_scale", "smear_gate", "smear_scale", "backout_lambda", "decay", "scan_decay", "w_decay", "mu", "mu2":
+	case "bigram_scale", "trigram_scale", "smear_gate", "smear_scale", "backout_lambda", "decay", "scan_decay", "w_decay", "mu", "mu2",
+		"s4d_log_dt", "s4d_log_A_real", "s4d_A_imag", "s4d_C_real", "s4d_C_imag", "s4d_D":
 		return true
 	}
 	return strings.HasSuffix(name, "_scale")

@@ -556,6 +556,46 @@ Example:
 {"type": "mamba3-canonical", "inner_dim": 512, "scan_chunk_size": 64}
 ```
 
+### `s4d`
+
+Linear time-invariant diagonal state-space token mixer with a closed-form
+kernel and differentiable FFT-convolution training path. Pair it with a
+`swiglu` or `geglu` block for channel mixing.
+
+Required fields:
+
+- `type: "s4d"`
+
+Optional fields:
+
+- `state_size` - full conjugate-pair state size per channel. Defaults to `64`
+  and must be positive and even.
+- `init` - initialization family. Omit or set to `"s4d-lin"` for
+  `A_n = -1/2 + i*pi*n`. Other families, including S4D-LegS, are rejected in
+  v1 rather than approximated.
+- `dt_min` - lower bound for the per-channel log-uniform time-step
+  initialization. Defaults to `0.001`.
+- `dt_max` - upper bound for the per-channel log-uniform time-step
+  initialization. Defaults to `0.1` and must exceed `dt_min`.
+- `bidirectional` - reserved direction field. Omit or set `false`;
+  `true` is rejected in v1.
+- `residual_scale_init` - optional S4D residual-scale initialization when
+  top-level `block_scales` is enabled.
+
+S4D-Lin uses fixed `B=1` absorbed into learned complex `C`, ZOH
+discretization, and a learned direct `D` term. The normal training path uses
+FFT convolution; the equivalent recurrent scan is an internal parity-test
+path, not a public execution mode or generation cache. S4D weights use the
+scalar/vector Adam optimizer group with no weight decay, so
+`training.scalar_lr` controls their learning rate.
+
+```json
+{"type": "s4d", "state_size": 64, "init": "s4d-lin", "dt_min": 0.001, "dt_max": 0.1}
+```
+
+See [S4D diagonal state-space block](s4d.md) for the numerical reference
+contract and runtime boundary.
+
 ### `retnet`
 
 Retention block with RMSNorm, multi-head retention mask construction, learned per-head decay weights, FFN tail, and residual connections.

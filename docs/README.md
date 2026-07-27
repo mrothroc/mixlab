@@ -40,6 +40,7 @@ mixlab -mode MODE -h
 ## Specialized Guides
 
 - [Canonical Mamba-3](canonical_mamba3.md)
+- [S4D diagonal state-space block](s4d.md)
 - [Continuous sequence input](continuous-input.md)
 - [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md)
 - [Block-diffusion experiments](diffusion-experiments.md)

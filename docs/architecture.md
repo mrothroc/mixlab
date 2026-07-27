@@ -50,7 +50,7 @@ Built-in blocks include:
 |--------|--------|
 | Attention | `plain`, `cross_attention` |
 | Feed-forward | `swiglu`, `geglu`, `mlp`, `moe` |
-| State-space and recurrent | `gated_linear_ssm`, `mamba3-canonical`, `retnet`, `rwkv`, `hgrn2`, `mlstm`; `legacy_mamba` is compatibility-only |
+| State-space and recurrent | `s4d`, `gated_linear_ssm`, `mamba3-canonical`, `retnet`, `rwkv`, `hgrn2`, `mlstm`; `legacy_mamba` is compatibility-only |
 | Bottleneck and layout | `perceiver`, `bottleneck`, U-Net layout, parallel residuals |
 | Token features | `token_blend`, n-gram embeddings, character feature embeddings |
 | Extension | `custom`, external Go block registrations |

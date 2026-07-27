@@ -200,6 +200,41 @@ func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool
 		return true
 	}
 	switch ws.InitMode {
+	case "s4d_log_dt":
+		dtMin := ws.DtMin
+		if dtMin <= 0 {
+			dtMin = 0.001
+		}
+		dtMax := ws.DtMax
+		if dtMax <= dtMin {
+			dtMax = 0.1
+		}
+		logMin := math.Log(dtMin)
+		logMax := math.Log(dtMax)
+		for i := range data {
+			data[i] = float32(logMin + rng.Float64()*(logMax-logMin))
+		}
+		return true
+	case "s4d_A_imag_lin":
+		if len(ws.Shape) != 2 || ws.Shape[1] <= 0 {
+			return false
+		}
+		statePairs := ws.Shape[1]
+		for i := range data {
+			data[i] = float32(math.Pi * float64(i%statePairs))
+		}
+		return true
+	case "s4d_C_normal":
+		componentStd := math.Sqrt(0.5)
+		for i := range data {
+			data[i] = float32(rng.NormFloat64() * componentStd)
+		}
+		return true
+	case "s4d_D_normal":
+		for i := range data {
+			data[i] = float32(rng.NormFloat64())
+		}
+		return true
 	case "dwa_alpha":
 		if len(data) > 0 {
 			data[len(data)-1] = 1

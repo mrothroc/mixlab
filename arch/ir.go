@@ -106,6 +106,8 @@ const OpTTTMLPScan = 103 // OP_TTT_MLP_SCAN
 
 const OpTTTMLPStatefulScan = 104 // OP_TTT_MLP_STATEFUL_SCAN
 
+const OpS4D = 105 // OP_S4D
+
 const (
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -163,6 +165,21 @@ func (p *Program) AddOp(code int, inputs, outputs []string, floatParams []float3
 		FloatParams: floatParams,
 		IntParams:   intParams,
 	})
+}
+
+// S4D emits a diagonal LTI SSM. mode=0 uses FFT convolution and mode=1 uses
+// the equivalent recurrent update for reference/parity tests.
+func (p *Program) S4D(
+	x, logDT, logAReal, aImag, cReal, cImag, direct, output, kernel string,
+	B, T, D, stateSize, mode int,
+) {
+	p.AddOp(
+		OpS4D,
+		[]string{x, logDT, logAReal, aImag, cReal, cImag, direct},
+		[]string{output, kernel},
+		nil,
+		[]int{B, T, D, stateSize, mode},
+	)
 }
 
 // Embed emits an embedding lookup: output = table[indices].

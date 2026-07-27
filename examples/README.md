@@ -71,6 +71,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [nucleotide_dna_rc_equivariant_classification_tiny.json](nucleotide_dna_rc_equivariant_classification_tiny.json) | RC-equivariant DNA classifier | Shared-weight forward/reverse-complement backbone with invariant mean pooling |
 | [sequence_classification_gated_deltanet_tiny.json](sequence_classification_gated_deltanet_tiny.json) | Native sequence classifier | End-to-end single-label classification on a recurrent Gated DeltaNet backbone |
 | [continuous_mamba3_classification_tiny.json](continuous_mamba3_classification_tiny.json) | Continuous sequence classifier | Float-frame input adapter with a native Mamba3 classification backbone |
+| [continuous_s4d_classification_tiny.json](continuous_s4d_classification_tiny.json) | Continuous S4D classifier | LTI diagonal SSM with an FFT-convolution sequence mixer |
 | [softcap_plain.json](softcap_plain.json) | Logit softcap | Bounded logits before loss |
 | [qk_norm_tiny.json](qk_norm_tiny.json) | QK-norm attention | Learned per-head-dimension Q/K RMSNorm |
 | [differential_attention_tiny.json](differential_attention_tiny.json) | Differential attention | DIFF Transformer two-softmax attention variant |
@@ -99,6 +100,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [lamb_plain_tiny.json](lamb_plain_tiny.json) | LAMB optimizer | Whole-model LAMB optimizer on a tiny transformer |
 | [moe_tiny.json](moe_tiny.json) | Sparse MoE transformer | Top-k routed SwiGLU feed-forward experts |
 | [mamba3_canonical_2L.json](mamba3_canonical_2L.json) | Canonical Mamba-3 SSM | Paper-aligned recurrent token mixer, no attention |
+| [continuous_s4d_classification_tiny.json](continuous_s4d_classification_tiny.json) | S4D-Lin SSM | HiPPO-derived LTI diagonal mixer for continuous sequence classification |
 | [retnet_2L.json](retnet_2L.json) | RetNet | Exponential decay retention |
 | [rwkv_2L.json](rwkv_2L.json) | RWKV | Linear attention with time decay |
 | [hgrn2_2L.json](hgrn2_2L.json) | HGRN2 mixer | Matrix-state recurrence token mixer |
@@ -116,7 +118,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 - **Nucleotide sequences**: Prepare FASTA with `-input-format fasta`, then use `nucleotide_dna_causal_tiny.json` or `nucleotide_dna_mlm_tiny.json` for record-isolated attention models. For recurrent/SSM causal pretraining, prepare with `-nucleotide-framing stream` and use `nucleotide_dna_mamba3_canonical_stream_tiny.json`. Match `vocab_size` to the emitted `nucleotide_vocab.json` when enabling ambiguity symbols beyond the default `N`.
 - **Reverse-complement DNA comparison**: Use the matched `nucleotide_dna_rc_augmented_classification_tiny.json` and `nucleotide_dna_rc_equivariant_classification_tiny.json` configs with labeled FASTA data. The native-only equivariant path shares all backbone weights across orientations and requires mean pooling and zero dropout.
 - **Native sequence classification**: Use `sequence_classification_gated_deltanet_tiny.json` with labeled JSONL prepared using `-label-field` or FASTA prepared using `-label-file`. Warm-start from the matching LM architecture with `-safetensors-load`; Mixlab appends a fresh classifier and fine-tunes the full native backbone.
-- **Continuous sequence classification**: Use `continuous_mamba3_classification_tiny.json` with `[N,T,F]` arrays prepared using `-input-format continuous`. Match `input_adapter.feature_dim`, `seq_len`, and `training.classification.num_labels` to the generated manifest.
+- **Continuous sequence classification**: Use `continuous_mamba3_classification_tiny.json` for a selective recurrent baseline or `continuous_s4d_classification_tiny.json` for an LTI FFT-convolution baseline with `[N,T,F]` arrays prepared using `-input-format continuous`. Match `input_adapter.feature_dim`, `seq_len`, and `training.classification.num_labels` to the generated manifest.
 - **Whole-word MLM**: Use `mlm_wwm_curriculum_tiny.json` with shards prepared using `-wwm-compatible-tokenizer`. Mixlab derives word starts from the shard-adjacent `tokenizer.json` and changes only host-side mask selection.
 - **Word-structural auxiliary**: Use `word_structural_mlm_tiny.json` when you want MLM training with local shuffled-span reconstruction through the same vocab head.
 - **Hybrid objectives**: Use `hybrid_tiny.json` for GPT-BERT-style causal plus masked-objective training. Set `training.hybrid_mix_granularity: "example"` when you want mixed causal and masked sequences in the same batch.
