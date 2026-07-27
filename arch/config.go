@@ -51,6 +51,7 @@ type ArchConfig struct {
 	NormType                 string            `json:"norm_type,omitempty"`
 	NormEps                  float32           `json:"norm_eps,omitempty"`
 	NormAffine               *bool             `json:"norm_affine,omitempty"`
+	BatchNormMomentum        float32           `json:"batchnorm_momentum,omitempty"`
 	NormPlacement            string            `json:"norm_placement,omitempty"`
 	FFNInternalNorm          bool              `json:"ffn_internal_norm,omitempty"`
 	LayerAggregation         string            `json:"layer_aggregation,omitempty"`
@@ -148,6 +149,7 @@ type BlockSpec struct {
 	DTMax                             float64      `json:"dt_max,omitempty"`                              // Mamba-3 canonical dt init upper bound; defaults to 0.1.
 	Init                              string       `json:"init,omitempty"`                                // S4D initialization; v1 supports "s4d-lin".
 	Bidirectional                     bool         `json:"bidirectional,omitempty"`                       // S4D reserved direction flag; v1 supports unidirectional only.
+	OutputTransform                   string       `json:"output_transform,omitempty"`                    // S4D output transform; omitted/"none" preserves the compact path, "glu" adds the reference projection.
 	NumLatents                        int          `json:"num_latents,omitempty"`                         // Perceiver/bottleneck latent count.
 	SourceStream                      string       `json:"source_stream,omitempty"`                       // cross_attention: stream providing K/V.
 	Decay                             float64      `json:"decay,omitempty"`                               // RetNet: initial decay rate in (0,1); defaults to 0.95.
@@ -521,9 +523,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	cfg.NormType = normalizeNormType(cfg.NormType)
 	switch cfg.NormType {
-	case NormTypeRMSNorm, NormTypeLayerNorm:
+	case NormTypeRMSNorm, NormTypeLayerNorm, NormTypeBatchNorm:
 	default:
-		return nil, fmt.Errorf("config %q has invalid norm_type=%q (must be \"rmsnorm\" or \"layernorm\")", source, cfg.NormType)
+		return nil, fmt.Errorf("config %q has invalid norm_type=%q (must be \"rmsnorm\", \"layernorm\", or \"batchnorm\")", source, cfg.NormType)
 	}
 	if cfg.NormEps < 0 {
 		return nil, fmt.Errorf("config %q has invalid norm_eps=%g (must be > 0)", source, cfg.NormEps)
@@ -533,6 +535,19 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.NormAffine != nil && !*cfg.NormAffine && cfg.NormType == NormTypeRMSNorm {
 		return nil, fmt.Errorf("config %q norm_affine=false requires norm_type=\"layernorm\" in this release", source)
+	}
+	if cfg.NormType == NormTypeBatchNorm {
+		if cfg.NormAffine != nil && !*cfg.NormAffine {
+			return nil, fmt.Errorf("config %q norm_affine=false is not supported with batchnorm in this release", source)
+		}
+		if cfg.BatchNormMomentum == 0 {
+			cfg.BatchNormMomentum = 0.1
+		}
+		if math.IsNaN(float64(cfg.BatchNormMomentum)) || math.IsInf(float64(cfg.BatchNormMomentum), 0) || cfg.BatchNormMomentum <= 0 || cfg.BatchNormMomentum > 1 {
+			return nil, fmt.Errorf("config %q has invalid batchnorm_momentum=%g (must be finite and in (0,1])", source, cfg.BatchNormMomentum)
+		}
+	} else if cfg.BatchNormMomentum != 0 {
+		return nil, fmt.Errorf("config %q batchnorm_momentum requires norm_type=\"batchnorm\"", source)
 	}
 	cfg.NormPlacement = normalizeNormPlacement(cfg.NormPlacement)
 	switch cfg.NormPlacement {
@@ -634,6 +649,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 	if err := validateTrainingObjective(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateBatchNormPolicy(cfg, source); err != nil {
 		return nil, err
 	}
 	if err := validateInputAdapter(cfg, source); err != nil {

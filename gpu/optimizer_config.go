@@ -8,6 +8,7 @@ import (
 type OptimizerWeightMetadata struct {
 	Name        string
 	Shape       []int
+	IsBuffer    bool
 	IsNormScale bool
 }
 
@@ -68,6 +69,10 @@ func BuildTrainerOptimizerSpec(cfg TrainerOptimizerConfig) (TrainerOptimizerSpec
 	}
 
 	for _, weight := range cfg.Weights {
+		if weight.IsBuffer {
+			weights = append(weights, WeightOptimizer{Frozen: true})
+			continue
+		}
 		class, err := classifyWeightOptimizer(weight)
 		if err != nil {
 			return TrainerOptimizerSpec{}, err

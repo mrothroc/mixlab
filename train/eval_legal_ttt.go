@@ -42,6 +42,7 @@ func legalChunkSGDOptimizerOverride(evalSpec EvalSpec) func(gpu.TrainerOptimizer
 			wmeta[i] = gpu.OptimizerWeightMetadata{
 				Name:        shape.Name,
 				Shape:       shape.Shape,
+				IsBuffer:    shape.IsBuffer,
 				IsNormScale: shape.IsNormScale,
 			}
 		}

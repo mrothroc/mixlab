@@ -34,6 +34,7 @@ std::vector<mlx_ir::WeightOptimizerSpec> read_weight_specs(
     specs.push_back(mlx_ir::WeightOptimizerSpec{
         static_cast<uint32_t>(weight_optimizers[i].group_index),
         weight_optimizers[i].decay != 0,
+        weight_optimizers[i].frozen != 0,
     });
   }
   return specs;
@@ -167,7 +168,7 @@ int64_t mlx_ir_create_trainer(
   };
   std::vector<mlx_ir_weight_optimizer> specs(static_cast<size_t>(n_weights));
   for (int i = 0; i < n_weights; ++i) {
-    specs[static_cast<size_t>(i)] = mlx_ir_weight_optimizer{0, decay_flags[i] != 0 ? 1 : 0};
+    specs[static_cast<size_t>(i)] = mlx_ir_weight_optimizer{0, decay_flags[i] != 0 ? 1 : 0, 0};
   }
   return mlx_ir_create_trainer_v2(
       program,

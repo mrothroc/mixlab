@@ -121,6 +121,55 @@ func TestS4DBlockWeightCount(t *testing.T) {
 	}
 }
 
+func TestS4DReferenceGLUOutputTransform(t *testing.T) {
+	spec := BlockSpec{Type: "s4d", StateSize: 16, OutputTransform: "glu"}
+	metas, err := s4dWeightShapesWithOptions(spec, 12, EmitOptions{
+		Norm:          defaultNormSpec(),
+		NormPlacement: NormPlacementPre,
+		Dropout:       0.1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(metas) != 9 {
+		t.Fatalf("weights=%d want 9", len(metas))
+	}
+	if got := metas[7]; got.Name != "s4d_out_proj" || !intSlicesEqual(got.Shape, []int{12, 24}) {
+		t.Fatalf("output projection metadata=%+v", got)
+	}
+	if got := metas[8]; got.Name != "s4d_out_bias" || !intSlicesEqual(got.Shape, []int{24}) || !got.InitZero {
+		t.Fatalf("output bias metadata=%+v", got)
+	}
+
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim":12,"vocab_size":32,"seq_len":8,"dropout":0.1,
+		"blocks":[{"type":"s4d","state_size":16,"output_transform":"glu"}],
+		"training":{"objective":"causal","batch_tokens":8}
+	}`), "s4d-glu")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := countOps(prog, OpSlice); got != 2 {
+		t.Fatalf("Slice ops=%d want 2", got)
+	}
+	if got := countOps(prog, OpSigmoid); got != 1 {
+		t.Fatalf("Sigmoid ops=%d want 1", got)
+	}
+	if got := countOps(prog, OpGELUExact); got != 1 {
+		t.Fatalf("GELUExact ops=%d want 1", got)
+	}
+	if got := countOps(prog, OpGELU); got != 0 {
+		t.Fatalf("approximate GELU ops=%d want 0 in reference transform", got)
+	}
+	if got := countOps(prog, OpDropout); got != 2 {
+		t.Fatalf("Dropout ops=%d want 2 (S4D inner and residual dropout)", got)
+	}
+}
+
 func TestS4DConfigValidation(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -133,6 +182,7 @@ func TestS4DConfigValidation(t *testing.T) {
 		{"bad dt min", `{"type":"s4d","dt_min":-0.1}`, "0 < dt_min < dt_max"},
 		{"bad dt order", `{"type":"s4d","dt_min":0.2,"dt_max":0.1}`, "0 < dt_min < dt_max"},
 		{"bidirectional", `{"type":"s4d","bidirectional":true}`, "not supported in v1"},
+		{"bad output transform", `{"type":"s4d","output_transform":"linear"}`, "output_transform"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

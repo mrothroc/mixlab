@@ -8,6 +8,7 @@ import (
 const (
 	NormTypeRMSNorm   = "rmsnorm"
 	NormTypeLayerNorm = "layernorm"
+	NormTypeBatchNorm = "batchnorm"
 
 	NormPlacementPre      = "pre"
 	NormPlacementPost     = "post"
@@ -20,9 +21,10 @@ const (
 )
 
 type NormSpec struct {
-	Type   string
-	Eps    float32
-	Affine bool
+	Type     string
+	Eps      float32
+	Affine   bool
+	Momentum float32
 }
 
 func defaultNormSpec() NormSpec {
@@ -35,6 +37,8 @@ func normalizeNormType(v string) string {
 		return NormTypeRMSNorm
 	case "layernorm", "layer_norm", "layer":
 		return NormTypeLayerNorm
+	case "batchnorm", "batch_norm", "batch":
+		return NormTypeBatchNorm
 	default:
 		return strings.ToLower(strings.TrimSpace(v))
 	}
@@ -65,6 +69,12 @@ func (cfg *ArchConfig) EffectiveNormSpec() NormSpec {
 	if cfg.NormAffine != nil {
 		spec.Affine = *cfg.NormAffine
 	}
+	if spec.Type == NormTypeBatchNorm {
+		spec.Momentum = cfg.BatchNormMomentum
+		if spec.Momentum == 0 {
+			spec.Momentum = 0.1
+		}
+	}
 	return spec
 }
 
@@ -85,6 +95,9 @@ func normSpecOrDefault(spec NormSpec) NormSpec {
 	spec.Type = normalizeNormType(spec.Type)
 	if spec.Eps == 0 {
 		spec.Eps = 1e-5
+	}
+	if spec.Type == NormTypeBatchNorm && spec.Momentum == 0 {
+		spec.Momentum = 0.1
 	}
 	return spec
 }
@@ -144,6 +157,13 @@ func normWeights(name string, dim int, spec NormSpec) []WeightMeta {
 			{Name: name + "_scale", Shape: []int{dim}, IsNormScale: true, InitOne: true},
 			{Name: name + "_bias", Shape: []int{dim}, InitZero: true},
 		}
+	case NormTypeBatchNorm:
+		return []WeightMeta{
+			{Name: name + "_scale", Shape: []int{dim}, IsNormScale: true, InitOne: true},
+			{Name: name + "_bias", Shape: []int{dim}, InitZero: true},
+			{Name: name + "_running_mean", Shape: []int{dim}, IsBuffer: true, InitZero: true},
+			{Name: name + "_running_var", Shape: []int{dim}, IsBuffer: true, InitOne: true},
+		}
 	default:
 		return []WeightMeta{{Name: name, Shape: []int{dim}, IsNormScale: true, InitOne: true}}
 	}
@@ -165,6 +185,23 @@ func emitNormIR(prog *Program, x string, wi int, output string, spec NormSpec) (
 		}
 		prog.LayerNormNoAffine(x, output, spec.Eps)
 		return wi, nil
+	case NormTypeBatchNorm:
+		if !spec.Affine {
+			return wi, fmt.Errorf("norm_affine=false is not supported with batchnorm")
+		}
+		prog.BatchNorm(
+			x,
+			weightName(wi),
+			weightName(wi+1),
+			weightName(wi+2),
+			weightName(wi+3),
+			output,
+			output+"_running_mean_update",
+			output+"_running_var_update",
+			spec.Eps,
+			spec.Momentum,
+		)
+		return wi + 4, nil
 	default:
 		return wi, fmt.Errorf("unsupported norm_type=%q", spec.Type)
 	}

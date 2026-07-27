@@ -97,6 +97,7 @@ const (
 	OpTTTMLPScan           = 103
 	OpTTTMLPStatefulScan   = 104
 	OpS4D                  = 105
+	OpBatchNorm            = 106
 )
 
 // HandleInput binds an existing GPU array handle to a declared IR input.
@@ -258,6 +259,7 @@ type OptimizerGroup struct {
 type WeightOptimizer struct {
 	GroupIndex int
 	Decay      bool
+	Frozen     bool
 }
 
 type TrainerOptimizerSpec struct {

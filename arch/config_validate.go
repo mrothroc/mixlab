@@ -69,6 +69,39 @@ func validateNormPolicy(cfg *ArchConfig, source string) error {
 	return nil
 }
 
+func validateBatchNormPolicy(cfg *ArchConfig, source string) error {
+	if cfg == nil || cfg.EffectiveNormSpec().Type != NormTypeBatchNorm {
+		return nil
+	}
+	if cfg.Training.EffectiveObjective() != ObjectiveClassification {
+		return fmt.Errorf("config %q norm_type=\"batchnorm\" supports training.objective=\"classification\" only in this release", source)
+	}
+	if cfg.EffectiveNormPlacement() != NormPlacementPre {
+		return fmt.Errorf("config %q norm_type=\"batchnorm\" requires norm_placement=\"pre\" in this release", source)
+	}
+	if cfg.Training.BatchTokens <= 1 {
+		return fmt.Errorf("config %q norm_type=\"batchnorm\" requires training.batch_tokens > 1", source)
+	}
+	if cfg.Training.SWAStart > 0 {
+		return fmt.Errorf("config %q norm_type=\"batchnorm\" does not support SWA until running-stat recalibration is available", source)
+	}
+	if len(cfg.Recurrence) > 0 || len(cfg.RecurrencePhases) > 0 {
+		return fmt.Errorf("config %q norm_type=\"batchnorm\" does not support recurrence in this release", source)
+	}
+	for i, block := range cfg.Blocks {
+		if strings.TrimSpace(block.WeightGroup) != "" {
+			return fmt.Errorf("config %q norm_type=\"batchnorm\" does not support blocks[%d].weight_group in this release", source, i)
+		}
+	}
+	if cfg.Training.TTTSteps > 0 {
+		return fmt.Errorf("config %q norm_type=\"batchnorm\" does not support training-time test-time-training settings", source)
+	}
+	if mode := strings.ToLower(strings.TrimSpace(cfg.EffectiveEvalSpec().TTTMode)); mode != "" && mode != "none" {
+		return fmt.Errorf("config %q norm_type=\"batchnorm\" does not support eval.ttt_mode=%q", source, cfg.EffectiveEvalSpec().TTTMode)
+	}
+	return nil
+}
+
 func validateRecurrence(cfg *ArchConfig, source string) error {
 	if cfg.Recurrence == nil {
 		return nil
@@ -182,6 +215,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if b.Bidirectional {
 			return fmt.Errorf("config %q %s[%d] bidirectional is valid only for type=s4d", source, groupName, idx)
+		}
+		if strings.TrimSpace(b.OutputTransform) != "" {
+			return fmt.Errorf("config %q %s[%d] output_transform is valid only for type=s4d", source, groupName, idx)
 		}
 	}
 	switch b.Type {
@@ -375,6 +411,11 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if b.Bidirectional {
 			return fmt.Errorf("config %q %s[%d] type=s4d bidirectional=true is not supported in v1", source, groupName, idx)
+		}
+		switch effectiveS4DOutputTransform(b) {
+		case S4DOutputTransformNone, S4DOutputTransformGLU:
+		default:
+			return fmt.Errorf("config %q %s[%d] type=s4d has invalid output_transform=%q (must be \"none\" or \"glu\")", source, groupName, idx, b.OutputTransform)
 		}
 	}
 	if (b.Type == "perceiver" || b.Type == "bottleneck") && b.Heads <= 0 {

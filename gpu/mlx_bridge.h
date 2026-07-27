@@ -92,6 +92,7 @@ typedef struct {
 typedef struct {
     int group_index;
     int decay;
+    int frozen;
 } mlx_ir_weight_optimizer;
 
 int mlx_ir_eval_program_output_size(

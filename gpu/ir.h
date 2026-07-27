@@ -110,6 +110,7 @@ enum OpType {
   OP_TTT_MLP_SCAN = 103,
   OP_TTT_MLP_STATEFUL_SCAN = 104,
   OP_S4D = 105,
+  OP_BATCHNORM = 106,
 };
 
 struct IRop {

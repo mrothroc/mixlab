@@ -12,6 +12,7 @@ import (
 type WeightShape struct {
 	Name          string
 	Shape         []int
+	IsBuffer      bool
 	IsNormScale   bool
 	InitOne       bool
 	InitValue     float32
@@ -41,6 +42,7 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 		shapes[i] = WeightShape{
 			Name:          m.Name,
 			Shape:         m.Shape,
+			IsBuffer:      m.IsBuffer,
 			IsNormScale:   m.IsNormScale,
 			InitOne:       m.InitOne,
 			InitValue:     m.InitValue,

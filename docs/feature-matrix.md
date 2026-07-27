@@ -57,6 +57,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Reverse-complement handling | Augmentation or exact shared-backbone RCPS | Manifest-backed DNA vocabulary; augmentation supports packed records and framed nucleotide streams; the two modes are mutually exclusive | [RC-equivariant classifier](../examples/nucleotide_dna_rc_equivariant_classification_tiny.json) |
 | Character, bigram, trigram features | Adds token-derived embedding channels | Character features require `char_features.bin` | [char_features_plain.json](../examples/char_features_plain.json) |
 | SWA/EMA checkpoints | Writes live and averaged weights | Configure start, decay, and interval | [swa_ema_tiny.json](../examples/swa_ema_tiny.json) |
+| BatchNorm running statistics | Native fixed-shape classification | Affine pre-norm only; padded records, recurrence, SWA, eval TTT, and HF export are gated | [continuous_s4d_batchnorm_reference_tiny.json](../examples/continuous_s4d_batchnorm_reference_tiny.json) |
 
 Training-only features do not run during native generation or ordinary HF
 inference unless the exported model surface explicitly requires their weights.
@@ -69,7 +70,7 @@ The config validator is authoritative for combinations.
 | `plain` attention and FFN/MoE blocks | Broad support | Broad but feature-gated support |
 | DeBERTa and differential `plain` variants | Native causal/masked support | Supported combinations have parity coverage |
 | `ttt_mlp` | Native causal training and stateful generation | Supported only for cache-safe TTT stacks |
-| S4D | Native differentiable FFT-convolution path | Gated; no maintained HF implementation yet |
+| S4D | Native differentiable FFT-convolution path; optional reference output GLU and BatchNorm classification | Gated; no maintained HF implementation yet |
 | HGRN2, mLSTM, RetNet, RWKV, Mamba, Gated DeltaNet | Native correctness-first paths | Generally gated or unsupported |
 | Parallel groups, recurrence, U-Net, custom blocks | Native under documented restrictions | Generally unsupported |
 

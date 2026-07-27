@@ -64,6 +64,12 @@ struct OptimizerGroupConfig {
 struct WeightOptimizerSpec {
   uint32_t group_index = 0;
   bool decay = false;
+  bool frozen = false;
+};
+
+struct ModelBufferUpdate {
+  size_t weight_index = 0;
+  std::string output_name;
 };
 
 struct IRTrainer {
@@ -74,6 +80,7 @@ struct IRTrainer {
   std::vector<mlx::core::array> weights;
   std::vector<OptimizerGroupConfig> optimizer_groups;
   std::vector<WeightOptimizerSpec> weight_optimizers;
+  std::vector<ModelBufferUpdate> model_buffer_updates;
   std::vector<mlx::core::array> adam_m;
   std::vector<mlx::core::array> adam_v;
   std::vector<uint8_t> has_adam_state;

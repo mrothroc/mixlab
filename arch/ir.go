@@ -108,6 +108,8 @@ const OpTTTMLPStatefulScan = 104 // OP_TTT_MLP_STATEFUL_SCAN
 
 const OpS4D = 105 // OP_S4D
 
+const OpBatchNorm = 106 // OP_BATCHNORM
+
 const (
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -426,6 +428,19 @@ func (p *Program) LayerNorm(x, scale, bias, output string, eps float32) {
 // learned affine parameters.
 func (p *Program) LayerNormNoAffine(x, output string, eps float32) {
 	p.AddOp(OpLayerNorm, []string{x}, []string{output}, []float32{eps}, nil)
+}
+
+// BatchNorm emits channel-last BatchNorm with trainable affine parameters and
+// persistent running-stat buffers. The two update outputs are consumed by the
+// trainer after successful training steps.
+func (p *Program) BatchNorm(x, scale, bias, runningMean, runningVar, output, meanUpdate, varUpdate string, eps, momentum float32) {
+	p.AddOp(
+		OpBatchNorm,
+		[]string{x, scale, bias, runningMean, runningVar},
+		[]string{output, meanUpdate, varUpdate},
+		[]float32{eps, momentum},
+		nil,
+	)
 }
 
 // RoPE emits rotary position embeddings.

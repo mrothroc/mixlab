@@ -228,6 +228,9 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 	if err != nil {
 		return 0, 0, err
 	}
+	classificationShapes := classificationWeightShapes(cfg.ModelDim, cfg.Training.Classification)
+	uniqueShapes = append(uniqueShapes, classificationShapes...)
+	expandedShapes = append(expandedShapes, classificationShapes...)
 
 	return countWeightMetaElements(uniqueShapes), countWeightMetaElements(expandedShapes), nil
 }
@@ -289,6 +292,9 @@ func ActiveParameterCountFromConfig(cfg *ArchConfig) (active int64, hasMoE bool,
 func countWeightMetaElements(metas []WeightMeta) int64 {
 	total := int64(0)
 	for _, meta := range metas {
+		if meta.IsBuffer {
+			continue
+		}
 		elements := int64(1)
 		for _, dim := range meta.Shape {
 			elements *= int64(dim)
@@ -343,6 +349,10 @@ func estimateS4DBlockFLOPs(block BlockSpec, B, T, D int) int64 {
 	kernel := 16 * i64(D) * i64(statePairs) * i64(T)
 	fft := 5 * i64(fftLen) * i64(logFFT) * i64(D) * i64(B+1)
 	pointwise := 8 * i64(B) * i64(T) * i64(D)
+	if effectiveS4DOutputTransform(block) == S4DOutputTransformGLU {
+		pointwise += 4 * i64(B) * i64(T) * i64(D) * i64(D)
+		pointwise += 2 * i64(B) * i64(T) * i64(D)
+	}
 	return kernel + fft + pointwise
 }
 

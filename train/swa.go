@@ -3,6 +3,8 @@ package train
 import (
 	"fmt"
 	"math"
+
+	"github.com/mrothroc/mixlab/arch"
 )
 
 // applyTrainingSWAOverrides applies any CLI SWA/EMA overrides onto the config's
@@ -34,6 +36,9 @@ func applyTrainingSWAOverrides(cfg *ArchConfig, opts TrainOptions) ([]string, er
 		}
 		cfg.Training.SWAInterval = *opts.SWAIntervalOverride
 		logs = append(logs, fmt.Sprintf("training.swa_interval overridden by CLI: %d", cfg.Training.SWAInterval))
+	}
+	if cfg.EffectiveNormSpec().Type == arch.NormTypeBatchNorm && cfg.Training.SWAStart > 0 {
+		return nil, fmt.Errorf("SWA is not supported with norm_type=\"batchnorm\" until running-stat recalibration is available")
 	}
 	return logs, nil
 }

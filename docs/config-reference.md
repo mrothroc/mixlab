@@ -55,9 +55,10 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 | `attn_dropout` | number | No | `dropout` | Training dropout on `plain` attention probabilities after softmax and before multiplying by values. Explicit `0` disables attention-probability dropout even when `dropout` is nonzero. |
 | `mlm_head` | string | No | `"linear"` | Masked-objective prediction head. `"linear"` keeps the legacy bare LM head. `"bert"` uses `LayerNorm(affine=false) -> Linear(D,D)+bias -> GELU -> LayerNorm(affine=false) -> Dropout -> tied embedding output + bias` for MLM/MNTP/hybrid masked steps and `AutoModelForMaskedLM` export. Requires `tie_embeddings: true` and a masked objective path. |
 | `layer_aggregation` | string | No | `"none"` | Optional dense weighted aggregation over static embeddings and previous sublayer outputs. `"dwa"` enables GPT-BERT-style DWA on supported sequential blocks. See [Dense Weighted Aggregation](#dense-weighted-aggregation-dwa). |
-| `norm_type` | string | No | `"rmsnorm"` | Normalization used by supported GPT-style blocks and the final model norm. `"rmsnorm"` preserves the legacy layout; `"layernorm"` emits LayerNorm. |
+| `norm_type` | string | No | `"rmsnorm"` | Normalization used by supported blocks and the final model norm. `"rmsnorm"` preserves the legacy layout; `"layernorm"` emits LayerNorm; `"batchnorm"` enables native BatchNorm for fixed-shape classification. |
 | `norm_eps` | number | No | `1e-5` | Epsilon for supported block/final norms. Must be `> 0`. |
-| `norm_affine` | boolean | No | `true` | Whether LayerNorm uses learned scale/bias. `false` is supported for `norm_type: "layernorm"`; RMSNorm remains affine-only. |
+| `norm_affine` | boolean | No | `true` | Whether LayerNorm uses learned scale/bias. `false` is supported for `norm_type: "layernorm"`; RMSNorm and BatchNorm remain affine-only. |
+| `batchnorm_momentum` | number | No | `0.1` | Running-stat update momentum for `norm_type: "batchnorm"`. Must be in `(0,1]`; rejected for other norm types. |
 | `norm_placement` | string | No | `"pre"` | Supported values are `"pre"`, `"post"`, and `"sandwich"`. `"post"` normalizes each sublayer delta before residual add; `"sandwich"` uses both pre-input and post-delta norms. V1 supports non-default placement on sequential `plain`, `swiglu`, `geglu`, and `mlp` blocks. |
 | `ffn_internal_norm` | boolean | No | `false` | Adds an internal norm to supported FFN paths before the down projection: after the activation/product in `swiglu`/`geglu`, after activation in `mlp`, and after the `plain` FFN tail activation. |
 | `block_scales` | boolean | No | `false` | Adds learned per-channel scales to supported residual branches. `plain`, `swiglu`, `geglu`, and `moe` use them by default when enabled; recurrent branches can use them when `residual_scale_init` is set. |
@@ -579,6 +580,9 @@ Optional fields:
   initialization. Defaults to `0.1` and must exceed `dt_min`.
 - `bidirectional` - reserved direction field. Omit or set `false`;
   `true` is rejected in v1.
+- `output_transform` - omit or set `"none"` for the compact Mixlab path.
+  Set `"glu"` to add the reference-style `D -> 2D` output projection, bias,
+  and GLU after the S4D GELU activation.
 - `residual_scale_init` - optional S4D residual-scale initialization when
   top-level `block_scales` is enabled.
 
@@ -590,11 +594,22 @@ scalar/vector Adam optimizer group with no weight decay, so
 `training.scalar_lr` controls their learning rate.
 
 ```json
-{"type": "s4d", "state_size": 64, "init": "s4d-lin", "dt_min": 0.001, "dt_max": 0.1}
+{"type": "s4d", "state_size": 64, "init": "s4d-lin", "dt_min": 0.001, "dt_max": 0.1, "output_transform": "glu"}
 ```
 
 See [S4D diagonal state-space block](s4d.md) for the numerical reference
 contract and runtime boundary.
+
+### BatchNorm boundary
+
+`norm_type: "batchnorm"` computes one statistic per channel across the
+combined batch/time axes, matching `torch.nn.BatchNorm1d` on `[B,D,T]`.
+Training uses batch statistics and updates checkpointed running mean/variance;
+validation and native evaluation use only those running statistics. V1
+requires `training.objective: "classification"`, `norm_placement: "pre"`,
+affine normalization, fixed unpadded records, and more than one batch-time
+sample. Recurrence, weight groups, SWA, and Hugging Face export are rejected
+until their running-stat semantics are defined.
 
 ### `retnet`
 

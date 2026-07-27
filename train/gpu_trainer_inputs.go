@@ -73,6 +73,16 @@ func (t *mlxGPUTrainer) makeRTDGeneratorInputs(batch objectiveBatch) ([]gpu.Tens
 
 func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seqLen int) ([]gpu.TensorInput, error) {
 	need := batchSize * seqLen
+	if t.batchNorm {
+		if len(batch.classificationMask) < need {
+			return nil, fmt.Errorf("batchnorm v1 requires an explicit unpadded classification_valid_mask: got=%d need=%d", len(batch.classificationMask), need)
+		}
+		for i, valid := range batch.classificationMask[:need] {
+			if valid <= 0 {
+				return nil, fmt.Errorf("batchnorm v1 does not support padded classification records: classification_valid_mask[%d]=%g", i, valid)
+			}
+		}
+	}
 	targetsInput := t.targetsInput
 	if !t.targetsInputKnown {
 		// Preserve the historical zero-value test/helper behavior. Real

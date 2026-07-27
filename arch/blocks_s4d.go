@@ -9,10 +9,24 @@ import (
 const (
 	S4DInitLin = "s4d-lin"
 
+	S4DOutputTransformNone = "none"
+	S4DOutputTransformGLU  = "glu"
+
 	defaultS4DStateSize = 64
 	defaultS4DDTMin     = 0.001
 	defaultS4DDTMax     = 0.1
 )
+
+func effectiveS4DOutputTransform(spec BlockSpec) string {
+	switch strings.ToLower(strings.TrimSpace(spec.OutputTransform)) {
+	case "", S4DOutputTransformNone:
+		return S4DOutputTransformNone
+	case S4DOutputTransformGLU:
+		return S4DOutputTransformGLU
+	default:
+		return strings.ToLower(strings.TrimSpace(spec.OutputTransform))
+	}
+}
 
 func effectiveS4DStateSize(spec BlockSpec) int {
 	if spec.StateSize != 0 {
@@ -69,6 +83,12 @@ func s4dWeightShapesWithOptions(spec BlockSpec, D int, opts EmitOptions) ([]Weig
 		WeightMeta{Name: "s4d_C_imag", Shape: []int{D, statePairs}, InitMode: "s4d_C_normal"},
 		WeightMeta{Name: "s4d_D", Shape: []int{D}, InitMode: "s4d_D_normal"},
 	)
+	if effectiveS4DOutputTransform(spec) == S4DOutputTransformGLU {
+		metas = append(metas,
+			WeightMeta{Name: "s4d_out_proj", Shape: []int{D, 2 * D}},
+			WeightMeta{Name: "s4d_out_bias", Shape: []int{2 * D}, InitZero: true},
+		)
+	}
 	if placement == NormPlacementPost || placement == NormPlacementSandwich {
 		metas = append(metas, normWeights("s4d_post_norm", D, norm)...)
 	}
@@ -113,6 +133,13 @@ func emitS4DIR(
 	postNorm := prefix + "_post_norm"
 	scaled := prefix + "_scaled"
 	dropped := prefix + "_dropout"
+	innerDropped := prefix + "_inner_dropout"
+	projected := prefix + "_projected"
+	projectedBiased := prefix + "_projected_biased"
+	gluValue := prefix + "_glu_value"
+	gluGate := prefix + "_glu_gate"
+	gluGateSigmoid := prefix + "_glu_gate_sigmoid"
+	gluOut := prefix + "_glu_out"
 
 	input := stream
 	if placement == NormPlacementPre || placement == NormPlacementSandwich {
@@ -141,8 +168,26 @@ func emitS4DIR(
 		0,
 	)
 	wi += 6
-	prog.GELU(s4dOut, activated)
+	if effectiveS4DOutputTransform(spec) == S4DOutputTransformGLU {
+		prog.GELUExact(s4dOut, activated)
+	} else {
+		prog.GELU(s4dOut, activated)
+	}
 	delta := activated
+	if effectiveS4DOutputTransform(spec) == S4DOutputTransformGLU {
+		if opts.Dropout > 0 {
+			prog.Dropout(delta, opts.Dropout, innerDropped)
+			delta = innerDropped
+		}
+		prog.MatMul(delta, weightName(wi), projected)
+		prog.Add(projected, weightName(wi+1), projectedBiased)
+		wi += 2
+		prog.Slice(projectedBiased, 0, D, 1, 1, gluValue)
+		prog.Slice(projectedBiased, D, 2*D, 1, 1, gluGate)
+		prog.Sigmoid(gluGate, gluGateSigmoid)
+		prog.Mul(gluValue, gluGateSigmoid, gluOut)
+		delta = gluOut
+	}
 
 	if placement == NormPlacementPost || placement == NormPlacementSandwich {
 		var err error

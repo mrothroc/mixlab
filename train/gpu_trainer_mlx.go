@@ -58,6 +58,7 @@ type mlxGPUTrainer struct {
 	classificationLabelsInput  bool
 	classificationMaskInput    bool
 	classificationPosInput     bool
+	batchNorm                  bool
 	rcTokensInput              bool
 	rcAlignmentInput           bool
 	rcComplementInput          bool
@@ -468,6 +469,7 @@ func initMLXGPUTrainer(
 		tttInnerLRScaleInput:       tttInnerLRScaleInput,
 		classificationLabelsInput:  classificationLabelsInput,
 		classificationMaskInput:    classificationMaskInput,
+		batchNorm:                  cfg.EffectiveNormSpec().Type == ir.NormTypeBatchNorm,
 		classificationPosInput:     classificationPosInput,
 		rcTokensInput:              rcTokensInput,
 		rcAlignmentInput:           rcAlignmentInput,

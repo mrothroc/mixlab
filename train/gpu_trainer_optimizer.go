@@ -61,6 +61,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 		wmeta[i] = gpu.OptimizerWeightMetadata{
 			Name:        s.Name,
 			Shape:       s.Shape,
+			IsBuffer:    s.IsBuffer,
 			IsNormScale: s.IsNormScale,
 		}
 	}

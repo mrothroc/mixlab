@@ -307,15 +307,19 @@ func mlxCreateTrainer(programHandle int64, weightHandles []int64, spec TrainerOp
 	}
 	cWeightSpecs := make([]C.mlx_ir_weight_optimizer, len(spec.Weights))
 	for i, weightSpec := range spec.Weights {
-		if weightSpec.GroupIndex < 0 || weightSpec.GroupIndex >= len(spec.Groups) {
+		if !weightSpec.Frozen && (weightSpec.GroupIndex < 0 || weightSpec.GroupIndex >= len(spec.Groups)) {
 			return 0, fmt.Errorf("weight %d has invalid group index %d", i, weightSpec.GroupIndex)
 		}
 		cWeightSpecs[i] = C.mlx_ir_weight_optimizer{
 			group_index: C.int(weightSpec.GroupIndex),
 			decay:       0,
+			frozen:      0,
 		}
 		if weightSpec.Decay {
 			cWeightSpecs[i].decay = 1
+		}
+		if weightSpec.Frozen {
+			cWeightSpecs[i].frozen = 1
 		}
 	}
 	cGroups := make([]C.mlx_ir_optimizer_group, len(spec.Groups))

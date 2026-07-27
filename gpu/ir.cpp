@@ -4622,6 +4622,55 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mx::astype(y, x.dtype()));
         break;
       }
+      case OP_BATCHNORM: {
+        if (op.n_inputs != 5 || op.n_outputs != 3 || op.n_float_params < 2) {
+          throw std::runtime_error("OP_BATCHNORM requires 5 inputs, 3 outputs, eps, and momentum");
+        }
+        const float eps = op.float_params[0];
+        const float momentum = op.float_params[1];
+        auto x = get(op, 0);
+        if (x.ndim() < 2) {
+          throw std::runtime_error("OP_BATCHNORM expects rank >= 2 with channels last");
+        }
+        const int channels = x.shape(x.ndim() - 1);
+        int rows = 1;
+        for (int axis = 0; axis < x.ndim() - 1; ++axis) {
+          rows *= x.shape(axis);
+        }
+        if (channels <= 0 || rows <= 0) {
+          throw std::runtime_error("OP_BATCHNORM received an empty tensor");
+        }
+        if (training && rows <= 1) {
+          throw std::runtime_error("OP_BATCHNORM training requires more than one sample across batch and time");
+        }
+        auto x_f32 = mx::astype(x, mx::float32);
+        auto flat = mx::reshape(x_f32, {rows, channels});
+        auto scale = mx::astype(get(op, 1), mx::float32);
+        auto bias = mx::astype(get(op, 2), mx::float32);
+        auto running_mean = mx::astype(get(op, 3), mx::float32);
+        auto running_var = mx::astype(get(op, 4), mx::float32);
+        mx::array mean = running_mean;
+        mx::array variance = running_var;
+        mx::array next_mean = running_mean;
+        mx::array next_var = running_var;
+        if (training) {
+          mean = mx::mean(flat, 0);
+          auto centered = flat - mean;
+          variance = mx::mean(mx::square(centered), 0);
+          const float unbiased_scale = static_cast<float>(rows) / static_cast<float>(rows - 1);
+          next_mean = mx::stop_gradient(
+              (1.0f - momentum) * running_mean + momentum * mean);
+          next_var = mx::stop_gradient(
+              (1.0f - momentum) * running_var +
+              momentum * variance * unbiased_scale);
+        }
+        auto normalized = (flat - mean) / mx::sqrt(variance + eps);
+        auto y = normalized * scale + bias;
+        set_out(op, 0, mx::astype(mx::reshape(y, x.shape()), x.dtype()));
+        set_out(op, 1, next_mean);
+        set_out(op, 2, next_var);
+        break;
+      }
       case OP_ROPE: {
         if (op.n_int_params < 2) {
           throw std::runtime_error("OP_ROPE requires int params: T, head_dim");

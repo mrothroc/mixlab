@@ -10,7 +10,8 @@ state updates are not necessarily the right inductive bias.
   "state_size": 64,
   "init": "s4d-lin",
   "dt_min": 0.001,
-  "dt_max": 0.1
+  "dt_max": 0.1,
+  "output_transform": "glu"
 }
 ```
 
@@ -43,9 +44,17 @@ it with an FFT. The recurrent form is retained internally for forward and
 gradient parity tests; it is not a public execution-mode switch or an
 incremental inference cache in v1.
 
-Only `init: "s4d-lin"` is accepted. S4D-LegS, bidirectional S4D, BatchNorm,
-the reference output GLU, and incremental recurrent-state inference remain
+Only `init: "s4d-lin"` is accepted. `output_transform: "glu"` adds the
+reference-style GELU, dropout, `D -> 2D` projection, and GLU output path.
+Omitting the field preserves the earlier compact GELU-only block exactly.
+S4D-LegS, bidirectional S4D, and incremental recurrent-state inference remain
 separate follow-up work rather than silent approximations.
+
+Global `norm_type: "batchnorm"` is supported for fixed-shape native
+classification. It computes channel statistics over batch and time, stores
+running mean/variance in native checkpoints, and uses those buffers for
+validation/evaluation. Padded records, recurrence, SWA, and HF export are
+rejected in this first release.
 
 ## Optimization
 
@@ -68,7 +77,8 @@ to set their learning rate independently:
 
 - Native token and `linear_frames` classification are supported.
 - The FFT path is differentiable through MLX.
-- Normal recurrence/weight sharing can reuse S4D block weights.
+- Normal recurrence/weight sharing can reuse S4D block weights when using
+  stateless RMSNorm/LayerNorm. BatchNorm rejects recurrence in v1.
 - Hugging Face export and stateful generation are not supported in v1 and
   fail explicitly.
 - `mode count` includes kernel materialization and FFT work in the estimate.
@@ -76,4 +86,3 @@ to set their learning rate independently:
 For continuous input, see [Continuous sequence input](continuous-input.md) and
 the [`continuous_s4d_classification_tiny.json`](../examples/continuous_s4d_classification_tiny.json)
 example.
-

@@ -1369,13 +1369,19 @@ mx::array fake_quantize_weight(const mx::array& weight, QATMode mode) {
 std::vector<mx::array> effective_training_weights(
     const std::vector<mx::array>& base_weights,
     QATMode qat_mode,
-    ComputeDType compute_dtype) {
+    ComputeDType compute_dtype,
+    const std::vector<WeightOptimizerSpec>& weight_specs) {
   if (qat_mode == QATMode::None && compute_dtype == ComputeDType::Float32) {
     return base_weights;
   }
   std::vector<mx::array> effective;
   effective.reserve(base_weights.size());
-  for (const auto& weight : base_weights) {
+  for (size_t i = 0; i < base_weights.size(); ++i) {
+    const auto& weight = base_weights[i];
+    if (i < weight_specs.size() && weight_specs[i].frozen) {
+      effective.push_back(weight);
+      continue;
+    }
     auto exec_weight = fake_quantize_weight(weight, qat_mode);
     if (compute_dtype == ComputeDType::BFloat16) {
       exec_weight = mx::astype(exec_weight, mx::bfloat16);
@@ -1387,14 +1393,19 @@ std::vector<mx::array> effective_training_weights(
 
 std::vector<mx::array> effective_compute_weights(
     const std::vector<mx::array>& base_weights,
-    ComputeDType compute_dtype) {
+    ComputeDType compute_dtype,
+    const std::vector<WeightOptimizerSpec>& weight_specs) {
   if (compute_dtype == ComputeDType::Float32) {
     return base_weights;
   }
   std::vector<mx::array> effective;
   effective.reserve(base_weights.size());
-  for (const auto& weight : base_weights) {
-    effective.push_back(mx::astype(weight, mx::bfloat16));
+  for (size_t i = 0; i < base_weights.size(); ++i) {
+    if (i < weight_specs.size() && weight_specs[i].frozen) {
+      effective.push_back(base_weights[i]);
+    } else {
+      effective.push_back(mx::astype(base_weights[i], mx::bfloat16));
+    }
   }
   return effective;
 }
@@ -1596,6 +1607,11 @@ std::vector<std::string> collect_training_step_output_names(const IRTrainer& tra
       output_names.push_back(name);
     }
   }
+  for (const auto& update : trainer.model_buffer_updates) {
+    if (std::find(output_names.begin(), output_names.end(), update.output_name) == output_names.end()) {
+      output_names.push_back(update.output_name);
+    }
+  }
   return output_names;
 }
 
@@ -1694,6 +1710,54 @@ std::optional<size_t> parse_weight_input_name(const std::string& name, size_t n_
     }
   }
   return idx;
+}
+
+std::vector<ModelBufferUpdate> collect_model_buffer_updates(
+    const IRProgram& program,
+    const std::vector<WeightOptimizerSpec>& weight_specs) {
+  std::vector<ModelBufferUpdate> updates;
+  for (const auto& op : program.ops) {
+    if (op.type != OP_BATCHNORM) {
+      continue;
+    }
+    if (op.n_inputs != 5 || op.n_outputs != 3) {
+      throw std::runtime_error("invalid OP_BATCHNORM buffer-update contract");
+    }
+    const std::pair<int, int> mappings[] = {{3, 1}, {4, 2}};
+    for (const auto& mapping : mappings) {
+      auto weight_index = parse_weight_input_name(
+          op.inputs[mapping.first],
+          weight_specs.size());
+      if (!weight_index.has_value()) {
+        throw std::runtime_error("OP_BATCHNORM running statistic must be a model weight buffer");
+      }
+      if (!weight_specs[*weight_index].frozen) {
+        throw std::runtime_error("OP_BATCHNORM running statistic is not marked frozen");
+      }
+      updates.push_back(ModelBufferUpdate{
+          *weight_index,
+          op.outputs[mapping.second],
+      });
+    }
+  }
+  return updates;
+}
+
+void apply_model_buffer_updates(
+    IRTrainer& trainer,
+    const std::unordered_map<std::string, mx::array>& outputs) {
+  for (const auto& update : trainer.model_buffer_updates) {
+    auto it = outputs.find(update.output_name);
+    if (it == outputs.end()) {
+      throw std::runtime_error(
+          "missing model buffer update output: " + update.output_name);
+    }
+    if (update.weight_index >= trainer.weights.size()) {
+      throw std::runtime_error("model buffer update weight index out of range");
+    }
+    trainer.weights[update.weight_index] = mx::stop_gradient(
+        mx::astype(it->second, mx::float32));
+  }
 }
 
 std::vector<uint8_t> required_ops_for_named_outputs(
@@ -1930,13 +1994,16 @@ float IRTrainer::step(const mx::array& tokens, const mx::array& targets) {
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
   }
+  if (!model_buffer_updates.empty()) {
+    throw std::runtime_error("model buffer updates require a named trainer step");
+  }
   step_count++;
 
   std::vector<int> argnums(weights.size());
   std::iota(argnums.begin(), argnums.end(), 0);
   auto fn = mx::value_and_grad(
       [this, tokens, targets](const std::vector<mx::array>& w) {
-        auto effective = effective_training_weights(w, qat_mode, compute_dtype);
+        auto effective = effective_training_weights(w, qat_mode, compute_dtype, weight_optimizers);
         return ir_interpret(program, effective, tokens, targets, true);
       },
       argnums);
@@ -1984,6 +2051,9 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
     throw std::runtime_error("missing weight optimizer spec");
   }
   const auto& spec = weight_optimizers[i];
+  if (spec.frozen) {
+    return;
+  }
   if (spec.group_index >= optimizer_groups.size()) {
     throw std::runtime_error("weight optimizer group index out of range");
   }
@@ -2182,7 +2252,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         for (size_t i = 0; i < n_weights; ++i) {
           w.push_back(fn_args[i]);
         }
-        auto effective = effective_training_weights(w, qat_mode, compute_dtype);
+        auto effective = effective_training_weights(w, qat_mode, compute_dtype, weight_optimizers);
         ArrayMap input_map;
         input_map.reserve(local_input_names.size());
         for (size_t i = 0; i < local_input_names.size(); ++i) {
@@ -2958,6 +3028,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   const auto opt_t0 = HostClock::now();
   auto raw_gradient_nonfinite = sanitize_and_clip_gradients(grads, max_grad_norm);
   apply_optimizer_updates(grads);
+  apply_model_buffer_updates(*this, outputs);
   if (timing_enabled) {
     timing_opt_us = elapsed_us(opt_t0, HostClock::now());
   }
@@ -3060,7 +3131,7 @@ float IRTrainer::evaluate(const mx::array& tokens, const mx::array& targets) {
   if (weights.empty()) {
     throw std::runtime_error("IR trainer has no weights");
   }
-  auto effective = effective_compute_weights(weights, compute_dtype);
+  auto effective = effective_compute_weights(weights, compute_dtype, weight_optimizers);
   auto loss = ir_interpret(program, effective, tokens, targets, false);
   mx::eval(loss);
   report_gated_delta_timing_summary("eval", step_count);
@@ -3074,7 +3145,7 @@ float IRTrainer::evaluate_named(const TensorMap& inputs) {
   }
   auto loss_name = evaluation_loss_name(program);
   auto output_names = collect_cached_output_names(program, loss_name);
-  auto effective = effective_compute_weights(weights, compute_dtype);
+  auto effective = effective_compute_weights(weights, compute_dtype, weight_optimizers);
   last_outputs = ir_interpret_outputs(program, effective, inputs, output_names);
   auto loss = last_outputs.at(loss_name);
   mx::eval(loss);
@@ -3200,7 +3271,7 @@ float IRTrainer::compute_mean_square_grads_named(const TensorMap& inputs, const 
   std::unordered_map<std::string, mx::array> outputs;
   auto fn = mx::value_and_grad(
       [this, inputs, output_name, &outputs](const std::vector<mx::array>& w) {
-        auto effective = effective_training_weights(w, qat_mode, compute_dtype);
+        auto effective = effective_training_weights(w, qat_mode, compute_dtype, weight_optimizers);
         outputs = ir_interpret_outputs(program, effective, inputs, {output_name}, true);
         auto it = outputs.find(output_name);
         if (it == outputs.end()) {
@@ -3235,7 +3306,7 @@ std::vector<float> IRTrainer::evaluate_per_token(const TensorMap& inputs) {
   }
   auto output_names = collect_cached_output_names(program, evaluation_loss_name(program));
   output_names.push_back("per_token_nll");
-  auto effective = effective_compute_weights(weights, compute_dtype);
+  auto effective = effective_compute_weights(weights, compute_dtype, weight_optimizers);
   last_outputs = ir_interpret_outputs(program, effective, inputs, output_names);
   auto nll = mx::astype(last_outputs.at("per_token_nll"), mx::float32);
   auto flat = mx::reshape(nll, {static_cast<mx::ShapeElem>(nll.size())});
@@ -3465,7 +3536,8 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
           }
           auto effective = effective_compute_weights(
               effective_lora_weights(weights, local_adapters),
-              compute_dtype);
+              compute_dtype,
+              weight_optimizers);
           return ir_interpret(program, effective, inputs, loss_name, true);
         },
         argnums);
@@ -3514,7 +3586,10 @@ float IRTrainer::evaluate_lora_named(const TensorMap& inputs, int rank, int step
   }
 
   auto output_names = collect_cached_output_names(program, loss_name);
-  auto effective = effective_compute_weights(effective_lora_weights(weights, adapters), compute_dtype);
+  auto effective = effective_compute_weights(
+      effective_lora_weights(weights, adapters),
+      compute_dtype,
+      weight_optimizers);
   last_outputs = ir_interpret_outputs(program, effective, inputs, output_names);
   auto loss = last_outputs.at(loss_name);
   std::vector<mx::array> eval_arrays;
@@ -3570,6 +3645,7 @@ void IRTrainer::set_program(const IRProgram& new_program) {
     throw std::runtime_error("cannot switch IR program while a submitted step is pending");
   }
   program = new_program;
+  model_buffer_updates = collect_model_buffer_updates(program, weight_optimizers);
   last_outputs.clear();
   last_grads.clear();
   cached_named_step_metadata_valid = false;
@@ -3641,6 +3717,7 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
   trainer->weights = initial_weights;
   trainer->optimizer_groups = groups;
   trainer->weight_optimizers = weight_specs;
+  trainer->model_buffer_updates = collect_model_buffer_updates(program, weight_specs);
   trainer->adam_m.reserve(initial_weights.size());
   trainer->adam_v.reserve(initial_weights.size());
   trainer->has_adam_state.reserve(initial_weights.size());
@@ -3652,8 +3729,20 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
   trainer->has_sgd_state.reserve(initial_weights.size());
   for (size_t i = 0; i < initial_weights.size(); ++i) {
     const auto& spec = weight_specs[i];
-    if (spec.group_index >= groups.size()) {
+    if (!spec.frozen && spec.group_index >= groups.size()) {
       throw std::runtime_error("IR optimizer group index out of range");
+    }
+    if (spec.frozen) {
+      trainer->adam_m.push_back(mx::array(0.0f, mx::float32));
+      trainer->adam_v.push_back(mx::array(0.0f, mx::float32));
+      trainer->has_adam_state.push_back(0);
+      trainer->muon_momentum.push_back(mx::array(0.0f, mx::float32));
+      trainer->has_muon_state.push_back(0);
+      trainer->muon_second_moment.push_back(mx::array(0.0f, mx::float32));
+      trainer->has_muon_second_moment_state.push_back(0);
+      trainer->sgd_momentum.push_back(mx::array(0.0f, mx::float32));
+      trainer->has_sgd_state.push_back(0);
+      continue;
     }
     const auto& group = groups[spec.group_index];
     switch (group.kind) {

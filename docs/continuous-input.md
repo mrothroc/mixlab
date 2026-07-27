@@ -95,6 +95,11 @@ Mamba block with:
 
 See [S4D](s4d.md) and
 [`continuous_s4d_classification_tiny.json`](../examples/continuous_s4d_classification_tiny.json).
+For reference-style normalization and output projection, use
+`norm_type: "batchnorm"` with `output_transform: "glu"` as shown in
+[`continuous_s4d_batchnorm_reference_tiny.json`](../examples/continuous_s4d_batchnorm_reference_tiny.json).
+That mode requires fixed unpadded records; partial/padded classification
+batches fail rather than contaminating running statistics.
 
 The adapter uses the top-level `positional_embedding` policy. Set `"none"` for
 raw signals whose sequence axis already carries order, or

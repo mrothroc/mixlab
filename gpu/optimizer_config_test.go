@@ -324,3 +324,28 @@ func TestBuildTrainerOptimizerSpec_NorMuonForMatrix(t *testing.T) {
 		t.Fatalf("matrix group MuonNormalization=%d, want NorMuon (%d)", matrixGroup.MuonNormalization, MuonNormalizationNorMuon)
 	}
 }
+
+func TestBuildTrainerOptimizerSpecFreezesModelBuffers(t *testing.T) {
+	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
+		Weights: []OptimizerWeightMetadata{
+			{Name: "embed", Shape: []int{10, 4}},
+			{Name: "block_norm_running_mean", Shape: []int{4}, IsBuffer: true},
+			{Name: "block_norm_running_var", Shape: []int{4}, IsBuffer: true},
+		},
+		Embed:  OptimizerSettings{Name: "adamw", LR: 1, Beta1: 0.9, Beta2: 0.99, Epsilon: 1e-8},
+		Head:   OptimizerSettings{Name: "adamw", LR: 1, Beta1: 0.9, Beta2: 0.99, Epsilon: 1e-8},
+		Scalar: OptimizerSettings{Name: "adamw", LR: 1, Beta1: 0.9, Beta2: 0.99, Epsilon: 1e-8},
+		Matrix: OptimizerSettings{Name: "adamw", LR: 1, Beta1: 0.9, Beta2: 0.99, Epsilon: 1e-8},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Weights) != 3 {
+		t.Fatalf("weight specs=%d want 3", len(spec.Weights))
+	}
+	for i := 1; i < 3; i++ {
+		if !spec.Weights[i].Frozen || spec.Weights[i].Decay {
+			t.Fatalf("buffer weight[%d]=%+v want frozen and non-decayed", i, spec.Weights[i])
+		}
+	}
+}

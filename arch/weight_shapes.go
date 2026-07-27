@@ -14,6 +14,7 @@ const DefaultFFNMultiplier = 2.67
 type WeightMeta struct {
 	Name          string
 	Shape         []int
+	IsBuffer      bool // persistent model state: checkpointed, but not optimized or counted as a parameter
 	IsNormScale   bool // true for normalization scales (init 1.0); false for other 1-D params (init 0.0)
 	InitOne       bool // true for non-norm weights that should initialize to 1.0
 	InitValue     float32
