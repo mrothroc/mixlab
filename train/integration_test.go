@@ -55,19 +55,6 @@ func attachSyntheticCharFeaturesForTest(cfg *arch.ArchConfig) {
 // generateSyntheticBatch creates random token sequences for training.
 // Tokens are uniform random in [0, vocabSize). Targets are the next token
 // (shifted by one position within the same random sequence).
-func generateSyntheticBatch(rng *rand.Rand, batchTokens, vocabSize int) (x, y []int) {
-	// Generate batchTokens+1 random tokens, then x = tokens[:-1], y = tokens[1:]
-	raw := make([]int, batchTokens+1)
-	for i := range raw {
-		raw[i] = rng.Intn(vocabSize)
-	}
-	x = make([]int, batchTokens)
-	y = make([]int, batchTokens)
-	copy(x, raw[:batchTokens])
-	copy(y, raw[1:batchTokens+1])
-	return x, y
-}
-
 // syntheticBatchUnsupportedReason reports why a config's forward graph cannot
 // be driven by the synthetic next-token harness used here. The harness feeds
 // plain (x, y) token batches through the simple TrainStepGPU/EvaluateGPU path,
