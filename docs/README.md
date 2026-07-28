@@ -52,6 +52,8 @@ mixlab -mode MODE -h
 These explain implementation decisions and release evidence; they are not the
 primary user contract:
 
+- [Distributed (DDP) training — current state and contributor guide](distributed-training.md)
+- [R1 DDP hardware acceptance](distributed-r1-hardware-acceptance.md)
 - [Block-diffusion design](block-diffusion-design.md)
 - [Block-diffusion release verification](block-diffusion-release-verification.md)
 - [Reference parity audit](reference-parity-audit-2026-06.md)
