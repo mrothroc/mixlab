@@ -2618,6 +2618,92 @@ S4DDiscreteParameters s4d_discretize(
   return {exp_real, exp_imag, b_real, b_imag, dt_a_real, dt_a_imag};
 }
 
+mx::array s4d_broadcast_groups(
+    const mx::array& raw,
+    int n_ssm,
+    int D,
+    int state_pairs) {
+  auto grouped = mx::reshape(mx::astype(raw, mx::float32), {n_ssm, 1, state_pairs});
+  auto expanded = mx::broadcast_to(grouped, {n_ssm, D / n_ssm, state_pairs});
+  return mx::reshape(expanded, {D, state_pairs});
+}
+
+S4DDiscreteParameters s4d_discretize_advanced(
+    const mx::array& log_dt_raw,
+    const mx::array& log_a_real_raw,
+    const mx::array& a_imag_raw,
+    const mx::array* b_real_raw,
+    const mx::array* b_imag_raw,
+    int D,
+    int state_pairs,
+    int n_ssm,
+    int discretization) {
+  auto dt = mx::reshape(mx::exp(mx::astype(log_dt_raw, mx::float32)), {D, 1});
+  auto a_real = -mx::exp(s4d_broadcast_groups(log_a_real_raw, n_ssm, D, state_pairs));
+  auto a_imag = s4d_broadcast_groups(a_imag_raw, n_ssm, D, state_pairs);
+  auto b_real = b_real_raw == nullptr
+      ? mx::ones({D, state_pairs}, mx::float32)
+      : s4d_broadcast_groups(*b_real_raw, n_ssm, D, state_pairs);
+  auto b_imag = b_imag_raw == nullptr
+      ? mx::zeros({D, state_pairs}, mx::float32)
+      : s4d_broadcast_groups(*b_imag_raw, n_ssm, D, state_pairs);
+
+  auto dt_a_real = dt * a_real;
+  auto dt_a_imag = dt * a_imag;
+  mx::array abar_real = mx::zeros_like(dt_a_real);
+  mx::array abar_imag = mx::zeros_like(dt_a_imag);
+  mx::array bbar_real = mx::zeros_like(dt_a_real);
+  mx::array bbar_imag = mx::zeros_like(dt_a_imag);
+  if (discretization == 0) {
+    auto magnitude = mx::exp(dt_a_real);
+    abar_real = magnitude * mx::cos(dt_a_imag);
+    abar_imag = magnitude * mx::sin(dt_a_imag);
+    auto numerator_real = abar_real - mx::array(1.0f, mx::float32);
+    auto denominator = mx::square(a_real) + mx::square(a_imag);
+    auto base_real = (numerator_real * a_real + abar_imag * a_imag) / denominator;
+    auto base_imag = (abar_imag * a_real - numerator_real * a_imag) / denominator;
+    bbar_real = base_real * b_real - base_imag * b_imag;
+    bbar_imag = base_real * b_imag + base_imag * b_real;
+  } else {
+    auto half_real = mx::array(0.5f, mx::float32) * dt_a_real;
+    auto half_imag = mx::array(0.5f, mx::float32) * dt_a_imag;
+    auto numerator_real = mx::array(1.0f, mx::float32) + half_real;
+    auto numerator_imag = half_imag;
+    auto denominator_real = mx::array(1.0f, mx::float32) - half_real;
+    auto denominator_imag = -half_imag;
+    auto denominator =
+        mx::square(denominator_real) + mx::square(denominator_imag);
+    abar_real =
+        (numerator_real * denominator_real + numerator_imag * denominator_imag) /
+        denominator;
+    abar_imag =
+        (numerator_imag * denominator_real - numerator_real * denominator_imag) /
+        denominator;
+    auto dt_b_real = dt * b_real;
+    auto dt_b_imag = dt * b_imag;
+    bbar_real =
+        (dt_b_real * denominator_real + dt_b_imag * denominator_imag) /
+        denominator;
+    bbar_imag =
+        (dt_b_imag * denominator_real - dt_b_real * denominator_imag) /
+        denominator;
+  }
+
+  auto magnitude_sq = mx::maximum(
+      mx::square(abar_real) + mx::square(abar_imag),
+      mx::array(1e-30f, mx::float32));
+  auto log_magnitude = mx::array(0.5f, mx::float32) * mx::log(magnitude_sq);
+  auto phase = mx::arctan2(abar_imag, abar_real);
+  return {
+      abar_real,
+      abar_imag,
+      bbar_real,
+      bbar_imag,
+      log_magnitude,
+      phase,
+  };
+}
+
 mx::array s4d_materialize_kernel(
     const S4DDiscreteParameters& discrete,
     const mx::array& c_real_raw,
@@ -2665,6 +2751,34 @@ mx::array s4d_fft_convolution(
   auto full = mx::fft::irfft(x_freq * kernel_broadcast, fft_len, 1);
   auto convolved = mx::slice(full, {0, 0, 0}, {B, T, D});
   auto direct = mx::reshape(mx::astype(direct_raw, mx::float32), {1, 1, D});
+  return mx::reshape(convolved + x * direct, {B * T, D});
+}
+
+mx::array s4d_fft_convolution_bidirectional(
+    const mx::array& x_raw,
+    const mx::array& forward_kernel,
+    const mx::array& backward_kernel,
+    const mx::array& direct_raw,
+    int B,
+    int T,
+    int D,
+    mx::array* combined_kernel) {
+  auto reverse_indices = mx::astype(mx::arange(T - 1, -1, -1), mx::int32);
+  auto reversed_backward = mx::take(backward_kernel, reverse_indices, 1);
+  auto zeros = mx::zeros({D, T}, mx::float32);
+  auto kernel =
+      mx::concatenate({forward_kernel, zeros}, 1) +
+      mx::concatenate({zeros, reversed_backward}, 1);
+  auto x = mx::reshape(mx::astype(x_raw, mx::float32), {B, T, D});
+  auto x_freq = mx::fft::rfft(x, 2 * T, 1);
+  auto kernel_freq = mx::fft::rfft(kernel, 2 * T, 1);
+  auto kernel_broadcast = mx::reshape(
+      mx::transpose(kernel_freq, {1, 0}),
+      {1, kernel_freq.shape(1), D});
+  auto full = mx::fft::irfft(x_freq * kernel_broadcast, 2 * T, 1);
+  auto convolved = mx::slice(full, {0, 0, 0}, {B, T, D});
+  auto direct = mx::reshape(mx::astype(direct_raw, mx::float32), {1, 1, D});
+  *combined_kernel = kernel;
   return mx::reshape(convolved + x * direct, {B * T, D});
 }
 
@@ -2727,6 +2841,71 @@ S4DResult s4d_forward(
       ? s4d_recurrent(x, discrete, c_real, c_imag, direct, B, T, D, state_pairs)
       : s4d_fft_convolution(x, kernel, direct, B, T, D);
   return {output, kernel};
+}
+
+S4DResult s4d_forward_advanced(
+    const std::vector<mx::array>& inputs,
+    int B,
+    int T,
+    int D,
+    int state_size,
+    int n_ssm,
+    bool bidirectional,
+    int discretization,
+    bool trainable_b) {
+  int state_pairs = state_size / 2;
+  int input_idx = 0;
+  const auto& x = inputs[input_idx++];
+  const auto& log_dt = inputs[input_idx++];
+  const auto& log_a_real = inputs[input_idx++];
+  const auto& a_imag = inputs[input_idx++];
+  const mx::array* b_real = nullptr;
+  const mx::array* b_imag = nullptr;
+  if (trainable_b) {
+    b_real = &inputs[input_idx++];
+    b_imag = &inputs[input_idx++];
+  }
+  const auto& c_forward_real = inputs[input_idx++];
+  const auto& c_forward_imag = inputs[input_idx++];
+  const mx::array* c_backward_real = nullptr;
+  const mx::array* c_backward_imag = nullptr;
+  if (bidirectional) {
+    c_backward_real = &inputs[input_idx++];
+    c_backward_imag = &inputs[input_idx++];
+  }
+  const auto& direct = inputs[input_idx++];
+
+  auto discrete = s4d_discretize_advanced(
+      log_dt,
+      log_a_real,
+      a_imag,
+      b_real,
+      b_imag,
+      D,
+      state_pairs,
+      n_ssm,
+      discretization);
+  auto forward_kernel = s4d_materialize_kernel(
+      discrete, c_forward_real, c_forward_imag, D, T, state_pairs);
+  if (!bidirectional) {
+    return {
+        s4d_fft_convolution(x, forward_kernel, direct, B, T, D),
+        forward_kernel,
+    };
+  }
+  auto backward_kernel = s4d_materialize_kernel(
+      discrete, *c_backward_real, *c_backward_imag, D, T, state_pairs);
+  auto combined_kernel = mx::zeros({D, 2 * T}, mx::float32);
+  auto output = s4d_fft_convolution_bidirectional(
+      x,
+      forward_kernel,
+      backward_kernel,
+      direct,
+      B,
+      T,
+      D,
+      &combined_kernel);
+  return {output, combined_kernel};
 }
 
 struct TTTMLPScanResult {
@@ -4112,7 +4291,25 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           }
           key = mx::astype(mx::take(get(op, 1), mx::array(op.int_params[0]), 0), mx::uint32);
         }
-        auto mask = mx::astype(mx::random::bernoulli(keep_prob, x.shape(), key), x.dtype());
+        mx::Shape mask_shape = x.shape();
+        bool tied = op.n_int_params >= 4;
+        if (tied) {
+          int B = op.int_params[1];
+          int T = op.int_params[2];
+          int D = op.int_params[3];
+          if (B <= 0 || T <= 0 || D <= 0 || x.size() != B * T * D) {
+            throw std::runtime_error("OP_DROPOUT tied mode requires flattened [B*T,D] input");
+          }
+          mask_shape = {B, 1, D};
+        }
+        auto mask = mx::astype(mx::random::bernoulli(keep_prob, mask_shape, key), x.dtype());
+        if (tied) {
+          mask = mx::reshape(
+              mx::broadcast_to(
+                  mask,
+                  {op.int_params[1], op.int_params[2], op.int_params[3]}),
+              x.shape());
+        }
         set_out(op, 0, x * mask / keep_prob);
         break;
       }
@@ -4415,8 +4612,8 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         break;
       }
       case OP_S4D: {
-        if (op.n_inputs != 7 || op.n_outputs != 2 || op.n_int_params < 5) {
-          throw std::runtime_error("OP_S4D requires 7 inputs, 2 outputs, and B,T,D,state_size,mode");
+        if (op.n_outputs != 2 || op.n_int_params < 5) {
+          throw std::runtime_error("OP_S4D requires 2 outputs and B,T,D,state_size,mode");
         }
         int B = op.int_params[0];
         int T = op.int_params[1];
@@ -4429,10 +4626,52 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         if (mode != 0 && mode != 1) {
           throw std::runtime_error("OP_S4D mode must be 0 (FFT) or 1 (recurrent)");
         }
-        auto result = s4d_forward(
-            get(op, 0), get(op, 1), get(op, 2), get(op, 3),
-            get(op, 4), get(op, 5), get(op, 6),
-            B, T, D, state_size, mode);
+        S4DResult result = [&]() {
+          if (op.n_int_params < 7) {
+            if (op.n_inputs != 7) {
+              throw std::runtime_error("legacy OP_S4D requires 7 inputs");
+            }
+            return s4d_forward(
+                get(op, 0), get(op, 1), get(op, 2), get(op, 3),
+                get(op, 4), get(op, 5), get(op, 6),
+                B, T, D, state_size, mode);
+          }
+          int n_ssm = op.int_params[5];
+          int flags = op.int_params[6];
+          bool bidirectional = (flags & 1) != 0;
+          int discretization = (flags & 2) != 0 ? 1 : 0;
+          bool trainable_b = (flags & 4) != 0;
+          int expected_inputs =
+              1 + 3 + (trainable_b ? 2 : 0) + 2 +
+              (bidirectional ? 2 : 0) + 1;
+          if (op.n_inputs != expected_inputs) {
+            throw std::runtime_error("advanced OP_S4D input count mismatch");
+          }
+          if (mode != 0) {
+            throw std::runtime_error("advanced OP_S4D supports FFT mode only");
+          }
+          if (n_ssm <= 0 || n_ssm > D || D % n_ssm != 0) {
+            throw std::runtime_error("advanced OP_S4D requires n_ssm to divide D");
+          }
+          if (discretization != 0 && discretization != 1) {
+            throw std::runtime_error("advanced OP_S4D discretization must be zoh or bilinear");
+          }
+          std::vector<mx::array> inputs;
+          inputs.reserve(op.n_inputs);
+          for (int i = 0; i < op.n_inputs; ++i) {
+            inputs.push_back(get(op, i));
+          }
+          return s4d_forward_advanced(
+              inputs,
+              B,
+              T,
+              D,
+              state_size,
+              n_ssm,
+              bidirectional,
+              discretization,
+              trainable_b);
+        }();
         set_out(op, 0, result.output);
         set_out(op, 1, result.kernel);
         break;

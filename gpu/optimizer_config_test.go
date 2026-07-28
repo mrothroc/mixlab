@@ -20,6 +20,8 @@ func TestClassifyWeightOptimizer(t *testing.T) {
 		{"smear_gate", OptimizerWeightMetadata{Name: "smear_gate", Shape: []int{12, 1}}, optimizerClassScalar},
 		{"smear_scale", OptimizerWeightMetadata{Name: "smear_scale", Shape: []int{1}}, optimizerClassScalar},
 		{"backout_lambda", OptimizerWeightMetadata{Name: "backout_lambda", Shape: []int{1}}, optimizerClassScalar},
+		{"s4d_B", OptimizerWeightMetadata{Name: "s4d_B_real", Shape: []int{2, 32}}, optimizerClassScalar},
+		{"s4d_backward_C", OptimizerWeightMetadata{Name: "s4d_C_backward_real", Shape: []int{64, 32}}, optimizerClassScalar},
 		{"vector", OptimizerWeightMetadata{Name: "bias", Shape: []int{128}}, optimizerClassScalar},
 		{"matrix", OptimizerWeightMetadata{Name: "wq", Shape: []int{128, 128}}, optimizerClassMatrix},
 	}
@@ -84,6 +86,38 @@ func TestBuildTrainerOptimizerSpec(t *testing.T) {
 	}
 	if spec.MaxGradNorm != 1.25 || spec.DefaultBaseLR != 0.01 {
 		t.Fatalf("spec lr fields = max_grad_norm=%v default_base_lr=%v", spec.MaxGradNorm, spec.DefaultBaseLR)
+	}
+}
+
+func TestBuildTrainerOptimizerSpecExtraGroupsAndAllParameterDecay(t *testing.T) {
+	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
+		Weights: []OptimizerWeightMetadata{
+			{Name: "s4d_log_A_real", Shape: []int{2, 4}, Group: "state", ForceNoDecay: true},
+			{Name: "s4d_log_dt", Shape: []int{8}, Group: "main", ForceNoDecay: true},
+			{Name: "s4d_C_real", Shape: []int{8, 4}, Group: "main"},
+			{Name: "s4d_D", Shape: []int{8}, Group: "main"},
+			{Name: "bias", Shape: []int{8}},
+		},
+		Embed:  OptimizerSettings{Name: "adamw", LR: 0.01, WeightDecay: 0.05},
+		Head:   OptimizerSettings{Name: "adamw", LR: 0.01, WeightDecay: 0.05},
+		Scalar: OptimizerSettings{Name: "adamw", LR: 0.01, WeightDecay: 0.05},
+		Matrix: OptimizerSettings{Name: "adamw", LR: 0.01, WeightDecay: 0.05},
+		ExtraGroups: map[string]OptimizerSettings{
+			"state": {Name: "adamw", LR: 0.001, WeightDecay: 0.05},
+			"main":  {Name: "adamw", LR: 0.01, WeightDecay: 0.05},
+		},
+		DecayAll: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantLR := []float32{0.001, 0.01, 0.01, 0.01, 0.01}
+	wantDecay := []bool{false, false, true, true, true}
+	for i := range spec.Weights {
+		group := spec.Groups[spec.Weights[i].GroupIndex]
+		if group.LR != wantLR[i] || spec.Weights[i].Decay != wantDecay[i] {
+			t.Fatalf("weight[%d] group=%+v decay=%v want lr=%g decay=%v", i, group, spec.Weights[i].Decay, wantLR[i], wantDecay[i])
+		}
 	}
 }
 

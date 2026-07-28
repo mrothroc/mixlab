@@ -66,6 +66,13 @@ func validateNormPolicy(cfg *ArchConfig, source string) error {
 			return fmt.Errorf("config %q non-default norm settings are not supported with blocks[%d].type=%q in this release", source, i, block.Type)
 		}
 	}
+	if cfg.EffectiveNormPlacement() == NormPlacementPostResidual {
+		for i, block := range cfg.Blocks {
+			if blockTypeKey(block) != "s4d" {
+				return fmt.Errorf("config %q norm_placement=\"post_residual\" currently supports s4d blocks only (blocks[%d].type=%q)", source, i, block.Type)
+			}
+		}
+	}
 	return nil
 }
 
@@ -218,6 +225,9 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		}
 		if strings.TrimSpace(b.OutputTransform) != "" {
 			return fmt.Errorf("config %q %s[%d] output_transform is valid only for type=s4d", source, groupName, idx)
+		}
+		if b.NSSM != 0 || strings.TrimSpace(b.Discretization) != "" || b.TrainableB || b.StateLR != nil || b.TieDropout {
+			return fmt.Errorf("config %q %s[%d] n_ssm, discretization, trainable_b, state_lr, and tie_dropout are valid only for type=s4d", source, groupName, idx)
 		}
 	}
 	switch b.Type {
@@ -409,8 +419,16 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 			math.IsInf(dtMin, 0) || math.IsInf(dtMax, 0) {
 			return fmt.Errorf("config %q %s[%d] type=s4d requires 0 < dt_min < dt_max", source, groupName, idx)
 		}
-		if b.Bidirectional {
-			return fmt.Errorf("config %q %s[%d] type=s4d bidirectional=true is not supported in v1", source, groupName, idx)
+		if b.NSSM < 0 {
+			return fmt.Errorf("config %q %s[%d] type=s4d has invalid n_ssm=%d (must be > 0 when set)", source, groupName, idx, b.NSSM)
+		}
+		switch effectiveS4DDiscretization(b) {
+		case S4DDiscretizationZOH, S4DDiscretizationBilinear:
+		default:
+			return fmt.Errorf("config %q %s[%d] type=s4d has invalid discretization=%q (must be \"zoh\" or \"bilinear\")", source, groupName, idx, b.Discretization)
+		}
+		if b.StateLR != nil && (*b.StateLR <= 0 || math.IsNaN(*b.StateLR) || math.IsInf(*b.StateLR, 0)) {
+			return fmt.Errorf("config %q %s[%d] type=s4d has invalid state_lr=%g (must be finite and > 0)", source, groupName, idx, *b.StateLR)
 		}
 		switch effectiveS4DOutputTransform(b) {
 		case S4DOutputTransformNone, S4DOutputTransformGLU:
@@ -565,6 +583,11 @@ func validateBlockRopeDims(b BlockSpec, modelDim int, source, groupName string, 
 
 func validateRecurrentMixerDims(b BlockSpec, modelDim int, source, groupName string, idx int) error {
 	switch blockTypeKey(b) {
+	case "s4d":
+		nSSM := effectiveS4DNSSM(b, modelDim)
+		if nSSM <= 0 || nSSM > modelDim || modelDim%nSSM != 0 {
+			return fmt.Errorf("config %q %s[%d] type=s4d requires n_ssm to divide model_dim (got n_ssm=%d model_dim=%d)", source, groupName, idx, nSSM, modelDim)
+		}
 	case "hgrn2":
 		if b.Heads <= 0 {
 			return nil

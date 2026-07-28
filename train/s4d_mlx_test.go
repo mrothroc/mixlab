@@ -97,6 +97,57 @@ func TestS4DTinyContinuousClassificationTraining(t *testing.T) {
 	assertS4DTrainingDecreases(t, cfg, batch, 2, 16)
 }
 
+func TestS4DReferenceBidirectionalGroupedContinuousTraining(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	cfg, err := ParseArchConfig([]byte(`{
+		"name":"s4d_reference_continuous_smoke",
+		"model_dim":8,
+		"seq_len":8,
+		"positional_embedding":"none",
+		"dropout":0.1,
+		"tie_dropout":true,
+		"norm_type":"layernorm",
+		"norm_placement":"post_residual",
+		"final_norm":false,
+		"input_adapter":{"kind":"linear_frames","feature_dim":1,"bias":true,"norm":"none"},
+		"blocks":[{
+			"type":"s4d","state_size":8,"n_ssm":2,"bidirectional":true,
+			"discretization":"bilinear","trainable_b":true,"state_lr":0.001,
+			"output_transform":"glu"
+		}],
+		"training":{
+			"objective":"classification",
+			"classification":{"num_labels":2,"pooling":"mean","classifier_dropout":0},
+			"optimizer":"adamw",
+			"batch_tokens":16,
+			"steps":40,
+			"lr":0.002,
+			"grad_clip":1,
+			"weight_decay":0.01,
+			"weight_decay_policy":"all",
+			"seed":31
+		}
+	}`), "s4d_reference_continuous_smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := make([]float32, 16)
+	for pos := 0; pos < 8; pos++ {
+		noise := float32((pos%3)-1) * 0.02
+		frames[pos] = -1 + noise
+		frames[8+pos] = 1 + noise
+	}
+	batch := objectiveBatch{
+		frames:               frames,
+		classificationLabels: []int32{0, 1},
+		classificationMask:   repeatFloat32Train(16, 1),
+		classificationPos:    []int32{7, 7},
+	}
+	assertS4DTrainingDecreases(t, cfg, batch, 2, 8)
+}
+
 func TestS4DBatchNormReferenceStyleContinuousTrainingAndCheckpoint(t *testing.T) {
 	if !mlxAvailable() {
 		t.Skip("MLX backend not available")

@@ -2,6 +2,7 @@ package arch
 
 import (
 	"math"
+	"os"
 	"strings"
 	"testing"
 )
@@ -103,6 +104,40 @@ func TestS4DConfigDefaultsWeightsAndIR(t *testing.T) {
 	t.Fatal("missing S4D op")
 }
 
+func TestS4DTopLevelTiedDropoutOnlyAffectsS4DBlocks(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim":8,
+		"vocab_size":32,
+		"seq_len":8,
+		"dropout":0.1,
+		"tie_dropout":true,
+		"blocks":[{"type":"s4d"},{"type":"swiglu"}],
+		"training":{"objective":"causal","batch_tokens":8}
+	}`), "s4d-mixed-tied-dropout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tied, ordinary := 0, 0
+	for _, op := range prog.Ops {
+		if op.Code != OpDropout {
+			continue
+		}
+		switch len(op.IntParams) {
+		case 4:
+			tied++
+		case 1:
+			ordinary++
+		}
+	}
+	if tied == 0 || ordinary == 0 {
+		t.Fatalf("dropout ops tied=%d ordinary=%d, want both in mixed stack", tied, ordinary)
+	}
+}
+
 func TestS4DBlockWeightCount(t *testing.T) {
 	for _, tc := range []struct {
 		blockScales bool
@@ -181,7 +216,9 @@ func TestS4DConfigValidation(t *testing.T) {
 		{"unknown init", `{"type":"s4d","init":"random"}`, `v1 supports "s4d-lin"`},
 		{"bad dt min", `{"type":"s4d","dt_min":-0.1}`, "0 < dt_min < dt_max"},
 		{"bad dt order", `{"type":"s4d","dt_min":0.2,"dt_max":0.1}`, "0 < dt_min < dt_max"},
-		{"bidirectional", `{"type":"s4d","bidirectional":true}`, "not supported in v1"},
+		{"bad n_ssm", `{"type":"s4d","n_ssm":3}`, "n_ssm to divide model_dim"},
+		{"bad discretization", `{"type":"s4d","discretization":"euler"}`, "discretization"},
+		{"bad state lr", `{"type":"s4d","state_lr":-0.001}`, "state_lr"},
 		{"bad output transform", `{"type":"s4d","output_transform":"linear"}`, "output_transform"},
 	}
 	for _, tc := range cases {
@@ -196,6 +233,172 @@ func TestS4DConfigValidation(t *testing.T) {
 				t.Fatalf("error=%v want substring %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestS4DReferenceConfigWeightsIRAndTiedDropout(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim":12,"seq_len":8,"dropout":0.1,"tie_dropout":true,
+		"norm_type":"layernorm","norm_placement":"post_residual","final_norm":false,
+		"input_adapter":{"kind":"linear_frames","feature_dim":1,"bias":true,"norm":"none"},
+		"blocks":[{
+			"type":"s4d","state_size":16,"n_ssm":2,"bidirectional":true,
+			"discretization":"bilinear","trainable_b":true,"state_lr":0.001,
+			"output_transform":"glu"
+		}],
+		"training":{
+			"objective":"classification",
+			"classification":{"num_labels":3,"pooling":"mean","classifier_dropout":0},
+			"optimizer":"adamw","lr":0.01,"weight_decay":0.05,
+			"weight_decay_policy":"all","batch_tokens":8
+		}
+	}`), "s4d-reference")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EffectiveFinalNorm() {
+		t.Fatal("final_norm=true, want false")
+	}
+	if cfg.Training.EffectiveWeightDecayPolicy() != WeightDecayPolicyAll {
+		t.Fatalf("weight decay policy=%q", cfg.Training.EffectiveWeightDecayPolicy())
+	}
+
+	metas, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]WeightMeta, len(metas))
+	for _, meta := range metas {
+		byName[meta.Name] = meta
+		if strings.HasPrefix(meta.Name, "final_norm") {
+			t.Fatalf("final norm weight unexpectedly present: %+v", meta)
+		}
+	}
+	wantShapes := map[string][]int{
+		"s4d_log_dt":                   {12},
+		"s4d_log_A_real":               {2, 8},
+		"s4d_A_imag":                   {2, 8},
+		"s4d_B_real":                   {2, 8},
+		"s4d_B_imag":                   {2, 8},
+		"s4d_C_real":                   {12, 8},
+		"s4d_C_imag":                   {12, 8},
+		"s4d_C_backward_real":          {12, 8},
+		"s4d_C_backward_imag":          {12, 8},
+		"s4d_D":                        {12},
+		"s4d_out_proj":                 {12, 24},
+		"s4d_out_bias":                 {24},
+		"s4d_post_residual_norm_scale": {12},
+		"s4d_post_residual_norm_bias":  {12},
+	}
+	for name, shape := range wantShapes {
+		meta, ok := byName[name]
+		if !ok || !intSlicesEqual(meta.Shape, shape) {
+			t.Fatalf("weight %q=%+v want shape %v", name, meta, shape)
+		}
+	}
+	for _, name := range []string{"s4d_log_A_real", "s4d_A_imag", "s4d_B_real", "s4d_B_imag"} {
+		meta := byName[name]
+		if meta.OptimizerRole != "s4d_state" || meta.OptimizerLR != 0.001 || !meta.ForceNoDecay {
+			t.Fatalf("%s optimizer metadata=%+v", name, meta)
+		}
+	}
+	if meta := byName["s4d_B_real"]; meta.InitMode != "s4d_B_one" || meta.InitOne {
+		t.Fatalf("B real initialization metadata=%+v", meta)
+	}
+	if meta := byName["s4d_B_imag"]; !meta.InitZero {
+		t.Fatalf("B imaginary initialization metadata=%+v", meta)
+	}
+	if meta := byName["s4d_log_dt"]; meta.OptimizerRole != "s4d_main" || !meta.ForceNoDecay {
+		t.Fatalf("dt optimizer metadata=%+v", meta)
+	}
+	for _, name := range []string{"s4d_C_real", "s4d_C_imag", "s4d_D"} {
+		meta := byName[name]
+		if meta.OptimizerRole != "s4d_main" || meta.ForceNoDecay {
+			t.Fatalf("%s optimizer metadata=%+v", name, meta)
+		}
+	}
+
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s4d *Op
+	tiedDropouts := 0
+	for i := range prog.Ops {
+		op := &prog.Ops[i]
+		if op.Code == OpS4D {
+			s4d = op
+		}
+		if op.Code == OpDropout && len(op.IntParams) == 4 {
+			tiedDropouts++
+			if !intSlicesEqual(op.IntParams[1:], []int{1, 8, 12}) {
+				t.Fatalf("tied dropout params=%v", op.IntParams)
+			}
+		}
+	}
+	if s4d == nil {
+		t.Fatal("missing S4D op")
+	}
+	if len(s4d.Inputs) != 11 || !intSlicesEqual(s4d.IntParams, []int{1, 8, 12, 16, 0, 2, 7}) {
+		t.Fatalf("advanced S4D inputs=%d params=%v", len(s4d.Inputs), s4d.IntParams)
+	}
+	if tiedDropouts != 2 {
+		t.Fatalf("tied dropout ops=%d want 2", tiedDropouts)
+	}
+}
+
+func TestS4DLegacyIRAndWeightLayoutRemainExact(t *testing.T) {
+	cfg, err := ParseArchConfig(validS4DConfigJSON(), "legacy-parity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metas, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"s4d_B_real", "s4d_C_backward_real"} {
+		for _, meta := range metas {
+			if meta.Name == forbidden {
+				t.Fatalf("legacy layout contains %q", forbidden)
+			}
+		}
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range prog.Ops {
+		if op.Code == OpS4D {
+			if len(op.Inputs) != 7 || !intSlicesEqual(op.IntParams, []int{1, 16, 8, 64, 0}) {
+				t.Fatalf("legacy S4D inputs=%d params=%v", len(op.Inputs), op.IntParams)
+			}
+			return
+		}
+	}
+	t.Fatal("missing legacy S4D op")
+}
+
+func TestS4DLRAImageReferenceExampleParsesAndCounts(t *testing.T) {
+	raw, err := os.ReadFile("../examples/continuous_s4d_lra_image_reference.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := ParseArchConfig(raw, "continuous_s4d_lra_image_reference.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Blocks) != 6 || cfg.ModelDim != 512 || cfg.SeqLen != 1024 {
+		t.Fatalf("unexpected reference dimensions: blocks=%d D=%d T=%d", len(cfg.Blocks), cfg.ModelDim, cfg.SeqLen)
+	}
+	if cfg.Training.BatchTokens/cfg.SeqLen != 50 || cfg.Training.Steps != 200000 || cfg.Training.Seed != 2222 {
+		t.Fatalf("unexpected training recipe: %+v", cfg.Training)
+	}
+	params, expanded, err := ParameterCountsFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if params <= 0 || expanded != params {
+		t.Fatalf("parameter counts=(%d,%d)", params, expanded)
 	}
 }
 

@@ -25,6 +25,10 @@ type WeightShape struct {
 	GPTBERTScale  float32
 	GPT2Scale     float32
 	ModelDim      int
+	OptimizerRole string
+	OptimizerLR   float32
+	ForceNoDecay  bool
+	ForceDecay    bool
 }
 
 func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
@@ -55,6 +59,10 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 			GPTBERTScale:  m.GPTBERTScale,
 			GPT2Scale:     m.GPT2Scale,
 			ModelDim:      cfg.ModelDim,
+			OptimizerRole: m.OptimizerRole,
+			OptimizerLR:   m.OptimizerLR,
+			ForceNoDecay:  m.ForceNoDecay,
+			ForceDecay:    m.ForceDecay,
 		}
 	}
 	return shapes, nil
@@ -224,6 +232,11 @@ func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool
 		statePairs := ws.Shape[1]
 		for i := range data {
 			data[i] = float32(math.Pi * float64(i%statePairs))
+		}
+		return true
+	case "s4d_B_one":
+		for i := range data {
+			data[i] = 1
 		}
 		return true
 	case "s4d_C_normal":

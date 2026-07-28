@@ -6,10 +6,13 @@ import (
 )
 
 type OptimizerWeightMetadata struct {
-	Name        string
-	Shape       []int
-	IsBuffer    bool
-	IsNormScale bool
+	Name         string
+	Shape        []int
+	IsBuffer     bool
+	IsNormScale  bool
+	Group        string
+	ForceNoDecay bool
+	ForceDecay   bool
 }
 
 type OptimizerSettings struct {
@@ -37,6 +40,8 @@ type TrainerOptimizerConfig struct {
 	Head          OptimizerSettings
 	Scalar        OptimizerSettings
 	Matrix        OptimizerSettings
+	ExtraGroups   map[string]OptimizerSettings
+	DecayAll      bool
 	MaxGradNorm   float32
 	DefaultBaseLR float32
 }
@@ -51,11 +56,11 @@ const (
 )
 
 func BuildTrainerOptimizerSpec(cfg TrainerOptimizerConfig) (TrainerOptimizerSpec, error) {
-	groupIndexByClass := make(map[optimizerClass]int, 4)
+	groupIndexByKey := make(map[string]int, 4+len(cfg.ExtraGroups))
 	groups := make([]OptimizerGroup, 0, 4)
 	weights := make([]WeightOptimizer, 0, len(cfg.Weights))
-	addGroup := func(class optimizerClass, settings OptimizerSettings) (int, error) {
-		if idx, ok := groupIndexByClass[class]; ok {
+	addGroup := func(key string, settings OptimizerSettings) (int, error) {
+		if idx, ok := groupIndexByKey[key]; ok {
 			return idx, nil
 		}
 		group, err := optimizerGroup(settings)
@@ -64,7 +69,7 @@ func BuildTrainerOptimizerSpec(cfg TrainerOptimizerConfig) (TrainerOptimizerSpec
 		}
 		idx := len(groups)
 		groups = append(groups, group)
-		groupIndexByClass[class] = idx
+		groupIndexByKey[key] = idx
 		return idx, nil
 	}
 
@@ -77,17 +82,25 @@ func BuildTrainerOptimizerSpec(cfg TrainerOptimizerConfig) (TrainerOptimizerSpec
 		if err != nil {
 			return TrainerOptimizerSpec{}, err
 		}
+		groupKey := fmt.Sprintf("class:%d", class)
 		settings, err := optimizerSettingsForClass(cfg, class, weight.Name)
-		if err != nil {
+		if weight.Group != "" {
+			var ok bool
+			settings, ok = cfg.ExtraGroups[weight.Group]
+			if !ok {
+				return TrainerOptimizerSpec{}, fmt.Errorf("weight %q references unknown optimizer group %q", weight.Name, weight.Group)
+			}
+			groupKey = "extra:" + weight.Group
+		} else if err != nil {
 			return TrainerOptimizerSpec{}, err
 		}
-		groupIdx, err := addGroup(class, settings)
+		groupIdx, err := addGroup(groupKey, settings)
 		if err != nil {
 			return TrainerOptimizerSpec{}, err
 		}
 		weights = append(weights, WeightOptimizer{
 			GroupIndex: groupIdx,
-			Decay:      shouldDecayOptimizerWeight(weight.Shape, class),
+			Decay:      shouldDecayOptimizerWeightWithPolicy(weight, class, cfg.DecayAll),
 		})
 	}
 
@@ -97,6 +110,19 @@ func BuildTrainerOptimizerSpec(cfg TrainerOptimizerConfig) (TrainerOptimizerSpec
 		MaxGradNorm:   cfg.MaxGradNorm,
 		DefaultBaseLR: cfg.DefaultBaseLR,
 	}, nil
+}
+
+func shouldDecayOptimizerWeightWithPolicy(weight OptimizerWeightMetadata, class optimizerClass, decayAll bool) bool {
+	if weight.ForceNoDecay {
+		return false
+	}
+	if weight.ForceDecay {
+		return true
+	}
+	if decayAll {
+		return true
+	}
+	return shouldDecayOptimizerWeight(weight.Shape, class)
 }
 
 func optimizerSettingsForClass(cfg TrainerOptimizerConfig, class optimizerClass, weightName string) (OptimizerSettings, error) {
@@ -198,7 +224,8 @@ func shouldDecayOptimizerWeight(shape []int, class optimizerClass) bool {
 func isScalarOptimizerName(name string) bool {
 	switch name {
 	case "bigram_scale", "trigram_scale", "smear_gate", "smear_scale", "backout_lambda", "decay", "scan_decay", "w_decay", "mu", "mu2",
-		"s4d_log_dt", "s4d_log_A_real", "s4d_A_imag", "s4d_C_real", "s4d_C_imag", "s4d_D":
+		"s4d_log_dt", "s4d_log_A_real", "s4d_A_imag", "s4d_B_real", "s4d_B_imag",
+		"s4d_C_real", "s4d_C_imag", "s4d_C_backward_real", "s4d_C_backward_imag", "s4d_D":
 		return true
 	}
 	return strings.HasSuffix(name, "_scale")

@@ -26,6 +26,10 @@ type WeightMeta struct {
 	DtMax         float64
 	GPTBERTScale  float32
 	GPT2Scale     float32
+	OptimizerRole string
+	OptimizerLR   float32
+	ForceNoDecay  bool
+	ForceDecay    bool
 }
 
 // ffnDim computes the FFN hidden dimension, clamped to at least D.
@@ -708,6 +712,7 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 		cfg.EffectiveNormSpec(),
 		cfg.EffectiveNormPlacement(),
 		cfg.FFNInternalNorm,
+		cfg.EffectiveFinalNorm(),
 	)
 	if err != nil {
 		return nil, err
@@ -727,7 +732,7 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if len(smearMetas) == 0 && len(backoutMetas) == 0 && len(data2VecMetas) == 0 && len(mlmHeadMetas) == 0 && len(layerAggregationMetas) == 0 && len(classificationMetas) == 0 {
 		return metas, nil
 	}
-	fixed := fixedWeightCountWithHeadAndNorm(cfg.ReservesUntiedHeadWeight(), cfg.EffectiveNormSpec()) + len(positionalEmbeddingWeightShapes(cfg.ModelDim, cfg.EffectiveMaxPositions(), cfg.EffectivePositionalEmbedding()))
+	fixed := fixedWeightCountWithHeadAndNorm(cfg.ReservesUntiedHeadWeight(), cfg.EffectiveNormSpec(), cfg.EffectiveFinalNorm()) + len(positionalEmbeddingWeightShapes(cfg.ModelDim, cfg.EffectiveMaxPositions(), cfg.EffectivePositionalEmbedding()))
 	out := make([]WeightMeta, 0, len(metas)+len(smearMetas)+len(backoutMetas)+len(data2VecMetas)+len(mlmHeadMetas)+len(layerAggregationMetas))
 	out = append(out, metas[:fixed]...)
 	out = append(out, smearMetas...)
@@ -767,13 +772,14 @@ func collectLinearFramesWeightShapesWithRefs(cfg *ArchConfig, refs []int) ([]Wei
 		cfg.EffectiveNormSpec(),
 		cfg.EffectiveNormPlacement(),
 		cfg.FFNInternalNorm,
+		cfg.EffectiveFinalNorm(),
 	)
 	if err != nil {
 		return nil, err
 	}
 	metas[0].Name = "input_adapter_proj"
 
-	fixed := fixedWeightCountWithHeadAndNorm(false, cfg.EffectiveNormSpec())
+	fixed := fixedWeightCountWithHeadAndNorm(false, cfg.EffectiveNormSpec(), cfg.EffectiveFinalNorm())
 	extra := linearFramesExtraWeightShapes(cfg)
 	out := make([]WeightMeta, 0, len(metas)+len(extra)+len(backoutWeightShapes(cfg.Backout))+len(classificationWeightShapes(cfg.ModelDim, cfg.Training.Classification)))
 	out = append(out, metas[:fixed]...)
@@ -852,6 +858,7 @@ func collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 	norm NormSpec,
 	normPlacement string,
 	ffnInternalNorm bool,
+	finalNorm ...bool,
 ) ([]WeightMeta, error) {
 	D := modelDim
 	V := vocabSize
@@ -904,12 +911,14 @@ func collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 
 	var shapes []WeightMeta
 
-	// Fixed weights: embed + optional head + final norm.
+	// Fixed weights: embed + optional head + optional final norm.
 	shapes = append(shapes, WeightMeta{Name: "embed", Shape: []int{V, D}})
 	if reserveHead {
 		shapes = append(shapes, WeightMeta{Name: "head", Shape: []int{D, V}})
 	}
-	shapes = append(shapes, normWeights("final_norm", D, norm)...)
+	if effectiveOptionalBool(true, finalNorm) {
+		shapes = append(shapes, normWeights("final_norm", D, norm)...)
+	}
 	shapes = append(shapes, positionalEmbeddingWeightShapes(D, maxPositions, positionalEmbedding)...)
 	shapes = append(shapes, charWeightShapes(D, charVocabSize, charDim)...)
 	shapes = append(shapes, bigramWeightShapes(D, bigramVocabSize, bigramDim)...)

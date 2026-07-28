@@ -184,6 +184,35 @@ func (p *Program) S4D(
 	)
 }
 
+// S4DAdvanced emits the reference-compatible S4D path with grouped A/B,
+// optional trainable B, bilinear discretization, and bidirectional kernels.
+func (p *Program) S4DAdvanced(
+	inputs []string,
+	output, kernel string,
+	B, T, D, stateSize, nSSM int,
+	bidirectional bool,
+	discretization string,
+	trainableB bool,
+) {
+	flags := 0
+	if bidirectional {
+		flags |= 1
+	}
+	if discretization == S4DDiscretizationBilinear {
+		flags |= 2
+	}
+	if trainableB {
+		flags |= 4
+	}
+	p.AddOp(
+		OpS4D,
+		inputs,
+		[]string{output, kernel},
+		nil,
+		[]int{B, T, D, stateSize, 0, nSSM, flags},
+	)
+}
+
 // Embed emits an embedding lookup: output = table[indices].
 func (p *Program) Embed(table, indices, output string) {
 	p.AddOp(OpEmbed, []string{table, indices}, []string{output}, nil, nil)
@@ -230,7 +259,7 @@ func (p *Program) ScalarMul(a string, s float32, output string) {
 }
 
 // Dropout emits inverted dropout with probability rate.
-func (p *Program) Dropout(a string, rate float32, output string) {
+func (p *Program) nextDropoutOrdinal() int {
 	ordinal := 0
 	found := false
 	for i := range p.Inputs {
@@ -245,7 +274,25 @@ func (p *Program) Dropout(a string, rate float32, output string) {
 	if !found {
 		p.DeclareInput(DropoutKeysInput, TensorInt32, []int{1, 2})
 	}
+	return ordinal
+}
+
+func (p *Program) Dropout(a string, rate float32, output string) {
+	ordinal := p.nextDropoutOrdinal()
 	p.AddOp(OpDropout, []string{a, DropoutKeysInput}, []string{output}, []float32{rate}, []int{ordinal})
+}
+
+// TiedDropout samples one [B,1,D] mask and broadcasts it across sequence
+// positions. The input and output remain flattened [B*T,D] tensors.
+func (p *Program) TiedDropout(a string, rate float32, B, T, D int, output string) {
+	ordinal := p.nextDropoutOrdinal()
+	p.AddOp(
+		OpDropout,
+		[]string{a, DropoutKeysInput},
+		[]string{output},
+		[]float32{rate},
+		[]int{ordinal, B, T, D},
+	)
 }
 
 // Sigmoid emits a sigmoid activation.

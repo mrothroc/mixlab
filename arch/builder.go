@@ -178,6 +178,7 @@ func countWeightsWithFeaturesRecurrenceParallelHeadLayoutNorm(
 	norm NormSpec,
 	normPlacement string,
 	ffnInternalNorm bool,
+	finalNorm ...bool,
 ) (int, error) {
 	refs, err := normalizeWeightRefs(blocks, recurrence)
 	if err != nil {
@@ -187,7 +188,7 @@ func countWeightsWithFeaturesRecurrenceParallelHeadLayoutNorm(
 		modelDim, vocabSize, seqLen, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual,
 		positionalEmbedding, maxPositions,
 		charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim,
-		blocks, refs, norm, normPlacement, ffnInternalNorm,
+		blocks, refs, norm, normPlacement, ffnInternalNorm, effectiveOptionalBool(true, finalNorm),
 	)
 	if err != nil {
 		return 0, err
@@ -230,10 +231,13 @@ func fixedWeightCountWithHead(reserveHead bool) int {
 	return 3 // embed + head + final_norm
 }
 
-func fixedWeightCountWithHeadAndNorm(reserveHead bool, norm NormSpec) int {
+func fixedWeightCountWithHeadAndNorm(reserveHead bool, norm NormSpec, finalNorm ...bool) int {
 	total := 1 // embed
 	if reserveHead {
 		total++
+	}
+	if !effectiveOptionalBool(true, finalNorm) {
+		return total
 	}
 	return total + len(normWeights("final_norm", 1, normSpecOrDefault(norm)))
 }
@@ -244,6 +248,13 @@ func finalNormWeightIndexWithHeadAndNorm(reserveHead bool, norm NormSpec) int {
 		return 1
 	}
 	return 2
+}
+
+func effectiveOptionalBool(defaultValue bool, values []bool) bool {
+	if len(values) == 0 {
+		return defaultValue
+	}
+	return values[0]
 }
 
 func needsResidMix(spec BlockSpec, residMix bool) bool {
@@ -435,6 +446,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		false,
 		defaultNormSpec(),
 		NormPlacementPre,
+		true,
 		false,
 		nil,
 		nil,
@@ -480,6 +492,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	framedCausalLoss bool,
 	norm NormSpec,
 	normPlacement string,
+	finalNorm bool,
 	ffnInternalNorm bool,
 	wordStructural *WordStructuralObjectiveSpec,
 	invariance *InvarianceSpec,
@@ -596,7 +609,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		return nil, fmt.Errorf("mlm_head=\"bert\" requires tie_embeddings=true")
 	}
 
-	nWeights, err := countWeightsWithFeaturesRecurrenceParallelHeadLayoutNorm(D, V, T, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, positionalEmbedding, maxPositions, charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence, norm, normPlacement, ffnInternalNorm)
+	nWeights, err := countWeightsWithFeaturesRecurrenceParallelHeadLayoutNorm(D, V, T, mlpMult, reserveHead, blockScales, residMix, unet, parallelResidual, positionalEmbedding, maxPositions, charVocabSize, charDim, bigramVocabSize, bigramDim, trigramVocabSize, trigramDim, blocks, recurrence, norm, normPlacement, ffnInternalNorm, finalNorm)
 	if err != nil {
 		return nil, err
 	}
@@ -686,7 +699,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			ModelDim:            D,
 			FeatureDim:          inputAdapter.FeatureDim,
 			ProjectionIndex:     0,
-			NextWeightIndex:     fixedWeightCountWithHeadAndNorm(reserveHead, norm),
+			NextWeightIndex:     fixedWeightCountWithHeadAndNorm(reserveHead, norm, finalNorm),
 			Bias:                inputAdapter.Bias == nil || *inputAdapter.Bias,
 			Norm:                inputAdapter.Norm,
 			NormEps:             norm.Eps,
@@ -695,14 +708,14 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 			EmbeddingDropout:    embeddingDropout,
 		})
 	case rcEquivariant:
-		wi, err = emitRCEquivariantInputIR(prog, B, T, D, fixedWeightCountWithHeadAndNorm(reserveHead, norm))
+		wi, err = emitRCEquivariantInputIR(prog, B, T, D, fixedWeightCountWithHeadAndNorm(reserveHead, norm, finalNorm))
 	default:
 		wi, err = emitDiscreteTokenInputIR(prog, discreteTokenInputOptions{
 			BatchSize:           B,
 			SeqLen:              T,
 			ModelDim:            D,
 			TokenWeightIndex:    0,
-			NextWeightIndex:     fixedWeightCountWithHeadAndNorm(reserveHead, norm),
+			NextWeightIndex:     fixedWeightCountWithHeadAndNorm(reserveHead, norm, finalNorm),
 			PositionalEmbedding: positionalEmbedding,
 			MaxPositions:        maxPositions,
 			Smear:               smearOpts,
@@ -830,8 +843,12 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	if rcEquivariant {
 		finalNormState = "rc_paired_final_norm"
 	}
-	if _, err := emitNamedNormIR(prog, "x", finalNormWeightIndexWithHeadAndNorm(reserveHead, norm), finalNormState, norm); err != nil {
-		return nil, err
+	if finalNorm {
+		if _, err := emitNamedNormIR(prog, "x", finalNormWeightIndexWithHeadAndNorm(reserveHead, norm), finalNormState, norm); err != nil {
+			return nil, err
+		}
+	} else {
+		prog.ScalarMul("x", 1, finalNormState)
 	}
 	headHiddenState := finalNormState
 	if rcEquivariant {

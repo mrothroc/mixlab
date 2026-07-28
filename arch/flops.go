@@ -196,6 +196,7 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 		cfg.EffectiveNormSpec(),
 		cfg.EffectiveNormPlacement(),
 		cfg.FFNInternalNorm,
+		cfg.EffectiveFinalNorm(),
 	)
 	if err != nil {
 		return 0, 0, err
@@ -224,6 +225,7 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 		cfg.EffectiveNormSpec(),
 		cfg.EffectiveNormPlacement(),
 		cfg.FFNInternalNorm,
+		cfg.EffectiveFinalNorm(),
 	)
 	if err != nil {
 		return 0, 0, err

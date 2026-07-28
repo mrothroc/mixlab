@@ -53,13 +53,15 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 | `dropout` | number | No | `0` | Legacy training dropout applied to both hidden/residual projections and attention probabilities unless `hidden_dropout` or `attn_dropout` override it. Must be in `[0,1]`. Eval, generation, parity, and HF export run with dropout disabled. |
 | `hidden_dropout` | number | No | `dropout` | Training dropout on attention output projections, FFN output projections, and MoE deltas. Explicit `0` disables hidden dropout even when `dropout` is nonzero. |
 | `attn_dropout` | number | No | `dropout` | Training dropout on `plain` attention probabilities after softmax and before multiplying by values. Explicit `0` disables attention-probability dropout even when `dropout` is nonzero. |
+| `tie_dropout` | boolean | No | `false` | Samples each S4D internal/residual dropout mask as `[B,1,D]` and broadcasts it over sequence positions. Non-S4D blocks keep their normal dropout behavior. Block-level `tie_dropout` can enable the same behavior for one S4D block. |
 | `mlm_head` | string | No | `"linear"` | Masked-objective prediction head. `"linear"` keeps the legacy bare LM head. `"bert"` uses `LayerNorm(affine=false) -> Linear(D,D)+bias -> GELU -> LayerNorm(affine=false) -> Dropout -> tied embedding output + bias` for MLM/MNTP/hybrid masked steps and `AutoModelForMaskedLM` export. Requires `tie_embeddings: true` and a masked objective path. |
 | `layer_aggregation` | string | No | `"none"` | Optional dense weighted aggregation over static embeddings and previous sublayer outputs. `"dwa"` enables GPT-BERT-style DWA on supported sequential blocks. See [Dense Weighted Aggregation](#dense-weighted-aggregation-dwa). |
 | `norm_type` | string | No | `"rmsnorm"` | Normalization used by supported blocks and the final model norm. `"rmsnorm"` preserves the legacy layout; `"layernorm"` emits LayerNorm; `"batchnorm"` enables native BatchNorm for fixed-shape classification. |
 | `norm_eps` | number | No | `1e-5` | Epsilon for supported block/final norms. Must be `> 0`. |
 | `norm_affine` | boolean | No | `true` | Whether LayerNorm uses learned scale/bias. `false` is supported for `norm_type: "layernorm"`; RMSNorm and BatchNorm remain affine-only. |
 | `batchnorm_momentum` | number | No | `0.1` | Running-stat update momentum for `norm_type: "batchnorm"`. Must be in `(0,1]`; rejected for other norm types. |
-| `norm_placement` | string | No | `"pre"` | Supported values are `"pre"`, `"post"`, and `"sandwich"`. `"post"` normalizes each sublayer delta before residual add; `"sandwich"` uses both pre-input and post-delta norms. V1 supports non-default placement on sequential `plain`, `swiglu`, `geglu`, and `mlp` blocks. |
+| `norm_placement` | string | No | `"pre"` | Supported values are `"pre"`, `"post"`, `"post_residual"`, and `"sandwich"`. Existing `"post"` normalizes each sublayer delta before residual add. `"post_residual"` implements standard `Norm(x + F(x))` for S4D-only stacks. `"sandwich"` uses both pre-input and post-delta norms. |
+| `final_norm` | boolean | No | `true` | Controls the model-level norm after the block stack. Set `false` for post-residual architectures whose reference omits a final norm. |
 | `ffn_internal_norm` | boolean | No | `false` | Adds an internal norm to supported FFN paths before the down projection: after the activation/product in `swiglu`/`geglu`, after activation in `mlp`, and after the `plain` FFN tail activation. |
 | `block_scales` | boolean | No | `false` | Adds learned per-channel scales to supported residual branches. `plain`, `swiglu`, `geglu`, and `moe` use them by default when enabled; recurrent branches can use them when `residual_scale_init` is set. |
 | `resid_mix` | boolean | No | `false` | Adds learned mixing of the current state and original input on `plain` blocks. |
@@ -578,23 +580,34 @@ Optional fields:
   initialization. Defaults to `0.001`.
 - `dt_max` - upper bound for the per-channel log-uniform time-step
   initialization. Defaults to `0.1` and must exceed `dt_min`.
-- `bidirectional` - reserved direction field. Omit or set `false`;
-  `true` is rejected in v1.
+- `bidirectional` - when `true`, learns independent forward/backward `C`
+  tensors while sharing `A`, `B`, and `dt`. The two length-`T` kernels are
+  combined into the official length-`2T` circular FFT kernel, including its
+  one-position reverse offset. Output width remains `model_dim`.
+- `n_ssm` - independent `A`/`B` groups. Omitted uses one group per model
+  channel, preserving the legacy layout. Must divide `model_dim`.
+- `discretization` - `"zoh"` by default or `"bilinear"` for the pinned
+  reference S4 implementation.
+- `trainable_b` - learns complex `B` tensors. Omitted keeps fixed `B=1`.
+- `state_lr` - optional A/B-only learning rate. When present, A/B use an
+  adaptive optimizer at this rate with no decay; dt/C/D use the global LR.
+- `tie_dropout` - shares this block's internal and residual dropout masks over
+  sequence positions.
 - `output_transform` - omit or set `"none"` for the compact Mixlab path.
   Set `"glu"` to add the reference-style `D -> 2D` output projection, bias,
   and GLU after the S4D GELU activation.
 - `residual_scale_init` - optional S4D residual-scale initialization when
   top-level `block_scales` is enabled.
 
-S4D-Lin uses fixed `B=1` absorbed into learned complex `C`, ZOH
-discretization, and a learned direct `D` term. The normal training path uses
-FFT convolution; the equivalent recurrent scan is an internal parity-test
-path, not a public execution mode or generation cache. S4D weights use the
-scalar/vector Adam optimizer group with no weight decay, so
-`training.scalar_lr` controls their learning rate.
+Omitting the reference fields keeps fixed `B=1`, per-channel A, ZOH
+discretization, and the legacy scalar optimizer grouping exactly. The normal
+training path uses FFT convolution; the equivalent recurrent scan is an
+internal parity-test path, not a public execution mode or generation cache.
+When `state_lr` is set, A/B use that rate without decay, dt uses global LR
+without decay, and C/D use global LR and the selected decay policy.
 
 ```json
-{"type": "s4d", "state_size": 64, "init": "s4d-lin", "dt_min": 0.001, "dt_max": 0.1, "output_transform": "glu"}
+{"type": "s4d", "state_size": 64, "init": "s4d-lin", "n_ssm": 2, "bidirectional": true, "discretization": "bilinear", "trainable_b": true, "state_lr": 0.001, "output_transform": "glu"}
 ```
 
 See [S4D diagonal state-space block](s4d.md) for the numerical reference
@@ -1125,6 +1138,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` and `"gpt2"` initialization. Ignored when `weight_init` is `"xavier_uniform"` or `"gptbert"`. |
 | `grad_clip` | number | No | `0` | Max grad norm. `0` means no clipping. Must be `>= 0`. |
 | `weight_decay` | number | No | `0.01` | Global fallback weight decay. Must be `>= 0`; explicit `0` disables decay for groups that inherit it. |
+| `weight_decay_policy` | string | No | `"matrix_only"` | `"matrix_only"` preserves the existing no-decay treatment for scalar/vector parameters. `"all"` enables decay for every ordinary trainable parameter; explicit optimizer metadata such as S4D A/B/dt no-decay still wins. |
 | `cautious_weight_decay` | boolean | No | `false` | When true, applies weight decay only to elements where parameter and gradient signs agree. This is an optimizer modifier for AdamW, LAMB, Muon, MuonEq-R, NorMuon, and SGD paths, not a separate optimizer kind. |
 | `cautious_weight_decay_activation_frac` | number | No | `0` | Fraction of training before cautious weight decay activates. Before activation, standard weight decay is used. `0` means active from step 0 when `cautious_weight_decay=true`; must be in `[0,1]`. |
 | `beta1` | number | No | `0.9` | AdamW beta1. Also seeds Muon momentum when `muon_momentum` is omitted. |
@@ -1427,6 +1441,12 @@ The trainer classifies weights into four optimizer groups. Muon-family optimizer
 | Head | AdamW or LAMB | `head` | `head_lr` | `head_weight_decay` |
 | Scalar | AdamW or LAMB | Norm scales, decay vectors, learned scalar scales | `scalar_lr` | `scalar_weight_decay` |
 | Matrix | Muon variant, AdamW, or LAMB | Projection and FFN matrices | `matrix_lr` | `matrix_weight_decay` |
+
+S4D blocks with `state_lr` add metadata-driven adaptive groups: A/B use
+`state_lr` with no decay; dt uses global `lr` with no decay; C/D use global
+`lr`. Under `weight_decay_policy: "all"`, C/D and other ordinary scalar/vector
+parameters receive their configured decay, matching optimizers that do not
+exclude biases and norm parameters.
 
 ### Training phases
 

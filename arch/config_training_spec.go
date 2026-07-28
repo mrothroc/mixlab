@@ -189,6 +189,7 @@ func (t *TrainingSpec) ApplyDefaults() {
 	t.Optimizer = strings.ToLower(strings.TrimSpace(t.Optimizer))
 	t.ComputeDType = strings.ToLower(strings.TrimSpace(t.ComputeDType))
 	t.WeightInit = strings.ToLower(strings.TrimSpace(t.WeightInit))
+	t.WeightDecayPolicy = t.EffectiveWeightDecayPolicy()
 	if !t.embedWeightDecaySet && t.EmbedWeightDecay == 0 {
 		t.EmbedWeightDecay = t.WeightDecay
 	}

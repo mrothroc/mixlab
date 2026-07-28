@@ -1,0 +1,116 @@
+{
+  "name": "continuous_s4d_lra_image_reference",
+  "model_dim": 512,
+  "seq_len": 1024,
+  "positional_embedding": "none",
+  "dropout": 0.1,
+  "tie_dropout": true,
+  "norm_type": "layernorm",
+  "norm_placement": "post_residual",
+  "final_norm": false,
+  "input_adapter": {
+    "kind": "linear_frames",
+    "feature_dim": 1,
+    "bias": true,
+    "norm": "none"
+  },
+  "blocks": [
+    {
+      "type": "s4d",
+      "state_size": 64,
+      "init": "s4d-lin",
+      "n_ssm": 2,
+      "bidirectional": true,
+      "discretization": "bilinear",
+      "trainable_b": true,
+      "state_lr": 0.001,
+      "dt_min": 0.001,
+      "dt_max": 0.1,
+      "output_transform": "glu"
+    },
+    {
+      "type": "s4d",
+      "state_size": 64,
+      "init": "s4d-lin",
+      "n_ssm": 2,
+      "bidirectional": true,
+      "discretization": "bilinear",
+      "trainable_b": true,
+      "state_lr": 0.001,
+      "dt_min": 0.001,
+      "dt_max": 0.1,
+      "output_transform": "glu"
+    },
+    {
+      "type": "s4d",
+      "state_size": 64,
+      "init": "s4d-lin",
+      "n_ssm": 2,
+      "bidirectional": true,
+      "discretization": "bilinear",
+      "trainable_b": true,
+      "state_lr": 0.001,
+      "dt_min": 0.001,
+      "dt_max": 0.1,
+      "output_transform": "glu"
+    },
+    {
+      "type": "s4d",
+      "state_size": 64,
+      "init": "s4d-lin",
+      "n_ssm": 2,
+      "bidirectional": true,
+      "discretization": "bilinear",
+      "trainable_b": true,
+      "state_lr": 0.001,
+      "dt_min": 0.001,
+      "dt_max": 0.1,
+      "output_transform": "glu"
+    },
+    {
+      "type": "s4d",
+      "state_size": 64,
+      "init": "s4d-lin",
+      "n_ssm": 2,
+      "bidirectional": true,
+      "discretization": "bilinear",
+      "trainable_b": true,
+      "state_lr": 0.001,
+      "dt_min": 0.001,
+      "dt_max": 0.1,
+      "output_transform": "glu"
+    },
+    {
+      "type": "s4d",
+      "state_size": 64,
+      "init": "s4d-lin",
+      "n_ssm": 2,
+      "bidirectional": true,
+      "discretization": "bilinear",
+      "trainable_b": true,
+      "state_lr": 0.001,
+      "dt_min": 0.001,
+      "dt_max": 0.1,
+      "output_transform": "glu"
+    }
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {
+      "num_labels": 10,
+      "pooling": "mean",
+      "classifier_dropout": 0
+    },
+    "optimizer": "adamw",
+    "steps": 200000,
+    "lr": 0.01,
+    "warmup_steps": 1000,
+    "hold_steps": 0,
+    "min_lr_fraction": 0.000001,
+    "grad_clip": 0,
+    "weight_decay": 0.05,
+    "weight_decay_policy": "all",
+    "batch_tokens": 51200,
+    "seed": 2222
+  }
+}

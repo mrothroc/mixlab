@@ -73,6 +73,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [continuous_mamba3_classification_tiny.json](continuous_mamba3_classification_tiny.json) | Continuous sequence classifier | Float-frame input adapter with a native Mamba3 classification backbone |
 | [continuous_s4d_classification_tiny.json](continuous_s4d_classification_tiny.json) | Continuous S4D classifier | LTI diagonal SSM with an FFT-convolution sequence mixer |
 | [continuous_s4d_batchnorm_reference_tiny.json](continuous_s4d_batchnorm_reference_tiny.json) | Reference-style S4D classifier | BatchNorm running statistics plus the opt-in S4D output projection/GLU |
+| [continuous_s4d_lra_image_reference.json](continuous_s4d_lra_image_reference.json) | S4D LRA Image reference | Six-layer bidirectional, grouped, bilinear S4D-Lin recipe pinned to the published reference |
 | [softcap_plain.json](softcap_plain.json) | Logit softcap | Bounded logits before loss |
 | [qk_norm_tiny.json](qk_norm_tiny.json) | QK-norm attention | Learned per-head-dimension Q/K RMSNorm |
 | [differential_attention_tiny.json](differential_attention_tiny.json) | Differential attention | DIFF Transformer two-softmax attention variant |

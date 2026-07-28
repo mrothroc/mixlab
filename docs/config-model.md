@@ -93,7 +93,9 @@ fields to opt into other layouts:
 |------|---------|
 | `norm_type` | `"rmsnorm"` or `"layernorm"`. |
 | `norm_affine` | Whether LayerNorm has learned scale/bias. |
-| `norm_placement` | `"pre"`, `"post"`, or `"sandwich"` for supported sequential blocks. |
+| `norm_placement` | `"pre"`, legacy delta-normalizing `"post"`, `"sandwich"`, or S4D standard `"post_residual"`. |
+| `final_norm` | Model-level final norm toggle; defaults to `true`. |
+| `tie_dropout` | S4D sequence-tied `[B,1,D]` dropout masks; defaults to `false`. |
 | `ffn_internal_norm` | Adds internal FFN normalization on supported FFN paths. |
 | `block_scales` | Adds learned residual-branch scales. |
 | `resid_mix` | Mixes current state with original embeddings on `plain` blocks. |

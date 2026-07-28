@@ -10,9 +10,10 @@ const (
 	NormTypeLayerNorm = "layernorm"
 	NormTypeBatchNorm = "batchnorm"
 
-	NormPlacementPre      = "pre"
-	NormPlacementPost     = "post"
-	NormPlacementSandwich = "sandwich"
+	NormPlacementPre          = "pre"
+	NormPlacementPost         = "post"
+	NormPlacementPostResidual = "post_residual"
+	NormPlacementSandwich     = "sandwich"
 
 	PlainAttnPostNormInherit       = "inherit"
 	PlainAttnPostNormNone          = "none"
@@ -50,6 +51,8 @@ func normalizeNormPlacement(v string) string {
 		return NormPlacementPre
 	case "post", "postnorm", "post_norm":
 		return NormPlacementPost
+	case "post_residual", "post_residual_norm":
+		return NormPlacementPostResidual
 	case "sandwich", "sandwich_norm":
 		return NormPlacementSandwich
 	default:

@@ -5,6 +5,7 @@ package train
 import (
 	"fmt"
 	"log"
+	"math"
 
 	"github.com/mrothroc/mixlab/gpu"
 )
@@ -57,12 +58,51 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 	cautiousWeightDecay := cfg.Training.CautiousWeightDecay
 	cautiousWeightDecayActivationStep := cfg.Training.EffectiveCautiousWeightDecayActivationStep()
 	wmeta := make([]gpu.OptimizerWeightMetadata, len(shapes))
+	extraGroups := make(map[string]gpu.OptimizerSettings)
+	adaptiveOptimizerName := "adamw"
+	adaptiveBeta1 := cfg.Training.Beta1
+	adaptiveBeta2 := cfg.Training.Beta2
+	adaptiveEps := cfg.Training.Epsilon
+	if cfg.Training.Optimizer == "lamb" {
+		adaptiveOptimizerName = "lamb"
+		adaptiveBeta1 = cfg.Training.LAMBBeta1
+		adaptiveBeta2 = cfg.Training.LAMBBeta2
+		adaptiveEps = cfg.Training.LAMBEps
+	}
+	s4dSettings := func(lr float32) gpu.OptimizerSettings {
+		return gpu.OptimizerSettings{
+			Name:                              adaptiveOptimizerName,
+			LR:                                lr,
+			Beta1:                             adaptiveBeta1,
+			Beta2:                             adaptiveBeta2,
+			Epsilon:                           adaptiveEps,
+			WeightDecay:                       cfg.Training.WeightDecay,
+			LAMBTrustRatioCap:                 cfg.Training.LAMBTrustRatioCap,
+			CautiousWeightDecay:               cautiousWeightDecay,
+			CautiousWeightDecayActivationStep: cautiousWeightDecayActivationStep,
+		}
+	}
 	for i, s := range shapes {
+		group := ""
+		switch s.OptimizerRole {
+		case "s4d_main":
+			group = "s4d_main"
+			extraGroups[group] = s4dSettings(float32(cfg.Training.LR))
+		case "s4d_state":
+			group = fmt.Sprintf("s4d_state_%08x", math.Float32bits(s.OptimizerLR))
+			extraGroups[group] = s4dSettings(s.OptimizerLR)
+		case "":
+		default:
+			return gpu.TrainerOptimizerSpec{}, fmt.Errorf("weight %q has unsupported optimizer role %q", s.Name, s.OptimizerRole)
+		}
 		wmeta[i] = gpu.OptimizerWeightMetadata{
-			Name:        s.Name,
-			Shape:       s.Shape,
-			IsBuffer:    s.IsBuffer,
-			IsNormScale: s.IsNormScale,
+			Name:         s.Name,
+			Shape:        s.Shape,
+			IsBuffer:     s.IsBuffer,
+			IsNormScale:  s.IsNormScale,
+			Group:        group,
+			ForceNoDecay: s.ForceNoDecay,
+			ForceDecay:   s.ForceDecay,
 		}
 	}
 	return gpu.BuildTrainerOptimizerSpec(gpu.TrainerOptimizerConfig{
@@ -116,6 +156,8 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 			MuonNormalization:                 matrixMuonNormalization(matrixOptimizerName),
 			RowNormalize:                      matrixOptimizerName == "muon_eq_r",
 		},
+		ExtraGroups:   extraGroups,
+		DecayAll:      cfg.Training.EffectiveWeightDecayPolicy() == "all",
 		MaxGradNorm:   cfg.Training.GradClip,
 		DefaultBaseLR: float32(cfg.Training.LR),
 	})

@@ -9,6 +9,11 @@ state updates are not necessarily the right inductive bias.
   "type": "s4d",
   "state_size": 64,
   "init": "s4d-lin",
+  "n_ssm": 2,
+  "bidirectional": true,
+  "discretization": "bilinear",
+  "trainable_b": true,
+  "state_lr": 0.001,
   "dt_min": 0.001,
   "dt_max": 0.1,
   "output_transform": "glu"
@@ -29,7 +34,7 @@ The block is a token mixer. Pair it with a channel mixer such as `swiglu` or
 
 ## Reference contract
 
-The v1 implementation follows the official minimal S4D-Lin
+The default implementation follows the official minimal S4D-Lin
 parameterization:
 
 - diagonal continuous poles `A_n = -1/2 + i*pi*n`
@@ -47,8 +52,17 @@ incremental inference cache in v1.
 Only `init: "s4d-lin"` is accepted. `output_transform: "glu"` adds the
 reference-style GELU, dropout, `D -> 2D` projection, and GLU output path.
 Omitting the field preserves the earlier compact GELU-only block exactly.
-S4D-LegS, bidirectional S4D, and incremental recurrent-state inference remain
-separate follow-up work rather than silent approximations.
+The additive reference path supports shared A/B groups through `n_ssm`,
+trainable complex B, bilinear discretization, and exact bidirectional
+length-`2T` FFT convolution. Bidirectionality shares A/B/dt and learns only
+the backward C independently. S4D-LegS and incremental recurrent-state
+inference remain separate work rather than silent approximations.
+
+For sequence classification parity with post-norm references, use
+`norm_placement: "post_residual"` to compute `Norm(x + Dropout(F(x)))`, and
+set `final_norm: false` when the reference has no model-level final norm.
+Top-level `tie_dropout: true` samples `[B,1,D]` masks for S4D internal and
+residual dropout.
 
 Global `norm_type: "batchnorm"` is supported for fixed-shape native
 classification. It computes channel statistics over batch and time, stores
@@ -58,17 +72,19 @@ rejected in this first release.
 
 ## Optimization
 
-S4D's continuous-time parameters and complex kernel coefficients use the
-scalar/vector Adam optimizer group even when the rest of a model uses Muon.
-This also disables weight decay for those parameters. Use `training.scalar_lr`
-to set their learning rate independently:
+With `state_lr` omitted, S4D keeps the legacy scalar/vector optimizer grouping.
+With `state_lr` set, A/B receive the specified LR with no decay, dt uses the
+global LR with no decay, and C/D use the global LR. Set
+`weight_decay_policy: "all"` when matching an optimizer that decays ordinary
+vectors, biases, and norm parameters:
 
 ```json
 {
   "training": {
-    "optimizer": "muon",
-    "lr": 0.001,
-    "scalar_lr": 0.0001
+    "optimizer": "adamw",
+    "lr": 0.01,
+    "weight_decay": 0.05,
+    "weight_decay_policy": "all"
   }
 }
 ```
@@ -77,6 +93,8 @@ to set their learning rate independently:
 
 - Native token and `linear_frames` classification are supported.
 - The FFT path is differentiable through MLX.
+- Bidirectional FFT output remains `D` channels; directional contributions
+  are summed before GELU/dropout/GLU.
 - Normal recurrence/weight sharing can reuse S4D block weights when using
   stateless RMSNorm/LayerNorm. BatchNorm rejects recurrence in v1.
 - Hugging Face export and stateful generation are not supported in v1 and
@@ -85,4 +103,6 @@ to set their learning rate independently:
 
 For continuous input, see [Continuous sequence input](continuous-input.md) and
 the [`continuous_s4d_classification_tiny.json`](../examples/continuous_s4d_classification_tiny.json)
-example.
+example. The pinned LRA Image recipe is
+[`continuous_s4d_lra_image_reference.json`](../examples/continuous_s4d_lra_image_reference.json);
+the full 200k-step result remains a hardware-intensive acceptance run.

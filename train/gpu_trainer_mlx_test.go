@@ -753,6 +753,54 @@ func TestBuildTrainerOptimizerSpec_CautiousWeightDecay(t *testing.T) {
 	}
 }
 
+func TestBuildTrainerOptimizerSpec_S4DReferenceGroups(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim":8,"seq_len":4,
+		"input_adapter":{"kind":"linear_frames","feature_dim":1,"norm":"none"},
+		"blocks":[{
+			"type":"s4d","state_size":8,"n_ssm":2,"bidirectional":true,
+			"discretization":"bilinear","trainable_b":true,"state_lr":0.001
+		}],
+		"training":{
+			"objective":"classification",
+			"classification":{"num_labels":2,"pooling":"mean","classifier_dropout":0},
+			"optimizer":"adamw","lr":0.01,"weight_decay":0.05,
+			"weight_decay_policy":"all","batch_tokens":4
+		}
+	}`), "s4d-reference-optimizer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := buildTrainerOptimizerSpec(cfg, shapes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"s4d_log_A_real", "s4d_A_imag", "s4d_B_real", "s4d_B_imag"} {
+		group, decay := optimizerGroupAndDecayForWeightName(t, spec, shapes, name)
+		if group.Kind != gpu.OptimizerAdamW || group.LR != 0.001 || group.WeightDecay != 0.05 || decay {
+			t.Fatalf("%s group=%+v decay=%v", name, group, decay)
+		}
+	}
+	group, decay := optimizerGroupAndDecayForWeightName(t, spec, shapes, "s4d_log_dt")
+	if group.LR != 0.01 || decay {
+		t.Fatalf("s4d_log_dt group=%+v decay=%v", group, decay)
+	}
+	for _, name := range []string{"s4d_C_real", "s4d_C_backward_real", "s4d_D"} {
+		group, decay := optimizerGroupAndDecayForWeightName(t, spec, shapes, name)
+		if group.LR != 0.01 || group.WeightDecay != 0.05 || !decay {
+			t.Fatalf("%s group=%+v decay=%v", name, group, decay)
+		}
+	}
+	_, biasDecay := optimizerGroupAndDecayForWeightName(t, spec, shapes, "input_adapter_bias")
+	if !biasDecay {
+		t.Fatal("weight_decay_policy=all did not decay ordinary input adapter bias")
+	}
+}
+
 func optimizerGroupForWeightName(t *testing.T, spec gpu.TrainerOptimizerSpec, shapes []WeightShape, name string) gpu.OptimizerGroup {
 	t.Helper()
 	for i, shape := range shapes {
@@ -769,4 +817,17 @@ func optimizerGroupForWeightName(t *testing.T, spec gpu.TrainerOptimizerSpec, sh
 	}
 	t.Fatalf("missing weight %q in shapes", name)
 	return gpu.OptimizerGroup{}
+}
+
+func optimizerGroupAndDecayForWeightName(t *testing.T, spec gpu.TrainerOptimizerSpec, shapes []WeightShape, name string) (gpu.OptimizerGroup, bool) {
+	t.Helper()
+	for i, shape := range shapes {
+		if shape.Name != name {
+			continue
+		}
+		weight := spec.Weights[i]
+		return spec.Groups[weight.GroupIndex], weight.Decay
+	}
+	t.Fatalf("missing weight %q in shapes", name)
+	return gpu.OptimizerGroup{}, false
 }

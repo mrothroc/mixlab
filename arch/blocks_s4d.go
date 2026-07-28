@@ -71,18 +71,57 @@ func s4dWeightShapesWithOptions(spec BlockSpec, D int, opts EmitOptions) ([]Weig
 	norm := normSpecOrDefault(opts.Norm)
 	placement := normPlacementOrDefault(opts.NormPlacement)
 	statePairs := stateSize / 2
-	metas := make([]WeightMeta, 0, 10)
+	nSSM := effectiveS4DNSSM(spec, D)
+	metas := make([]WeightMeta, 0, 14)
 	if placement == NormPlacementPre || placement == NormPlacementSandwich {
 		metas = append(metas, normWeights("s4d_norm", D, norm)...)
 	}
-	metas = append(metas,
-		WeightMeta{Name: "s4d_log_dt", Shape: []int{D}, InitMode: "s4d_log_dt", DtMin: dtMin, DtMax: dtMax},
-		WeightMeta{Name: "s4d_log_A_real", Shape: []int{D, statePairs}, InitValue: float32(math.Log(0.5))},
-		WeightMeta{Name: "s4d_A_imag", Shape: []int{D, statePairs}, InitMode: "s4d_A_imag_lin"},
-		WeightMeta{Name: "s4d_C_real", Shape: []int{D, statePairs}, InitMode: "s4d_C_normal"},
-		WeightMeta{Name: "s4d_C_imag", Shape: []int{D, statePairs}, InitMode: "s4d_C_normal"},
-		WeightMeta{Name: "s4d_D", Shape: []int{D}, InitMode: "s4d_D_normal"},
-	)
+	dtMeta := WeightMeta{Name: "s4d_log_dt", Shape: []int{D}, InitMode: "s4d_log_dt", DtMin: dtMin, DtMax: dtMax}
+	aRealMeta := WeightMeta{Name: "s4d_log_A_real", Shape: []int{nSSM, statePairs}, InitValue: float32(math.Log(0.5))}
+	aImagMeta := WeightMeta{Name: "s4d_A_imag", Shape: []int{nSSM, statePairs}, InitMode: "s4d_A_imag_lin"}
+	if spec.StateLR != nil {
+		dtMeta.OptimizerRole = "s4d_main"
+		dtMeta.ForceNoDecay = true
+		for _, meta := range []*WeightMeta{&aRealMeta, &aImagMeta} {
+			meta.OptimizerRole = "s4d_state"
+			meta.OptimizerLR = float32(*spec.StateLR)
+			meta.ForceNoDecay = true
+		}
+	}
+	metas = append(metas, dtMeta, aRealMeta, aImagMeta)
+	if spec.TrainableB {
+		bReal := WeightMeta{Name: "s4d_B_real", Shape: []int{nSSM, statePairs}, InitMode: "s4d_B_one"}
+		bImag := WeightMeta{Name: "s4d_B_imag", Shape: []int{nSSM, statePairs}, InitZero: true}
+		if spec.StateLR != nil {
+			for _, meta := range []*WeightMeta{&bReal, &bImag} {
+				meta.OptimizerRole = "s4d_state"
+				meta.OptimizerLR = float32(*spec.StateLR)
+				meta.ForceNoDecay = true
+			}
+		}
+		metas = append(metas, bReal, bImag)
+	}
+	cReal := WeightMeta{Name: "s4d_C_real", Shape: []int{D, statePairs}, InitMode: "s4d_C_normal"}
+	cImag := WeightMeta{Name: "s4d_C_imag", Shape: []int{D, statePairs}, InitMode: "s4d_C_normal"}
+	if spec.StateLR != nil {
+		cReal.OptimizerRole = "s4d_main"
+		cImag.OptimizerRole = "s4d_main"
+	}
+	metas = append(metas, cReal, cImag)
+	if spec.Bidirectional {
+		backReal := WeightMeta{Name: "s4d_C_backward_real", Shape: []int{D, statePairs}, InitMode: "s4d_C_normal"}
+		backImag := WeightMeta{Name: "s4d_C_backward_imag", Shape: []int{D, statePairs}, InitMode: "s4d_C_normal"}
+		if spec.StateLR != nil {
+			backReal.OptimizerRole = "s4d_main"
+			backImag.OptimizerRole = "s4d_main"
+		}
+		metas = append(metas, backReal, backImag)
+	}
+	direct := WeightMeta{Name: "s4d_D", Shape: []int{D}, InitMode: "s4d_D_normal"}
+	if spec.StateLR != nil {
+		direct.OptimizerRole = "s4d_main"
+	}
+	metas = append(metas, direct)
 	if effectiveS4DOutputTransform(spec) == S4DOutputTransformGLU {
 		metas = append(metas,
 			WeightMeta{Name: "s4d_out_proj", Shape: []int{D, 2 * D}},
@@ -94,6 +133,9 @@ func s4dWeightShapesWithOptions(spec BlockSpec, D int, opts EmitOptions) ([]Weig
 	}
 	if opts.BlockScales {
 		metas = append(metas, residualScaleWeightMeta(spec, "s4d_scale", D))
+	}
+	if placement == NormPlacementPostResidual {
+		metas = append(metas, normWeights("s4d_post_residual_norm", D, norm)...)
 	}
 	return metas, nil
 }
@@ -131,6 +173,7 @@ func emitS4DIR(
 	kernel := prefix + "_kernel"
 	activated := prefix + "_gelu"
 	postNorm := prefix + "_post_norm"
+	residual := prefix + "_residual"
 	scaled := prefix + "_scaled"
 	dropped := prefix + "_dropout"
 	innerDropped := prefix + "_inner_dropout"
@@ -151,23 +194,58 @@ func emitS4DIR(
 		input = xNorm
 	}
 
-	prog.S4D(
-		input,
-		weightName(wi),
-		weightName(wi+1),
-		weightName(wi+2),
-		weightName(wi+3),
-		weightName(wi+4),
-		weightName(wi+5),
-		s4dOut,
-		kernel,
-		B,
-		T,
-		D,
-		stateSize,
-		0,
-	)
-	wi += 6
+	if s4dUsesAdvancedKernel(spec) {
+		inputs := []string{
+			input,
+			weightName(wi),
+			weightName(wi + 1),
+			weightName(wi + 2),
+		}
+		wi += 3
+		if spec.TrainableB {
+			inputs = append(inputs, weightName(wi), weightName(wi+1))
+			wi += 2
+		}
+		inputs = append(inputs, weightName(wi), weightName(wi+1))
+		wi += 2
+		if spec.Bidirectional {
+			inputs = append(inputs, weightName(wi), weightName(wi+1))
+			wi += 2
+		}
+		inputs = append(inputs, weightName(wi))
+		wi++
+		prog.S4DAdvanced(
+			inputs,
+			s4dOut,
+			kernel,
+			B,
+			T,
+			D,
+			stateSize,
+			effectiveS4DNSSM(spec, D),
+			spec.Bidirectional,
+			effectiveS4DDiscretization(spec),
+			spec.TrainableB,
+		)
+	} else {
+		prog.S4D(
+			input,
+			weightName(wi),
+			weightName(wi+1),
+			weightName(wi+2),
+			weightName(wi+3),
+			weightName(wi+4),
+			weightName(wi+5),
+			s4dOut,
+			kernel,
+			B,
+			T,
+			D,
+			stateSize,
+			0,
+		)
+		wi += 6
+	}
 	if effectiveS4DOutputTransform(spec) == S4DOutputTransformGLU {
 		prog.GELUExact(s4dOut, activated)
 	} else {
@@ -176,7 +254,11 @@ func emitS4DIR(
 	delta := activated
 	if effectiveS4DOutputTransform(spec) == S4DOutputTransformGLU {
 		if opts.Dropout > 0 {
-			prog.Dropout(delta, opts.Dropout, innerDropped)
+			if spec.TieDropout {
+				prog.TiedDropout(delta, opts.Dropout, B, T, D, innerDropped)
+			} else {
+				prog.Dropout(delta, opts.Dropout, innerDropped)
+			}
 			delta = innerDropped
 		}
 		prog.MatMul(delta, weightName(wi), projected)
@@ -203,8 +285,21 @@ func emitS4DIR(
 		delta = scaled
 	}
 	if opts.Dropout > 0 {
-		prog.Dropout(delta, opts.Dropout, dropped)
+		if spec.TieDropout {
+			prog.TiedDropout(delta, opts.Dropout, B, T, D, dropped)
+		} else {
+			prog.Dropout(delta, opts.Dropout, dropped)
+		}
 		delta = dropped
+	}
+	if placement == NormPlacementPostResidual {
+		prog.Add(stream, delta, residual)
+		var err error
+		wi, err = emitNamedNormIR(prog, residual, wi, stream, norm)
+		if err != nil {
+			return wi, err
+		}
+		return wi, nil
 	}
 	prog.Add(stream, delta, stream)
 	return wi, nil

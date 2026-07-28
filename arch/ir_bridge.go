@@ -328,6 +328,15 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	if state.HiddenCaptureTopK > 0 {
 		wordStructural = nil
 	}
+	blocks := cfg.Blocks
+	if cfg.TieDropout {
+		blocks = append([]BlockSpec(nil), cfg.Blocks...)
+		for i := range blocks {
+			if blockTypeKey(blocks[i]) == "s4d" {
+				blocks[i].TieDropout = true
+			}
+		}
+	}
 
 	return buildIRProgramWithDropoutNgramsOrderAndSmear(
 		cfg.ModelDim,
@@ -350,7 +359,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		cfg.LogitSoftcap,
 		hiddenDropout,
 		attnDropout,
-		cfg.Blocks,
+		blocks,
 		cfg.Recurrence,
 		executionOrder,
 		activeMTP,
@@ -374,6 +383,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		framedCausalLoss,
 		cfg.EffectiveNormSpec(),
 		cfg.EffectiveNormPlacement(),
+		cfg.EffectiveFinalNorm(),
 		cfg.FFNInternalNorm,
 		wordStructural,
 		invariance,

@@ -47,12 +47,14 @@ type ArchConfig struct {
 	Dropout                  float32           `json:"dropout,omitempty"`
 	AttnDropout              float32           `json:"attn_dropout,omitempty"`
 	HiddenDropout            float32           `json:"hidden_dropout,omitempty"`
+	TieDropout               bool              `json:"tie_dropout,omitempty"`
 	MLMHead                  string            `json:"mlm_head,omitempty"`
 	NormType                 string            `json:"norm_type,omitempty"`
 	NormEps                  float32           `json:"norm_eps,omitempty"`
 	NormAffine               *bool             `json:"norm_affine,omitempty"`
 	BatchNormMomentum        float32           `json:"batchnorm_momentum,omitempty"`
 	NormPlacement            string            `json:"norm_placement,omitempty"`
+	FinalNorm                *bool             `json:"final_norm,omitempty"`
 	FFNInternalNorm          bool              `json:"ffn_internal_norm,omitempty"`
 	LayerAggregation         string            `json:"layer_aggregation,omitempty"`
 	MTP                      *MTPSpec          `json:"mtp,omitempty"`
@@ -149,6 +151,11 @@ type BlockSpec struct {
 	DTMax                             float64      `json:"dt_max,omitempty"`                              // Mamba-3 canonical dt init upper bound; defaults to 0.1.
 	Init                              string       `json:"init,omitempty"`                                // S4D initialization; v1 supports "s4d-lin".
 	Bidirectional                     bool         `json:"bidirectional,omitempty"`                       // S4D reserved direction flag; v1 supports unidirectional only.
+	NSSM                              int          `json:"n_ssm,omitempty"`                               // S4D independent A/B groups; defaults to model_dim.
+	Discretization                    string       `json:"discretization,omitempty"`                      // S4D: "zoh" (default) or "bilinear".
+	TrainableB                        bool         `json:"trainable_b,omitempty"`                         // S4D: learn complex B instead of using fixed ones.
+	StateLR                           *float64     `json:"state_lr,omitempty"`                            // S4D: optional A/B optimizer learning rate.
+	TieDropout                        bool         `json:"tie_dropout,omitempty"`                         // S4D: share dropout masks across sequence positions.
 	OutputTransform                   string       `json:"output_transform,omitempty"`                    // S4D output transform; omitted/"none" preserves the compact path, "glu" adds the reference projection.
 	NumLatents                        int          `json:"num_latents,omitempty"`                         // Perceiver/bottleneck latent count.
 	SourceStream                      string       `json:"source_stream,omitempty"`                       // cross_attention: stream providing K/V.
@@ -321,6 +328,7 @@ type TrainingSpec struct {
 	HardwareTFLOPs                    float64                      `json:"hardware_tflops,omitempty"` // peak hardware TFLOPS (e.g., 400 for M1 Max, 312 for A100)
 	GradClip                          float32                      `json:"grad_clip"`
 	WeightDecay                       float32                      `json:"weight_decay"`
+	WeightDecayPolicy                 string                       `json:"weight_decay_policy,omitempty"`
 	CautiousWeightDecay               bool                         `json:"cautious_weight_decay,omitempty"`
 	CautiousWeightDecayActivationFrac float64                      `json:"cautious_weight_decay_activation_frac,omitempty"`
 	Beta1                             float32                      `json:"beta1"`
@@ -551,9 +559,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	cfg.NormPlacement = normalizeNormPlacement(cfg.NormPlacement)
 	switch cfg.NormPlacement {
-	case NormPlacementPre, NormPlacementPost, NormPlacementSandwich:
+	case NormPlacementPre, NormPlacementPost, NormPlacementPostResidual, NormPlacementSandwich:
 	default:
-		return nil, fmt.Errorf("config %q has invalid norm_placement=%q (must be \"pre\", \"post\", or \"sandwich\")", source, cfg.NormPlacement)
+		return nil, fmt.Errorf("config %q has invalid norm_placement=%q (must be \"pre\", \"post\", \"post_residual\", or \"sandwich\")", source, cfg.NormPlacement)
 	}
 	if cfg.MTP != nil {
 		if cfg.MTP.nSet && cfg.MTP.N < 1 {
@@ -685,6 +693,11 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if cfg.Training.EmbedLR < 0 || cfg.Training.MatrixLR < 0 || cfg.Training.ScalarLR < 0 || cfg.Training.HeadLR < 0 {
 		return nil, fmt.Errorf("config %q has invalid per-group learning rate (must be >= 0)", source)
+	}
+	switch cfg.Training.EffectiveWeightDecayPolicy() {
+	case WeightDecayPolicyMatrixOnly, WeightDecayPolicyAll:
+	default:
+		return nil, fmt.Errorf("config %q has invalid training.weight_decay_policy=%q (must be \"matrix_only\" or \"all\")", source, cfg.Training.WeightDecayPolicy)
 	}
 	if cfg.Training.MuonMomentum < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.muon_momentum=%g (must be >= 0)", source, cfg.Training.MuonMomentum)
