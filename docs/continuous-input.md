@@ -62,7 +62,7 @@ before trainer construction.
     "kind": "linear_frames",
     "feature_dim": 1,
     "bias": true,
-    "norm": "layernorm"
+    "norm": "none"
   },
   "blocks": [
     {
@@ -105,6 +105,13 @@ The adapter uses the top-level `positional_embedding` policy. Set `"none"` for
 raw signals whose sequence axis already carries order, or
 `"learned_absolute"` for a learned table. There is no adapter-specific
 position field.
+
+Keep `input_adapter.norm: "none"` for low-dimensional raw signals when
+magnitude carries information. The optional LayerNorm is applied after the
+linear projection. At `feature_dim: 1`, its zero-bias initialization cancels
+the input magnitude exactly and gives the backbone only the input sign. Mixlab
+therefore warns about `norm: "layernorm"` for `feature_dim <= 4`. LayerNorm is
+still available for inputs where per-timestep scale invariance is deliberate.
 
 ## Current boundary
 

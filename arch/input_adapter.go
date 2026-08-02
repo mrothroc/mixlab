@@ -11,6 +11,8 @@ const (
 
 	InputAdapterNormNone      = "none"
 	InputAdapterNormLayerNorm = "layernorm"
+
+	inputAdapterLowDimLayerNormWarningMaxFeatureDim = 4
 )
 
 // InputAdapterSpec selects how model inputs become [B,T,model_dim] hidden
@@ -76,6 +78,20 @@ func (cfg *ArchConfig) EffectiveInputAdapterNorm() string {
 		return InputAdapterNormNone
 	}
 	return normalizeInputAdapterNorm(cfg.InputAdapter.Norm)
+}
+
+func inputAdapterWarnings(cfg *ArchConfig, source string) []string {
+	if cfg == nil || !cfg.LinearFramesEnabled() || cfg.InputAdapter == nil {
+		return nil
+	}
+	if cfg.EffectiveInputAdapterNorm() != InputAdapterNormLayerNorm ||
+		cfg.InputAdapter.FeatureDim > inputAdapterLowDimLayerNormWarningMaxFeatureDim {
+		return nil
+	}
+	return []string{fmt.Sprintf(
+		"WARN: config %q uses input_adapter.kind=%q with feature_dim=%d and norm=%q; post-projection LayerNorm can discard input magnitude at initialization (feature_dim=1 is exactly sign-only while the projection bias is zero). Prefer norm=%q for magnitude-bearing raw signals.",
+		source, InputAdapterLinearFrames, cfg.InputAdapter.FeatureDim, InputAdapterNormLayerNorm, InputAdapterNormNone,
+	)}
 }
 
 func linearFramesExtraWeightShapes(cfg *ArchConfig) []WeightMeta {

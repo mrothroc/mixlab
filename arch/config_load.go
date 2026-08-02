@@ -93,5 +93,12 @@ func ParseArchConfig(data []byte, source string) (*ArchConfig, error) {
 	_, cfg.attnDropoutSet = fields["attn_dropout"]
 	_, cfg.hiddenDropoutSet = fields["hidden_dropout"]
 	warnDeprecatedMamba3Blocks(cfg.Blocks)
-	return validateConfig(&cfg, source)
+	validated, err := validateConfig(&cfg, source)
+	if err != nil {
+		return nil, err
+	}
+	for _, warning := range inputAdapterWarnings(validated, source) {
+		fmt.Fprintln(os.Stderr, warning)
+	}
+	return validated, nil
 }

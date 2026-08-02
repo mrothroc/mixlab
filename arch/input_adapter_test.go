@@ -2,6 +2,7 @@ package arch
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -69,6 +70,45 @@ func TestLinearFramesConfigAndValidation(t *testing.T) {
 			raw, _ := json.Marshal(candidate)
 			if _, err := ParseArchConfig(raw, tt.name); err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("error=%v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestLinearFramesLowDimLayerNormWarning(t *testing.T) {
+	tests := []struct {
+		name       string
+		featureDim int
+		norm       string
+		wantWarn   bool
+	}{
+		{name: "one feature", featureDim: 1, norm: InputAdapterNormLayerNorm, wantWarn: true},
+		{name: "warning boundary", featureDim: 4, norm: "layer_norm", wantWarn: true},
+		{name: "above warning boundary", featureDim: 5, norm: InputAdapterNormLayerNorm},
+		{name: "explicit none", featureDim: 1, norm: InputAdapterNormNone},
+		{name: "omitted defaults to none", featureDim: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := linearFramesTestConfig()
+			candidate.InputAdapter.FeatureDim = tt.featureDim
+			candidate.InputAdapter.Norm = tt.norm
+			raw, err := json.Marshal(candidate)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, stderr := parseConfigCapturingStderr(t, raw, tt.name)
+			if got := strings.Contains(stderr, "post-projection LayerNorm can discard input magnitude"); got != tt.wantWarn {
+				t.Fatalf("warning=%t want=%t stderr=%q", got, tt.wantWarn, stderr)
+			}
+			if tt.wantWarn {
+				if !strings.Contains(stderr, fmt.Sprintf("feature_dim=%d", tt.featureDim)) ||
+					!strings.Contains(stderr, `Prefer norm="none"`) {
+					t.Fatalf("warning lacks actionable config details: %q", stderr)
+				}
+			}
+			if cfg.EffectiveInputAdapterNorm() != normalizeInputAdapterNorm(tt.norm) {
+				t.Fatalf("norm=%q want=%q", cfg.EffectiveInputAdapterNorm(), normalizeInputAdapterNorm(tt.norm))
 			}
 		})
 	}

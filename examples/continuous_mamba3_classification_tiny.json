@@ -7,7 +7,7 @@
     "kind": "linear_frames",
     "feature_dim": 4,
     "bias": true,
-    "norm": "layernorm"
+    "norm": "none"
   },
   "mlp_mult": 2.0,
   "blocks": [

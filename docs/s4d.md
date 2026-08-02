@@ -89,6 +89,16 @@ vectors, biases, and norm parameters:
 }
 ```
 
+The pinned LRA reference uses both `state_lr: 0.001` and
+`weight_decay_policy: "all"`. The default `"matrix_only"` policy remains valid
+for other S4D recipes, but it does not reproduce that reference optimizer:
+ordinary biases, norms, and scalar/vector C/D parameters are not decayed.
+
+For low-dimensional continuous signals, also keep `input_adapter.norm` at
+`"none"` unless projection-scale invariance is intentional. Post-projection
+LayerNorm is exactly sign-only at initialization for `feature_dim: 1` while
+the projection bias is zero.
+
 ## Runtime boundary
 
 - Native token and `linear_frames` classification are supported.

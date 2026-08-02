@@ -33,7 +33,7 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 | `model_dim` | integer | Yes | None | Hidden size `D`. Must be `> 0`. |
 | `vocab_size` | integer | Token inputs only | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` for `token_embedding`. Omit it for `input_adapter.kind: "linear_frames"`. |
 | `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
-| `input_adapter` | object | No | `{"kind":"token_embedding"}` | Selects the model input representation. `linear_frames` accepts float32 `[B,T,F]` data and requires `feature_dim > 0`; optional `bias` defaults to `true`, and `norm` is `"none"` or `"layernorm"`. Continuous v1 is native sequence classification only. |
+| `input_adapter` | object | No | `{"kind":"token_embedding"}` | Selects the model input representation. `linear_frames` accepts float32 `[B,T,F]` data and requires `feature_dim > 0`; optional `bias` defaults to `true`, and `norm` defaults to `"none"` and also accepts `"layernorm"`. Continuous v1 is native sequence classification only. |
 | `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `geglu`, `mlp`, `moe` experts, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
 | `smear_embeddings` | boolean | No | `false` | Enables 1-token-lookback smearing on token embeddings before the first block. |
@@ -116,7 +116,7 @@ head, or dummy vocabulary is allocated.
     "kind": "linear_frames",
     "feature_dim": 1,
     "bias": true,
-    "norm": "layernorm"
+    "norm": "none"
   },
   "blocks": [
     {"type": "mamba3-canonical", "inner_dim": 32, "state_size": 8, "n_groups": 4},
@@ -136,6 +136,13 @@ there is intentionally no second `input_adapter.positions` field.
 existing model-level position table. Continuous input requires a
 `continuous_frames` dataset manifest with matching `feature_dim`, `seq_len`,
 and classification label count. See [Continuous input](continuous-input.md).
+
+For magnitude-bearing low-dimensional signals, keep `input_adapter.norm` at
+`"none"`. LayerNorm follows the `F -> D` projection, so with `feature_dim: 1`
+and the zero-initialized projection bias it cancels input magnitude exactly and
+passes only the sign at initialization. Mixlab warns when post-projection
+LayerNorm is selected with `feature_dim <= 4`; higher-dimensional use remains
+available when scale invariance is intentional.
 
 ## Smear Token Embeddings
 
