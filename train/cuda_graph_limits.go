@@ -19,7 +19,10 @@ func cudaGraphLimitsForSelection(configPath, configsDir string) gpu.CUDAGraphLim
 }
 
 func cudaGraphLimitsForConfigPath(path string) gpu.CUDAGraphLimits {
-	cfg, err := LoadArchConfig(path)
+	// Quiet load: this preflight parses the config only to size CUDA graph
+	// limits and runs before the primary, user-facing load. Emitting advisory
+	// config warnings here would duplicate them.
+	cfg, err := LoadArchConfigQuiet(path)
 	if err != nil {
 		return gpu.CUDAGraphLimits{}
 	}
@@ -35,7 +38,8 @@ func cudaGraphLimitsForConfig(cfg *ArchConfig) gpu.CUDAGraphLimits {
 }
 
 func cudaGraphLimitsForConfigDir(dir string) gpu.CUDAGraphLimits {
-	configs, err := loadConfigsFromDir(dir)
+	// Quiet load: preflight only; the arch_race run surfaces config warnings.
+	configs, err := loadConfigsFromDirQuiet(dir)
 	if err != nil {
 		return gpu.CUDAGraphLimits{}
 	}

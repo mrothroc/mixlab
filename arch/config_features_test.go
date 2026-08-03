@@ -348,7 +348,8 @@ func TestParseArchConfig_Mamba3DeprecatedAliasWarnsAndMatchesGatedLinearSSM(t *t
 	}
 }
 
-func parseConfigCapturingStderr(t *testing.T, data []byte, source string) (*ArchConfig, string) {
+// captureStderr runs fn with os.Stderr redirected and returns what it wrote.
+func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 
 	oldStderr := os.Stderr
@@ -361,7 +362,8 @@ func parseConfigCapturingStderr(t *testing.T, data []byte, source string) (*Arch
 		os.Stderr = oldStderr
 	}()
 
-	cfg, parseErr := ParseArchConfig(data, source)
+	fn()
+
 	if closeErr := writeEnd.Close(); closeErr != nil {
 		t.Fatalf("close stderr pipe writer: %v", closeErr)
 	}
@@ -372,10 +374,20 @@ func parseConfigCapturingStderr(t *testing.T, data []byte, source string) (*Arch
 	if closeErr := readEnd.Close(); closeErr != nil {
 		t.Fatalf("close stderr pipe reader: %v", closeErr)
 	}
+	return string(out)
+}
+
+func parseConfigCapturingStderr(t *testing.T, data []byte, source string) (*ArchConfig, string) {
+	t.Helper()
+	var cfg *ArchConfig
+	var parseErr error
+	out := captureStderr(t, func() {
+		cfg, parseErr = ParseArchConfig(data, source)
+	})
 	if parseErr != nil {
 		t.Fatalf("ParseArchConfig: %v", parseErr)
 	}
-	return cfg, string(out)
+	return cfg, out
 }
 
 func TestParseArchConfig_AcceptsMamba3Canonical(t *testing.T) {

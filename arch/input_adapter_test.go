@@ -3,6 +3,8 @@ package arch
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -111,6 +113,42 @@ func TestLinearFramesLowDimLayerNormWarning(t *testing.T) {
 				t.Fatalf("norm=%q want=%q", cfg.EffectiveInputAdapterNorm(), normalizeInputAdapterNorm(tt.norm))
 			}
 		})
+	}
+}
+
+// TestLoadArchConfigQuietSuppressesInputAdapterWarning locks in the fix for the
+// CLI double-parse: the internal preflight (LoadArchConfigQuiet) must stay
+// silent while the primary load (LoadArchConfig) surfaces the warning exactly
+// once, so a footgun config warns once per invocation, not twice.
+func TestLoadArchConfigQuietSuppressesInputAdapterWarning(t *testing.T) {
+	candidate := linearFramesTestConfig()
+	candidate.InputAdapter.FeatureDim = 1
+	candidate.InputAdapter.Norm = InputAdapterNormLayerNorm
+	raw, err := json.Marshal(candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "footgun.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const marker = "discard input magnitude"
+	quiet := captureStderr(t, func() {
+		if _, err := LoadArchConfigQuiet(path); err != nil {
+			t.Fatalf("LoadArchConfigQuiet: %v", err)
+		}
+	})
+	if strings.Contains(quiet, marker) {
+		t.Fatalf("LoadArchConfigQuiet emitted a warning: %q", quiet)
+	}
+	loud := captureStderr(t, func() {
+		if _, err := LoadArchConfig(path); err != nil {
+			t.Fatalf("LoadArchConfig: %v", err)
+		}
+	})
+	if got := strings.Count(loud, marker); got != 1 {
+		t.Fatalf("LoadArchConfig warning count=%d want=1 stderr=%q", got, loud)
 	}
 }
 

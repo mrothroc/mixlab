@@ -106,8 +106,18 @@ func sortKey(r TrainResult) float64 {
 }
 
 // loadConfigsFromDir walks dir and loads all .json files as ArchConfigs,
-// returning them sorted by filename.
+// returning them sorted by filename. It surfaces advisory config warnings.
 func loadConfigsFromDir(dir string) ([]*ArchConfig, error) {
+	return loadConfigsFromDirOpt(dir, true)
+}
+
+// loadConfigsFromDirQuiet is loadConfigsFromDir without emitting advisory config
+// warnings, for internal preflights that must not duplicate them.
+func loadConfigsFromDirQuiet(dir string) ([]*ArchConfig, error) {
+	return loadConfigsFromDirOpt(dir, false)
+}
+
+func loadConfigsFromDirOpt(dir string, emitWarnings bool) ([]*ArchConfig, error) {
 	var paths []string
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -126,9 +136,13 @@ func loadConfigsFromDir(dir string) ([]*ArchConfig, error) {
 	}
 	sort.Strings(paths)
 
+	load := LoadArchConfig
+	if !emitWarnings {
+		load = LoadArchConfigQuiet
+	}
 	configs := make([]*ArchConfig, 0, len(paths))
 	for _, p := range paths {
-		cfg, err := LoadArchConfig(p)
+		cfg, err := load(p)
 		if err != nil {
 			return nil, fmt.Errorf("load config %q: %w", p, err)
 		}

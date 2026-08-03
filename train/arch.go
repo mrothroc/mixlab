@@ -23,6 +23,7 @@ var DefaultTrainingSpec = arch.DefaultTrainingSpec
 var DefaultEvalSpec = arch.DefaultEvalSpec
 var DefaultLegalChunkSGDEvalSpec = arch.DefaultLegalChunkSGDEvalSpec
 var LoadArchConfig = arch.LoadArchConfig
+var LoadArchConfigQuiet = arch.LoadArchConfigQuiet
 var ParseArchConfig = arch.ParseArchConfig
 
 func BuildIRProgramFromConfig(cfg *ArchConfig) (*arch.Program, error) {
