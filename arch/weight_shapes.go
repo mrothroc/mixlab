@@ -26,10 +26,25 @@ type WeightMeta struct {
 	DtMax         float64
 	GPTBERTScale  float32
 	GPT2Scale     float32
-	OptimizerRole string
-	OptimizerLR   float32
-	ForceNoDecay  bool
-	ForceDecay    bool
+	// PyTorchLinearFanIn marks a tensor as an nn.Linear-style weight or paired
+	// bias. It is ignored unless training.weight_init="pytorch_linear".
+	PyTorchLinearFanIn int
+	OptimizerRole      string
+	OptimizerLR        float32
+	ForceNoDecay       bool
+	ForceDecay         bool
+}
+
+func linearWeightMeta(name string, fanIn, fanOut int) WeightMeta {
+	return WeightMeta{
+		Name: name, Shape: []int{fanIn, fanOut}, PyTorchLinearFanIn: fanIn,
+	}
+}
+
+func linearBiasWeightMeta(name string, fanIn, fanOut int) WeightMeta {
+	return WeightMeta{
+		Name: name, Shape: []int{fanOut}, InitZero: true, PyTorchLinearFanIn: fanIn,
+	}
 }
 
 // ffnDim computes the FFN hidden dimension, clamped to at least D.
@@ -778,6 +793,7 @@ func collectLinearFramesWeightShapesWithRefs(cfg *ArchConfig, refs []int) ([]Wei
 		return nil, err
 	}
 	metas[0].Name = "input_adapter_proj"
+	metas[0].PyTorchLinearFanIn = cfg.InputAdapter.FeatureDim
 
 	fixed := fixedWeightCountWithHeadAndNorm(false, cfg.EffectiveNormSpec(), cfg.EffectiveFinalNorm())
 	extra := linearFramesExtraWeightShapes(cfg)

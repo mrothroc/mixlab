@@ -115,4 +115,8 @@ For continuous input, see [Continuous sequence input](continuous-input.md) and
 the [`continuous_s4d_classification_tiny.json`](../examples/continuous_s4d_classification_tiny.json)
 example. The pinned LRA Image recipe is
 [`continuous_s4d_lra_image_reference.json`](../examples/continuous_s4d_lra_image_reference.json);
-the full 200k-step result remains a hardware-intensive acceptance run.
+it follows the reference's 200 epochs as 180,000 optimizer updates while retaining
+the separately configured 200,000-step cosine horizon and 1,000-step warmup. Its
+ordinary input, S4D output, and classifier affine layers use
+`weight_init: "pytorch_linear"`; S4D state parameters retain their dedicated
+`s4d-lin` initializers. The full run remains a hardware-intensive acceptance run.

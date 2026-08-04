@@ -102,7 +102,9 @@
       "classifier_dropout": 0
     },
     "optimizer": "adamw",
-    "steps": 200000,
+    "weight_init": "pytorch_linear",
+    "steps": 180000,
+    "lr_schedule_steps": 200000,
     "lr": 0.01,
     "warmup_steps": 1000,
     "hold_steps": 0,

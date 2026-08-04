@@ -100,9 +100,9 @@ func linearFramesExtraWeightShapes(cfg *ArchConfig) []WeightMeta {
 	}
 	var out []WeightMeta
 	if cfg.EffectiveInputAdapterBias() {
-		out = append(out, WeightMeta{
-			Name: "input_adapter_bias", Shape: []int{cfg.ModelDim}, InitZero: true,
-		})
+		out = append(out, linearBiasWeightMeta(
+			"input_adapter_bias", cfg.InputAdapter.FeatureDim, cfg.ModelDim,
+		))
 	}
 	if cfg.EffectiveInputAdapterNorm() == InputAdapterNormLayerNorm {
 		out = append(out,

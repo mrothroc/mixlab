@@ -228,7 +228,8 @@ func buildTrainingScheduler(spec TrainingSpec) (trainingScheduler, int) {
 		HoldSteps:      spec.HoldSteps,
 		HoldStepsSet:   spec.HoldStepsConfigured(),
 	}
-	return trainingScheduleWithOptions(float32(spec.LR), spec.Steps, spec.WarmdownSteps, spec.MinLRFraction, opts), spec.Steps
+	scheduleSteps := spec.EffectiveLRScheduleSteps()
+	return trainingScheduleWithOptions(float32(spec.LR), scheduleSteps, spec.WarmdownSteps, spec.MinLRFraction, opts), spec.Steps
 }
 
 func phaseDisplayLabel(phase TrainingPhase, index int) string {

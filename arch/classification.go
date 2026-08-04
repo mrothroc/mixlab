@@ -80,8 +80,8 @@ func classificationWeightShapes(modelDim int, spec *ClassificationSpec) []Weight
 		return nil
 	}
 	return []WeightMeta{
-		{Name: "head_classifier_proj", Shape: []int{modelDim, spec.NumLabels}},
-		{Name: "head_classifier_bias", Shape: []int{spec.NumLabels}, InitZero: true},
+		linearWeightMeta("head_classifier_proj", modelDim, spec.NumLabels),
+		linearBiasWeightMeta("head_classifier_bias", modelDim, spec.NumLabels),
 	}
 }
 

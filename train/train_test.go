@@ -234,6 +234,51 @@ func TestBuildTrainingScheduler_UsesWarmupFields(t *testing.T) {
 	}
 }
 
+func TestBuildTrainingScheduler_UsesIndependentLRHorizon(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim": 32,
+		"vocab_size": 128,
+		"seq_len": 8,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {
+			"steps": 180000,
+			"lr_schedule_steps": 200000,
+			"lr": 0.01,
+			"warmup_steps": 1000,
+			"hold_steps": 0,
+			"min_lr_fraction": 0.000001
+		}
+	}`), "independent-lr-horizon")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	sched, steps := buildTrainingScheduler(cfg.Training)
+	if steps != 180000 {
+		t.Fatalf("training steps=%d want 180000", steps)
+	}
+	s, ok := sched.(LRSchedule)
+	if !ok {
+		t.Fatalf("scheduler type=%T want LRSchedule", sched)
+	}
+	if s.MaxSteps != 200000 || s.Warmup != 1000 || s.Hold != 0 {
+		t.Fatalf("schedule=%+v", s)
+	}
+	if got := s.At(179999); got <= s.MinLR || got >= s.BaseLR {
+		t.Fatalf("At(last training step)=%g want between min=%g and base=%g", got, s.MinLR, s.BaseLR)
+	}
+}
+
+func TestBuildTrainingScheduler_OmittedHorizonPreservesSteps(t *testing.T) {
+	spec := TrainingSpec{Steps: 1234, LR: 0.01}
+	sched, steps := buildTrainingScheduler(spec)
+	if steps != 1234 {
+		t.Fatalf("training steps=%d want 1234", steps)
+	}
+	if got := sched.(LRSchedule).MaxSteps; got != 1234 {
+		t.Fatalf("schedule max steps=%d want 1234", got)
+	}
+}
+
 func TestTrainingSchedule_StepsLessThanWarmup(t *testing.T) {
 	s := trainingSchedule(0.01, 50, 0, 0)
 	if s.Warmup != 50 {

@@ -281,6 +281,46 @@ func TestGPT2WeightInitAccepted(t *testing.T) {
 	}
 }
 
+func TestPyTorchLinearWeightInitAccepted(t *testing.T) {
+	raw := []byte(`{
+		"name": "pytorch_linear_weight_init",
+		"model_dim": 32,
+		"vocab_size": 128,
+		"seq_len": 8,
+		"blocks": [{"type": "plain", "heads": 4}],
+		"training": {"steps": 100, "lr": 0.0003, "batch_tokens": 1024, "weight_init": "pytorch_linear"}
+	}`)
+	cfg, err := ParseArchConfig(raw, "pytorch_linear_weight_init")
+	if err != nil {
+		t.Fatalf("ParseArchConfig: %v", err)
+	}
+	if cfg.Training.WeightInit != "pytorch_linear" {
+		t.Fatalf("weight_init=%q want pytorch_linear", cfg.Training.WeightInit)
+	}
+}
+
+func TestInvalidIndependentLRScheduleHorizon(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		training string
+	}{
+		{name: "negative", training: `"steps":100,"lr_schedule_steps":-1`},
+		{name: "phases", training: `"phases":[{"steps":100,"lr":0.001}],"lr_schedule_steps":200`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(`{
+				"model_dim":32,"vocab_size":128,"seq_len":8,
+				"blocks":[{"type":"plain","heads":4}],
+				"training":{` + tc.training + `,"batch_tokens":8}
+			}`)
+			_, err := ParseArchConfig(raw, tc.name)
+			if err == nil || !strings.Contains(err.Error(), "lr_schedule_steps") {
+				t.Fatalf("ParseArchConfig error=%v want lr_schedule_steps error", err)
+			}
+		})
+	}
+}
+
 func TestNegativeHardwareTFLOPs(t *testing.T) {
 	cfg := ArchConfig{
 		ModelDim:  128,

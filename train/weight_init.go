@@ -10,25 +10,26 @@ import (
 )
 
 type WeightShape struct {
-	Name          string
-	Shape         []int
-	IsBuffer      bool
-	IsNormScale   bool
-	InitOne       bool
-	InitValue     float32
-	InitZero      bool
-	InitMode      string
-	InitLogArange bool
-	InitDtBias    bool
-	DtMin         float64
-	DtMax         float64
-	GPTBERTScale  float32
-	GPT2Scale     float32
-	ModelDim      int
-	OptimizerRole string
-	OptimizerLR   float32
-	ForceNoDecay  bool
-	ForceDecay    bool
+	Name               string
+	Shape              []int
+	IsBuffer           bool
+	IsNormScale        bool
+	InitOne            bool
+	InitValue          float32
+	InitZero           bool
+	InitMode           string
+	InitLogArange      bool
+	InitDtBias         bool
+	DtMin              float64
+	DtMax              float64
+	GPTBERTScale       float32
+	GPT2Scale          float32
+	ModelDim           int
+	PyTorchLinearFanIn int
+	OptimizerRole      string
+	OptimizerLR        float32
+	ForceNoDecay       bool
+	ForceDecay         bool
 }
 
 func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
@@ -44,25 +45,26 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 	shapes := make([]WeightShape, len(metas))
 	for i, m := range metas {
 		shapes[i] = WeightShape{
-			Name:          m.Name,
-			Shape:         m.Shape,
-			IsBuffer:      m.IsBuffer,
-			IsNormScale:   m.IsNormScale,
-			InitOne:       m.InitOne,
-			InitValue:     m.InitValue,
-			InitZero:      m.InitZero,
-			InitMode:      m.InitMode,
-			InitLogArange: m.InitLogArange,
-			InitDtBias:    m.InitDtBias,
-			DtMin:         m.DtMin,
-			DtMax:         m.DtMax,
-			GPTBERTScale:  m.GPTBERTScale,
-			GPT2Scale:     m.GPT2Scale,
-			ModelDim:      cfg.ModelDim,
-			OptimizerRole: m.OptimizerRole,
-			OptimizerLR:   m.OptimizerLR,
-			ForceNoDecay:  m.ForceNoDecay,
-			ForceDecay:    m.ForceDecay,
+			Name:               m.Name,
+			Shape:              m.Shape,
+			IsBuffer:           m.IsBuffer,
+			IsNormScale:        m.IsNormScale,
+			InitOne:            m.InitOne,
+			InitValue:          m.InitValue,
+			InitZero:           m.InitZero,
+			InitMode:           m.InitMode,
+			InitLogArange:      m.InitLogArange,
+			InitDtBias:         m.InitDtBias,
+			DtMin:              m.DtMin,
+			DtMax:              m.DtMax,
+			GPTBERTScale:       m.GPTBERTScale,
+			GPT2Scale:          m.GPT2Scale,
+			ModelDim:           cfg.ModelDim,
+			PyTorchLinearFanIn: m.PyTorchLinearFanIn,
+			OptimizerRole:      m.OptimizerRole,
+			OptimizerLR:        m.OptimizerLR,
+			ForceNoDecay:       m.ForceNoDecay,
+			ForceDecay:         m.ForceDecay,
 		}
 	}
 	return shapes, nil
@@ -79,6 +81,18 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 		}
 		data := make([]float32, n)
 		if applySpecialWeightInit(data, ws, rng) {
+			weights[i] = data
+			continue
+		}
+		if weightInit == "pytorch_linear" && ws.PyTorchLinearFanIn > 0 {
+			linearRNG := rng
+			if len(ws.Shape) == 1 {
+				// PyTorch-style biases add random draws where Mixlab historically
+				// used zeros. Keep those draws off the model RNG stream so later
+				// specialized initializers remain byte-identical.
+				linearRNG = rand.New(rand.NewSource(pytorchLinearBiasSeed(seed, i)))
+			}
+			fillFanInUniform(data, ws.PyTorchLinearFanIn, linearRNG)
 			weights[i] = data
 			continue
 		}
@@ -275,10 +289,7 @@ func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool
 		if len(ws.Shape) < 2 || ws.Shape[0] <= 0 {
 			return false
 		}
-		bound := 1.0 / math.Sqrt(float64(ws.Shape[0]))
-		for i := range data {
-			data[i] = float32(rng.Float64()*2*bound - bound)
-		}
+		fillFanInUniform(data, ws.Shape[0], rng)
 		return true
 	case "torch_depthwise_conv1d_uniform":
 		if len(ws.Shape) < 1 || ws.Shape[0] <= 0 {
@@ -317,6 +328,18 @@ func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool
 	default:
 		return false
 	}
+}
+
+func fillFanInUniform(data []float32, fanIn int, rng *rand.Rand) {
+	bound := 1.0 / math.Sqrt(float64(fanIn))
+	for i := range data {
+		data[i] = float32(rng.Float64()*2*bound - bound)
+	}
+}
+
+func pytorchLinearBiasSeed(seed int64, weightIndex int) int64 {
+	const biasSalt int64 = 0x4f1bbcdc676f5a2d
+	return seed ^ biasSalt ^ int64(weightIndex+1)*0x5851f42d4c957f2d
 }
 
 func inverseSoftplus(x float64) float64 {

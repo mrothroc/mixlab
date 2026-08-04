@@ -190,9 +190,9 @@ func TestLinearFramesWeightsIRAndCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPrefix := []WeightMeta{
-		{Name: "input_adapter_proj", Shape: []int{1, 8}},
+		{Name: "input_adapter_proj", Shape: []int{1, 8}, PyTorchLinearFanIn: 1},
 		{Name: "final_norm", Shape: []int{8}, IsNormScale: true, InitOne: true},
-		{Name: "input_adapter_bias", Shape: []int{8}, InitZero: true},
+		{Name: "input_adapter_bias", Shape: []int{8}, InitZero: true, PyTorchLinearFanIn: 1},
 		{Name: "input_adapter_norm_scale", Shape: []int{8}, IsNormScale: true, InitOne: true},
 		{Name: "input_adapter_norm_bias", Shape: []int{8}, InitZero: true},
 	}
@@ -204,7 +204,7 @@ func TestLinearFramesWeightsIRAndCounts(t *testing.T) {
 			t.Fatalf("weight[%d]=%+v, want %+v", i, weights[i], want)
 		}
 	}
-	if got := weights[len(weights)-2]; got.Name != "head_classifier_proj" || !reflect.DeepEqual(got.Shape, []int{8, 3}) {
+	if got := weights[len(weights)-2]; got.Name != "head_classifier_proj" || !reflect.DeepEqual(got.Shape, []int{8, 3}) || got.PyTorchLinearFanIn != 8 {
 		t.Fatalf("classifier projection=%+v", got)
 	}
 	for _, weight := range weights {

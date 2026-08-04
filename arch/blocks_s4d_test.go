@@ -390,8 +390,36 @@ func TestS4DLRAImageReferenceExampleParsesAndCounts(t *testing.T) {
 	if len(cfg.Blocks) != 6 || cfg.ModelDim != 512 || cfg.SeqLen != 1024 {
 		t.Fatalf("unexpected reference dimensions: blocks=%d D=%d T=%d", len(cfg.Blocks), cfg.ModelDim, cfg.SeqLen)
 	}
-	if cfg.Training.BatchTokens/cfg.SeqLen != 50 || cfg.Training.Steps != 200000 || cfg.Training.Seed != 2222 {
+	if cfg.Training.BatchTokens/cfg.SeqLen != 50 || cfg.Training.Steps != 180000 ||
+		cfg.Training.LRScheduleSteps != 200000 || cfg.Training.WarmupSteps != 1000 ||
+		cfg.Training.WeightInit != "pytorch_linear" || cfg.Training.Seed != 2222 {
 		t.Fatalf("unexpected training recipe: %+v", cfg.Training)
+	}
+	metas, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFanIn := map[string]int{
+		"input_adapter_proj":   1,
+		"input_adapter_bias":   1,
+		"s4d_out_proj":         512,
+		"s4d_out_bias":         512,
+		"head_classifier_proj": 512,
+		"head_classifier_bias": 512,
+	}
+	seen := map[string]int{}
+	for _, meta := range metas {
+		if want, ok := wantFanIn[meta.Name]; ok {
+			if meta.PyTorchLinearFanIn != want {
+				t.Fatalf("%s PyTorchLinearFanIn=%d want %d", meta.Name, meta.PyTorchLinearFanIn, want)
+			}
+			seen[meta.Name]++
+		}
+	}
+	for name := range wantFanIn {
+		if seen[name] == 0 {
+			t.Fatalf("missing affine metadata for %s", name)
+		}
 	}
 	params, expanded, err := ParameterCountsFromConfig(cfg)
 	if err != nil {

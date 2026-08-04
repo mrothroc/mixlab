@@ -30,6 +30,16 @@ func (t TrainingSpec) TotalSteps() int {
 	return total
 }
 
+// EffectiveLRScheduleSteps returns the horizon used by the standard cosine
+// schedule. It is independent from TotalSteps so epoch-bounded references can
+// stop before their configured scheduler horizon.
+func (t TrainingSpec) EffectiveLRScheduleSteps() int {
+	if t.LRScheduleSteps > 0 {
+		return t.LRScheduleSteps
+	}
+	return t.Steps
+}
+
 // EffectiveComputeDType returns the training compute dtype, defaulting to fp32.
 func (t TrainingSpec) EffectiveComputeDType() string {
 	dtype := strings.ToLower(strings.TrimSpace(t.ComputeDType))

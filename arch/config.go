@@ -275,6 +275,7 @@ func (e *ExampleFramingSpec) UnmarshalJSON(data []byte) error {
 // TrainingSpec holds training hyperparameters.
 type TrainingSpec struct {
 	Steps                             int                          `json:"steps"`
+	LRScheduleSteps                   int                          `json:"lr_schedule_steps,omitempty"`
 	LR                                float64                      `json:"lr"`
 	Phases                            []TrainingPhase              `json:"phases,omitempty"`
 	Objective                         string                       `json:"objective,omitempty"`
@@ -358,7 +359,7 @@ type TrainingSpec struct {
 	ComputeDType        string  `json:"compute_dtype,omitempty"`
 	QAT                 string  `json:"qat,omitempty"` // "none" (default), "int8", or "int6"
 	QATStart            int     `json:"qat_start,omitempty"`
-	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default), "normal", "gptbert", or "gpt2"
+	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default), "normal", "gptbert", "gpt2", or "pytorch_linear"
 	WeightInitStd       float32 `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
 	EmbedWeightDecay    float32 `json:"embed_weight_decay"`
 	MatrixWeightDecay   float32 `json:"matrix_weight_decay"`
@@ -708,9 +709,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, fmt.Errorf("config %q has invalid training.optimizer=%q (must be \"adamw\", \"muon\", \"muon_eq_r\", \"normuon\", or \"lamb\")", source, cfg.Training.Optimizer)
 	}
 	switch cfg.Training.WeightInit {
-	case "", "xavier_uniform", "normal", "gptbert", "gpt2":
+	case "", "xavier_uniform", "normal", "gptbert", "gpt2", "pytorch_linear":
 	default:
-		return nil, fmt.Errorf("config %q has invalid training.weight_init=%q (must be \"xavier_uniform\", \"normal\", \"gptbert\", or \"gpt2\")", source, cfg.Training.WeightInit)
+		return nil, fmt.Errorf("config %q has invalid training.weight_init=%q (must be \"xavier_uniform\", \"normal\", \"gptbert\", \"gpt2\", or \"pytorch_linear\")", source, cfg.Training.WeightInit)
 	}
 	switch cfg.Training.EffectiveComputeDType() {
 	case "float32", "bf16":
@@ -759,6 +760,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.Training.WarmupSteps < 0 {
 		return nil, fmt.Errorf("config %q has invalid training.warmup_steps=%d (must be >= 0)", source, cfg.Training.WarmupSteps)
 	}
+	if cfg.Training.LRScheduleSteps < 0 {
+		return nil, fmt.Errorf("config %q has invalid training.lr_schedule_steps=%d (must be >= 0)", source, cfg.Training.LRScheduleSteps)
+	}
 	if cfg.Training.WarmupRatio < 0 || cfg.Training.WarmupRatio > 1 {
 		return nil, fmt.Errorf("config %q has invalid training.warmup_ratio=%g (must be in [0,1])", source, cfg.Training.WarmupRatio)
 	}
@@ -792,6 +796,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		}
 	}
 	if len(cfg.Training.Phases) > 0 {
+		if cfg.Training.LRScheduleSteps != 0 {
+			return nil, fmt.Errorf("config %q cannot set training.lr_schedule_steps with training.phases; phase steps define their own schedule", source)
+		}
 		cfg.Training.Steps = cfg.Training.TotalSteps()
 	}
 	if err := validateRecurrencePhases(cfg, source); err != nil {

@@ -124,8 +124,8 @@ func s4dWeightShapesWithOptions(spec BlockSpec, D int, opts EmitOptions) ([]Weig
 	metas = append(metas, direct)
 	if effectiveS4DOutputTransform(spec) == S4DOutputTransformGLU {
 		metas = append(metas,
-			WeightMeta{Name: "s4d_out_proj", Shape: []int{D, 2 * D}},
-			WeightMeta{Name: "s4d_out_bias", Shape: []int{2 * D}, InitZero: true},
+			linearWeightMeta("s4d_out_proj", D, 2*D),
+			linearBiasWeightMeta("s4d_out_bias", D, 2*D),
 		)
 	}
 	if placement == NormPlacementPost || placement == NormPlacementSandwich {

@@ -153,6 +153,27 @@ func TestResumeScheduleContinuesOriginalHorizonAtFloor(t *testing.T) {
 	}
 }
 
+func TestResumeManifestPreservesIndependentLRScheduleHorizon(t *testing.T) {
+	spec := TrainingSpec{
+		Steps:           180000,
+		LRScheduleSteps: 200000,
+		LR:              0.01,
+		WarmupSteps:     1000,
+	}
+	spec.ApplyDefaults()
+	scheduler, total := buildTrainingScheduler(spec)
+	saved, err := resumeScheduleFrom(spec, scheduler, total)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.OriginalTotalSteps != 180000 {
+		t.Fatalf("original training steps=%d want 180000", saved.OriginalTotalSteps)
+	}
+	if saved.Standard == nil || saved.Standard.MaxSteps != 200000 || saved.Standard.Warmup != 1000 {
+		t.Fatalf("saved schedule=%+v", saved.Standard)
+	}
+}
+
 func TestResumeEarlyStopSnapshotBeforeFirstValidationIsJSONSafe(t *testing.T) {
 	state := newEarlyStopState(&EarlyStopSpec{Patience: 3})
 	snapshot := state.resumeSnapshot()
