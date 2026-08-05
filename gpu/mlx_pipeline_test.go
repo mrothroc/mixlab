@@ -4,10 +4,24 @@ package gpu
 
 import (
 	"math"
+	"runtime"
 	"testing"
 
 	ir "github.com/mrothroc/mixlab/arch"
 )
+
+// lockMLXThread pins the test goroutine to one OS thread for its duration.
+// MLX streams are thread-local (see mlx/stream.h ThreadLocalStream), and these
+// tests drive the trainer across multiple cgo calls (create, submit, collect);
+// without pinning, Go can migrate the goroutine between OS threads and a later
+// call lands on a thread that lacks the stream the trainer state was created on
+// ("There is no Stream(gpu, N) in current thread"). Production already pins the
+// thread at every MLX entry point (e.g. train.runTrain); the tests must too.
+func lockMLXThread(t *testing.T) {
+	t.Helper()
+	runtime.LockOSThread()
+	t.Cleanup(runtime.UnlockOSThread)
+}
 
 func makePipelineTestProgram() *ir.Program {
 	prog := ir.NewProgram(2)
@@ -127,6 +141,7 @@ func TestTrainerPipelineCollectsSubmittedLossesInOrder(t *testing.T) {
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
+	lockMLXThread(t)
 
 	gpuProg, err := LowerIRProgram(makePipelineTestProgram())
 	if err != nil {
@@ -186,6 +201,7 @@ func TestTrainerStepCachesLossOnlyByDefault(t *testing.T) {
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
+	lockMLXThread(t)
 	t.Setenv("MIXLAB_CAPTURE_TRAIN_OUTPUTS", "0")
 
 	gpuProg, err := LowerIRProgram(makePipelineTestProgram())
@@ -210,6 +226,7 @@ func TestTrainerStepCanCaptureTrainOutputsForDebug(t *testing.T) {
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
+	lockMLXThread(t)
 	t.Setenv("MIXLAB_CAPTURE_TRAIN_OUTPUTS", "1")
 
 	gpuProg, err := LowerIRProgram(makePipelineTestProgram())
@@ -235,6 +252,7 @@ func TestTrainerPipelineReadsConfiguredScalarWithoutFlushingLookahead(t *testing
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
+	lockMLXThread(t)
 	t.Setenv("MIXLAB_CAPTURE_TRAIN_OUTPUTS", "0")
 
 	gpuProg, err := LowerIRProgram(makePipelineTestProgram())
@@ -275,6 +293,7 @@ func TestTrainerPipelineMatchesSynchronousTrainingExactly(t *testing.T) {
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
+	lockMLXThread(t)
 
 	gpuProg, err := LowerIRProgram(makePipelineTestProgram())
 	if err != nil {
