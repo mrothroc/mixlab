@@ -8,6 +8,7 @@ import (
 )
 
 func TestRequiredDistributedBackendIsCompiled(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX GPU backend unavailable")
 	}

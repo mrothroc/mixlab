@@ -12,6 +12,7 @@ import (
 )
 
 func TestMoEFeedForwardMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -81,6 +82,7 @@ func TestMoEFeedForwardMatchesCPUOracle(t *testing.T) {
 }
 
 func TestMoEFeedForwardGradientsFinite(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

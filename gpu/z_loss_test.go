@@ -10,6 +10,7 @@ import (
 )
 
 func TestZLossMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -52,6 +53,7 @@ func TestZLossMatchesCPUOracle(t *testing.T) {
 }
 
 func TestMaskedZLossIgnoresFiniteExtremeInactiveRows(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

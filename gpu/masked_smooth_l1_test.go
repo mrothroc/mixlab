@@ -10,6 +10,7 @@ import (
 )
 
 func TestMaskedSmoothL1MatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -68,6 +69,7 @@ func TestMaskedSmoothL1MatchesCPUOracle(t *testing.T) {
 }
 
 func TestEvalProgramOutputsReadsMultipleNamedOutputs(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

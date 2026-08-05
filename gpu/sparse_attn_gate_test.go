@@ -10,6 +10,7 @@ import (
 )
 
 func TestSparseAttnGateWeightUpdatesDuringTraining(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -111,6 +112,7 @@ func TestSparseAttnGateWeightUpdatesDuringTraining(t *testing.T) {
 }
 
 func TestSparseAttnGateParallelResidualTrainStep(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -195,14 +197,17 @@ func TestSparseAttnGateParallelResidualTrainStep(t *testing.T) {
 }
 
 func TestParallelResidualRopeDimsTrainStep(t *testing.T) {
+	lockMLXThread(t)
 	testParallelResidualPlainFeatureTrainStep(t, ir.BlockSpec{Type: "plain", Heads: 4, RopeDims: 16}, "parallel_rope_dims")
 }
 
 func TestParallelResidualWindowSizeTrainStep(t *testing.T) {
+	lockMLXThread(t)
 	testParallelResidualPlainFeatureTrainStep(t, ir.BlockSpec{Type: "plain", Heads: 4, WindowSize: 32}, "parallel_window_size")
 }
 
 func TestParallelResidualXSATrainStep(t *testing.T) {
+	lockMLXThread(t)
 	testParallelResidualPlainFeatureTrainStep(t, ir.BlockSpec{Type: "plain", Heads: 4, XSA: true}, "parallel_xsa")
 }
 

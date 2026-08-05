@@ -10,10 +10,12 @@ import (
 )
 
 func TestMuonEqROneStepMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	runMuonVariantOneStepOracle(t, MuonNormalizationRowL2)
 }
 
 func TestNorMuonOneStepMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	runMuonVariantOneStepOracle(t, MuonNormalizationNorMuon)
 }
 

@@ -10,6 +10,7 @@ import (
 )
 
 func TestDebertaRelativeBiasMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -61,6 +62,7 @@ func TestDebertaRelativeBiasMatchesCPUOracle(t *testing.T) {
 }
 
 func TestDebertaRelativeBiasRepeatedEvalMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -115,6 +117,7 @@ func TestDebertaRelativeBiasRepeatedEvalMatchesCPUOracle(t *testing.T) {
 }
 
 func TestDebertaRelativeBucketIndexMatchesGPTBertReference(t *testing.T) {
+	lockMLXThread(t)
 	const (
 		T      = 8
 		window = 4
@@ -146,6 +149,7 @@ func TestDebertaRelativeBucketIndexMatchesGPTBertReference(t *testing.T) {
 }
 
 func TestDebertaRelativeBiasUsesSameQMinusKBucketForP2C(t *testing.T) {
+	lockMLXThread(t)
 	const (
 		B      = 1
 		T      = 4

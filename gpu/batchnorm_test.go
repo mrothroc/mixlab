@@ -10,6 +10,7 @@ import (
 )
 
 func TestBatchNormTrainingMatchesCPUForwardBackwardAndUpdatesBuffers(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -176,6 +177,7 @@ func crossEntropyMeanCPU(logits []float32, targets []int32, rows, dim int) float
 }
 
 func TestBatchNormEvaluationUsesRunningStatsNotBatchComposition(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

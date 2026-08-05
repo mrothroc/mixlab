@@ -13,6 +13,7 @@ import (
 )
 
 func TestGroupRuntimeStartupIdentity(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX device unavailable")
 	}
@@ -82,6 +83,7 @@ func TestGroupRuntimeStartupIdentity(t *testing.T) {
 }
 
 func TestGroupRuntimeStartupIdentityTwoRankGenerationMismatch(t *testing.T) {
+	lockMLXThread(t)
 	if os.Getenv("MIXLAB_DDP_TWO_RANK") != "1" {
 		t.Skip("set MIXLAB_DDP_TWO_RANK=1 and launch with mlx.launch ring hostfile")
 	}
@@ -124,6 +126,7 @@ func TestGroupRuntimeStartupIdentityTwoRankGenerationMismatch(t *testing.T) {
 }
 
 func TestGroupRuntimeStartupIdentityTwoRankHostfile(t *testing.T) {
+	lockMLXThread(t)
 	if os.Getenv("MIXLAB_DDP_TWO_RANK") != "1" {
 		t.Skip("set MIXLAB_DDP_TWO_RANK=1 and launch with mlx.launch ring hostfile")
 	}

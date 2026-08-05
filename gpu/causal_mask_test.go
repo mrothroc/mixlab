@@ -31,6 +31,7 @@ func buildCausalMaskTestProgram() *ir.Program {
 }
 
 func TestCausalMaskSlidingWindowPattern(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -88,6 +89,7 @@ func TestCausalMaskSlidingWindowPattern(t *testing.T) {
 }
 
 func TestSelectiveCausalMaskAppliesPerBatchRow(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

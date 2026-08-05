@@ -130,6 +130,7 @@ func runRoPEIndexedTestProgram(t *testing.T, prog *ir.Program, positions []int32
 }
 
 func TestRoPEIndexedContiguousMatchesStandard(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -141,6 +142,7 @@ func TestRoPEIndexedContiguousMatchesStandard(t *testing.T) {
 }
 
 func TestRoPEIndexedSparsePositionsUseAbsolutePositionValues(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -176,6 +178,7 @@ func TestRoPEIndexedSparsePositionsUseAbsolutePositionValues(t *testing.T) {
 }
 
 func TestRoPEPartialLeavesPassThroughDimsUnchanged(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -205,6 +208,7 @@ func TestRoPEPartialLeavesPassThroughDimsUnchanged(t *testing.T) {
 }
 
 func TestRoPEHalfRotationMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

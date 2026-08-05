@@ -10,6 +10,7 @@ import (
 )
 
 func TestHGRN2ScanMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -64,6 +65,7 @@ func TestHGRN2ScanMatchesCPUOracle(t *testing.T) {
 }
 
 func TestHGRN2ScanMatchesReferenceFixture(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -114,6 +116,7 @@ func TestHGRN2ScanMatchesReferenceFixture(t *testing.T) {
 }
 
 func TestMLSTMScanMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -168,6 +171,7 @@ func TestMLSTMScanMatchesCPUOracle(t *testing.T) {
 }
 
 func TestMLSTMScanMatchesReferenceFixture(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

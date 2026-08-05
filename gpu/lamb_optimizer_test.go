@@ -10,6 +10,7 @@ import (
 )
 
 func TestLAMBOptimizerMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

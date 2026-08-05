@@ -10,6 +10,7 @@ import (
 )
 
 func TestS4DReferenceBidirectionalGroupedBilinearForwardAndBackward(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -106,6 +107,7 @@ func TestS4DReferenceBidirectionalGroupedBilinearForwardAndBackward(t *testing.T
 }
 
 func TestS4DReferenceZeroBackwardRecoversUnidirectional(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

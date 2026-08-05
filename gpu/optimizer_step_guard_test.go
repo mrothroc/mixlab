@@ -92,6 +92,7 @@ func readOptimizerGuardWeight(t *testing.T, trainer TrainerHandle) float32 {
 }
 
 func TestOptimizerStepGuardRollsBackNonFiniteGradientAndBiasStep(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -159,6 +160,7 @@ func TestOptimizerStepGuardRollsBackNonFiniteGradientAndBiasStep(t *testing.T) {
 }
 
 func TestBackwardTraceAttributesFiniteForwardNonFiniteBackward(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -186,6 +188,7 @@ func TestBackwardTraceAttributesFiniteForwardNonFiniteBackward(t *testing.T) {
 }
 
 func TestBackwardTraceAfterSkipPreservesLeadUp(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -219,6 +222,7 @@ func TestBackwardTraceAfterSkipPreservesLeadUp(t *testing.T) {
 }
 
 func TestBackwardTraceAttributesFirstForwardNonFiniteOp(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -244,6 +248,7 @@ func TestBackwardTraceAttributesFirstForwardNonFiniteOp(t *testing.T) {
 }
 
 func TestOptimizerStepGuardFailsAfterThreeConsecutiveBadGradients(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -277,6 +282,7 @@ func TestOptimizerStepGuardFailsAfterThreeConsecutiveBadGradients(t *testing.T) 
 }
 
 func TestOptimizerStepGuardRestoresExistingLAMBMoments(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -322,6 +328,7 @@ func TestOptimizerStepGuardRestoresExistingLAMBMoments(t *testing.T) {
 }
 
 func TestOptimizerStepGuardRollsBackNonFiniteCandidateUpdate(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

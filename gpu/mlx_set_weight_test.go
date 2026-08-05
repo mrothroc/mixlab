@@ -21,6 +21,7 @@ func compareFloat32Slices(t *testing.T, got, want []float32, tol float64) {
 }
 
 func TestTrainerSetWeightRoundTrip(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -52,6 +53,7 @@ func TestTrainerSetWeightRoundTrip(t *testing.T) {
 }
 
 func TestTrainerSetWeightSizeMismatch(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -81,6 +83,7 @@ func TestTrainerSetWeightSizeMismatch(t *testing.T) {
 }
 
 func TestTrainerSetWeightInvalidIndex(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -106,6 +109,7 @@ func TestTrainerSetWeightInvalidIndex(t *testing.T) {
 }
 
 func TestTrainerSetWeightAffectsForward(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -139,6 +143,7 @@ func TestTrainerSetWeightAffectsForward(t *testing.T) {
 }
 
 func TestTrainerSetWeightLeavesOtherWeightsAlone(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

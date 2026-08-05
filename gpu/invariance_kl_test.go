@@ -10,6 +10,7 @@ import (
 )
 
 func TestMaskedSymmetricKLMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -83,6 +84,7 @@ func TestMaskedSymmetricKLMatchesCPUOracle(t *testing.T) {
 }
 
 func TestMaskedSymmetricKLNearDegenerateDistributionHasFiniteLossAndGradients(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

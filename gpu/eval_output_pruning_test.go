@@ -9,6 +9,7 @@ import (
 )
 
 func TestEvalProgramOutputPrunesUnrequestedBranches(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -41,6 +42,7 @@ func TestEvalProgramOutputPrunesUnrequestedBranches(t *testing.T) {
 }
 
 func TestEvalProgramOutputsPrunesUnrequestedBranches(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

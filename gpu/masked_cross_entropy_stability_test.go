@@ -10,6 +10,7 @@ import (
 )
 
 func TestMaskedCrossEntropyIgnoresFiniteExtremeInactiveRows(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -68,6 +69,7 @@ func TestMaskedCrossEntropyIgnoresFiniteExtremeInactiveRows(t *testing.T) {
 }
 
 func TestPLLMarginPairRowsDoNotPoisonPrimaryOrZLoss(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

@@ -10,6 +10,7 @@ import (
 )
 
 func TestLayerNormMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -65,6 +66,7 @@ func TestLayerNormMatchesCPUOracle(t *testing.T) {
 }
 
 func TestElementwisePrototypeOpsMatchCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

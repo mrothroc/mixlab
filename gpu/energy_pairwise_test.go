@@ -10,6 +10,7 @@ import (
 )
 
 func TestEnergyPairwiseLossMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -78,6 +79,7 @@ func TestEnergyPairwiseLossMatchesCPUOracle(t *testing.T) {
 }
 
 func TestEnergySpanPoolAndPairwiseLossMatchCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -159,6 +161,7 @@ func TestEnergySpanPoolAndPairwiseLossMatchCPUOracle(t *testing.T) {
 }
 
 func TestSpanPLLPoolAndPairwiseLossMatchCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

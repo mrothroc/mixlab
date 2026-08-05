@@ -10,6 +10,7 @@ import (
 )
 
 func TestDistillationKLMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -78,6 +79,7 @@ func TestDistillationKLMatchesCPUOracle(t *testing.T) {
 }
 
 func TestMaskedDistillationKLMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

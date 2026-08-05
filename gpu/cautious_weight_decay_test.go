@@ -85,6 +85,7 @@ func cautiousWeightDecayTestGroup(enabled bool, activationStep int) OptimizerGro
 }
 
 func TestTrainerCautiousWeightDecaySignMask(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -108,6 +109,7 @@ func TestTrainerCautiousWeightDecaySignMask(t *testing.T) {
 }
 
 func TestTrainerCautiousWeightDecayActivationSchedule(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

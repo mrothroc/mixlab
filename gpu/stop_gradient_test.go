@@ -30,6 +30,7 @@ func requireZeroGrad(t *testing.T, grad []float32) {
 }
 
 func TestStopGradientForwardIdentity(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -73,6 +74,7 @@ func TestStopGradientForwardIdentity(t *testing.T) {
 }
 
 func TestStopGradientZeroesWeightGradient(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -123,6 +125,7 @@ func TestStopGradientZeroesWeightGradient(t *testing.T) {
 }
 
 func TestStopGradientBlocksMatMulWeightGradient(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -180,6 +183,7 @@ func TestStopGradientBlocksMatMulWeightGradient(t *testing.T) {
 }
 
 func TestStopGradientBlocksScatterPositionsWeightGradient(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -256,6 +260,7 @@ func TestStopGradientBlocksScatterPositionsWeightGradient(t *testing.T) {
 }
 
 func TestStopGradientBlocksGatherPositionsWeightGradient(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

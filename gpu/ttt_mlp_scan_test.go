@@ -10,6 +10,7 @@ import (
 )
 
 func TestTTTMLPScanChunkOneMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -60,6 +61,7 @@ func TestTTTMLPScanChunkOneMatchesCPUOracle(t *testing.T) {
 }
 
 func TestTTTMLPScanChunkedRaggedTailMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -101,6 +103,7 @@ func TestTTTMLPScanChunkedRaggedTailMatchesCPUOracle(t *testing.T) {
 }
 
 func TestTTTMLPScanRaggedChunkAndRowResetAreFinite(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

@@ -15,6 +15,7 @@ const (
 )
 
 func TestRandomNormalProducesNonDegenerateSamples(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -35,6 +36,7 @@ func TestRandomNormalProducesNonDegenerateSamples(t *testing.T) {
 }
 
 func TestRandomNormalSuccessiveOpsProduceDistinctSamples(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -68,6 +70,7 @@ func TestRandomNormalSuccessiveOpsProduceDistinctSamples(t *testing.T) {
 }
 
 func TestRandomNormalHonorsMeanAndStddev(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

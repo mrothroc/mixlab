@@ -10,6 +10,7 @@ import (
 )
 
 func TestTrainerNorMuonChangesMatrixUpdate(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

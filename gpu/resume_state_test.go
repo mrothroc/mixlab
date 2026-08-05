@@ -53,6 +53,7 @@ func resumeStateWeights(t *testing.T, trainer TrainerHandle) []float32 {
 }
 
 func TestTrainerStateSnapshotRestoreMatchesUninterruptedOptimizerStep(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}

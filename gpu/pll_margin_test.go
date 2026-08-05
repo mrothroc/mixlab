@@ -10,6 +10,7 @@ import (
 )
 
 func TestMaskedMarginPLLMatchesCPUOracleAndHasFiniteGradients(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -81,6 +82,7 @@ func TestMaskedMarginPLLMatchesCPUOracleAndHasFiniteGradients(t *testing.T) {
 }
 
 func TestMaskedMarginPLLSkipsNonFiniteAuxiliaryPair(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -150,6 +152,7 @@ func TestMaskedMarginPLLSkipsNonFiniteAuxiliaryPair(t *testing.T) {
 }
 
 func TestMaskedMarginPLLAnalyticalGradientMatchesCPUOracle(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
@@ -205,6 +208,7 @@ func TestMaskedMarginPLLAnalyticalGradientMatchesCPUOracle(t *testing.T) {
 }
 
 func TestMaskedMarginPLLGradientIsBoundedAtLargeVocab(t *testing.T) {
+	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
 	}
