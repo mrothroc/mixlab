@@ -37,6 +37,12 @@ sequence-classification forwards. A native `training.objective:
 "classification"` checkpoint exports its trained classifier head; it is not
 reinitialized on Hugging Face load.
 
+Fixed-shape `linear_frames` classifiers with S4D-only backbones also export as
+custom-code `AutoModelForSequenceClassification` directories. Omit
+`-tokenizer-path` and token-ID flags for these models; Hugging Face inference
+passes float `[B,T,F]` tensors as `input_values`. BatchNorm and padded S4D
+records remain explicitly gated.
+
 ## `parity`
 
 Compare a Hugging Face export against native Mixlab inference:

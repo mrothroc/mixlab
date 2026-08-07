@@ -58,6 +58,9 @@ func materializeNativeClassificationHFExportWeights(cfg *ArchConfig, shapes []We
 	outWeights := append([][]float32(nil), weights...)
 	outShapes[projIdx].Shape = []int{labels, dim}
 	outWeights[projIdx] = transposeMatrix(weights[projIdx], dim, labels)
+	if cfg.LinearFramesEnabled() {
+		return outShapes, outWeights, nil
+	}
 	if !hasWeightShapeName(outShapes, "head") {
 		if !cfg.TieEmbeddings {
 			return nil, nil, fmt.Errorf("native classification HF export requires head weight for untied embeddings")

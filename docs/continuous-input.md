@@ -120,8 +120,15 @@ existing `mean` or `last` pooling. It deliberately rejects:
 
 - language-model, masked, diffusion, and multihead objectives
 - token-derived char, n-gram, smear, framing, and reverse-complement features
-- Hugging Face export and token generation
+- token generation
 - mixed token and continuous inputs in one example
 
 Omitting `input_adapter` preserves the existing token graph and weight layout
 exactly.
+
+Fixed-shape native classifiers with S4D-only backbones are the exception to the
+earlier HF boundary: `export-hf` writes a tokenizer-free custom-code
+`AutoModelForSequenceClassification` directory accepting float
+`input_values: [B,T,F]`. It preserves `linear_frames`, S4D, pooling, and trained
+classifier weights. BatchNorm, padded records, mixed backbones, and stateful
+generation remain native-only. See [Hugging Face export](hf-export.md#continuous-s4d-classifiers).

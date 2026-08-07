@@ -27,6 +27,13 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 		"AutoModelForCausalLM":               "modeling_mixlab.MixlabForCausalLM",
 		"AutoModelForSequenceClassification": "modeling_mixlab.MixlabForSequenceClassification",
 	}
+	if cfg.LinearFramesEnabled() {
+		autoMap = map[string]string{
+			"AutoConfig":                         "configuration_mixlab.MixlabConfig",
+			"AutoModel":                          "modeling_mixlab.MixlabModel",
+			"AutoModelForSequenceClassification": "modeling_mixlab.MixlabForSequenceClassification",
+		}
+	}
 	if hfExportSupportsMaskedLM(cfg) {
 		maskedBlocks = hfBlockEntries(cfg, true)
 		architectures = append(architectures, "MixlabForMaskedLM")
@@ -58,6 +65,9 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 		HiddenDropout:                 cfg.EffectiveHiddenDropout(),
 		EmbeddingDropout:              cfg.EffectiveEmbeddingDropout(),
 		PositionalEmbedding:           cfg.EffectivePositionalEmbedding(),
+		FinalNorm:                     hfFinalNormOverride(cfg),
+		InputAdapter:                  cfg.InputAdapter,
+		TieDropout:                    cfg.TieDropout,
 		CharVocabSize:                 cfg.CharVocabSize,
 		CharDim:                       cfg.EffectiveCharDim(),
 		CharMaxPerToken:               cfg.EffectiveCharMaxPerToken(),
@@ -77,7 +87,7 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 			"source":                     "mixlab",
 			"weight_map":                 "weight_map.json",
 			"requires_trust":             "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":           []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.differential_attention", "plain.ffn_activation=gelu", "plain.ffn_activation=gelu_new", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.ffn_pre_norm", "plain.ffn_bias", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "positional_embedding=learned_absolute", "positional_embedding=none", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe", "ttt_mlp", "mamba3-canonical"},
+			"supported_blocks":           []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.differential_attention", "plain.ffn_activation=gelu", "plain.ffn_activation=gelu_new", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.ffn_pre_norm", "plain.ffn_bias", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "positional_embedding=learned_absolute", "positional_embedding=none", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe", "ttt_mlp", "mamba3-canonical", "s4d"},
 			"native_sequence_classifier": cfg.ClassificationEnabled(),
 			"unsupported_fails":          true,
 		},
@@ -338,6 +348,8 @@ func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 				entry["scan_chunk_size"] = *block.ScanChunkSize
 			}
 			blocks = append(blocks, entry)
+		case "s4d":
+			blocks = append(blocks, hfS4DBlockEntry(cfg, block))
 		}
 	}
 	return blocks

@@ -1,6 +1,6 @@
 # Hugging Face Export
 
-`export-hf` writes a Hugging Face custom-code directory from a Mixlab JSON config and a Mixlab safetensors checkpoint. Custom Mixlab checkpoints export `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForSequenceClassification`; masked and hybrid checkpoints also export `AutoModelForMaskedLM`. For masked-capable exports, `AutoModel` and sequence classification use the bidirectional encoder backbone while `AutoModelForCausalLM` stays causal.
+`export-hf` writes a Hugging Face custom-code directory from a Mixlab JSON config and a Mixlab safetensors checkpoint. Token-model checkpoints export `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForSequenceClassification`; masked and hybrid checkpoints also export `AutoModelForMaskedLM`. Native continuous S4D classifiers export only `AutoModel` and `AutoModelForSequenceClassification`. For masked-capable token exports, `AutoModel` and sequence classification use the bidirectional encoder backbone while `AutoModelForCausalLM` stays causal.
 
 ```bash
 mixlab -mode export-hf \
@@ -23,11 +23,14 @@ mixlab -mode export-hf \
 The exported directory contains:
 
 - `config.json` with `auto_map` entries for `AutoConfig`, `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForSequenceClassification`; masked-capable exports also include `AutoModelForMaskedLM`
-- `configuration_mixlab.py`, `modeling_mixlab.py`, `pooling_mixlab.py`, `ttt_mlp_mixlab.py`, and `mamba3_mixlab.py` static maintained templates
+- `configuration_mixlab.py`, `modeling_mixlab.py`, `pooling_mixlab.py`, `ttt_mlp_mixlab.py`, `mamba3_mixlab.py`, and `s4d_mixlab.py` static maintained templates
 - `model.safetensors` with Hugging Face state-dict keys
 - `weight_map.json` mapping Mixlab `w{index}_{name}` tensors to Hugging Face tensor names
 - `tokenizer.json`, plus `tokenizer_config.json` and `special_tokens_map.json`
 - `char_features.bin` when token-level character feature embeddings are enabled
+
+Continuous `linear_frames` exports do not contain tokenizer or special-token
+files because their public input is a float tensor rather than token IDs.
 
 ## Special Token IDs
 
@@ -111,6 +114,41 @@ backbone:
 Native classification exports use the explicit/defaulted
 `training.classification.pooling` from the training config.
 
+### Continuous S4D classifiers
+
+Native `linear_frames` classifiers whose sequential backbone contains only
+`s4d` blocks export as fixed-shape custom-code models. They preserve the input
+projection and optional bias/LayerNorm, all S4D state parameters, optional
+trainable B, grouped `n_ssm`, ZOH or bilinear discretization, bidirectionality,
+the optional GLU output transform, post-residual normalization, optional final
+norm, mean/last pooling, and the trained classifier.
+
+```bash
+mixlab -mode export-hf \
+  -config examples/continuous_s4d_lra_image_reference.json \
+  -safetensors-load runs/s4d/model.safetensors \
+  -export-dir runs/s4d/hf
+```
+
+```python
+import torch
+from transformers import AutoModelForSequenceClassification
+
+model = AutoModelForSequenceClassification.from_pretrained(
+    "runs/s4d/hf", trust_remote_code=True
+).eval()
+frames = torch.from_numpy(features).float()  # [B, seq_len, feature_dim]
+with torch.no_grad():
+    logits = model(input_values=frames).logits
+```
+
+This first export contract is deliberately fixed-shape. `input_values` must be
+`[B, config.seq_len, input_adapter.feature_dim]`; padding or a mask containing
+zero is rejected because it would change the S4D convolution contract.
+BatchNorm checkpoints remain native-only because their running buffers do not
+yet have export parity coverage. Continuous exports do not accept
+`-tokenizer-path` or special-token flags. Stateful S4D generation is not added.
+
 Mixed causal/bidirectional graphs are ambiguous. They continue to export normally,
 but loading the classification class requires an explicit policy:
 
@@ -191,6 +229,7 @@ HF export supports next-token and masked-LM checkpoints using sequential blocks:
 - sequential `moe` blocks with a linear router, top-k token routing, and `swiglu`, `geglu`, or `mlp` experts
 - causal `ttt_mlp` stacks composed only with pointwise `swiglu`, `geglu`, or `mlp`; the exported model carries request-owned recurrent state through `past_key_values`
 - causal or native-classification `mamba3-canonical` stacks composed only with pointwise `swiglu`, `geglu`, or `mlp`; the maintained PyTorch path mirrors the complete canonical scan for non-cached forwards
+- fixed-shape native continuous classifiers composed only from `s4d` blocks; the maintained PyTorch path mirrors grouped/trainable-B ZOH or bilinear kernels, bidirectionality, GLU output transforms, and post-residual norms
 - embedding-time `char`, `bigram`, and `trigram` feature channels
 - tied embeddings; the exporter materializes `lm_head_weight = embed_tokens.weight.T` for Hugging Face consumers
 - data2vec-trained checkpoints; the training-only predictor weights and `training.data2vec` spec are stripped, exporting the student/base inference model

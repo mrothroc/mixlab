@@ -14,7 +14,7 @@ import (
 	"github.com/mrothroc/mixlab/arch"
 )
 
-//go:embed hf_templates/configuration_mixlab.py hf_templates/modeling_mixlab.py hf_templates/pooling_mixlab.py hf_templates/ttt_mlp_mixlab.py hf_templates/mamba3_mixlab.py
+//go:embed hf_templates/configuration_mixlab.py hf_templates/modeling_mixlab.py hf_templates/pooling_mixlab.py hf_templates/ttt_mlp_mixlab.py hf_templates/mamba3_mixlab.py hf_templates/s4d_mixlab.py
 var hfTemplateFS embed.FS
 
 // ExportHFOptions describes a Hugging Face export operation.
@@ -29,46 +29,49 @@ type ExportHFOptions struct {
 }
 
 type hfConfigJSON struct {
-	ModelType                     string            `json:"model_type"`
-	Architectures                 []string          `json:"architectures"`
-	AutoMap                       map[string]string `json:"auto_map"`
-	Name                          string            `json:"name,omitempty"`
-	ModelDim                      int               `json:"model_dim"`
-	HiddenSize                    int               `json:"hidden_size"`
-	VocabSize                     int               `json:"vocab_size"`
-	SeqLen                        int               `json:"seq_len"`
-	MaxPositionEmbeddings         int               `json:"max_position_embeddings"`
-	MLPMult                       float64           `json:"mlp_mult"`
-	NormType                      string            `json:"norm_type,omitempty"`
-	NormEps                       float32           `json:"norm_eps,omitempty"`
-	NormAffine                    bool              `json:"norm_affine"`
-	NormPlacement                 string            `json:"norm_placement,omitempty"`
-	FFNInternalNorm               bool              `json:"ffn_internal_norm,omitempty"`
-	LogitSoftcap                  float32           `json:"logit_softcap,omitempty"`
-	MLMHead                       string            `json:"mlm_head,omitempty"`
-	LayerAggregation              string            `json:"layer_aggregation,omitempty"`
-	LayerAggregationScope         string            `json:"layer_aggregation_scope,omitempty"`
-	SequenceClassificationPooling string            `json:"sequence_classification_pooling,omitempty"`
-	NumLabels                     int               `json:"num_labels,omitempty"`
-	ClassifierDropout             *float32          `json:"classifier_dropout,omitempty"`
-	HiddenDropout                 float32           `json:"hidden_dropout,omitempty"`
-	EmbeddingDropout              float32           `json:"embedding_dropout,omitempty"`
-	PositionalEmbedding           string            `json:"positional_embedding,omitempty"`
-	CharVocabSize                 int               `json:"char_vocab_size,omitempty"`
-	CharDim                       int               `json:"char_dim,omitempty"`
-	CharMaxPerToken               int               `json:"char_max_per_token,omitempty"`
-	CharFeaturesFile              string            `json:"char_features_file,omitempty"`
-	BigramVocabSize               int               `json:"bigram_vocab_size,omitempty"`
-	BigramDim                     int               `json:"bigram_dim,omitempty"`
-	TrigramVocabSize              int               `json:"trigram_vocab_size,omitempty"`
-	TrigramDim                    int               `json:"trigram_dim,omitempty"`
-	PadTokenID                    *int              `json:"pad_token_id,omitempty"`
-	EOSTokenID                    *int              `json:"eos_token_id,omitempty"`
-	BOSTokenID                    *int              `json:"bos_token_id,omitempty"`
-	UNKTokenID                    *int              `json:"unk_token_id,omitempty"`
-	Blocks                        []map[string]any  `json:"blocks"`
-	MaskedBlocks                  []map[string]any  `json:"masked_blocks,omitempty"`
-	Mixlab                        map[string]any    `json:"mixlab"`
+	ModelType                     string                 `json:"model_type"`
+	Architectures                 []string               `json:"architectures"`
+	AutoMap                       map[string]string      `json:"auto_map"`
+	Name                          string                 `json:"name,omitempty"`
+	ModelDim                      int                    `json:"model_dim"`
+	HiddenSize                    int                    `json:"hidden_size"`
+	VocabSize                     int                    `json:"vocab_size"`
+	SeqLen                        int                    `json:"seq_len"`
+	MaxPositionEmbeddings         int                    `json:"max_position_embeddings"`
+	MLPMult                       float64                `json:"mlp_mult"`
+	NormType                      string                 `json:"norm_type,omitempty"`
+	NormEps                       float32                `json:"norm_eps,omitempty"`
+	NormAffine                    bool                   `json:"norm_affine"`
+	NormPlacement                 string                 `json:"norm_placement,omitempty"`
+	FFNInternalNorm               bool                   `json:"ffn_internal_norm,omitempty"`
+	LogitSoftcap                  float32                `json:"logit_softcap,omitempty"`
+	MLMHead                       string                 `json:"mlm_head,omitempty"`
+	LayerAggregation              string                 `json:"layer_aggregation,omitempty"`
+	LayerAggregationScope         string                 `json:"layer_aggregation_scope,omitempty"`
+	SequenceClassificationPooling string                 `json:"sequence_classification_pooling,omitempty"`
+	NumLabels                     int                    `json:"num_labels,omitempty"`
+	ClassifierDropout             *float32               `json:"classifier_dropout,omitempty"`
+	HiddenDropout                 float32                `json:"hidden_dropout,omitempty"`
+	EmbeddingDropout              float32                `json:"embedding_dropout,omitempty"`
+	PositionalEmbedding           string                 `json:"positional_embedding,omitempty"`
+	FinalNorm                     *bool                  `json:"final_norm,omitempty"`
+	InputAdapter                  *arch.InputAdapterSpec `json:"input_adapter,omitempty"`
+	TieDropout                    bool                   `json:"tie_dropout,omitempty"`
+	CharVocabSize                 int                    `json:"char_vocab_size,omitempty"`
+	CharDim                       int                    `json:"char_dim,omitempty"`
+	CharMaxPerToken               int                    `json:"char_max_per_token,omitempty"`
+	CharFeaturesFile              string                 `json:"char_features_file,omitempty"`
+	BigramVocabSize               int                    `json:"bigram_vocab_size,omitempty"`
+	BigramDim                     int                    `json:"bigram_dim,omitempty"`
+	TrigramVocabSize              int                    `json:"trigram_vocab_size,omitempty"`
+	TrigramDim                    int                    `json:"trigram_dim,omitempty"`
+	PadTokenID                    *int                   `json:"pad_token_id,omitempty"`
+	EOSTokenID                    *int                   `json:"eos_token_id,omitempty"`
+	BOSTokenID                    *int                   `json:"bos_token_id,omitempty"`
+	UNKTokenID                    *int                   `json:"unk_token_id,omitempty"`
+	Blocks                        []map[string]any       `json:"blocks"`
+	MaskedBlocks                  []map[string]any       `json:"masked_blocks,omitempty"`
+	Mixlab                        map[string]any         `json:"mixlab"`
 }
 
 type hfWeightMapping struct {
@@ -143,15 +146,23 @@ func runExportHF(opts ExportHFOptions) error {
 		return fmt.Errorf("HF weight map count mismatch: mapping=%d weights=%d", len(mapping), len(exportWeights))
 	}
 
-	tokenizer, err := resolveHFTokenizerSource(opts.TokenizerSource, opts.ConfigPath, opts.SafetensorsLoad)
-	if err != nil {
-		return err
+	continuous := exportCfg.LinearFramesEnabled()
+	if continuous && (strings.TrimSpace(opts.TokenizerSource) != "" || opts.BOSTokenID != nil || opts.EOSTokenID != nil || opts.PADTokenID != nil) {
+		return fmt.Errorf("continuous linear_frames HF export does not use tokenizer or special-token options")
 	}
-	specials, err := deriveHFTokenizerSpecials(tokenizer, exportCfg, opts)
-	if err != nil {
-		return err
+	var tokenizer hfTokenizerSource
+	var specials hfTokenizerSpecials
+	if !continuous {
+		tokenizer, err = resolveHFTokenizerSource(opts.TokenizerSource, opts.ConfigPath, opts.SafetensorsLoad)
+		if err != nil {
+			return err
+		}
+		specials, err = deriveHFTokenizerSpecials(tokenizer, exportCfg, opts)
+		if err != nil {
+			return err
+		}
+		warnMissingHFGenerationSpecials(specials)
 	}
-	warnMissingHFGenerationSpecials(specials)
 
 	if err := os.MkdirAll(opts.OutputDir, 0o755); err != nil {
 		return fmt.Errorf("create HF output directory %q: %w", opts.OutputDir, err)
@@ -170,8 +181,10 @@ func runExportHF(opts ExportHFOptions) error {
 	if err := writeJSONFile(filepath.Join(opts.OutputDir, "weight_map.json"), mapping); err != nil {
 		return err
 	}
-	if err := writeHFTokenizerArtifacts(opts.OutputDir, tokenizer, specials); err != nil {
-		return err
+	if !continuous {
+		if err := writeHFTokenizerArtifacts(opts.OutputDir, tokenizer, specials); err != nil {
+			return err
+		}
 	}
 	if err := writeHFCharFeatureArtifact(opts.OutputDir, exportCfg); err != nil {
 		return err
@@ -215,7 +228,7 @@ func hfExportInferenceConfig(cfg *ArchConfig) *ArchConfig {
 }
 
 func writeHFTemplates(outputDir string) error {
-	for _, name := range []string{"configuration_mixlab.py", "modeling_mixlab.py", "pooling_mixlab.py", "ttt_mlp_mixlab.py", "mamba3_mixlab.py"} {
+	for _, name := range []string{"configuration_mixlab.py", "modeling_mixlab.py", "pooling_mixlab.py", "ttt_mlp_mixlab.py", "mamba3_mixlab.py", "s4d_mixlab.py"} {
 		data, err := hfTemplateFS.ReadFile(filepath.Join("hf_templates", name))
 		if err != nil {
 			return fmt.Errorf("read HF template %s: %w", name, err)
@@ -265,11 +278,30 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 		}
 		return fmt.Errorf("HF export requires base weight %q", name)
 	}
-	if err := addByName("embed", "embed_tokens.weight"); err != nil {
-		return nil, err
-	}
-	if err := addByName("head", "lm_head_weight"); err != nil {
-		return nil, err
+	if cfg.LinearFramesEnabled() {
+		if err := addByName("input_adapter_proj", "input_adapter.weight"); err != nil {
+			return nil, err
+		}
+		if cfg.EffectiveInputAdapterBias() {
+			if err := addByName("input_adapter_bias", "input_adapter.bias"); err != nil {
+				return nil, err
+			}
+		}
+		if cfg.EffectiveInputAdapterNorm() == arch.InputAdapterNormLayerNorm {
+			if err := addByName("input_adapter_norm_scale", "input_adapter_norm.weight"); err != nil {
+				return nil, err
+			}
+			if err := addByName("input_adapter_norm_bias", "input_adapter_norm.bias"); err != nil {
+				return nil, err
+			}
+		}
+	} else {
+		if err := addByName("embed", "embed_tokens.weight"); err != nil {
+			return nil, err
+		}
+		if err := addByName("head", "lm_head_weight"); err != nil {
+			return nil, err
+		}
 	}
 	normSpec := cfg.EffectiveNormSpec()
 	normPlacement := cfg.EffectiveNormPlacement()
@@ -305,8 +337,10 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 			return names
 		}
 	}
-	if err := addNormByName("final_norm", "final_norm"); err != nil {
-		return nil, err
+	if cfg.EffectiveFinalNorm() {
+		if err := addNormByName("final_norm", "final_norm"); err != nil {
+			return nil, err
+		}
 	}
 	if cfg.EffectivePositionalEmbedding() == "learned_absolute" {
 		if err := addByName("position_embeddings", "position_embeddings.weight"); err != nil {
@@ -647,6 +681,17 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 			for _, name := range names {
 				if wi >= len(shapes) {
 					return nil, fmt.Errorf("weight map exhausted while mapping mamba3-canonical block %d", blockIdx)
+				}
+				if err := addExpected(wi, name.mixlab, prefix+"."+name.hf); err != nil {
+					return nil, err
+				}
+				wi = firstUnmappedWeight(used, wi+1)
+			}
+		case "s4d":
+			names := hfS4DWeightNames(block, normPlacement, normSpec)
+			for _, name := range names {
+				if wi >= len(shapes) {
+					return nil, fmt.Errorf("weight map exhausted while mapping s4d block %d", blockIdx)
 				}
 				if err := addExpected(wi, name.mixlab, prefix+"."+name.hf); err != nil {
 					return nil, err

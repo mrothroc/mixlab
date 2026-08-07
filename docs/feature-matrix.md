@@ -36,7 +36,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Block diffusion | Yes | Native PLL scoring | Native diffusion generation | Pure diffusion is native-only | [block_diffusion_tiny.json](../examples/block_diffusion_tiny.json) |
 | Multihead | Yes | Selected native scorer/detector/denoiser | Selected diffusion head | Exports only `export_head` | [multihead_mntp_diffusion_tiny.json](../examples/multihead_mntp_diffusion_tiny.json) |
 | Sequence classification | Yes | Loss, accuracy, MCC, macro-F1, binary AUROC | No | Trained classifier export is supported on HF-covered custom-code backbones; gated mixers such as Gated DeltaNet remain explicit errors | [sequence_classification_gated_deltanet_tiny.json](../examples/sequence_classification_gated_deltanet_tiny.json) |
-| Continuous sequence classification | Yes | Same native classification metrics | No | `linear_frames` v1 is native-only and requires a matching continuous manifest; no token embedding or LM head | [continuous_mamba3_classification_tiny.json](../examples/continuous_mamba3_classification_tiny.json) |
+| Continuous sequence classification | Yes | Same native classification metrics | No | Fixed-shape `linear_frames` classifiers export when the backbone is S4D-only; other continuous backbones remain native-only. A matching continuous manifest is required for training. | [continuous_s4d_lra_image_reference.json](../examples/continuous_s4d_lra_image_reference.json) |
 | DNA RC-equivariant MLM/classification | Yes | Native masked eval or classification metrics | No | Native-only in v1; no extra weights, approximately 2x backbone compute | [Augmented control](../examples/nucleotide_dna_rc_augmented_classification_tiny.json), [equivariant](../examples/nucleotide_dna_rc_equivariant_classification_tiny.json) |
 | RTD detector | Multihead auxiliary | `score-electra` | No | Detector and generator are skipped | [multihead_mntp_rtd_tiny.json](../examples/multihead_mntp_rtd_tiny.json) |
 | Native energy head | Multihead auxiliary | `score-ebm` | No | Energy head is skipped | [multihead_mntp_energy_tiny.json](../examples/multihead_mntp_energy_tiny.json) |
@@ -70,7 +70,7 @@ The config validator is authoritative for combinations.
 | `plain` attention and FFN/MoE blocks | Broad support | Broad but feature-gated support |
 | DeBERTa and differential `plain` variants | Native causal/masked support | Supported combinations have parity coverage |
 | `ttt_mlp` | Native causal training and stateful generation | Supported only for cache-safe TTT stacks |
-| S4D | Native differentiable FFT convolution; compact causal default plus grouped/trainable-B/bilinear/bidirectional reference path, tied dropout, output GLU, and classification norms | Gated; no maintained HF implementation or incremental state cache |
+| S4D | Native differentiable FFT convolution; compact causal default plus grouped/trainable-B/bilinear/bidirectional reference path, tied dropout, output GLU, and classification norms | Fixed-shape `linear_frames` native classifiers export through the maintained PyTorch FFT path; token models, BatchNorm, padding, and incremental state remain gated |
 | HGRN2, mLSTM, RetNet, RWKV, Mamba, Gated DeltaNet | Native correctness-first paths | Generally gated or unsupported |
 | Parallel groups, recurrence, U-Net, custom blocks | Native under documented restrictions | Generally unsupported |
 

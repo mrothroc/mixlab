@@ -53,6 +53,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "legacy_mamba", Status: hfExportGated, Reason: "The legacy fixed-decay recurrence is not represented in the HF template."},
 		{Feature: "gated_linear_ssm", Status: hfExportGated, Reason: "The simplified gated linear SSM is not yet represented in the HF template."},
 		{Feature: "mamba3-canonical", Status: hfExportSupported, Reason: "The canonical complex-pair exponential-trapezoidal scan is mirrored by a maintained non-cached PyTorch inference reference with native parity coverage."},
+		{Feature: "s4d", Status: hfExportSupported, Reason: "Fixed-shape linear_frames native classifiers use a maintained PyTorch FFT-convolution reference with native parity coverage."},
 		{Feature: "retnet", Status: hfExportGated, Reason: "Retention recurrence export needs dedicated parity fixtures before it can be enabled."},
 		{Feature: "rwkv", Status: hfExportGated, Reason: "RWKV recurrence export needs dedicated parity fixtures before it can be enabled."},
 		{Feature: "custom", Status: hfExportUnsupported, Reason: "Arbitrary JSON custom blocks cannot be converted into a static HF template safely."},
@@ -97,7 +98,7 @@ func hfExportBlockCapability(block BlockSpec) hfExportCapability {
 			return capabilityByFeature("plain.qk_norm")
 		}
 		return capabilityByFeature("plain")
-	case "swiglu", "geglu", "mlp", "moe", "hgrn2", "mlstm", "gated_deltanet", "ttt_mlp", "legacy_mamba", "mamba3", "gated_linear_ssm", "mamba3-canonical", "retnet", "rwkv", "custom":
+	case "swiglu", "geglu", "mlp", "moe", "hgrn2", "mlstm", "gated_deltanet", "ttt_mlp", "legacy_mamba", "mamba3", "gated_linear_ssm", "mamba3-canonical", "s4d", "retnet", "rwkv", "custom":
 		feature := strings.ToLower(strings.TrimSpace(block.Type))
 		if feature == "mamba3" {
 			feature = "gated_linear_ssm"

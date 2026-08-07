@@ -62,7 +62,7 @@ func TestExportHFMaskedLMMetadataAndBidirectionalBlocks(t *testing.T) {
 	}
 	assertHFModelingTemplateContains(t, filepath.Join(outDir, "modeling_mixlab.py"),
 		"masked_blocks if masked_blocks else config.blocks",
-		"def forward_hidden(self, input_ids=None, attention_mask=None):",
+		"def forward_hidden(self, input_ids=None, attention_mask=None, input_values=None):",
 		"x = block(x, relative_embeddings, dwa, attention_mask)",
 		"super().__init__(config, blocks=config.blocks)",
 	)

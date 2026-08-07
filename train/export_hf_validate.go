@@ -12,10 +12,9 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 		return fmt.Errorf("unsupported HF export: nil config")
 	}
 	if cfg.LinearFramesEnabled() {
-		return unsupportedHFExport(
-			"input_adapter.kind",
-			"linear_frames checkpoints are native continuous-classification models in v1",
-		)
+		if err := validateHFContinuousS4DComposition(cfg); err != nil {
+			return err
+		}
 	}
 	if cfg.RCEquivarianceEnabled() {
 		return unsupportedHFExport("rc_equivariant", "shared reverse-complement branches are native-only in v1")
@@ -131,6 +130,10 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 		case "mamba3-canonical":
 			if err := validateHFMamba3CanonicalComposition(cfg, field); err != nil {
 				return err
+			}
+		case "s4d":
+			if !cfg.LinearFramesEnabled() {
+				return unsupportedHFExport(field+".type", "s4d HF export currently requires a linear_frames native classification checkpoint")
 			}
 		default:
 			capability := hfExportBlockCapability(block)

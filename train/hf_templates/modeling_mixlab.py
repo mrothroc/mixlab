@@ -15,6 +15,7 @@ from transformers.modeling_outputs import (
 from .configuration_mixlab import MixlabConfig
 from .pooling_mixlab import pool_sequence
 from .mamba3_mixlab import MixlabMamba3CanonicalBlock
+from .s4d_mixlab import MixlabS4DBlock
 from .ttt_mlp_mixlab import (
     MixlabTTTMLPBlock,
     MixlabTTTMLPState,
@@ -806,7 +807,34 @@ class MixlabModel(PreTrainedModel):
 
     def __init__(self, config, blocks=None):
         super().__init__(config)
-        self.embed_tokens = nn.Embedding(config.vocab_size, config.model_dim)
+        input_adapter = getattr(config, "input_adapter", None) or {}
+        self.input_adapter_kind = str(
+            input_adapter.get("kind", "token_embedding") or "token_embedding"
+        ).lower()
+        self.input_adapter = None
+        self.input_adapter_norm = None
+        if self.input_adapter_kind == "linear_frames":
+            feature_dim = int(input_adapter.get("feature_dim", 0) or 0)
+            if feature_dim <= 0:
+                raise ValueError("linear_frames input_adapter requires feature_dim > 0")
+            use_bias = bool(input_adapter.get("bias", True))
+            self.input_adapter = MixlabLinear(
+                feature_dim, config.model_dim, bias=use_bias
+            )
+            adapter_norm = str(input_adapter.get("norm", "none") or "none").lower()
+            if adapter_norm == "layernorm":
+                self.input_adapter_norm = nn.LayerNorm(
+                    config.model_dim,
+                    eps=float(getattr(config, "norm_eps", 1e-5) or 1e-5),
+                )
+            elif adapter_norm != "none":
+                raise ValueError(f"unsupported linear_frames norm {adapter_norm!r}")
+            self.embed_tokens = None
+            self.main_input_name = "input_values"
+        elif self.input_adapter_kind == "token_embedding":
+            self.embed_tokens = nn.Embedding(config.vocab_size, config.model_dim)
+        else:
+            raise ValueError(f"unsupported input_adapter kind {self.input_adapter_kind!r}")
         self.position_embeddings = None
         self.positional_embedding = str(getattr(config, "positional_embedding", "rope") or "rope").lower()
         if self.positional_embedding == "learned_absolute":
@@ -931,16 +959,24 @@ class MixlabModel(PreTrainedModel):
                 modules.append(MixlabTTTMLPBlock(config, block))
             elif block_type == "mamba3-canonical":
                 modules.append(MixlabMamba3CanonicalBlock(config, block))
+            elif block_type == "s4d":
+                modules.append(MixlabS4DBlock(config, block, make_mixlab_norm))
             else:
                 raise ValueError(f"unsupported exported Mixlab block type {block_type!r}")
         self.blocks = nn.ModuleList(modules)
-        self.final_norm = make_mixlab_norm(config, config.model_dim)
+        self.final_norm = (
+            make_mixlab_norm(config, config.model_dim)
+            if bool(getattr(config, "final_norm", True))
+            else nn.Identity()
+        )
         self.post_init()
 
     def get_input_embeddings(self):
         return self.embed_tokens
 
     def set_input_embeddings(self, value):
+        if self.input_adapter_kind == "linear_frames":
+            raise ValueError("linear_frames models do not use token embeddings")
         self.embed_tokens = value
 
     def _bigram_ids(self, input_ids):
@@ -970,16 +1006,44 @@ class MixlabModel(PreTrainedModel):
         out[:, 2:] = h + 1
         return out
 
-    def _embed_features(self, input_ids):
-        x = self.embed_tokens(input_ids)
+    def _embed_features(self, input_ids=None, input_values=None):
+        if self.input_adapter_kind == "linear_frames":
+            if input_ids is not None:
+                raise ValueError("linear_frames models accept input_values, not input_ids")
+            if input_values is None:
+                raise ValueError("input_values is required for linear_frames models")
+            if input_values.ndim != 3:
+                raise ValueError("input_values must have shape [batch, sequence, feature]")
+            feature_dim = int(self.config.input_adapter["feature_dim"])
+            if input_values.shape[-1] != feature_dim:
+                raise ValueError(
+                    f"input_values feature dimension {input_values.shape[-1]} does not match {feature_dim}"
+                )
+            if input_values.shape[1] != int(self.config.seq_len):
+                raise ValueError(
+                    f"input_values sequence length {input_values.shape[1]} does not match fixed seq_len={self.config.seq_len}"
+                )
+            x = self.input_adapter(
+                input_values.to(dtype=self.input_adapter.weight.dtype)
+            )
+            if self.input_adapter_norm is not None:
+                x = self.input_adapter_norm(x)
+        else:
+            if input_values is not None:
+                raise ValueError("token_embedding models accept input_ids, not input_values")
+            if input_ids is None:
+                raise ValueError("input_ids is required")
+            x = self.embed_tokens(input_ids)
         if self.position_embeddings is not None:
-            seq_len = input_ids.shape[1]
+            seq_len = x.shape[1]
             if seq_len > int(self.config.max_position_embeddings):
                 raise ValueError(
                     f"sequence length {seq_len} exceeds max_position_embeddings={self.config.max_position_embeddings}"
                 )
-            position_ids = torch.arange(seq_len, device=input_ids.device, dtype=torch.long)
+            position_ids = torch.arange(seq_len, device=x.device, dtype=torch.long)
             x = x + self.position_embeddings(position_ids).unsqueeze(0)
+        if self.input_adapter_kind == "linear_frames":
+            return self.embed_dropout(x)
         if self.char_table is not None:
             if self.char_lookup is None:
                 self.char_lookup = load_char_lookup(self.config).to(input_ids.device)
@@ -1014,12 +1078,25 @@ class MixlabModel(PreTrainedModel):
         self,
         input_ids=None,
         attention_mask=None,
+        input_values=None,
         ttt_state=None,
         use_cache=False,
     ):
-        if input_ids is None:
-            raise ValueError("input_ids is required")
-        x = self._embed_features(input_ids)
+        x = self._embed_features(input_ids=input_ids, input_values=input_values)
+        if self.input_adapter_kind == "linear_frames":
+            expected = tuple(x.shape[:2])
+            if attention_mask is None:
+                attention_mask = torch.ones(
+                    expected, dtype=torch.long, device=x.device
+                )
+            elif attention_mask.ndim != 2 or tuple(attention_mask.shape) != expected:
+                raise ValueError(
+                    f"continuous attention_mask must have shape {expected}"
+                )
+            elif not bool(torch.all(attention_mask.ne(0))):
+                raise ValueError(
+                    "continuous S4D HF export requires fixed unpadded records"
+                )
         dwa = None
         if self.layer_aggregation == "dwa":
             if self.layer_aggregation_scope == "head":
@@ -1060,6 +1137,8 @@ class MixlabModel(PreTrainedModel):
                 ttt_index += 1
             elif isinstance(block, MixlabMamba3CanonicalBlock):
                 x = block(x, attention_mask=attention_mask, dwa=dwa)
+            elif isinstance(block, MixlabS4DBlock):
+                x = block(x, attention_mask=attention_mask, dwa=dwa)
             else:
                 x = block(x, dwa)
         if dwa is not None:
@@ -1069,12 +1148,18 @@ class MixlabModel(PreTrainedModel):
                 dwa.finish()
         return self.final_norm(x), tuple(next_ttt_state) if use_cache else None
 
-    def forward_hidden(self, input_ids=None, attention_mask=None):
-        hidden, _ = self.forward_hidden_with_state(input_ids, attention_mask)
+    def forward_hidden(self, input_ids=None, attention_mask=None, input_values=None):
+        hidden, _ = self.forward_hidden_with_state(
+            input_ids, attention_mask, input_values=input_values
+        )
         return hidden
 
-    def forward(self, input_ids=None, attention_mask=None, **kwargs):
-        return BaseModelOutput(last_hidden_state=self.forward_hidden(input_ids, attention_mask))
+    def forward(self, input_ids=None, attention_mask=None, input_values=None, **kwargs):
+        return BaseModelOutput(
+            last_hidden_state=self.forward_hidden(
+                input_ids, attention_mask, input_values=input_values
+            )
+        )
 
     def bert_mlm_logits(self, hidden):
         if self.mlm_head != "bert":
@@ -1205,12 +1290,27 @@ class MixlabForSequenceClassification(MixlabModel):
         if classifier_dropout is None:
             classifier_dropout = float(getattr(config, "hidden_dropout", 0.0) or 0.0)
         self.classifier_dropout = nn.Dropout(float(classifier_dropout))
-        # This task head is intentionally absent from the Mixlab checkpoint and
-        # receives PyTorch's standard fresh Linear initialization for fine-tuning.
+        # Native classification exports load this module from the checkpoint;
+        # LM-backbone exports retain its ordinary fresh fine-tuning initialization.
         self.classifier = nn.Linear(config.model_dim, self.num_labels)
 
-    def forward(self, input_ids=None, attention_mask=None, labels=None, **kwargs):
-        hidden = self.forward_hidden(input_ids, attention_mask)
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        input_values=None,
+        labels=None,
+        **kwargs,
+    ):
+        if self.input_adapter_kind == "linear_frames" and attention_mask is None:
+            if input_values is None or input_values.ndim != 3:
+                raise ValueError("input_values is required for linear_frames classification")
+            attention_mask = torch.ones(
+                input_values.shape[:2], dtype=torch.long, device=input_values.device
+            )
+        hidden = self.forward_hidden(
+            input_ids, attention_mask, input_values=input_values
+        )
         pooled = pool_sequence(
             hidden,
             attention_mask,

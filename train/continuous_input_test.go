@@ -106,9 +106,9 @@ func TestContinuousManifestMismatchFailsBeforeTrainerSetup(t *testing.T) {
 	}
 }
 
-func TestContinuousInputRejectsHFExport(t *testing.T) {
+func TestContinuousInputRejectsUnsupportedHFExportStack(t *testing.T) {
 	err := validateHFExportConfig(continuousTrainTestConfig(t))
-	if err == nil || !strings.Contains(err.Error(), "input_adapter.kind") {
+	if err == nil || !strings.Contains(err.Error(), "sequential s4d-only stacks") {
 		t.Fatalf("HF export error=%v", err)
 	}
 }

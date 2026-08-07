@@ -107,8 +107,11 @@ the projection bias is zero.
   are summed before GELU/dropout/GLU.
 - Normal recurrence/weight sharing can reuse S4D block weights when using
   stateless RMSNorm/LayerNorm. BatchNorm rejects recurrence in v1.
-- Hugging Face export and stateful generation are not supported in v1 and
-  fail explicitly.
+- Hugging Face export supports fixed-shape native `linear_frames`
+  classification checkpoints whose sequential stack contains only S4D blocks.
+  The exported custom model accepts float `input_values`, preserves the trained
+  classifier, and rejects padding. Token-model S4D export, BatchNorm buffers,
+  and stateful generation remain gated.
 - `mode count` includes kernel materialization and FFT work in the estimate.
 
 For continuous input, see [Continuous sequence input](continuous-input.md) and
