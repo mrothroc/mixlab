@@ -20,7 +20,8 @@ const hfS4DContinuousConfig = `{
   "input_adapter":{"kind":"linear_frames","feature_dim":1,"bias":true,"norm":"none"},
   "blocks":[{
     "type":"s4d","state_size":4,"n_ssm":2,"bidirectional":true,
-    "discretization":"bilinear","trainable_b":true,"output_transform":"glu"
+    "discretization":"bilinear","trainable_b":true,"output_transform":"glu",
+    "freq_scale":3,"sobolev_filter":{"beta_init":-0.25,"learning_rate":0.004}
   }],
   "training":{
     "objective":"classification",
@@ -45,10 +46,15 @@ func TestExportHFS4DContinuousConfigAndWeightMap(t *testing.T) {
 		"type": "s4d", "state_size": 4, "n_ssm": 2,
 		"bidirectional": true, "discretization": "bilinear",
 		"trainable_b": true, "output_transform": "glu", "tie_dropout": true,
+		"freq_scale": 3.0,
 	} {
 		if got := blocks[0][key]; got != want {
 			t.Fatalf("block %s=%v, want %v", key, got, want)
 		}
+	}
+	sobolev, ok := blocks[0]["sobolev_filter"].(map[string]any)
+	if !ok || sobolev["beta_init"] != -0.25 || sobolev["learning_rate"] != 0.004 {
+		t.Fatalf("sobolev_filter=%#v", blocks[0]["sobolev_filter"])
 	}
 
 	shapes, err := computeWeightShapes(cfg)
@@ -80,6 +86,7 @@ func TestExportHFS4DContinuousConfigAndWeightMap(t *testing.T) {
 		"s4d_log_dt":                   "blocks.0.log_dt",
 		"s4d_B_real":                   "blocks.0.B_real",
 		"s4d_C_backward_real":          "blocks.0.C_backward_real",
+		"s4d_sobolev_beta":             "blocks.0.sobolev_beta",
 		"s4d_out_proj":                 "blocks.0.out_proj.weight",
 		"s4d_post_residual_norm_scale": "blocks.0.post_residual_norm.weight",
 		"head_classifier_proj":         "classifier.weight",
@@ -196,6 +203,7 @@ func TestExportHFS4DTemplateContainsReferenceMath(t *testing.T) {
 	for _, want := range []string{
 		"class MixlabS4DBlock", "def _discretize", "def _kernel",
 		"torch.fft.rfft", "backward_kernel.flip(1)",
+		"self.sobolev_beta", "frequency_product = frequency_product * frequency_filter",
 		"value * torch.sigmoid(gate)", "self.post_residual_norm(output)",
 	} {
 		if !strings.Contains(source, want) {

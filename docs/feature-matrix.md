@@ -70,7 +70,7 @@ The config validator is authoritative for combinations.
 | `plain` attention and FFN/MoE blocks | Broad support | Broad but feature-gated support |
 | DeBERTa and differential `plain` variants | Native causal/masked support | Supported combinations have parity coverage |
 | `ttt_mlp` | Native causal training and stateful generation | Supported only for cache-safe TTT stacks |
-| S4D | Native differentiable FFT convolution; compact causal default plus grouped/trainable-B/bilinear/bidirectional reference path, tied dropout, output GLU, and classification norms | Fixed-shape `linear_frames` native classifiers export through the maintained PyTorch FFT path; token models, BatchNorm, padding, and incremental state remain gated |
+| S4D | Native differentiable FFT convolution; compact causal default plus grouped/trainable-B/bilinear/bidirectional reference path, frequency-scaled poles, learned Sobolev filters, tied dropout, output GLU, and classification norms | Fixed-shape `linear_frames` native classifiers export through the maintained PyTorch FFT path; token models, BatchNorm, padding, and incremental state remain gated |
 | HGRN2, mLSTM, RetNet, RWKV, Mamba, Gated DeltaNet | Native correctness-first paths | Generally gated or unsupported |
 | Parallel groups, recurrence, U-Net, custom blocks | Native under documented restrictions | Generally unsupported |
 

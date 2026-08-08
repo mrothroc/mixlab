@@ -1,6 +1,7 @@
 package arch
 
 import (
+	"encoding/json"
 	"math"
 	"os"
 	"strings"
@@ -153,6 +154,128 @@ func TestS4DBlockWeightCount(t *testing.T) {
 		if got != tc.want {
 			t.Fatalf("BlockWeightCount(block_scales=%v)=%d want %d", tc.blockScales, got, tc.want)
 		}
+	}
+}
+
+func TestS4DFrequencyTuningConfigWeightsAndIR(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim":8,"vocab_size":32,"seq_len":8,
+		"blocks":[{"type":"s4d","state_size":16,"freq_scale":3,
+			"sobolev_filter":{"beta_init":-0.5,"learning_rate":0.004}}],
+		"training":{"objective":"causal","batch_tokens":8}
+	}`), "s4d-frequency-tuning")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := cfg.Blocks[0]
+	if got := effectiveS4DFreqScale(block); got != 3 {
+		t.Fatalf("freq_scale=%g want 3", got)
+	}
+	if !block.S4DSobolevFilterEnabled() || effectiveS4DSobolevLearningRate(block) != 0.004 {
+		t.Fatalf("sobolev filter=%+v", block.SobolevFilter)
+	}
+	metas, err := s4dWeightShapesWithOptions(block, cfg.ModelDim, EmitOptions{
+		Norm: defaultNormSpec(), NormPlacement: NormPlacementPre,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]WeightMeta, len(metas))
+	for _, meta := range metas {
+		byName[meta.Name] = meta
+	}
+	if got := byName["s4d_A_imag"].InitScale; got != 3 {
+		t.Fatalf("A_imag init scale=%g want 3", got)
+	}
+	beta := byName["s4d_sobolev_beta"]
+	if !intSlicesEqual(beta.Shape, []int{8}) || beta.InitValue != -0.5 || beta.InitZero ||
+		beta.OptimizerRole != "s4d_state" || math.Abs(float64(beta.OptimizerLR)-0.004) > 1e-7 || !beta.ForceNoDecay {
+		t.Fatalf("sobolev beta metadata=%+v", beta)
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, op := range prog.Ops {
+		if op.Code != OpS4D {
+			continue
+		}
+		if len(op.Inputs) != 8 || !intSlicesEqual(op.IntParams, []int{1, 8, 8, 16, 0, 1}) {
+			t.Fatalf("frequency-tuned S4D inputs=%d params=%v", len(op.Inputs), op.IntParams)
+		}
+		return
+	}
+	t.Fatal("missing S4D op")
+}
+
+func TestS4DSobolevBooleanShorthandAndDisabledParity(t *testing.T) {
+	for _, tc := range []struct {
+		value       string
+		enabled     bool
+		wantWeights int
+	}{
+		{value: "true", enabled: true, wantWeights: 8},
+		{value: "false", enabled: false, wantWeights: 7},
+	} {
+		raw := []byte(`{
+			"model_dim":8,"vocab_size":32,"seq_len":8,
+			"blocks":[{"type":"s4d","state_size":16,"sobolev_filter":` + tc.value + `}],
+			"training":{"objective":"causal","batch_tokens":8}
+		}`)
+		cfg, err := ParseArchConfig(raw, "s4d-sobolev-"+tc.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := cfg.Blocks[0]
+		if block.S4DSobolevFilterEnabled() != tc.enabled {
+			t.Fatalf("sobolev_filter=%s enabled=%v want %v", tc.value, block.S4DSobolevFilterEnabled(), tc.enabled)
+		}
+		if tc.enabled && effectiveS4DSobolevLearningRate(block) != DefaultS4DSobolevLR {
+			t.Fatalf("default Sobolev LR=%g want %g", effectiveS4DSobolevLearningRate(block), DefaultS4DSobolevLR)
+		}
+		got, err := BlockWeightCount(block, false, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != tc.wantWeights {
+			t.Fatalf("sobolev_filter=%s weights=%d want %d", tc.value, got, tc.wantWeights)
+		}
+		encoded, err := json.Marshal(block)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var roundTrip BlockSpec
+		if err := json.Unmarshal(encoded, &roundTrip); err != nil {
+			t.Fatal(err)
+		}
+		if roundTrip.S4DSobolevFilterEnabled() != tc.enabled {
+			t.Fatalf("round-trip sobolev_filter=%s enabled=%v want %v; JSON=%s", tc.value, roundTrip.S4DSobolevFilterEnabled(), tc.enabled, encoded)
+		}
+	}
+}
+
+func TestS4DFrequencyTuningValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		blockJSON string
+		want      string
+	}{
+		{name: "zero frequency scale", blockJSON: `"freq_scale":0`, want: "freq_scale"},
+		{name: "negative frequency scale", blockJSON: `"freq_scale":-1`, want: "freq_scale"},
+		{name: "bad beta", blockJSON: `"sobolev_filter":{"beta_init":1e999}`, want: "cannot unmarshal"},
+		{name: "zero filter lr", blockJSON: `"sobolev_filter":{"learning_rate":0}`, want: "learning_rate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := []byte(`{
+				"model_dim":8,"vocab_size":32,"seq_len":8,
+				"blocks":[{"type":"s4d","state_size":16,` + tc.blockJSON + `}],
+				"training":{"objective":"causal","batch_tokens":8}
+			}`)
+			_, err := ParseArchConfig(raw, tc.name)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v want containing %q", err, tc.want)
+			}
+		})
 	}
 }
 

@@ -169,50 +169,6 @@ func (p *Program) AddOp(code int, inputs, outputs []string, floatParams []float3
 	})
 }
 
-// S4D emits a diagonal LTI SSM. mode=0 uses FFT convolution and mode=1 uses
-// the equivalent recurrent update for reference/parity tests.
-func (p *Program) S4D(
-	x, logDT, logAReal, aImag, cReal, cImag, direct, output, kernel string,
-	B, T, D, stateSize, mode int,
-) {
-	p.AddOp(
-		OpS4D,
-		[]string{x, logDT, logAReal, aImag, cReal, cImag, direct},
-		[]string{output, kernel},
-		nil,
-		[]int{B, T, D, stateSize, mode},
-	)
-}
-
-// S4DAdvanced emits the reference-compatible S4D path with grouped A/B,
-// optional trainable B, bilinear discretization, and bidirectional kernels.
-func (p *Program) S4DAdvanced(
-	inputs []string,
-	output, kernel string,
-	B, T, D, stateSize, nSSM int,
-	bidirectional bool,
-	discretization string,
-	trainableB bool,
-) {
-	flags := 0
-	if bidirectional {
-		flags |= 1
-	}
-	if discretization == S4DDiscretizationBilinear {
-		flags |= 2
-	}
-	if trainableB {
-		flags |= 4
-	}
-	p.AddOp(
-		OpS4D,
-		inputs,
-		[]string{output, kernel},
-		nil,
-		[]int{B, T, D, stateSize, 0, nSSM, flags},
-	)
-}
-
 // Embed emits an embedding lookup: output = table[indices].
 func (p *Program) Embed(table, indices, output string) {
 	p.AddOp(OpEmbed, []string{table, indices}, []string{output}, nil, nil)

@@ -24,6 +24,7 @@ type WeightMeta struct {
 	InitDtBias    bool
 	DtMin         float64
 	DtMax         float64
+	InitScale     float64
 	GPTBERTScale  float32
 	GPT2Scale     float32
 	// PyTorchLinearFanIn marks a tensor as an nn.Linear-style weight or paired

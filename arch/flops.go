@@ -351,6 +351,12 @@ func estimateS4DBlockFLOPs(block BlockSpec, B, T, D int) int64 {
 	kernel := 16 * i64(D) * i64(statePairs) * i64(T)
 	fft := 5 * i64(fftLen) * i64(logFFT) * i64(D) * i64(B+1)
 	pointwise := 8 * i64(B) * i64(T) * i64(D)
+	if block.S4DSobolevFilterEnabled() {
+		// Per-feature power filter plus one complex multiply for each batch FFT.
+		frequencyBins := fftLen/2 + 1
+		pointwise += 4 * i64(frequencyBins) * i64(D)
+		pointwise += 6 * i64(B) * i64(frequencyBins) * i64(D)
+	}
 	if effectiveS4DOutputTransform(block) == S4DOutputTransformGLU {
 		pointwise += 4 * i64(B) * i64(T) * i64(D) * i64(D)
 		pointwise += 2 * i64(B) * i64(T) * i64(D)

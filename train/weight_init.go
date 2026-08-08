@@ -22,6 +22,7 @@ type WeightShape struct {
 	InitDtBias         bool
 	DtMin              float64
 	DtMax              float64
+	InitScale          float64
 	GPTBERTScale       float32
 	GPT2Scale          float32
 	ModelDim           int
@@ -57,6 +58,7 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 			InitDtBias:         m.InitDtBias,
 			DtMin:              m.DtMin,
 			DtMax:              m.DtMax,
+			InitScale:          m.InitScale,
 			GPTBERTScale:       m.GPTBERTScale,
 			GPT2Scale:          m.GPT2Scale,
 			ModelDim:           cfg.ModelDim,
@@ -244,8 +246,12 @@ func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool
 			return false
 		}
 		statePairs := ws.Shape[1]
+		scale := ws.InitScale
+		if scale == 0 {
+			scale = 1
+		}
 		for i := range data {
-			data[i] = float32(math.Pi * float64(i%statePairs))
+			data[i] = float32(scale * math.Pi * float64(i%statePairs))
 		}
 		return true
 	case "s4d_B_one":

@@ -430,6 +430,21 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		if b.StateLR != nil && (*b.StateLR <= 0 || math.IsNaN(*b.StateLR) || math.IsInf(*b.StateLR, 0)) {
 			return fmt.Errorf("config %q %s[%d] type=s4d has invalid state_lr=%g (must be finite and > 0)", source, groupName, idx, *b.StateLR)
 		}
+		freqScale := effectiveS4DFreqScale(b)
+		if !(freqScale > 0) || math.IsNaN(freqScale) || math.IsInf(freqScale, 0) {
+			return fmt.Errorf("config %q %s[%d] type=s4d has invalid freq_scale=%g (must be finite and > 0)", source, groupName, idx, freqScale)
+		}
+		if b.SobolevFilter != nil {
+			if math.IsNaN(b.SobolevFilter.BetaInit) || math.IsInf(b.SobolevFilter.BetaInit, 0) {
+				return fmt.Errorf("config %q %s[%d] type=s4d has invalid sobolev_filter.beta_init=%g (must be finite)", source, groupName, idx, b.SobolevFilter.BetaInit)
+			}
+			if b.S4DSobolevFilterEnabled() {
+				lr := effectiveS4DSobolevLearningRate(b)
+				if !(lr > 0) || math.IsNaN(lr) || math.IsInf(lr, 0) {
+					return fmt.Errorf("config %q %s[%d] type=s4d has invalid sobolev_filter.learning_rate=%g (must be finite and > 0)", source, groupName, idx, lr)
+				}
+			}
+		}
 		switch effectiveS4DOutputTransform(b) {
 		case S4DOutputTransformNone, S4DOutputTransformGLU:
 		default:

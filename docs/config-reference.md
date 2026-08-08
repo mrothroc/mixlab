@@ -583,6 +583,15 @@ Optional fields:
 - `init` - initialization family. Omit or set to `"s4d-lin"` for
   `A_n = -1/2 + i*pi*n`. Other families, including S4D-LegS, are rejected in
   v1 rather than approximated.
+- `freq_scale` - finite positive multiplier for the imaginary S4D-Lin pole
+  initialization, `A_n = -1/2 + i * freq_scale * pi * n`. Defaults to `1.0`
+  and does not add a checkpoint tensor.
+- `sobolev_filter` - optional trainable transfer-function filter. Omit or set
+  `false` to disable it; `true` enables reference defaults. The object form
+  accepts `beta_init` (default `0.0`) and `learning_rate` (default `0.01`). It
+  adds `s4d_sobolev_beta: [model_dim]`, applies
+  `(1 + frequency_bin/fft_length)^beta` to the convolution spectrum, and leaves
+  the direct `D*x` term unchanged. The exponent uses no weight decay.
 - `dt_min` - lower bound for the per-channel log-uniform time-step
   initialization. Defaults to `0.001`.
 - `dt_max` - upper bound for the per-channel log-uniform time-step
@@ -611,10 +620,12 @@ discretization, and the legacy scalar optimizer grouping exactly. The normal
 training path uses FFT convolution; the equivalent recurrent scan is an
 internal parity-test path, not a public execution mode or generation cache.
 When `state_lr` is set, A/B use that rate without decay, dt uses global LR
-without decay, and C/D use global LR and the selected decay policy.
+without decay, and C/D use global LR and the selected decay policy. Sobolev
+beta uses its configured learning rate without decay. Because the filter needs
+the complete FFT, it is not supported by the internal recurrent parity mode.
 
 ```json
-{"type": "s4d", "state_size": 64, "init": "s4d-lin", "n_ssm": 2, "bidirectional": true, "discretization": "bilinear", "trainable_b": true, "state_lr": 0.001, "output_transform": "glu"}
+{"type": "s4d", "state_size": 64, "init": "s4d-lin", "n_ssm": 2, "bidirectional": true, "discretization": "bilinear", "trainable_b": true, "state_lr": 0.001, "freq_scale": 3, "sobolev_filter": {"beta_init": 0, "learning_rate": 0.01}, "output_transform": "glu"}
 ```
 
 See [S4D diagonal state-space block](s4d.md) for the numerical reference

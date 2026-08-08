@@ -2731,10 +2731,26 @@ mx::array s4d_materialize_kernel(
   return mx::array(2.0f, mx::float32) * mx::sum(terms, 1);
 }
 
+mx::array s4d_sobolev_frequency_filter(
+    const mx::array& sobolev_beta_raw,
+    int fft_len,
+    int D) {
+  int frequency_bins = fft_len / 2 + 1;
+  auto normalized_frequency = mx::reshape(
+      mx::astype(mx::arange(frequency_bins), mx::float32) /
+          mx::array(static_cast<float>(fft_len), mx::float32),
+      {1, frequency_bins, 1});
+  auto beta = mx::reshape(mx::astype(sobolev_beta_raw, mx::float32), {1, 1, D});
+  return mx::power(
+      mx::array(1.0f, mx::float32) + normalized_frequency,
+      beta);
+}
+
 mx::array s4d_fft_convolution(
     const mx::array& x_raw,
     const mx::array& kernel,
     const mx::array& direct_raw,
+    const mx::array* sobolev_beta_raw,
     int B,
     int T,
     int D) {
@@ -2748,7 +2764,11 @@ mx::array s4d_fft_convolution(
   auto kernel_broadcast = mx::reshape(
       mx::transpose(kernel_freq, {1, 0}),
       {1, kernel_freq.shape(1), D});
-  auto full = mx::fft::irfft(x_freq * kernel_broadcast, fft_len, 1);
+  auto product = x_freq * kernel_broadcast;
+  if (sobolev_beta_raw != nullptr) {
+    product = product * s4d_sobolev_frequency_filter(*sobolev_beta_raw, fft_len, D);
+  }
+  auto full = mx::fft::irfft(product, fft_len, 1);
   auto convolved = mx::slice(full, {0, 0, 0}, {B, T, D});
   auto direct = mx::reshape(mx::astype(direct_raw, mx::float32), {1, 1, D});
   return mx::reshape(convolved + x * direct, {B * T, D});
@@ -2759,6 +2779,7 @@ mx::array s4d_fft_convolution_bidirectional(
     const mx::array& forward_kernel,
     const mx::array& backward_kernel,
     const mx::array& direct_raw,
+    const mx::array* sobolev_beta_raw,
     int B,
     int T,
     int D,
@@ -2775,7 +2796,12 @@ mx::array s4d_fft_convolution_bidirectional(
   auto kernel_broadcast = mx::reshape(
       mx::transpose(kernel_freq, {1, 0}),
       {1, kernel_freq.shape(1), D});
-  auto full = mx::fft::irfft(x_freq * kernel_broadcast, 2 * T, 1);
+  auto product = x_freq * kernel_broadcast;
+  if (sobolev_beta_raw != nullptr) {
+    int fft_len = 2 * T;
+    product = product * s4d_sobolev_frequency_filter(*sobolev_beta_raw, fft_len, D);
+  }
+  auto full = mx::fft::irfft(product, 2 * T, 1);
   auto convolved = mx::slice(full, {0, 0, 0}, {B, T, D});
   auto direct = mx::reshape(mx::astype(direct_raw, mx::float32), {1, 1, D});
   *combined_kernel = kernel;
@@ -2829,6 +2855,7 @@ S4DResult s4d_forward(
     const mx::array& c_real,
     const mx::array& c_imag,
     const mx::array& direct,
+    const mx::array* sobolev_beta,
     int B,
     int T,
     int D,
@@ -2837,9 +2864,12 @@ S4DResult s4d_forward(
   int state_pairs = state_size / 2;
   auto discrete = s4d_discretize(log_dt, log_a_real, a_imag, D, state_pairs);
   auto kernel = s4d_materialize_kernel(discrete, c_real, c_imag, D, T, state_pairs);
+  if (mode == 1 && sobolev_beta != nullptr) {
+    throw std::runtime_error("S4D Sobolev filter requires full-sequence FFT mode");
+  }
   auto output = mode == 1
       ? s4d_recurrent(x, discrete, c_real, c_imag, direct, B, T, D, state_pairs)
-      : s4d_fft_convolution(x, kernel, direct, B, T, D);
+      : s4d_fft_convolution(x, kernel, direct, sobolev_beta, B, T, D);
   return {output, kernel};
 }
 
@@ -2852,7 +2882,8 @@ S4DResult s4d_forward_advanced(
     int n_ssm,
     bool bidirectional,
     int discretization,
-    bool trainable_b) {
+    bool trainable_b,
+    bool sobolev_filter) {
   int state_pairs = state_size / 2;
   int input_idx = 0;
   const auto& x = inputs[input_idx++];
@@ -2874,6 +2905,10 @@ S4DResult s4d_forward_advanced(
     c_backward_imag = &inputs[input_idx++];
   }
   const auto& direct = inputs[input_idx++];
+  const mx::array* sobolev_beta = nullptr;
+  if (sobolev_filter) {
+    sobolev_beta = &inputs[input_idx++];
+  }
 
   auto discrete = s4d_discretize_advanced(
       log_dt,
@@ -2889,7 +2924,7 @@ S4DResult s4d_forward_advanced(
       discrete, c_forward_real, c_forward_imag, D, T, state_pairs);
   if (!bidirectional) {
     return {
-        s4d_fft_convolution(x, forward_kernel, direct, B, T, D),
+        s4d_fft_convolution(x, forward_kernel, direct, sobolev_beta, B, T, D),
         forward_kernel,
     };
   }
@@ -2901,6 +2936,7 @@ S4DResult s4d_forward_advanced(
       forward_kernel,
       backward_kernel,
       direct,
+      sobolev_beta,
       B,
       T,
       D,
@@ -4628,12 +4664,16 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         }
         S4DResult result = [&]() {
           if (op.n_int_params < 7) {
-            if (op.n_inputs != 7) {
-              throw std::runtime_error("legacy OP_S4D requires 7 inputs");
+            bool sobolev_filter = op.n_int_params >= 6 && op.int_params[5] != 0;
+            int expected_inputs = sobolev_filter ? 8 : 7;
+            if (op.n_inputs != expected_inputs) {
+              throw std::runtime_error("legacy OP_S4D input count mismatch");
             }
+            const mx::array* sobolev_beta = sobolev_filter ? &get(op, 7) : nullptr;
             return s4d_forward(
                 get(op, 0), get(op, 1), get(op, 2), get(op, 3),
                 get(op, 4), get(op, 5), get(op, 6),
+                sobolev_beta,
                 B, T, D, state_size, mode);
           }
           int n_ssm = op.int_params[5];
@@ -4641,9 +4681,10 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
           bool bidirectional = (flags & 1) != 0;
           int discretization = (flags & 2) != 0 ? 1 : 0;
           bool trainable_b = (flags & 4) != 0;
+          bool sobolev_filter = (flags & 8) != 0;
           int expected_inputs =
               1 + 3 + (trainable_b ? 2 : 0) + 2 +
-              (bidirectional ? 2 : 0) + 1;
+              (bidirectional ? 2 : 0) + 1 + (sobolev_filter ? 1 : 0);
           if (op.n_inputs != expected_inputs) {
             throw std::runtime_error("advanced OP_S4D input count mismatch");
           }
@@ -4670,7 +4711,8 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
               n_ssm,
               bidirectional,
               discretization,
-              trainable_b);
+              trainable_b,
+              sobolev_filter);
         }();
         set_out(op, 0, result.output);
         set_out(op, 1, result.kernel);

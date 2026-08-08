@@ -91,6 +91,47 @@ type DataSpec struct {
 	NoShardShuffle bool `json:"no_shard_shuffle,omitempty"`
 }
 
+// S4DSobolev configures the trainable frequency exponent used by
+// the S4D Sobolev transfer-function filter. A present object enables it.
+type S4DSobolev struct {
+	Enabled      bool     `json:"-"`
+	BetaInit     float64  `json:"beta_init,omitempty"`
+	LearningRate *float64 `json:"learning_rate,omitempty"`
+}
+
+// UnmarshalJSON accepts true as shorthand for an enabled filter with reference
+// defaults, false as disabled, or an object with explicit tuning controls.
+func (s *S4DSobolev) UnmarshalJSON(data []byte) error {
+	var enabled bool
+	if err := json.Unmarshal(data, &enabled); err == nil {
+		*s = S4DSobolev{Enabled: enabled}
+		return nil
+	}
+	type Alias S4DSobolev
+	var alias Alias
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&alias); err != nil {
+		return err
+	}
+	*s = S4DSobolev(alias)
+	s.Enabled = true
+	return nil
+}
+
+// MarshalJSON keeps explicit disabled filters readable while emitting enabled
+// filters as the extensible object form.
+func (s S4DSobolev) MarshalJSON() ([]byte, error) {
+	if !s.Enabled {
+		return json.Marshal(false)
+	}
+	type encoded struct {
+		BetaInit     float64  `json:"beta_init,omitempty"`
+		LearningRate *float64 `json:"learning_rate,omitempty"`
+	}
+	return json.Marshal(encoded{BetaInit: s.BetaInit, LearningRate: s.LearningRate})
+}
+
 // Types and validation helpers for recurrence_phases live in
 // arch/config_recurrence_phases.go.
 
@@ -150,6 +191,8 @@ type BlockSpec struct {
 	DTMin                             float64      `json:"dt_min,omitempty"`                              // Mamba-3 canonical dt init lower bound; defaults to 0.001.
 	DTMax                             float64      `json:"dt_max,omitempty"`                              // Mamba-3 canonical dt init upper bound; defaults to 0.1.
 	Init                              string       `json:"init,omitempty"`                                // S4D initialization; v1 supports "s4d-lin".
+	FreqScale                         *float64     `json:"freq_scale,omitempty"`                          // S4D-Lin imaginary-pole initialization scale; defaults to 1.
+	SobolevFilter                     *S4DSobolev  `json:"sobolev_filter,omitempty"`                      // S4D trainable frequency-domain transfer-function filter.
 	Bidirectional                     bool         `json:"bidirectional,omitempty"`                       // S4D reserved direction flag; v1 supports unidirectional only.
 	NSSM                              int          `json:"n_ssm,omitempty"`                               // S4D independent A/B groups; defaults to model_dim.
 	Discretization                    string       `json:"discretization,omitempty"`                      // S4D: "zoh" (default) or "bilinear".

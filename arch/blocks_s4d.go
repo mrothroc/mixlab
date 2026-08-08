@@ -79,6 +79,9 @@ func s4dWeightShapesWithOptions(spec BlockSpec, D int, opts EmitOptions) ([]Weig
 	dtMeta := WeightMeta{Name: "s4d_log_dt", Shape: []int{D}, InitMode: "s4d_log_dt", DtMin: dtMin, DtMax: dtMax}
 	aRealMeta := WeightMeta{Name: "s4d_log_A_real", Shape: []int{nSSM, statePairs}, InitValue: float32(math.Log(0.5))}
 	aImagMeta := WeightMeta{Name: "s4d_A_imag", Shape: []int{nSSM, statePairs}, InitMode: "s4d_A_imag_lin"}
+	if spec.FreqScale != nil {
+		aImagMeta.InitScale = *spec.FreqScale
+	}
 	if spec.StateLR != nil {
 		dtMeta.OptimizerRole = "s4d_main"
 		dtMeta.ForceNoDecay = true
@@ -122,6 +125,21 @@ func s4dWeightShapesWithOptions(spec BlockSpec, D int, opts EmitOptions) ([]Weig
 		direct.OptimizerRole = "s4d_main"
 	}
 	metas = append(metas, direct)
+	if spec.S4DSobolevFilterEnabled() {
+		beta := WeightMeta{
+			Name:          "s4d_sobolev_beta",
+			Shape:         []int{D},
+			OptimizerRole: "s4d_state",
+			OptimizerLR:   float32(effectiveS4DSobolevLearningRate(spec)),
+			ForceNoDecay:  true,
+		}
+		if spec.SobolevFilter.BetaInit == 0 {
+			beta.InitZero = true
+		} else {
+			beta.InitValue = float32(spec.SobolevFilter.BetaInit)
+		}
+		metas = append(metas, beta)
+	}
 	if effectiveS4DOutputTransform(spec) == S4DOutputTransformGLU {
 		metas = append(metas,
 			linearWeightMeta("s4d_out_proj", D, 2*D),
@@ -214,7 +232,11 @@ func emitS4DIR(
 		}
 		inputs = append(inputs, weightName(wi))
 		wi++
-		prog.S4DAdvanced(
+		if spec.S4DSobolevFilterEnabled() {
+			inputs = append(inputs, weightName(wi))
+			wi++
+		}
+		prog.s4dAdvanced(
 			inputs,
 			s4dOut,
 			kernel,
@@ -226,25 +248,24 @@ func emitS4DIR(
 			spec.Bidirectional,
 			effectiveS4DDiscretization(spec),
 			spec.TrainableB,
+			spec.S4DSobolevFilterEnabled(),
 		)
 	} else {
-		prog.S4D(
+		inputs := []string{
 			input,
 			weightName(wi),
-			weightName(wi+1),
-			weightName(wi+2),
-			weightName(wi+3),
-			weightName(wi+4),
-			weightName(wi+5),
-			s4dOut,
-			kernel,
-			B,
-			T,
-			D,
-			stateSize,
-			0,
-		)
+			weightName(wi + 1),
+			weightName(wi + 2),
+			weightName(wi + 3),
+			weightName(wi + 4),
+			weightName(wi + 5),
+		}
 		wi += 6
+		if spec.S4DSobolevFilterEnabled() {
+			inputs = append(inputs, weightName(wi))
+			wi++
+		}
+		prog.s4d(inputs, s4dOut, kernel, B, T, D, stateSize, 0, spec.S4DSobolevFilterEnabled())
 	}
 	if effectiveS4DOutputTransform(spec) == S4DOutputTransformGLU {
 		prog.GELUExact(s4dOut, activated)

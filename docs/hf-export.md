@@ -120,8 +120,9 @@ Native `linear_frames` classifiers whose sequential backbone contains only
 `s4d` blocks export as fixed-shape custom-code models. They preserve the input
 projection and optional bias/LayerNorm, all S4D state parameters, optional
 trainable B, grouped `n_ssm`, ZOH or bilinear discretization, bidirectionality,
-the optional GLU output transform, post-residual normalization, optional final
-norm, mean/last pooling, and the trained classifier.
+the optional GLU output transform, frequency-scaled pole initialization,
+learned Sobolev transfer-function exponents, post-residual normalization,
+optional final norm, mean/last pooling, and the trained classifier.
 
 ```bash
 mixlab -mode export-hf \

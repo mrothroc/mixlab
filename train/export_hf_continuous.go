@@ -60,7 +60,7 @@ func hfS4DBlockEntry(cfg *ArchConfig, block BlockSpec) map[string]any {
 	if discretization == "" {
 		discretization = arch.S4DDiscretizationZOH
 	}
-	return map[string]any{
+	entry := map[string]any{
 		"type":             "s4d",
 		"state_size":       stateSize,
 		"n_ssm":            nSSM,
@@ -70,6 +70,20 @@ func hfS4DBlockEntry(cfg *ArchConfig, block BlockSpec) map[string]any {
 		"output_transform": hfS4DOutputTransform(block),
 		"tie_dropout":      cfg.TieDropout || block.TieDropout,
 	}
+	if block.FreqScale != nil {
+		entry["freq_scale"] = *block.FreqScale
+	}
+	if block.S4DSobolevFilterEnabled() {
+		lr := arch.DefaultS4DSobolevLR
+		if block.SobolevFilter.LearningRate != nil {
+			lr = *block.SobolevFilter.LearningRate
+		}
+		entry["sobolev_filter"] = map[string]any{
+			"beta_init":     block.SobolevFilter.BetaInit,
+			"learning_rate": lr,
+		}
+	}
+	return entry
 }
 
 func hfS4DOutputTransform(block BlockSpec) string {
@@ -114,6 +128,9 @@ func hfS4DWeightNames(block BlockSpec, normPlacement string, norm arch.NormSpec)
 		)
 	}
 	names = append(names, hfBlockWeightName{mixlab: "s4d_D", hf: "D"})
+	if block.S4DSobolevFilterEnabled() {
+		names = append(names, hfBlockWeightName{mixlab: "s4d_sobolev_beta", hf: "sobolev_beta"})
+	}
 	if hfS4DOutputTransform(block) == "glu" {
 		names = append(names,
 			hfBlockWeightName{mixlab: "s4d_out_proj", hf: "out_proj.weight"},

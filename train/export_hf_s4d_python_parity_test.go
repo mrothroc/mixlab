@@ -37,6 +37,14 @@ func TestExportHFS4DContinuousNativePythonParity(t *testing.T) {
           "blocks":[{"type":"s4d","state_size":4}],
           "training":{"objective":"classification","classification":{"num_labels":3,"pooling":"mean","classifier_dropout":0},"steps":1,"batch_tokens":6,"seed":20260808}
         }`},
+		{name: "zoh_unidirectional_sobolev_filter", config: `{
+          "name":"s4d_continuous_sobolev_export","model_dim":8,"seq_len":6,
+          "positional_embedding":"none","norm_type":"rmsnorm","norm_placement":"pre",
+          "input_adapter":{"kind":"linear_frames","feature_dim":1,"bias":true,"norm":"none"},
+          "blocks":[{"type":"s4d","state_size":4,"freq_scale":3,
+            "sobolev_filter":{"beta_init":-0.5,"learning_rate":0.004}}],
+          "training":{"objective":"classification","classification":{"num_labels":3,"pooling":"mean","classifier_dropout":0},"steps":1,"batch_tokens":6,"seed":20260809}
+        }`},
 	}
 	for _, tc := range configs {
 		t.Run(tc.name, func(t *testing.T) {

@@ -58,6 +58,43 @@ length-`2T` FFT convolution. Bidirectionality shares A/B/dt and learns only
 the backward C independently. S4D-LegS and incremental recurrent-state
 inference remain separate work rather than silent approximations.
 
+## Frequency tuning
+
+S4D-Lin can opt into the two frequency-bias controls from
+[Yu et al., ICLR 2025](https://arxiv.org/abs/2410.02035):
+
+```json
+{
+  "type": "s4d",
+  "freq_scale": 3.0,
+  "sobolev_filter": {
+    "beta_init": 0.0,
+    "learning_rate": 0.01
+  }
+}
+```
+
+`freq_scale` changes only the imaginary-pole initialization:
+`A_n = -1/2 + i * freq_scale * pi * n`. It defaults to `1.0`; finite values
+greater than zero are accepted. Existing checkpoints store the initialized and
+subsequently trained poles, so the scale is not applied again when loading.
+
+`sobolev_filter` adds one learned exponent per model feature. The object form
+defaults to `beta_init: 0.0` and `learning_rate: 0.01`; `true` is shorthand for
+those defaults, while omission or `false` disables it. The exponent has no
+weight decay. For FFT bin `k` and transform length `L_fft`, the convolution
+spectrum is multiplied by
+`(1 + k/L_fft)^beta`. The direct `D*x` contribution is intentionally not
+filtered, matching the paper's supplemental implementation. Zero-initialized
+beta makes the initial forward exactly the ordinary S4D forward while allowing
+training to change the frequency sensitivity.
+
+The two controls are independent. Use baseline, `freq_scale` only, Sobolev
+only, and both as a matched-budget four-arm ablation. The paper's LRA Image
+result used `freq_scale: 3` and learned beta, but reported results should not be
+attributed to these controls unless the baseline and tuned runs use identical
+training budgets.
+
 For sequence classification parity with post-norm references, use
 `norm_placement: "post_residual"` to compute `Norm(x + Dropout(F(x)))`, and
 set `final_norm: false` when the reference has no model-level final norm.
@@ -93,6 +130,8 @@ The pinned LRA reference uses both `state_lr: 0.001` and
 `weight_decay_policy: "all"`. The default `"matrix_only"` policy remains valid
 for other S4D recipes, but it does not reproduce that reference optimizer:
 ordinary biases, norms, and scalar/vector C/D parameters are not decayed.
+An enabled Sobolev filter always uses its own `learning_rate` and no decay,
+independently of `state_lr`.
 
 For low-dimensional continuous signals, also keep `input_adapter.norm` at
 `"none"` unless projection-scale invariance is intentional. Post-projection
@@ -103,6 +142,9 @@ the projection bias is zero.
 
 - Native token and `linear_frames` classification are supported.
 - The FFT path is differentiable through MLX.
+- The Sobolev filter is a full-sequence FFT operator. The internal recurrent
+  parity path remains available for ordinary S4D but is rejected when the
+  filter is enabled; it is not approximated as a streaming filter.
 - Bidirectional FFT output remains `D` channels; directional contributions
   are summed before GELU/dropout/GLU.
 - Normal recurrence/weight sharing can reuse S4D block weights when using
@@ -111,7 +153,8 @@ the projection bias is zero.
   classification checkpoints whose sequential stack contains only S4D blocks.
   The exported custom model accepts float `input_values`, preserves the trained
   classifier, and rejects padding. Token-model S4D export, BatchNorm buffers,
-  and stateful generation remain gated.
+  and stateful generation remain gated. Frequency-scaled poles and learned
+  Sobolev exponents are preserved by the fixed-shape export.
 - `mode count` includes kernel materialization and FFT work in the estimate.
 
 For continuous input, see [Continuous sequence input](continuous-input.md) and
@@ -123,3 +166,5 @@ the separately configured 200,000-step cosine horizon and 1,000-step warmup. Its
 ordinary input, S4D output, and classifier affine layers use
 `weight_init: "pytorch_linear"`; S4D state parameters retain their dedicated
 `s4d-lin` initializers. The full run remains a hardware-intensive acceptance run.
+For a small frequency-tuning surface example, see
+[`continuous_s4d_frequency_tuned_tiny.json`](../examples/continuous_s4d_frequency_tuned_tiny.json).

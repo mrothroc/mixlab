@@ -759,7 +759,8 @@ func TestBuildTrainerOptimizerSpec_S4DReferenceGroups(t *testing.T) {
 		"input_adapter":{"kind":"linear_frames","feature_dim":1,"norm":"none"},
 		"blocks":[{
 			"type":"s4d","state_size":8,"n_ssm":2,"bidirectional":true,
-			"discretization":"bilinear","trainable_b":true,"state_lr":0.001
+			"discretization":"bilinear","trainable_b":true,"state_lr":0.001,
+			"sobolev_filter":{"learning_rate":0.004}
 		}],
 		"training":{
 			"objective":"classification",
@@ -785,7 +786,11 @@ func TestBuildTrainerOptimizerSpec_S4DReferenceGroups(t *testing.T) {
 			t.Fatalf("%s group=%+v decay=%v", name, group, decay)
 		}
 	}
-	group, decay := optimizerGroupAndDecayForWeightName(t, spec, shapes, "s4d_log_dt")
+	group, decay := optimizerGroupAndDecayForWeightName(t, spec, shapes, "s4d_sobolev_beta")
+	if group.Kind != gpu.OptimizerAdamW || group.LR != 0.004 || group.WeightDecay != 0.05 || decay {
+		t.Fatalf("s4d_sobolev_beta group=%+v decay=%v", group, decay)
+	}
+	group, decay = optimizerGroupAndDecayForWeightName(t, spec, shapes, "s4d_log_dt")
 	if group.LR != 0.01 || decay {
 		t.Fatalf("s4d_log_dt group=%+v decay=%v", group, decay)
 	}

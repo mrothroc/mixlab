@@ -61,6 +61,15 @@ class MixlabS4DBlock(nn.Module):
             self.register_parameter("C_backward_real", None)
             self.register_parameter("C_backward_imag", None)
         self.D = nn.Parameter(torch.empty(dim))
+        sobolev_config = block_config.get("sobolev_filter")
+        if sobolev_config:
+            if isinstance(sobolev_config, dict):
+                beta_init = float(sobolev_config.get("beta_init", 0.0) or 0.0)
+            else:
+                beta_init = 0.0
+            self.sobolev_beta = nn.Parameter(torch.full((dim,), beta_init))
+        else:
+            self.register_parameter("sobolev_beta", None)
         self.out_proj = (
             _MixlabS4DLinear(dim, 2 * dim, bias=True)
             if self.output_transform == "glu"
@@ -175,8 +184,24 @@ class MixlabS4DBlock(nn.Module):
             fft_len = 1 << max(1, 2 * steps - 1).bit_length()
         x_frequency = torch.fft.rfft(x.float(), n=fft_len, dim=1)
         kernel_frequency = torch.fft.rfft(kernel, n=fft_len, dim=1)
+        frequency_product = x_frequency * kernel_frequency.transpose(0, 1).unsqueeze(0)
+        if self.sobolev_beta is not None:
+            frequency_bins = frequency_product.shape[1]
+            normalized_frequency = (
+                torch.arange(
+                    frequency_bins,
+                    device=frequency_product.device,
+                    dtype=torch.float32,
+                )
+                / float(fft_len)
+            ).reshape(1, frequency_bins, 1)
+            frequency_filter = torch.pow(
+                1.0 + normalized_frequency,
+                self.sobolev_beta.float().reshape(1, 1, self.dim),
+            )
+            frequency_product = frequency_product * frequency_filter
         convolved = torch.fft.irfft(
-            x_frequency * kernel_frequency.transpose(0, 1).unsqueeze(0),
+            frequency_product,
             n=fft_len,
             dim=1,
         )[:, :steps, :]
