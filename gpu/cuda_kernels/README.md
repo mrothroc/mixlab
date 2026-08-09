@@ -4,6 +4,9 @@ All custom CUDA kernels for mixlab live in this directory.
 
 Pattern:
 - Add a `.cu` file here. Its basename is the kernel symbol used at runtime.
+- Keep one registered launch symbol per `.cu` file. Put helpers shared by several
+  kernels in a local `.cuh` file; the registry generator inlines those includes
+  into the embedded source fallback.
 - Add the relative path to `cuda_kernels.list`.
 - `generate_registry.sh` compiles each listed kernel to a multi-arch fatbin with SASS for `sm_80`, `sm_86`, `sm_89`, and `sm_90`, then emits `registry_generated.h`.
 - Runtime code launches kernels via `mlx_ir::launch_precompiled_cuda_kernel(...)`, which hands the embedded fatbin to MLX/CUDA. The driver selects the matching image for the active GPU.

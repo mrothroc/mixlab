@@ -10,6 +10,8 @@
 
 namespace mlx_ir {
 
+bool precompiled_cuda_kernel_available(const std::string& kernel_name);
+
 std::vector<mlx::core::array> launch_precompiled_cuda_kernel(
     const std::string& kernel_name,
     const std::vector<mlx::core::array>& inputs,

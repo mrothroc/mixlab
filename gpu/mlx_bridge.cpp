@@ -1260,11 +1260,18 @@ int mlx_ir_eval_program_grads_named_for_output(
     for (int i = 0; i < n_weights; ++i) {
       const auto& g = compiled_out[static_cast<size_t>(i + 1)];
       if (g.dtype() != mx::float32 || g.size() != static_cast<size_t>(grad_sizes[i]) || grad_out_ptrs[i] == nullptr) {
+        std::cout << "[mlx_bridge] mlx_ir_eval_program_grads_named_for_output"
+                  << " rejected gradient " << i << ": dtype=" << g.dtype()
+                  << " size=" << g.size() << " want_size=" << grad_sizes[i]
+                  << " null_out=" << (grad_out_ptrs[i] == nullptr) << std::endl;
         return -1;
       }
       std::memcpy(grad_out_ptrs[i], g.data<float>(), g.size() * sizeof(float));
     }
     return 0;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_ir_eval_program_grads_named_for_output", e);
+    return -1;
   } catch (...) {
     return -1;
   }

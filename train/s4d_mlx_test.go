@@ -97,6 +97,105 @@ func TestS4DTinyContinuousClassificationTraining(t *testing.T) {
 	assertS4DTrainingDecreases(t, cfg, batch, 2, 16)
 }
 
+func TestS4DSobolevFrequencyFilterTinyTraining(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	cfg, err := ParseArchConfig([]byte(`{
+		"name":"s4d_sobolev_smoke",
+		"model_dim":8,
+		"seq_len":8,
+		"positional_embedding":"none",
+		"input_adapter":{"kind":"linear_frames","feature_dim":1,"bias":true,"norm":"none"},
+		"blocks":[
+			{"type":"s4d","state_size":8,"freq_scale":3,"sobolev_filter":{"beta_init":0,"learning_rate":0.01}},
+			{"type":"swiglu"}
+		],
+		"training":{
+			"objective":"classification",
+			"classification":{"num_labels":2,"pooling":"last","classifier_dropout":0},
+			"optimizer":"adamw",
+			"batch_tokens":16,
+			"steps":20,
+			"lr":0.003,
+			"scalar_lr":0.001,
+			"grad_clip":1,
+			"weight_decay":0,
+			"seed":43
+		}
+	}`), "s4d_sobolev_smoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	frames := make([]float32, 16)
+	for pos := 0; pos < 8; pos++ {
+		noise := float32((pos%3)-1) * 0.02
+		frames[pos] = -1 + noise
+		frames[8+pos] = 1 + noise
+	}
+	batch := objectiveBatch{
+		frames:               frames,
+		classificationLabels: []int32{0, 1},
+		classificationMask:   repeatFloat32Train(16, 1),
+		classificationPos:    []int32{7, 7},
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainerInterface, err := initGPUTrainer(prog, cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainer := trainerInterface.(*mlxGPUTrainer)
+	defer trainer.CloseTrainer()
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	betaIndex := -1
+	for i, shape := range shapes {
+		if shape.Name == "s4d_sobolev_beta" {
+			betaIndex = i
+			break
+		}
+	}
+	if betaIndex < 0 {
+		t.Fatal("S4D Sobolev beta weight not found")
+	}
+	before, err := trainer.ReadWeights()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := trainer.EvaluateObjectiveGPU(batch, 2, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for step := 0; step < cfg.Training.Steps; step++ {
+		loss, err := trainer.TrainObjectiveStepGPU(batch, 2, 8, float32(cfg.Training.LR))
+		if err != nil {
+			t.Fatalf("step %d: %v", step, err)
+		}
+		if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
+			t.Fatalf("step %d non-finite loss=%g", step, loss)
+		}
+	}
+	last, err := trainer.EvaluateObjectiveGPU(batch, 2, 8)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(last < first) {
+		t.Fatalf("Sobolev S4D loss did not decrease: first=%g last=%g", first, last)
+	}
+	after, err := trainer.ReadWeights()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff := maxAbsDiffS4D(before[betaIndex], after[betaIndex]); diff <= 1e-8 {
+		t.Fatalf("Sobolev beta did not change after training; diff=%g", diff)
+	}
+}
+
 func TestS4DReferenceBidirectionalGroupedContinuousTraining(t *testing.T) {
 	if !mlxAvailable() {
 		t.Skip("MLX backend not available")

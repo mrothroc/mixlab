@@ -142,6 +142,19 @@ mx::cu::JitModule& load_precompiled_or_source_cuda_module(
 
 } // namespace
 
+bool precompiled_cuda_kernel_available(const std::string& kernel_name) {
+#ifdef __linux__
+  for (unsigned int i = 0; i < cuda_kernels::kEmbeddedCudaKernelImageCount; ++i) {
+    if (kernel_name == cuda_kernels::kEmbeddedCudaKernelImages[i].kernel_name) {
+      return true;
+    }
+  }
+#else
+  (void)kernel_name;
+#endif
+  return false;
+}
+
 std::vector<mx::array> launch_precompiled_cuda_kernel(
     const std::string& kernel_name,
     const std::vector<mx::array>& inputs,

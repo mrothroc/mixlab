@@ -4,6 +4,7 @@
 #include "gated_delta_metal_primitive.h"
 #include "mamba3_cuda_primitive.h"
 #include "mamba3_metal_primitive.h"
+#include "s4d_sobolev_cuda_primitive.h"
 #include "ttt_mlp_cuda_primitive.h"
 
 #include <mlx/device.h>
@@ -2746,6 +2747,30 @@ mx::array s4d_sobolev_frequency_filter(
       beta);
 }
 
+mx::array s4d_apply_sobolev_frequency_filter(
+    const mx::array& product,
+    const mx::array& sobolev_beta_raw,
+    int fft_len,
+    int D) {
+  if (mlx_ir::s4d_sobolev_cuda_primitive_available()) {
+    auto beta = mx::reshape(
+        mx::astype(sobolev_beta_raw, mx::float32), {D});
+    return mlx_ir::s4d_sobolev_filter_cuda_primitive(
+        product, beta, fft_len);
+  }
+  const char* disabled =
+      std::getenv("MIXLAB_S4D_SOBOLEV_DISABLE_CUDA_PRIMITIVE");
+  const bool explicitly_disabled =
+      disabled != nullptr && std::string(disabled) == "1";
+  if (cuda_gpu_available() && !explicitly_disabled) {
+    throw std::runtime_error(
+        "S4D Sobolev CUDA training requires the embedded forward and backward kernels; "
+        "rebuild the CUDA kernel registry or use a published CUDA image");
+  }
+  return product *
+      s4d_sobolev_frequency_filter(sobolev_beta_raw, fft_len, D);
+}
+
 mx::array s4d_fft_convolution(
     const mx::array& x_raw,
     const mx::array& kernel,
@@ -2766,7 +2791,8 @@ mx::array s4d_fft_convolution(
       {1, kernel_freq.shape(1), D});
   auto product = x_freq * kernel_broadcast;
   if (sobolev_beta_raw != nullptr) {
-    product = product * s4d_sobolev_frequency_filter(*sobolev_beta_raw, fft_len, D);
+    product = s4d_apply_sobolev_frequency_filter(
+        product, *sobolev_beta_raw, fft_len, D);
   }
   auto full = mx::fft::irfft(product, fft_len, 1);
   auto convolved = mx::slice(full, {0, 0, 0}, {B, T, D});
@@ -2799,7 +2825,8 @@ mx::array s4d_fft_convolution_bidirectional(
   auto product = x_freq * kernel_broadcast;
   if (sobolev_beta_raw != nullptr) {
     int fft_len = 2 * T;
-    product = product * s4d_sobolev_frequency_filter(*sobolev_beta_raw, fft_len, D);
+    product = s4d_apply_sobolev_frequency_filter(
+        product, *sobolev_beta_raw, fft_len, D);
   }
   auto full = mx::fft::irfft(product, 2 * T, 1);
   auto convolved = mx::slice(full, {0, 0, 0}, {B, T, D});

@@ -89,6 +89,14 @@ filtered, matching the paper's supplemental implementation. Zero-initialized
 beta makes the initial forward exactly the ordinary S4D forward while allowing
 training to change the frequency sensitivity.
 
+Metal retains the differentiable MLX-op implementation. CUDA uses Mixlab's
+embedded forward and backward kernels because MLX 0.32 cannot compile the
+real-parameter/complex-spectrum VJP used by this filter. Published CUDA images
+include these kernels. Custom CUDA builds must generate the embedded kernel
+registry as described in [`gpu/cuda_kernels/README.md`](../gpu/cuda_kernels/README.md).
+`MIXLAB_S4D_SOBOLEV_DISABLE_CUDA_PRIMITIVE=1` is only for forward differential
+checks; the MLX CUDA fallback is not a supported training path.
+
 The two controls are independent. Use baseline, `freq_scale` only, Sobolev
 only, and both as a matched-budget four-arm ablation. The paper's LRA Image
 result used `freq_scale: 3` and learned beta, but reported results should not be
