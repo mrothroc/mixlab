@@ -18,9 +18,17 @@ COPY go.mod ./
 COPY . .
 RUN go mod download
 
+# Assert that every kernel listed in cuda_kernels.list reached the generated
+# registry. The names are derived from the list rather than hard-coded, so
+# kernels added later are covered automatically; the previous form named two
+# kernels by hand and silently stopped covering everything added after them.
 RUN MIXLAB_REQUIRE_CUDA_KERNELS=1 bash gpu/cuda_kernels/generate_registry.sh \
-    && grep -q 'mamba3_selective_scan_fwd' gpu/cuda_kernels/registry_generated.h \
-    && grep -q 'ttt_mlp_causal_conv' gpu/cuda_kernels/registry_generated.h
+    && while read -r kernel_path; do \
+         case "${kernel_path}" in ''|\#*) continue ;; esac; \
+         kernel_name="$(basename "${kernel_path}" .cu)"; \
+         grep -q "\"${kernel_name}\"" gpu/cuda_kernels/registry_generated.h \
+           || { echo "CUDA kernel missing from generated registry: ${kernel_name}" >&2; exit 1; }; \
+       done < gpu/cuda_kernels/cuda_kernels.list
 
 RUN CGO_ENABLED=1 go build -tags mlx -o /mixlab ./cmd/mixlab \
     && echo "Build OK: $(file /mixlab)"
