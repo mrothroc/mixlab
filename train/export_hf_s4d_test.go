@@ -53,7 +53,8 @@ func TestExportHFS4DContinuousConfigAndWeightMap(t *testing.T) {
 		}
 	}
 	sobolev, ok := blocks[0]["sobolev_filter"].(map[string]any)
-	if !ok || sobolev["beta_init"] != -0.25 || sobolev["learning_rate"] != 0.004 {
+	if !ok || sobolev["beta_init"] != -0.25 || sobolev["learning_rate"] != 0.004 ||
+		sobolev["trainable"] != true || sobolev["weight_decay"] != 0.0 || sobolev["granularity"] != "channel" {
 		t.Fatalf("sobolev_filter=%#v", blocks[0]["sobolev_filter"])
 	}
 
@@ -203,7 +204,8 @@ func TestExportHFS4DTemplateContainsReferenceMath(t *testing.T) {
 	for _, want := range []string{
 		"class MixlabS4DBlock", "def _discretize", "def _kernel",
 		"torch.fft.rfft", "backward_kernel.flip(1)",
-		"self.sobolev_beta", "frequency_product = frequency_product * frequency_filter",
+		"self.sobolev_beta", "self.sobolev_bounds", "torch.tanh(effective_beta)",
+		"frequency_product = frequency_product * frequency_filter",
 		"value * torch.sigmoid(gate)", "self.post_residual_norm(output)",
 	} {
 		if !strings.Contains(source, want) {

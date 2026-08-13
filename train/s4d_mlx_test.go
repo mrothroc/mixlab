@@ -196,6 +196,80 @@ func TestS4DSobolevFrequencyFilterTinyTraining(t *testing.T) {
 	}
 }
 
+func TestS4DSobolevFrozenAndBoundedLayerControls(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	for _, tc := range []struct {
+		name       string
+		filter     string
+		wantChange bool
+	}{
+		{name: "frozen", filter: `{"beta_init":0.5,"trainable":false}`, wantChange: false},
+		{name: "bounded_layer", filter: `{"beta_init":0.5,"granularity":"layer","bounds":[-2,2]}`, wantChange: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := ParseArchConfig([]byte(`{
+				"name":"s4d_sobolev_controls","model_dim":8,"seq_len":8,
+				"positional_embedding":"none",
+				"input_adapter":{"kind":"linear_frames","feature_dim":1,"bias":true,"norm":"none"},
+				"blocks":[{"type":"s4d","state_size":8,"sobolev_filter":`+tc.filter+`}],
+				"training":{"objective":"classification","classification":{"num_labels":2,"pooling":"last","classifier_dropout":0},
+					"optimizer":"adamw","batch_tokens":16,"steps":4,"lr":0.001,"grad_clip":1,"weight_decay":0,"seed":44}
+			}`), tc.name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prog, err := BuildIRProgramFromConfig(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			trainerInterface, err := initGPUTrainer(prog, cfg, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			trainer := trainerInterface.(*mlxGPUTrainer)
+			defer trainer.CloseTrainer()
+			shapes, err := computeWeightShapes(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			betaIndex := -1
+			for i, shape := range shapes {
+				if shape.Name == "s4d_sobolev_beta" {
+					betaIndex = i
+				}
+			}
+			if betaIndex < 0 {
+				t.Fatal("missing beta")
+			}
+			before, err := trainer.ReadWeightsGPU([]int{betaIndex})
+			if err != nil {
+				t.Fatal(err)
+			}
+			frames := []float32{-1, -.8, -.6, -.4, -.2, 0, .2, .4, 1, .8, .6, .4, .2, 0, -.2, -.4}
+			batch := objectiveBatch{frames: frames, classificationLabels: []int32{0, 1}, classificationMask: repeatFloat32Train(16, 1), classificationPos: []int32{7, 7}}
+			for step := 0; step < 4; step++ {
+				loss, err := trainer.TrainObjectiveStepGPU(batch, 2, 8, float32(cfg.Training.LR))
+				if err != nil {
+					t.Fatalf("step %d: %v", step, err)
+				}
+				if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
+					t.Fatalf("step %d loss=%g", step, loss)
+				}
+			}
+			after, err := trainer.ReadWeightsGPU([]int{betaIndex})
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed := maxAbsDiffS4D(before[0], after[0]) > 1e-8
+			if changed != tc.wantChange {
+				t.Fatalf("beta changed=%v want %v; before=%v after=%v", changed, tc.wantChange, before[0], after[0])
+			}
+		})
+	}
+}
+
 func TestS4DReferenceBidirectionalGroupedContinuousTraining(t *testing.T) {
 	if !mlxAvailable() {
 		t.Skip("MLX backend not available")

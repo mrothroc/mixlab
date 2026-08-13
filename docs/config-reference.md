@@ -588,10 +588,18 @@ Optional fields:
   and does not add a checkpoint tensor.
 - `sobolev_filter` - optional trainable transfer-function filter. Omit or set
   `false` to disable it; `true` enables reference defaults. The object form
-  accepts `beta_init` (default `0.0`) and `learning_rate` (default `0.01`). It
-  adds `s4d_sobolev_beta: [model_dim]`, applies
+  accepts `beta_init` (default `0.0`), `learning_rate` (default `0.01`),
+  `trainable` (default `true`), `weight_decay` (default `0.0`), and
+  `granularity` (`"channel"` by default or `"layer"`). `trainable:false`
+  checkpoints and counts beta but excludes it from optimizer updates; its
+  ignored `learning_rate` may then be zero. Channel
+  granularity stores `[model_dim]`; layer granularity stores `[1]` and
+  broadcasts it over features. Optional `bounds:[min,max]` uses
+  `mid + half_range*tanh(raw_beta)` and requires `beta_init` strictly inside
+  the interval. It applies
   `(1 + frequency_bin/fft_length)^beta` to the convolution spectrum, and leaves
-  the direct `D*x` term unchanged. The exponent uses no weight decay.
+  the direct `D*x` term unchanged. Omitted controls retain channel-wise,
+  trainable, zero-decay reference behavior.
 - `dt_min` - lower bound for the per-channel log-uniform time-step
   initialization. Defaults to `0.001`.
 - `dt_max` - upper bound for the per-channel log-uniform time-step
@@ -621,11 +629,11 @@ training path uses FFT convolution; the equivalent recurrent scan is an
 internal parity-test path, not a public execution mode or generation cache.
 When `state_lr` is set, A/B use that rate without decay, dt uses global LR
 without decay, and C/D use global LR and the selected decay policy. Sobolev
-beta uses its configured learning rate without decay. Because the filter needs
+beta uses its configured learning rate and decay. Because the filter needs
 the complete FFT, it is not supported by the internal recurrent parity mode.
 
 ```json
-{"type": "s4d", "state_size": 64, "init": "s4d-lin", "n_ssm": 2, "bidirectional": true, "discretization": "bilinear", "trainable_b": true, "state_lr": 0.001, "freq_scale": 3, "sobolev_filter": {"beta_init": 0, "learning_rate": 0.01}, "output_transform": "glu"}
+{"type": "s4d", "state_size": 64, "init": "s4d-lin", "n_ssm": 2, "bidirectional": true, "discretization": "bilinear", "trainable_b": true, "state_lr": 0.001, "freq_scale": 3, "sobolev_filter": {"beta_init": 0, "learning_rate": 0.01, "trainable": true, "weight_decay": 0, "granularity": "channel"}, "output_transform": "glu"}
 ```
 
 See [S4D diagonal state-space block](s4d.md) for the numerical reference

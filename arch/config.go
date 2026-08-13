@@ -94,9 +94,13 @@ type DataSpec struct {
 // S4DSobolev configures the trainable frequency exponent used by
 // the S4D Sobolev transfer-function filter. A present object enables it.
 type S4DSobolev struct {
-	Enabled      bool     `json:"-"`
-	BetaInit     float64  `json:"beta_init,omitempty"`
-	LearningRate *float64 `json:"learning_rate,omitempty"`
+	Enabled      bool      `json:"-"`
+	BetaInit     float64   `json:"beta_init,omitempty"`
+	LearningRate *float64  `json:"learning_rate,omitempty"`
+	Trainable    *bool     `json:"trainable,omitempty"`
+	WeightDecay  *float64  `json:"weight_decay,omitempty"`
+	Granularity  string    `json:"granularity,omitempty"`
+	Bounds       []float64 `json:"bounds,omitempty"`
 }
 
 // UnmarshalJSON accepts true as shorthand for an enabled filter with reference
@@ -126,10 +130,17 @@ func (s S4DSobolev) MarshalJSON() ([]byte, error) {
 		return json.Marshal(false)
 	}
 	type encoded struct {
-		BetaInit     float64  `json:"beta_init,omitempty"`
-		LearningRate *float64 `json:"learning_rate,omitempty"`
+		BetaInit     float64   `json:"beta_init,omitempty"`
+		LearningRate *float64  `json:"learning_rate,omitempty"`
+		Trainable    *bool     `json:"trainable,omitempty"`
+		WeightDecay  *float64  `json:"weight_decay,omitempty"`
+		Granularity  string    `json:"granularity,omitempty"`
+		Bounds       []float64 `json:"bounds,omitempty"`
 	}
-	return json.Marshal(encoded{BetaInit: s.BetaInit, LearningRate: s.LearningRate})
+	return json.Marshal(encoded{
+		BetaInit: s.BetaInit, LearningRate: s.LearningRate, Trainable: s.Trainable,
+		WeightDecay: s.WeightDecay, Granularity: s.Granularity, Bounds: s.Bounds,
+	})
 }
 
 // Types and validation helpers for recurrence_phases live in

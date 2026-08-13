@@ -43,6 +43,7 @@ func legalChunkSGDOptimizerOverride(evalSpec EvalSpec) func(gpu.TrainerOptimizer
 				Name:        shape.Name,
 				Shape:       shape.Shape,
 				IsBuffer:    shape.IsBuffer,
+				Frozen:      shape.Frozen,
 				IsNormScale: shape.IsNormScale,
 			}
 		}

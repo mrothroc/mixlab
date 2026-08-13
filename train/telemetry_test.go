@@ -138,6 +138,18 @@ func TestTelemetryOmitsInactiveComponentLosses(t *testing.T) {
 	}
 }
 
+func TestTelemetryRetainsLastS4DSobolevSampleBetweenLogSteps(t *testing.T) {
+	state := newTelemetryState()
+	diagnostics := &telemetryS4DSobolev{Blocks: []telemetryS4DSobolevBlock{{BlockIndexes: []int{0}, Median: 0.5}}}
+	state.update(telemetryUpdate{Step: 1, S4DSobolev: diagnostics})
+	diagnostics.Blocks[0].BlockIndexes[0] = 99
+	state.update(telemetryUpdate{Step: 2})
+	snapshot := state.snapshot(false)
+	if snapshot.S4DSobolev == nil || snapshot.S4DSobolev.Blocks[0].Median != 0.5 || snapshot.S4DSobolev.Blocks[0].BlockIndexes[0] != 0 {
+		t.Fatalf("s4d_sobolev=%+v", snapshot.S4DSobolev)
+	}
+}
+
 func TestMLMMaskStatsTelemetryDerivedValues(t *testing.T) {
 	masking := (mlmMaskStats{Unit: "whole_word", TargetProb: 0.15, EligibleTokens: 20, SelectedTokens: 3, SelectedGroups: 2, SelectedGroupTokenTotal: 3}).telemetry()
 	if masking == nil || masking.RealizedRate != 0.15 || masking.MeanSelectedGroupSize != 1.5 {

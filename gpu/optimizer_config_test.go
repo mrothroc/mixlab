@@ -89,6 +89,19 @@ func TestBuildTrainerOptimizerSpec(t *testing.T) {
 	}
 }
 
+func TestBuildTrainerOptimizerSpecFrozenParameter(t *testing.T) {
+	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
+		Weights: []OptimizerWeightMetadata{{Name: "beta", Shape: []int{4}, Frozen: true}},
+		Scalar:  OptimizerSettings{Name: "adamw", LR: 0.01},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Weights) != 1 || !spec.Weights[0].Frozen {
+		t.Fatalf("weights=%+v", spec.Weights)
+	}
+}
+
 func TestBuildTrainerOptimizerSpecExtraGroupsAndAllParameterDecay(t *testing.T) {
 	spec, err := BuildTrainerOptimizerSpec(TrainerOptimizerConfig{
 		Weights: []OptimizerWeightMetadata{

@@ -404,6 +404,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		telemetry = &telemetryRuntime{state: newTelemetryState()}
 	}
 	componentTelemetryEnabled := opts.telemetry != nil
+	sobolevBindings, err := arch.CollectS4DSobolevWeightBindings(cfg)
+	if err != nil {
+		return TrainResult{}, fmt.Errorf("collect S4D Sobolev diagnostics: %w", err)
+	}
 	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
 	// steadyStart is set after the first step in this process completes, which
@@ -691,6 +695,15 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 			}
 			componentLosses, trainingExtra := splitTrainingDiagnostics(componentLosses)
+			var sobolevDiagnostics *telemetryS4DSobolev
+			if len(sobolevBindings) > 0 && shouldLogTrainingStep(step, steps, logEvery) {
+				diagnosticStart := time.Now()
+				sobolevDiagnostics, err = sampleS4DSobolevDiagnostics(trainer, sobolevBindings)
+				gpuDuration += time.Since(diagnosticStart)
+				if err != nil {
+					return TrainResult{}, fmt.Errorf("sample S4D Sobolev diagnostics at step %d: %w", step, err)
+				}
+			}
 			optimizerStats, err := readOptimizerStats(trainer)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("read optimizer stats at step %d: %w", step, err)
@@ -741,6 +754,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				ConsecutiveSkipped:    optimizerStats.ConsecutiveSkipped,
 				OptimizerStepSkipped:  optimizerStats.LastStepSkipped,
 				Masking:               currentDiagnosticBatch.mlmMaskStats.telemetry(),
+				S4DSobolev:            sobolevDiagnostics,
 			})
 			handleMLXMemoryControls(name, step, mlxMemLogEvery, mlxClearCacheEvery, telemetry)
 
@@ -837,6 +851,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				if extra := formatTrainingExtraDiagnostics(trainingExtra); extra != "" {
 					fmt.Printf("  [%s] [ttt] %s\n", name, extra)
 				}
+				if beta := formatS4DSobolevDiagnostics(sobolevDiagnostics); beta != "" {
+					fmt.Printf("  [%s] [s4d-sobolev] %s\n", name, beta)
+				}
 				logDuration := time.Since(logStart)
 				if opts.Timing {
 					compileStatsStr := formatCompileStats(trainer)
@@ -877,6 +894,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					ConsecutiveSkipped:    optimizerStats.ConsecutiveSkipped,
 					OptimizerStepSkipped:  optimizerStats.LastStepSkipped,
 					Masking:               currentDiagnosticBatch.mlmMaskStats.telemetry(),
+					S4DSobolev:            sobolevDiagnostics,
 				})
 				if err := telemetry.writeSnapshot(true); err != nil {
 					return TrainResult{}, err

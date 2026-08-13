@@ -1,3 +1,5 @@
+import math
+
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -65,11 +67,30 @@ class MixlabS4DBlock(nn.Module):
         if sobolev_config:
             if isinstance(sobolev_config, dict):
                 beta_init = float(sobolev_config.get("beta_init", 0.0) or 0.0)
+                granularity = str(
+                    sobolev_config.get("granularity", "channel") or "channel"
+                )
+                bounds = sobolev_config.get("bounds")
+                trainable = bool(sobolev_config.get("trainable", True))
             else:
                 beta_init = 0.0
-            self.sobolev_beta = nn.Parameter(torch.full((dim,), beta_init))
+                granularity = "channel"
+                bounds = None
+                trainable = True
+            beta_size = 1 if granularity == "layer" else dim
+            if bounds is not None:
+                lower, upper = float(bounds[0]), float(bounds[1])
+                ratio = (beta_init - (lower + upper) / 2.0) / (
+                    (upper - lower) / 2.0
+                )
+                beta_init = math.atanh(ratio)
+            self.sobolev_beta = nn.Parameter(
+                torch.full((beta_size,), beta_init), requires_grad=trainable
+            )
+            self.sobolev_bounds = bounds
         else:
             self.register_parameter("sobolev_beta", None)
+            self.sobolev_bounds = None
         self.out_proj = (
             _MixlabS4DLinear(dim, 2 * dim, bias=True)
             if self.output_transform == "glu"
@@ -195,9 +216,20 @@ class MixlabS4DBlock(nn.Module):
                 )
                 / float(fft_len)
             ).reshape(1, frequency_bins, 1)
+            effective_beta = self.sobolev_beta.float()
+            if self.sobolev_bounds is not None:
+                lower, upper = self.sobolev_bounds
+                effective_beta = (
+                    (float(lower) + float(upper)) / 2.0
+                    + (float(upper) - float(lower))
+                    / 2.0
+                    * torch.tanh(effective_beta)
+                )
+            if effective_beta.numel() == 1:
+                effective_beta = effective_beta.expand(self.dim)
             frequency_filter = torch.pow(
                 1.0 + normalized_frequency,
-                self.sobolev_beta.float().reshape(1, 1, self.dim),
+                effective_beta.reshape(1, 1, self.dim),
             )
             frequency_product = frequency_product * frequency_filter
         convolved = torch.fft.irfft(

@@ -126,6 +126,9 @@ func validateRecurrence(cfg *ArchConfig, source string) error {
 		if cfg.Blocks[i].Type != cfg.Blocks[ref].Type {
 			return fmt.Errorf("config %q recurrence[%d]=%d type mismatch: blocks[%d].type=%q blocks[%d].type=%q", source, i, ref, i, cfg.Blocks[i].Type, ref, cfg.Blocks[ref].Type)
 		}
+		if ref != i && blockTypeKey(cfg.Blocks[i]) == "s4d" && !s4dSobolevSharedControlsEqual(cfg.Blocks[ref], cfg.Blocks[i]) {
+			return fmt.Errorf("config %q recurrence[%d]=%d requires matching S4D Sobolev filter controls", source, i, ref)
+		}
 	}
 	return nil
 }
@@ -187,6 +190,9 @@ func weightGroupHeadCount(spec BlockSpec) (int, bool) {
 }
 
 func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, curIdx int, cur BlockSpec) error {
+	if blockTypeKey(first) == "s4d" && !s4dSobolevSharedControlsEqual(first, cur) {
+		return fmt.Errorf("blocks[%d] weight_group=%q must match blocks[%d] Sobolev filter controls", curIdx, cur.WeightGroup, firstIdx)
+	}
 	firstShapes, err := blockWeightShapes(first, cfg.ModelDim, cfg.SeqLen, 1, cfg.VocabSize, cfg.EffectiveMLPMult(), cfg.BlockScales, cfg.ResidMix)
 	if err != nil {
 		return fmt.Errorf("blocks[%d] weight_group=%q references invalid weight layout: %w", firstIdx, first.WeightGroup, err)
@@ -212,6 +218,23 @@ func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, c
 		}
 	}
 	return nil
+}
+
+func s4dSobolevSharedControlsEqual(a, b BlockSpec) bool {
+	if a.S4DSobolevFilterEnabled() != b.S4DSobolevFilterEnabled() {
+		return false
+	}
+	if !a.S4DSobolevFilterEnabled() {
+		return true
+	}
+	alo, ahi, abounded := S4DSobolevBounds(a)
+	blo, bhi, bbounded := S4DSobolevBounds(b)
+	return a.SobolevFilter.BetaInit == b.SobolevFilter.BetaInit &&
+		effectiveS4DSobolevLearningRate(a) == effectiveS4DSobolevLearningRate(b) &&
+		EffectiveS4DSobolevTrainable(a) == EffectiveS4DSobolevTrainable(b) &&
+		EffectiveS4DSobolevWeightDecay(a) == EffectiveS4DSobolevWeightDecay(b) &&
+		EffectiveS4DSobolevGranularity(a) == EffectiveS4DSobolevGranularity(b) &&
+		abounded == bbounded && alo == blo && ahi == bhi
 }
 
 // validateBlockSpec checks that a single block spec has a valid type.
@@ -440,8 +463,28 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 			}
 			if b.S4DSobolevFilterEnabled() {
 				lr := effectiveS4DSobolevLearningRate(b)
-				if !(lr > 0) || math.IsNaN(lr) || math.IsInf(lr, 0) {
-					return fmt.Errorf("config %q %s[%d] type=s4d has invalid sobolev_filter.learning_rate=%g (must be finite and > 0)", source, groupName, idx, lr)
+				if math.IsNaN(lr) || math.IsInf(lr, 0) || lr < 0 || (EffectiveS4DSobolevTrainable(b) && lr == 0) {
+					return fmt.Errorf("config %q %s[%d] type=s4d has invalid sobolev_filter.learning_rate=%g (must be finite and > 0 when trainable, or >= 0 when frozen)", source, groupName, idx, lr)
+				}
+				decay := EffectiveS4DSobolevWeightDecay(b)
+				if decay < 0 || math.IsNaN(decay) || math.IsInf(decay, 0) {
+					return fmt.Errorf("config %q %s[%d] type=s4d has invalid sobolev_filter.weight_decay=%g (must be finite and >= 0)", source, groupName, idx, decay)
+				}
+				switch EffectiveS4DSobolevGranularity(b) {
+				case S4DSobolevGranularityChannel, S4DSobolevGranularityLayer:
+				default:
+					return fmt.Errorf("config %q %s[%d] type=s4d has invalid sobolev_filter.granularity=%q (must be \"channel\" or \"layer\")", source, groupName, idx, b.SobolevFilter.Granularity)
+				}
+				if len(b.SobolevFilter.Bounds) != 0 && len(b.SobolevFilter.Bounds) != 2 {
+					return fmt.Errorf("config %q %s[%d] type=s4d requires sobolev_filter.bounds to contain exactly [min,max]", source, groupName, idx)
+				}
+				if lo, hi, bounded := S4DSobolevBounds(b); bounded {
+					if math.IsNaN(lo) || math.IsNaN(hi) || math.IsInf(lo, 0) || math.IsInf(hi, 0) || !(lo < hi) {
+						return fmt.Errorf("config %q %s[%d] type=s4d requires sobolev_filter.bounds=[min,max] with finite min < max", source, groupName, idx)
+					}
+					if !(b.SobolevFilter.BetaInit > lo && b.SobolevFilter.BetaInit < hi) {
+						return fmt.Errorf("config %q %s[%d] type=s4d requires sobolev_filter.beta_init=%g strictly inside bounds [%g,%g]", source, groupName, idx, b.SobolevFilter.BetaInit, lo, hi)
+					}
 				}
 			}
 		}

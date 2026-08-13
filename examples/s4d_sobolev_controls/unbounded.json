@@ -1,0 +1,17 @@
+{
+  "name": "s4d_sobolev_unbounded",
+  "model_dim": 32,
+  "seq_len": 64,
+  "positional_embedding": "none",
+  "input_adapter": {"kind": "linear_frames", "feature_dim": 4, "bias": true, "norm": "none"},
+  "blocks": [
+    {"type": "s4d", "state_size": 64, "freq_scale": 3, "sobolev_filter": {"beta_init": 0, "learning_rate": 0.01}},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {"num_labels": 3, "pooling": "last", "classifier_dropout": 0.1},
+    "optimizer": "adamw", "steps": 100, "lr": 0.0003, "grad_clip": 1,
+    "weight_decay": 0.01, "batch_tokens": 128, "seed": 42
+  }
+}

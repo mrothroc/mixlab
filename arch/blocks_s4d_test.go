@@ -196,6 +196,9 @@ func TestS4DFrequencyTuningConfigWeightsAndIR(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if got := countOps(prog, OpTanh); got != 0 {
+		t.Fatalf("unbounded Sobolev default emitted %d tanh ops", got)
+	}
 	for _, op := range prog.Ops {
 		if op.Code != OpS4D {
 			continue
@@ -597,5 +600,115 @@ func TestS4DDisabledParityDoesNotChangePlainConfig(t *testing.T) {
 	}
 	if got := countOps(prog, OpS4D); got != 0 {
 		t.Fatalf("plain config emitted %d S4D ops", got)
+	}
+}
+
+func TestS4DSobolevControlsWeightMetadataAndBoundedIR(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim":8,"vocab_size":32,"seq_len":8,
+		"blocks":[{"type":"s4d","state_size":16,"sobolev_filter":{
+			"beta_init":0.5,"learning_rate":0.002,"trainable":false,
+			"weight_decay":0.03,"granularity":"layer","bounds":[-2,2]
+		}}],
+		"training":{"objective":"causal","batch_tokens":8}
+	}`), "s4d-sobolev-controls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := cfg.Blocks[0]
+	if EffectiveS4DSobolevTrainable(block) || EffectiveS4DSobolevGranularity(block) != S4DSobolevGranularityLayer {
+		t.Fatalf("effective controls=%+v", block.SobolevFilter)
+	}
+	lo, hi, bounded := S4DSobolevBounds(block)
+	if !bounded || lo != -2 || hi != 2 {
+		t.Fatalf("bounds=(%g,%g,%v)", lo, hi, bounded)
+	}
+	metas, err := s4dWeightShapesWithOptions(block, cfg.ModelDim, EmitOptions{Norm: defaultNormSpec(), NormPlacement: NormPlacementPre})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var beta WeightMeta
+	for _, meta := range metas {
+		if meta.Name == "s4d_sobolev_beta" {
+			beta = meta
+		}
+	}
+	wantRaw := float32(math.Atanh(0.25))
+	if !intSlicesEqual(beta.Shape, []int{1}) || !beta.Frozen || beta.OptimizerRole != "s4d_sobolev" ||
+		math.Abs(float64(beta.InitValue-wantRaw)) > 1e-6 || beta.OptimizerWeightDecay != 0.03 || !beta.ForceDecay || beta.ForceNoDecay {
+		t.Fatalf("beta metadata=%+v want raw init %g", beta, wantRaw)
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if countOps(prog, OpTanh) != 1 || countOps(prog, OpFull) < 2 || countOps(prog, OpMul) < 1 {
+		t.Fatalf("bounded layer IR missing transform: tanh=%d full=%d mul=%d", countOps(prog, OpTanh), countOps(prog, OpFull), countOps(prog, OpMul))
+	}
+}
+
+func TestS4DSobolevControlValidation(t *testing.T) {
+	for _, tc := range []struct{ name, filter, want string }{
+		{"bad decay", `{"weight_decay":-0.1}`, "weight_decay"},
+		{"bad granularity", `{"granularity":"model"}`, "granularity"},
+		{"bad bounds length", `{"bounds":[-1]}`, "exactly"},
+		{"bad bounds order", `{"bounds":[2,-2]}`, "min < max"},
+		{"init at boundary", `{"beta_init":2,"bounds":[-2,2]}`, "strictly inside"},
+		{"zero trainable lr", `{"learning_rate":0}`, "when trainable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseArchConfig([]byte(`{"model_dim":8,"vocab_size":32,"seq_len":8,"blocks":[{"type":"s4d","state_size":16,"sobolev_filter":`+tc.filter+`}],"training":{"batch_tokens":8}}`), tc.name)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestS4DSobolevFrozenAcceptsZeroLearningRate(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim":8,"vocab_size":32,"seq_len":8,
+		"blocks":[{"type":"s4d","state_size":16,"sobolev_filter":{"trainable":false,"learning_rate":0}}],
+		"training":{"batch_tokens":8}
+	}`), "frozen-zero-lr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	metas, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, meta := range metas {
+		if meta.Name == "s4d_sobolev_beta" {
+			if !meta.Frozen || meta.OptimizerLR != 0 {
+				t.Fatalf("beta=%+v", meta)
+			}
+			return
+		}
+	}
+	t.Fatal("missing beta")
+}
+
+func TestS4DSobolevSharedWeightsRequireMatchingControls(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		second     string
+		recurrence string
+		want       string
+	}{
+		{name: "weight group bounds", second: `{"type":"s4d","weight_group":"shared","state_size":16,"sobolev_filter":{"bounds":[-3,3]}}`, want: "Sobolev filter controls"},
+		{name: "recurrence granularity", second: `{"type":"s4d","state_size":16,"sobolev_filter":{"granularity":"layer"}}`, recurrence: `,"recurrence":[0,0]`, want: "matching S4D Sobolev filter controls"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			first := `{"type":"s4d","state_size":16,"sobolev_filter":{"bounds":[-2,2]}}`
+			if strings.Contains(tc.name, "weight group") {
+				first = `{"type":"s4d","weight_group":"shared","state_size":16,"sobolev_filter":{"bounds":[-2,2]}}`
+			}
+			raw := []byte(`{"model_dim":8,"vocab_size":32,"seq_len":8,"blocks":[` + first + `,` + tc.second + `]` + tc.recurrence + `,"training":{"batch_tokens":8}}`)
+			_, err := ParseArchConfig(raw, tc.name)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v want %q", err, tc.want)
+			}
+		})
 	}
 }

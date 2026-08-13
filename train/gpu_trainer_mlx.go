@@ -932,6 +932,28 @@ func (t *mlxGPUTrainer) ReadWeights() ([][]float32, error) {
 	return weights, nil
 }
 
+func (t *mlxGPUTrainer) ReadWeightsGPU(indexes []int) ([][]float32, error) {
+	if err := t.FlushGPU(); err != nil {
+		return nil, err
+	}
+	weights := make([][]float32, len(indexes))
+	for outIndex, weightIndex := range indexes {
+		if weightIndex < 0 || weightIndex >= len(t.shapes) {
+			return nil, fmt.Errorf("weight index %d out of range [0,%d)", weightIndex, len(t.shapes))
+		}
+		size, err := gpu.TrainerWeightSize(t.handle, weightIndex)
+		if err != nil {
+			return nil, fmt.Errorf("weight %d size: %w", weightIndex, err)
+		}
+		data := make([]float32, size)
+		if err := gpu.TrainerReadWeight(t.handle, weightIndex, data); err != nil {
+			return nil, fmt.Errorf("read weight %d: %w", weightIndex, err)
+		}
+		weights[outIndex] = data
+	}
+	return weights, nil
+}
+
 // ReadOutput reads a named output tensor cached by the last trainer step or eval.
 func (t *mlxGPUTrainer) ReadOutput(name string, shape []int) ([]float32, error) {
 	if err := t.FlushGPU(); err != nil {

@@ -69,7 +69,10 @@ S4D-Lin can opt into the two frequency-bias controls from
   "freq_scale": 3.0,
   "sobolev_filter": {
     "beta_init": 0.0,
-    "learning_rate": 0.01
+    "learning_rate": 0.01,
+    "trainable": true,
+    "weight_decay": 0.0,
+    "granularity": "channel"
   }
 }
 ```
@@ -79,15 +82,51 @@ S4D-Lin can opt into the two frequency-bias controls from
 greater than zero are accepted. Existing checkpoints store the initialized and
 subsequently trained poles, so the scale is not applied again when loading.
 
-`sobolev_filter` adds one learned exponent per model feature. The object form
-defaults to `beta_init: 0.0` and `learning_rate: 0.01`; `true` is shorthand for
-those defaults, while omission or `false` disables it. The exponent has no
-weight decay. For FFT bin `k` and transform length `L_fft`, the convolution
+`sobolev_filter` adds one learned exponent per model feature by default. The
+object form defaults to `beta_init: 0.0`, `learning_rate: 0.01`,
+`trainable: true`, `weight_decay: 0.0`, and `granularity: "channel"`; `true` is
+shorthand for those defaults, while omission or `false` disables it. For FFT
+bin `k` and transform length `L_fft`, the convolution
 spectrum is multiplied by
 `(1 + k/L_fft)^beta`. The direct `D*x` contribution is intentionally not
 filtered, matching the paper's supplemental implementation. Zero-initialized
 beta makes the initial forward exactly the ordinary S4D forward while allowing
 training to change the frequency sensitivity.
+
+Set `trainable: false` to pin beta while keeping it in checkpoints and parameter
+counts; its ignored `learning_rate` may then be zero. `weight_decay` controls
+only beta's dedicated optimizer group.
+`granularity: "layer"` stores one scalar beta per block and broadcasts it over
+features. Optional `bounds: [min,max]` uses a differentiable tanh
+reparameterization rather than a hard clamp. The checkpoint tensor remains the
+raw parameter when bounds are active; native and exported forwards transform it
+to effective beta. `beta_init` must lie strictly inside the bounds.
+
+At normal training log cadence, Mixlab reads back only beta tensors and prints
+effective-beta p01/p50/p99, extrema, counts outside absolute 1 and 2,
+near-bound counts (within one percent of the configured interval), and
+min/median/max Nyquist multipliers. The same structured values appear under
+`s4d_sobolev` in `-telemetry-out` and `/debug/mixlab/telemetry`.
+
+### Frequency-filter reference audit
+
+The [official ICLR 2025 supplemental implementation](https://proceedings.iclr.cc/paper_files/paper/2025/file/e73f4935d2ef5e23997de852e8a52661-Supplemental-Conference.zip)
+resolves details not stated in the paper:
+
+| Field | Official supplemental | Mixlab default | Status |
+|---|---|---|---|
+| Beta shape | `[channels,d_model]`; LRA uses `channels:1`, so `[D]` per block | `[D]` per block | Match |
+| Frequency coordinate | `1 + k/(l_kernel+L)` | `1 + k/L_fft` | Match for the LRA `L_fft=2T` path; power-of-two unidirectional lengths can differ |
+| Direct term | Adds `D*x` after inverse FFT | Adds `D*x` after inverse FFT | Match |
+| Initialization | Zero | Zero | Match |
+| Optimizer | Dedicated `lr_s`; LRA sets `0.01` | Dedicated beta LR, default `0.01` | Match |
+| Weight decay | Explicitly zero in parameter registration | Default `0.0` | Match |
+| Schedule | Global cosine; LRA config has 180k steps and 18k warmup | Special LR follows the global schedule | Match in semantics; recipe values remain config-controlled |
+
+Layer granularity, nonzero decay, and bounds are experimental controls, not
+corrections to the published reference. The paper models scalar beta in its
+SISO analysis, while supplemental LRA code is authoritative for the trained
+S4D model.
 
 Metal retains the differentiable MLX-op implementation. CUDA uses Mixlab's
 embedded forward and backward kernels because MLX 0.32 cannot compile the
@@ -138,8 +177,8 @@ The pinned LRA reference uses both `state_lr: 0.001` and
 `weight_decay_policy: "all"`. The default `"matrix_only"` policy remains valid
 for other S4D recipes, but it does not reproduce that reference optimizer:
 ordinary biases, norms, and scalar/vector C/D parameters are not decayed.
-An enabled Sobolev filter always uses its own `learning_rate` and no decay,
-independently of `state_lr`.
+An enabled Sobolev filter always uses its own `learning_rate` and
+`weight_decay`, independently of `state_lr` and global decay policy.
 
 For low-dimensional continuous signals, also keep `input_adapter.norm` at
 `"none"` unless projection-scale invariance is intentional. Post-projection

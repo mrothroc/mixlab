@@ -91,6 +91,11 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 		case "s4d_state":
 			group = fmt.Sprintf("s4d_state_%08x", math.Float32bits(s.OptimizerLR))
 			extraGroups[group] = s4dSettings(s.OptimizerLR)
+		case "s4d_sobolev":
+			group = fmt.Sprintf("s4d_sobolev_%08x_%08x", math.Float32bits(s.OptimizerLR), math.Float32bits(s.OptimizerWeightDecay))
+			settings := s4dSettings(s.OptimizerLR)
+			settings.WeightDecay = s.OptimizerWeightDecay
+			extraGroups[group] = settings
 		case "":
 		default:
 			return gpu.TrainerOptimizerSpec{}, fmt.Errorf("weight %q has unsupported optimizer role %q", s.Name, s.OptimizerRole)
@@ -99,6 +104,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 			Name:         s.Name,
 			Shape:        s.Shape,
 			IsBuffer:     s.IsBuffer,
+			Frozen:       s.Frozen,
 			IsNormScale:  s.IsNormScale,
 			Group:        group,
 			ForceNoDecay: s.ForceNoDecay,

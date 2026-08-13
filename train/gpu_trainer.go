@@ -31,6 +31,16 @@ func readTrainerWeights(trainer any) ([][]float32, error) {
 	return nil, fmt.Errorf("trainer does not support weight reading; ensure you are using the MLX backend")
 }
 
+func readSelectedTrainerWeights(trainer any, indexes []int) ([][]float32, error) {
+	type selectedWeightReader interface {
+		ReadWeightsGPU([]int) ([][]float32, error)
+	}
+	if wr, ok := trainer.(selectedWeightReader); ok {
+		return wr.ReadWeightsGPU(indexes)
+	}
+	return nil, fmt.Errorf("trainer does not support targeted weight reading; ensure you are using the MLX backend")
+}
+
 func readTrainerOutput(trainer GPUTrainer, name string, shape []int) ([]float32, error) {
 	type outputReader interface {
 		ReadOutput(name string, shape []int) ([]float32, error)

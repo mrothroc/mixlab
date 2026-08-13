@@ -10,27 +10,29 @@ import (
 )
 
 type WeightShape struct {
-	Name               string
-	Shape              []int
-	IsBuffer           bool
-	IsNormScale        bool
-	InitOne            bool
-	InitValue          float32
-	InitZero           bool
-	InitMode           string
-	InitLogArange      bool
-	InitDtBias         bool
-	DtMin              float64
-	DtMax              float64
-	InitScale          float64
-	GPTBERTScale       float32
-	GPT2Scale          float32
-	ModelDim           int
-	PyTorchLinearFanIn int
-	OptimizerRole      string
-	OptimizerLR        float32
-	ForceNoDecay       bool
-	ForceDecay         bool
+	Name                 string
+	Shape                []int
+	IsBuffer             bool
+	Frozen               bool
+	IsNormScale          bool
+	InitOne              bool
+	InitValue            float32
+	InitZero             bool
+	InitMode             string
+	InitLogArange        bool
+	InitDtBias           bool
+	DtMin                float64
+	DtMax                float64
+	InitScale            float64
+	GPTBERTScale         float32
+	GPT2Scale            float32
+	ModelDim             int
+	PyTorchLinearFanIn   int
+	OptimizerRole        string
+	OptimizerLR          float32
+	OptimizerWeightDecay float32
+	ForceNoDecay         bool
+	ForceDecay           bool
 }
 
 func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
@@ -46,27 +48,29 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 	shapes := make([]WeightShape, len(metas))
 	for i, m := range metas {
 		shapes[i] = WeightShape{
-			Name:               m.Name,
-			Shape:              m.Shape,
-			IsBuffer:           m.IsBuffer,
-			IsNormScale:        m.IsNormScale,
-			InitOne:            m.InitOne,
-			InitValue:          m.InitValue,
-			InitZero:           m.InitZero,
-			InitMode:           m.InitMode,
-			InitLogArange:      m.InitLogArange,
-			InitDtBias:         m.InitDtBias,
-			DtMin:              m.DtMin,
-			DtMax:              m.DtMax,
-			InitScale:          m.InitScale,
-			GPTBERTScale:       m.GPTBERTScale,
-			GPT2Scale:          m.GPT2Scale,
-			ModelDim:           cfg.ModelDim,
-			PyTorchLinearFanIn: m.PyTorchLinearFanIn,
-			OptimizerRole:      m.OptimizerRole,
-			OptimizerLR:        m.OptimizerLR,
-			ForceNoDecay:       m.ForceNoDecay,
-			ForceDecay:         m.ForceDecay,
+			Name:                 m.Name,
+			Shape:                m.Shape,
+			IsBuffer:             m.IsBuffer,
+			Frozen:               m.Frozen,
+			IsNormScale:          m.IsNormScale,
+			InitOne:              m.InitOne,
+			InitValue:            m.InitValue,
+			InitZero:             m.InitZero,
+			InitMode:             m.InitMode,
+			InitLogArange:        m.InitLogArange,
+			InitDtBias:           m.InitDtBias,
+			DtMin:                m.DtMin,
+			DtMax:                m.DtMax,
+			InitScale:            m.InitScale,
+			GPTBERTScale:         m.GPTBERTScale,
+			GPT2Scale:            m.GPT2Scale,
+			ModelDim:             cfg.ModelDim,
+			PyTorchLinearFanIn:   m.PyTorchLinearFanIn,
+			OptimizerRole:        m.OptimizerRole,
+			OptimizerLR:          m.OptimizerLR,
+			OptimizerWeightDecay: m.OptimizerWeightDecay,
+			ForceNoDecay:         m.ForceNoDecay,
+			ForceDecay:           m.ForceDecay,
 		}
 	}
 	return shapes, nil

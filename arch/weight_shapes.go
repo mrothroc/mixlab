@@ -15,6 +15,7 @@ type WeightMeta struct {
 	Name          string
 	Shape         []int
 	IsBuffer      bool // persistent model state: checkpointed, but not optimized or counted as a parameter
+	Frozen        bool // checkpointed parameter excluded from optimization but still counted
 	IsNormScale   bool // true for normalization scales (init 1.0); false for other 1-D params (init 0.0)
 	InitOne       bool // true for non-norm weights that should initialize to 1.0
 	InitValue     float32
@@ -29,11 +30,12 @@ type WeightMeta struct {
 	GPT2Scale     float32
 	// PyTorchLinearFanIn marks a tensor as an nn.Linear-style weight or paired
 	// bias. It is ignored unless training.weight_init="pytorch_linear".
-	PyTorchLinearFanIn int
-	OptimizerRole      string
-	OptimizerLR        float32
-	ForceNoDecay       bool
-	ForceDecay         bool
+	PyTorchLinearFanIn   int
+	OptimizerRole        string
+	OptimizerLR          float32
+	OptimizerWeightDecay float32
+	ForceNoDecay         bool
+	ForceDecay           bool
 }
 
 func linearWeightMeta(name string, fanIn, fanOut int) WeightMeta {

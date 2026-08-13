@@ -53,6 +53,7 @@ type telemetryRunState struct {
 	OptimizerStepSkipped  bool                          `json:"optimizer_step_skipped,omitempty"`
 	Masking               *telemetryMasking             `json:"masking,omitempty"`
 	Distributed           *distributedTrainingTelemetry `json:"distributed,omitempty"`
+	S4DSobolev            *telemetryS4DSobolev          `json:"s4d_sobolev,omitempty"`
 }
 
 type telemetryMasking struct {
@@ -118,6 +119,7 @@ type telemetryUpdate struct {
 	OptimizerStepSkipped  bool
 	Masking               *telemetryMasking
 	Distributed           *distributedTrainingTelemetry
+	S4DSobolev            *telemetryS4DSobolev
 }
 
 type telemetrySnapshot struct {
@@ -282,6 +284,7 @@ func (s *telemetryState) update(u telemetryUpdate) {
 		OptimizerStepSkipped:  u.OptimizerStepSkipped,
 		Masking:               cloneTelemetryMasking(u.Masking),
 		Distributed:           cloneDistributedTrainingTelemetry(u.Distributed),
+		S4DSobolev:            cloneTelemetryS4DSobolev(u.S4DSobolev),
 	}
 	if u.HasLoss {
 		loss := u.Loss
@@ -296,6 +299,9 @@ func (s *telemetryState) update(u telemetryUpdate) {
 		next.Timing = &timing
 	}
 	s.mu.Lock()
+	if next.S4DSobolev == nil {
+		next.S4DSobolev = cloneTelemetryS4DSobolev(s.s.S4DSobolev)
+	}
 	s.s = next
 	s.mu.Unlock()
 }
@@ -308,6 +314,18 @@ func cloneDistributedTrainingTelemetry(
 	}
 	cloned := *telemetry
 	return &cloned
+}
+
+func cloneTelemetryS4DSobolev(in *telemetryS4DSobolev) *telemetryS4DSobolev {
+	if in == nil {
+		return nil
+	}
+	out := &telemetryS4DSobolev{Blocks: make([]telemetryS4DSobolevBlock, len(in.Blocks))}
+	copy(out.Blocks, in.Blocks)
+	for i := range out.Blocks {
+		out.Blocks[i].BlockIndexes = append([]int(nil), in.Blocks[i].BlockIndexes...)
+	}
+	return out
 }
 
 func cloneTelemetryMasking(masking *telemetryMasking) *telemetryMasking {

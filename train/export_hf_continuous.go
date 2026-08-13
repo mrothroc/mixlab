@@ -78,10 +78,17 @@ func hfS4DBlockEntry(cfg *ArchConfig, block BlockSpec) map[string]any {
 		if block.SobolevFilter.LearningRate != nil {
 			lr = *block.SobolevFilter.LearningRate
 		}
-		entry["sobolev_filter"] = map[string]any{
+		sobolev := map[string]any{
 			"beta_init":     block.SobolevFilter.BetaInit,
 			"learning_rate": lr,
+			"trainable":     arch.EffectiveS4DSobolevTrainable(block),
+			"weight_decay":  arch.EffectiveS4DSobolevWeightDecay(block),
+			"granularity":   arch.EffectiveS4DSobolevGranularity(block),
 		}
+		if lo, hi, bounded := arch.S4DSobolevBounds(block); bounded {
+			sobolev["bounds"] = []float64{lo, hi}
+		}
+		entry["sobolev_filter"] = sobolev
 	}
 	return entry
 }

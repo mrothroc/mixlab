@@ -673,6 +673,38 @@ func TestBuildTrainerOptimizerSpec_ParsedAdamWZeroWeightDecay(t *testing.T) {
 	}
 }
 
+func TestBuildTrainerOptimizerSpec_S4DSobolevControls(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim":8,"vocab_size":32,"seq_len":8,
+		"blocks":[{"type":"s4d","state_size":8,"sobolev_filter":{
+			"learning_rate":0.002,"weight_decay":0.03,"trainable":true
+		}}],
+		"training":{"objective":"causal","optimizer":"adamw","batch_tokens":8,"weight_decay":0.5}
+	}`), "s4d-sobolev-optimizer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, err := buildTrainerOptimizerSpec(cfg, shapes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, shape := range shapes {
+		if shape.Name != "s4d_sobolev_beta" {
+			continue
+		}
+		group := spec.Groups[spec.Weights[i].GroupIndex]
+		if spec.Weights[i].Frozen || !spec.Weights[i].Decay || group.LR != 0.002 || group.WeightDecay != 0.03 {
+			t.Fatalf("beta optimizer=%+v group=%+v", spec.Weights[i], group)
+		}
+		return
+	}
+	t.Fatal("missing Sobolev beta")
+}
+
 func TestBuildTrainerOptimizerSpec_ParsedLAMBMixedWeightDecay(t *testing.T) {
 	cfg, err := ParseArchConfig([]byte(`{
 		"name": "lamb_mixed_decay",

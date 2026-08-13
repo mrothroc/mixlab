@@ -9,6 +9,7 @@ type OptimizerWeightMetadata struct {
 	Name         string
 	Shape        []int
 	IsBuffer     bool
+	Frozen       bool
 	IsNormScale  bool
 	Group        string
 	ForceNoDecay bool
@@ -74,7 +75,7 @@ func BuildTrainerOptimizerSpec(cfg TrainerOptimizerConfig) (TrainerOptimizerSpec
 	}
 
 	for _, weight := range cfg.Weights {
-		if weight.IsBuffer {
+		if weight.IsBuffer || weight.Frozen {
 			weights = append(weights, WeightOptimizer{Frozen: true})
 			continue
 		}

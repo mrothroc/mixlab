@@ -126,17 +126,30 @@ func s4dWeightShapesWithOptions(spec BlockSpec, D int, opts EmitOptions) ([]Weig
 	}
 	metas = append(metas, direct)
 	if spec.S4DSobolevFilterEnabled() {
-		beta := WeightMeta{
-			Name:          "s4d_sobolev_beta",
-			Shape:         []int{D},
-			OptimizerRole: "s4d_state",
-			OptimizerLR:   float32(effectiveS4DSobolevLearningRate(spec)),
-			ForceNoDecay:  true,
+		betaDim := D
+		if EffectiveS4DSobolevGranularity(spec) == S4DSobolevGranularityLayer {
+			betaDim = 1
 		}
-		if spec.SobolevFilter.BetaInit == 0 {
+		decay := EffectiveS4DSobolevWeightDecay(spec)
+		optimizerRole := "s4d_state"
+		if decay > 0 {
+			optimizerRole = "s4d_sobolev"
+		}
+		beta := WeightMeta{
+			Name:                 "s4d_sobolev_beta",
+			Shape:                []int{betaDim},
+			Frozen:               !EffectiveS4DSobolevTrainable(spec),
+			OptimizerRole:        optimizerRole,
+			OptimizerLR:          float32(effectiveS4DSobolevLearningRate(spec)),
+			OptimizerWeightDecay: float32(decay),
+			ForceNoDecay:         decay == 0,
+			ForceDecay:           decay > 0,
+		}
+		rawInit := s4dSobolevRawInit(spec)
+		if rawInit == 0 {
 			beta.InitZero = true
 		} else {
-			beta.InitValue = float32(spec.SobolevFilter.BetaInit)
+			beta.InitValue = float32(rawInit)
 		}
 		metas = append(metas, beta)
 	}
@@ -211,6 +224,34 @@ func emitS4DIR(
 		}
 		input = xNorm
 	}
+	emitSobolevBeta := func() string {
+		raw := weightName(wi)
+		wi++
+		beta := raw
+		if lo, hi, bounded := S4DSobolevBounds(spec); bounded {
+			tanhName := prefix + "_sobolev_beta_tanh"
+			scaledName := prefix + "_sobolev_beta_scaled"
+			midName := prefix + "_sobolev_beta_mid"
+			effectiveName := prefix + "_sobolev_beta_effective"
+			prog.Tanh(raw, tanhName)
+			prog.ScalarMul(tanhName, float32((hi-lo)/2), scaledName)
+			shape := []int{D}
+			if EffectiveS4DSobolevGranularity(spec) == S4DSobolevGranularityLayer {
+				shape = []int{1}
+			}
+			prog.Full(shape, float32((lo+hi)/2), midName)
+			prog.Add(scaledName, midName, effectiveName)
+			beta = effectiveName
+		}
+		if EffectiveS4DSobolevGranularity(spec) == S4DSobolevGranularityLayer {
+			ones := prefix + "_sobolev_beta_ones"
+			expanded := prefix + "_sobolev_beta_expanded"
+			prog.Full([]int{D}, 1, ones)
+			prog.Mul(beta, ones, expanded)
+			beta = expanded
+		}
+		return beta
+	}
 
 	if s4dUsesAdvancedKernel(spec) {
 		inputs := []string{
@@ -233,8 +274,7 @@ func emitS4DIR(
 		inputs = append(inputs, weightName(wi))
 		wi++
 		if spec.S4DSobolevFilterEnabled() {
-			inputs = append(inputs, weightName(wi))
-			wi++
+			inputs = append(inputs, emitSobolevBeta())
 		}
 		prog.s4dAdvanced(
 			inputs,
@@ -262,8 +302,7 @@ func emitS4DIR(
 		}
 		wi += 6
 		if spec.S4DSobolevFilterEnabled() {
-			inputs = append(inputs, weightName(wi))
-			wi++
+			inputs = append(inputs, emitSobolevBeta())
 		}
 		prog.s4d(inputs, s4dOut, kernel, B, T, D, stateSize, 0, spec.S4DSobolevFilterEnabled())
 	}
