@@ -3,6 +3,13 @@
 Use `export-hf` to write a Hugging Face directory, then use `parity` to compare
 that directory against native Mixlab inference on real token shards.
 
+Mixlab writes only the optional Python block modules used by the exported
+architecture. For example, an S4D-only export includes `s4d_mixlab.py` but not
+the Mamba-3 or TTT-MLP modules; a plain transformer includes none of those
+optional files. This keeps `trust_remote_code=True` payloads limited to code
+the model can execute. Existing exported directories remain loadable without
+re-exporting; re-export only when you want the smaller file set.
+
 ## `export-hf`
 
 Export a supported Mixlab checkpoint:

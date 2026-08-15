@@ -131,6 +131,14 @@ func TestRunExportHFS4DContinuousIsTokenizerFree(t *testing.T) {
 			t.Fatalf("continuous export unexpectedly wrote %s", name)
 		}
 	}
+	if _, err := os.Stat(filepath.Join(outDir, "s4d_mixlab.py")); err != nil {
+		t.Fatalf("continuous S4D export is missing s4d_mixlab.py: %v", err)
+	}
+	for _, name := range []string{"ttt_mlp_mixlab.py", "mamba3_mixlab.py"} {
+		if _, err := os.Stat(filepath.Join(outDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("continuous S4D export unexpectedly contains %s (stat err=%v)", name, err)
+		}
+	}
 	tensors, err := loadSafetensors(filepath.Join(outDir, "model.safetensors"))
 	if err != nil {
 		t.Fatalf("load exported tensors: %v", err)

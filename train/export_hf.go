@@ -1,7 +1,6 @@
 package train
 
 import (
-	"embed"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -13,9 +12,6 @@ import (
 
 	"github.com/mrothroc/mixlab/arch"
 )
-
-//go:embed hf_templates/configuration_mixlab.py hf_templates/modeling_mixlab.py hf_templates/pooling_mixlab.py hf_templates/ttt_mlp_mixlab.py hf_templates/mamba3_mixlab.py hf_templates/s4d_mixlab.py
-var hfTemplateFS embed.FS
 
 // ExportHFOptions describes a Hugging Face export operation.
 type ExportHFOptions struct {
@@ -172,7 +168,7 @@ func runExportHF(opts ExportHFOptions) error {
 	}); err != nil {
 		return err
 	}
-	if err := writeHFTemplates(opts.OutputDir); err != nil {
+	if err := writeHFTemplates(opts.OutputDir, exportCfg); err != nil {
 		return err
 	}
 	if err := writeHFSafetensors(filepath.Join(opts.OutputDir, "model.safetensors"), exportCfg, mapping, exportWeights); err != nil {
@@ -225,19 +221,6 @@ func hfExportInferenceConfig(cfg *ArchConfig) *ArchConfig {
 		}
 	}
 	return &out
-}
-
-func writeHFTemplates(outputDir string) error {
-	for _, name := range []string{"configuration_mixlab.py", "modeling_mixlab.py", "pooling_mixlab.py", "ttt_mlp_mixlab.py", "mamba3_mixlab.py", "s4d_mixlab.py"} {
-		data, err := hfTemplateFS.ReadFile(filepath.Join("hf_templates", name))
-		if err != nil {
-			return fmt.Errorf("read HF template %s: %w", name, err)
-		}
-		if err := os.WriteFile(filepath.Join(outputDir, name), data, 0o644); err != nil {
-			return fmt.Errorf("write HF template %s: %w", name, err)
-		}
-	}
-	return nil
 }
 
 func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping, error) {

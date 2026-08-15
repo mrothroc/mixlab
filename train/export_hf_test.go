@@ -40,7 +40,6 @@ func TestExportHFWeightMapAndDirectoryMetadata(t *testing.T) {
 		"configuration_mixlab.py",
 		"modeling_mixlab.py",
 		"pooling_mixlab.py",
-		"ttt_mlp_mixlab.py",
 		"model.safetensors",
 		"weight_map.json",
 		"tokenizer.json",
@@ -49,6 +48,11 @@ func TestExportHFWeightMapAndDirectoryMetadata(t *testing.T) {
 	} {
 		if _, err := os.Stat(filepath.Join(outDir, name)); err != nil {
 			t.Fatalf("missing exported %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{"ttt_mlp_mixlab.py", "mamba3_mixlab.py", "s4d_mixlab.py"} {
+		if _, err := os.Stat(filepath.Join(outDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("plain export unexpectedly contains optional template %s (stat err=%v)", name, err)
 		}
 	}
 

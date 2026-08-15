@@ -14,13 +14,7 @@ from transformers.modeling_outputs import (
 
 from .configuration_mixlab import MixlabConfig
 from .pooling_mixlab import pool_sequence
-from .mamba3_mixlab import MixlabMamba3CanonicalBlock
-from .s4d_mixlab import MixlabS4DBlock
-from .ttt_mlp_mixlab import (
-    MixlabTTTMLPBlock,
-    MixlabTTTMLPState,
-    require_right_padded_ttt_batch,
-)
+# MIXLAB_OPTIONAL_BLOCK_IMPORTS
 
 
 class MixlabRMSNorm(nn.Module):
@@ -946,23 +940,25 @@ class MixlabModel(PreTrainedModel):
         for block in block_configs:
             block_type = block.get("type")
             if block_type == "plain":
-                modules.append(MixlabPlainBlock(config, block))
+                module = MixlabPlainBlock(config, block)
             elif block_type == "swiglu":
-                modules.append(MixlabSwiGLUBlock(config, "sigmoid"))
+                module = MixlabSwiGLUBlock(config, "sigmoid")
             elif block_type == "geglu":
-                modules.append(MixlabSwiGLUBlock(config, "gelu"))
+                module = MixlabSwiGLUBlock(config, "gelu")
             elif block_type == "mlp":
-                modules.append(MixlabMLPBlock(config, block))
+                module = MixlabMLPBlock(config, block)
             elif block_type == "moe":
-                modules.append(MixlabMoEBlock(config, block))
+                module = MixlabMoEBlock(config, block)
             elif block_type == "ttt_mlp":
-                modules.append(MixlabTTTMLPBlock(config, block))
+                module = MixlabTTTMLPBlock(config, block)
             elif block_type == "mamba3-canonical":
-                modules.append(MixlabMamba3CanonicalBlock(config, block))
+                module = MixlabMamba3CanonicalBlock(config, block)
             elif block_type == "s4d":
-                modules.append(MixlabS4DBlock(config, block, make_mixlab_norm))
+                module = MixlabS4DBlock(config, block, make_mixlab_norm)
             else:
                 raise ValueError(f"unsupported exported Mixlab block type {block_type!r}")
+            module._mixlab_block_type = block_type
+            modules.append(module)
         self.blocks = nn.ModuleList(modules)
         self.final_norm = (
             make_mixlab_norm(config, config.model_dim)
@@ -1106,9 +1102,13 @@ class MixlabModel(PreTrainedModel):
         relative_embeddings = self.relative_embeddings
         if relative_embeddings is not None and self.relative_layer_norm is not None:
             relative_embeddings = self.relative_layer_norm(relative_embeddings)
-        ttt_blocks = sum(isinstance(block, MixlabTTTMLPBlock) for block in self.blocks)
+        ttt_blocks = sum(
+            getattr(block, "_mixlab_block_type", None) == "ttt_mlp"
+            for block in self.blocks
+        )
         mamba3_blocks = sum(
-            isinstance(block, MixlabMamba3CanonicalBlock) for block in self.blocks
+            getattr(block, "_mixlab_block_type", None) == "mamba3-canonical"
+            for block in self.blocks
         )
         if mamba3_blocks and (use_cache or ttt_state is not None):
             raise ValueError(
@@ -1123,9 +1123,10 @@ class MixlabModel(PreTrainedModel):
         next_ttt_state = []
         ttt_index = 0
         for block in self.blocks:
-            if isinstance(block, MixlabPlainBlock):
+            block_type = getattr(block, "_mixlab_block_type", None)
+            if block_type == "plain":
                 x = block(x, relative_embeddings, dwa, attention_mask)
-            elif isinstance(block, MixlabTTTMLPBlock):
+            elif block_type == "ttt_mlp":
                 x, block_state = block(
                     x,
                     dwa=dwa,
@@ -1135,9 +1136,9 @@ class MixlabModel(PreTrainedModel):
                 if use_cache:
                     next_ttt_state.append(block_state)
                 ttt_index += 1
-            elif isinstance(block, MixlabMamba3CanonicalBlock):
+            elif block_type == "mamba3-canonical":
                 x = block(x, attention_mask=attention_mask, dwa=dwa)
-            elif isinstance(block, MixlabS4DBlock):
+            elif block_type == "s4d":
                 x = block(x, attention_mask=attention_mask, dwa=dwa)
             else:
                 x = block(x, dwa)
