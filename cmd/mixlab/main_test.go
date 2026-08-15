@@ -134,7 +134,7 @@ func TestClassificationLabelFlagsInPrepareHelpGroup(t *testing.T) {
 
 func TestClassificationEvalFlagsInHelpGroup(t *testing.T) {
 	groups := modeFlagGroups["eval"]
-	for _, flagName := range []string{"val-batches", "classification-out"} {
+	for _, flagName := range []string{"val", "train", "val-batches", "classification-out"} {
 		if !flagGroupContains(groups, flagName) {
 			t.Fatalf("eval help groups missing %s", flagName)
 		}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 	"sort"
 
 	"github.com/mrothroc/mixlab/arch"
@@ -58,6 +59,31 @@ func evaluateClassificationValidationWithPredictions(
 		return ClassificationMetrics{}, fmt.Errorf("trainer does not support classification logits readback")
 	}
 	return evaluateClassificationValidationWithEvaluator(cfg, valSet, evaluator, step, batchSize, seqLen, predictionsOut)
+}
+
+func evaluateClassificationValidationWithOptionalPredictions(
+	cfg *ArchConfig,
+	valSet *data.ValSet,
+	evaluator classificationOutputEvaluator,
+	step, batchSize, seqLen int,
+	predictionsPath string,
+) (ClassificationMetrics, error) {
+	if predictionsPath == "" {
+		return evaluateClassificationValidationWithEvaluator(cfg, valSet, evaluator, step, batchSize, seqLen, nil)
+	}
+	out, err := os.Create(predictionsPath)
+	if err != nil {
+		return ClassificationMetrics{}, fmt.Errorf("create classification output %q: %w", predictionsPath, err)
+	}
+	metrics, evalErr := evaluateClassificationValidationWithEvaluator(cfg, valSet, evaluator, step, batchSize, seqLen, out)
+	closeErr := out.Close()
+	if evalErr != nil {
+		return ClassificationMetrics{}, evalErr
+	}
+	if closeErr != nil {
+		return ClassificationMetrics{}, fmt.Errorf("close classification output %q: %w", predictionsPath, closeErr)
+	}
+	return metrics, nil
 }
 
 func evaluateClassificationValidationWithEvaluator(

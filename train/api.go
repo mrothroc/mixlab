@@ -68,8 +68,8 @@ func RunEvalModeWithLUT(configPath, trainPattern, safetensorsLoad, lutDir string
 	return runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir)
 }
 
-// RunEvalModeWithOptions runs standalone evaluation with explicit
-// classification split controls.
+// RunEvalModeWithOptions runs standalone evaluation with explicit split and
+// classification output controls.
 func RunEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, opts EvalModeOptions) error {
 	return runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad, opts)
 }

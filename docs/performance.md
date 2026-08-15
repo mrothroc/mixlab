@@ -57,6 +57,19 @@ MIXLAB_MLX_MEM_LOG_EVERY=100 MIXLAB_MLX_CLEAR_CACHE_EVERY=500 ./mixlab -mode arc
 `MIXLAB_MLX_MEM_LOG_EVERY` prints the compact telemetry line at the requested
 cadence, including MLX memory and best-effort GPU utilization when available.
 
+FFT-heavy training paths can need additional temporary headroom. In particular,
+S4D `sobolev_filter` may retain frequency-domain intermediates for backward and
+can raise peak memory by several GiB even for a small parameter count. If the
+reported peak is flat after warmup but a 24 GiB device intermittently fails an
+allocation, a practical starting point is:
+
+```bash
+MIXLAB_MLX_MEMORY_LIMIT_MB=16000 MIXLAB_MLX_MEM_LOG_EVERY=100 ./mixlab -mode arch ...
+```
+
+Treat this as an allocator bound, not a model-memory estimate. Tune it for the
+device while leaving room for runtime and display allocations.
+
 ## Step timing
 
 Add `-timing` to see where each progress interval spends time:

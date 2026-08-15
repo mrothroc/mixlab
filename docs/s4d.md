@@ -108,6 +108,20 @@ near-bound counts (within one percent of the configured interval), and
 min/median/max Nyquist multipliers. The same structured values appear under
 `s4d_sobolev` in `-telemetry-out` and `/debug/mixlab/telemetry`.
 
+The Sobolev path can materially increase peak training memory because its FFT
+filter intermediates participate in backward. The increase is shape- and
+backend-dependent and should remain flat after graph warmup; a flat peak is not
+evidence of a leak. On a 24 GiB accelerator, start a constrained run with:
+
+```bash
+MIXLAB_MLX_MEMORY_LIMIT_MB=16000 ./mixlab -mode arch ...
+```
+
+This encourages earlier allocator reuse and leaves headroom for driver/runtime
+allocations. Use `MIXLAB_MLX_MEM_LOG_EVERY=100` to confirm active and peak
+memory stabilize before committing to a long run. A recomputation-based
+backward is a possible future optimization; it is not enabled by this setting.
+
 ### Frequency-filter reference audit
 
 The [official ICLR 2025 supplemental implementation](https://proceedings.iclr.cc/paper_files/paper/2025/file/e73f4935d2ef5e23997de852e8a52661-Supplemental-Conference.zip)

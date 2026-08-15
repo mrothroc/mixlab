@@ -23,17 +23,34 @@ Evaluate a checkpoint:
 ./mixlab -mode eval \
   -config examples/plain_3L.json \
   -safetensors-load weights.safetensors \
-  -train 'data/example/val_*.bin'
+  -val 'data/example/val_*.bin'
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-config` | Required. JSON architecture config. |
 | `-safetensors-load` | Required. Checkpoint to evaluate. |
-| `-train` | Required. Shard glob used as the eval token stream. |
+| `-val` | Preferred evaluation shard glob. The matched shards are scored exactly as supplied. |
+| `-train` | Legacy alternative when `-val` is omitted. Eval derives a validation glob by replacing the first `train` with `val`; a glob already naming `val_*` is unchanged. |
 | `-lut-dir` | Directory containing BPB lookup tables. Default: `data`. |
 | `-val-batches N` | Classification-only batch cap. `0` (default) evaluates the entire labeled split; a positive cap prints an evaluated/total warning. |
-| `-classification-out PATH` | Classification-only JSONL containing the example index, gold label, prediction, and logits. |
+| `-classification-out PATH` | Optional classification-only JSONL containing the example index, gold label, prediction, and logits. Omit it to print metrics only. |
+
+Pass `-val` when scoring a held-out or test split directly. In particular, a
+directory prepared with `-val-split 0` contains only `train_*` shards, so score
+those records without copying them under another name:
+
+```bash
+./mixlab -mode eval \
+  -config model.json \
+  -safetensors-load model.safetensors \
+  -val 'data/test/train_*.bin'
+```
+
+For backward compatibility, omitting `-val` retains the older `-train` to
+`val` derivation. Mixlab reports the exact evaluation glob and whether it came
+from explicit `-val` or legacy derivation. If the derived glob matches no
+files, eval fails before GPU setup and recommends an explicit `-val` glob.
 
 For `training.objective: "classification"`, `eval` consumes labeled
 validation shards and reports cross-entropy loss, accuracy, multiclass MCC,
@@ -55,7 +72,7 @@ For auditable downstream metrics:
 ./mixlab -mode eval \
   -config examples/sequence_classification_gated_deltanet_tiny.json \
   -safetensors-load runs/classifier.safetensors \
-  -train 'data/classification/val_*.bin' \
+  -val 'data/classification/val_*.bin' \
   -classification-out runs/classifier.predictions.jsonl
 ```
 

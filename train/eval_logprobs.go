@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/mrothroc/mixlab/data"
@@ -18,6 +17,9 @@ import (
 // should produce in a single GPU pass over the validation set. At least one
 // output path must be non-empty.
 type EvalExportOptions struct {
+	// ValPattern selects evaluation shards directly. When empty, eval keeps the
+	// legacy behavior of deriving a validation glob from the train pattern.
+	ValPattern     string
 	LogprobsOut    string
 	RanksOut       string
 	UncertaintyOut string
@@ -63,8 +65,9 @@ func runEvalExports(configPath, trainPattern, safetensorsLoad, lutDir string, ex
 	if safetensorsLoad == "" {
 		return fmt.Errorf("-safetensors-load is required for eval mode")
 	}
-	if trainPattern == "" {
-		return fmt.Errorf("-train is required for eval mode; pass a glob pattern for data shards, e.g.: -train 'data/train_*.bin'")
+	selection, err := resolveEvalShardPattern(trainPattern, exports.ValPattern)
+	if err != nil {
+		return err
 	}
 	if exports.LogprobsOut == "" && exports.RanksOut == "" && exports.UncertaintyOut == "" && exports.LogitsOut == "" {
 		return fmt.Errorf("at least one of -logprobs-out, -ranks-out, -uncertainty-out, or -logits-out is required for export")
@@ -73,7 +76,7 @@ func runEvalExports(configPath, trainPattern, safetensorsLoad, lutDir string, ex
 		return err
 	}
 
-	session, err := newInferenceSession(configPath, safetensorsLoad, trainPattern)
+	session, err := newInferenceSession(configPath, safetensorsLoad, selection.Pattern)
 	if err != nil {
 		return err
 	}
@@ -84,14 +87,14 @@ func runEvalExports(configPath, trainPattern, safetensorsLoad, lutDir string, ex
 		return fmt.Errorf("vocab_size=%d exceeds uint16 record format limit", cfg.VocabSize)
 	}
 
-	valPattern := strings.Replace(trainPattern, "train", "val", 1)
-	if err := runFullEvalLogprobs(session, valPattern, lutDir, exports); err != nil {
+	if err := runFullEvalLogprobs(session, selection.Pattern, lutDir, exports); err != nil {
 		return err
 	}
 
 	fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
 		cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
 	fmt.Printf("  [%s] loaded %d weights from %s\n", cfg.Name, session.weightCount, safetensorsLoad)
+	fmt.Printf("  [%s] evaluation shards (%s): %s\n", cfg.Name, selection.sourceLabel(), selection.Pattern)
 	if exports.LogprobsOut != "" {
 		fmt.Printf("  [%s] wrote per-token eval NLLs to %s\n", cfg.Name, exports.LogprobsOut)
 	}

@@ -18,6 +18,7 @@ func main() {
 	configPath := flag.String("config", "", "path to architecture JSON config")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
+	valPattern := flag.String("val", "", "explicit evaluation shard glob; eval mode only, overrides legacy -train-derived validation glob")
 	safetensorsPath := flag.String("safetensors", "", "export weights to safetensors file after training")
 	safetensorsLoad := flag.String("safetensors-load", "", "load weights from safetensors file for a warm start, eval, generation, or export")
 	resume := flag.String("resume", "", "resume training from a complete checkpoint directory, manifest, or companion file")
@@ -325,6 +326,7 @@ func main() {
 				must(err)
 			}
 			must(train.RunEvalExports(*configPath, *trainPattern, *safetensorsLoad, *lutDir, train.EvalExportOptions{
+				ValPattern:     *valPattern,
 				LogprobsOut:    *logprobsOut,
 				RanksOut:       *ranksOut,
 				UncertaintyOut: *uncertaintyOut,
@@ -334,7 +336,7 @@ func main() {
 			}))
 		default:
 			must(train.RunEvalModeWithOptions(*configPath, *trainPattern, *safetensorsLoad, train.EvalModeOptions{
-				LUTDir: *lutDir, ValBatches: *valBatches, ClassificationOut: *classificationOut,
+				LUTDir: *lutDir, ValPattern: *valPattern, ValBatches: *valBatches, ClassificationOut: *classificationOut,
 			}))
 		}
 	case "hiddenstats":
@@ -465,7 +467,8 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Required", []string{"config"}},
 	},
 	"eval": {
-		{"Required", []string{"config", "train", "safetensors-load"}},
+		{"Required", []string{"config", "safetensors-load"}},
+		{"Evaluation data", []string{"val", "train"}},
 		{"Lookup tables", []string{"lut-dir"}},
 		{"Classification evaluation", []string{"val-batches", "classification-out"}},
 		{"Per-token exports", []string{"logprobs-out", "ranks-out", "uncertainty-out", "logits-out", "logits-dtype", "logits-form"}},

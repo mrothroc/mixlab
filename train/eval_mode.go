@@ -3,9 +3,7 @@ package train
 
 import (
 	"fmt"
-	"os"
 	"runtime"
-	"strings"
 
 	"github.com/mrothroc/mixlab/data"
 )
@@ -19,6 +17,7 @@ func runEvalMode(configPath, trainPattern, safetensorsLoad, lutDir string) error
 // explicitly caps the number of batches.
 type EvalModeOptions struct {
 	LUTDir            string
+	ValPattern        string
 	ValBatches        int
 	ClassificationOut string
 }
@@ -36,15 +35,16 @@ func runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, op
 	if safetensorsLoad == "" {
 		return fmt.Errorf("-safetensors-load is required for eval mode")
 	}
-	if trainPattern == "" {
-		return fmt.Errorf("-train is required for eval mode; pass a glob pattern for data shards, e.g.: -train 'data/train_*.bin'")
+	selection, err := resolveEvalShardPattern(trainPattern, opts.ValPattern)
+	if err != nil {
+		return err
 	}
 
 	cfg, err := LoadArchConfig(configPath)
 	if err != nil {
 		return err
 	}
-	if err := configureDatasetForTraining(cfg, trainPattern, cfg.Name); err != nil {
+	if err := configureDatasetForTraining(cfg, selection.Pattern, cfg.Name); err != nil {
 		return err
 	}
 	if !cfg.ClassificationEnabled() {
@@ -58,7 +58,7 @@ func runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, op
 	if cfg.Training.ExampleFramingEnabled() {
 		return fmt.Errorf("training.example_framing is not supported by standalone eval mode in v1")
 	}
-	if _, err := configureCharFeaturesForTraining(cfg, trainPattern); err != nil {
+	if _, err := configureCharFeaturesForTraining(cfg, selection.Pattern); err != nil {
 		return err
 	}
 	var prog *Program
@@ -85,7 +85,7 @@ func runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, op
 	if err != nil {
 		return fmt.Errorf("load safetensors %q: %w", safetensorsLoad, err)
 	}
-	valPattern := strings.Replace(trainPattern, "train", "val", 1)
+	valPattern := selection.Pattern
 	if cfg.EffectiveEvalSpec().LegalChunkSGDEnabled() {
 		if opts.ClassificationOut != "" {
 			return fmt.Errorf("-classification-out is not supported with legal chunk-SGD eval")
@@ -93,6 +93,7 @@ func runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, op
 		fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
 			cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
 		fmt.Printf("  [%s] loaded %d weights from %s\n", cfg.Name, len(loadedWeights), safetensorsLoad)
+		fmt.Printf("  [%s] evaluation shards (%s): %s\n", cfg.Name, selection.sourceLabel(), valPattern)
 		trainer, err := initLegalChunkSGDTrainer(prog, cfg, loadedWeights)
 		if err != nil {
 			return err
@@ -124,33 +125,20 @@ func runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, op
 		return fmt.Errorf("load val set %q: %w", valPattern, err)
 	}
 	if cfg.ClassificationEnabled() {
-		var predictionsFile *os.File
-		if opts.ClassificationOut != "" {
-			predictionsFile, err = os.Create(opts.ClassificationOut)
-			if err != nil {
-				return fmt.Errorf("create classification output %q: %w", opts.ClassificationOut, err)
-			}
-			defer func() {
-				if predictionsFile != nil {
-					_ = predictionsFile.Close()
-				}
-			}()
+		evaluator, ok := trainer.(classificationOutputEvaluator)
+		if !ok {
+			return fmt.Errorf("evaluate classification validation: trainer does not support classification logits readback")
 		}
-		metrics, err := evaluateClassificationValidationWithPredictions(
-			cfg, valSet, trainer, 0, batchSize, seqLen, predictionsFile,
+		metrics, err := evaluateClassificationValidationWithOptionalPredictions(
+			cfg, valSet, evaluator, 0, batchSize, seqLen, opts.ClassificationOut,
 		)
 		if err != nil {
 			return fmt.Errorf("evaluate classification validation: %w", err)
 		}
-		if predictionsFile != nil {
-			if err := predictionsFile.Close(); err != nil {
-				return fmt.Errorf("close classification output %q: %w", opts.ClassificationOut, err)
-			}
-			predictionsFile = nil
-		}
 		fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
 			cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
 		fmt.Printf("  [%s] loaded %d weights from %s\n", cfg.Name, len(loadedWeights), safetensorsLoad)
+		fmt.Printf("  [%s] evaluation shards (%s): %s\n", cfg.Name, selection.sourceLabel(), valPattern)
 		if valSet.EvaluatedExamples < valSet.TotalExamples {
 			fmt.Printf(
 				"  [%s] warning: classification validation capped at %d of %d examples by -val-batches=%d\n",
@@ -176,6 +164,7 @@ func runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, op
 	fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
 		cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
 	fmt.Printf("  [%s] loaded %d weights from %s\n", cfg.Name, len(loadedWeights), safetensorsLoad)
+	fmt.Printf("  [%s] evaluation shards (%s): %s\n", cfg.Name, selection.sourceLabel(), valPattern)
 	if tttSteps > 0 {
 		if tttMode == "lora" {
 			fmt.Printf("  [%s] validation loss=%.6f (LoRA-TTT steps=%d lr=%g rank=%d)\n", cfg.Name, valLoss, tttSteps, tttLR, tttRank)

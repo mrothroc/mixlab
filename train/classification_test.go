@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"math"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -132,6 +133,44 @@ func TestClassificationValidationExcludesPaddedFinalRowsAndWritesPredictions(t *
 	}
 	if len(records) != 3 || records[2].Index != 2 || records[2].Label != 1 || records[2].Prediction != 1 {
 		t.Fatalf("prediction records=%+v", records)
+	}
+}
+
+func TestClassificationValidationWithoutPredictionOutputMatchesMetricsOnly(t *testing.T) {
+	cfg := nativeClassificationTestConfig()
+	valSet := &data.ValSet{
+		TotalExamples: 2, EvaluatedExamples: 2,
+		Batches: []data.ValBatch{classificationValBatch([]int32{0, 1}, 2)},
+	}
+	newEvaluator := func() *scriptedClassificationEvaluator {
+		return &scriptedClassificationEvaluator{
+			losses: []float32{0.25},
+			logits: [][]float32{{3, 0, 0, 3}},
+		}
+	}
+	withoutOutput, err := evaluateClassificationValidationWithOptionalPredictions(
+		cfg, valSet, newEvaluator(), 0, 2, 6, "",
+	)
+	if err != nil {
+		t.Fatalf("metrics-only classification eval: %v", err)
+	}
+	outPath := filepath.Join(t.TempDir(), "predictions.jsonl")
+	withOutput, err := evaluateClassificationValidationWithOptionalPredictions(
+		cfg, valSet, newEvaluator(), 0, 2, 6, outPath,
+	)
+	if err != nil {
+		t.Fatalf("classification eval with predictions: %v", err)
+	}
+	if !reflect.DeepEqual(withoutOutput, withOutput) {
+		t.Fatalf("metrics changed when prediction output was enabled: without=%+v with=%+v", withoutOutput, withOutput)
+	}
+	raw, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := bytes.Count(raw, []byte{'\n'})
+	if lines != 2 {
+		t.Fatalf("prediction records=%d want=2; output=%q", lines, raw)
 	}
 }
 
