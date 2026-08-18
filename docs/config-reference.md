@@ -609,7 +609,8 @@ Optional fields:
   combined into the official length-`2T` circular FFT kernel, including its
   one-position reverse offset. Output width remains `model_dim`.
 - `n_ssm` - independent `A`/`B` groups. Omitted uses one group per model
-  channel, preserving the legacy layout. Must divide `model_dim`.
+  channel, preserving the legacy layout. Must divide `model_dim`. Shared groups
+  follow the upstream interleaved channel mapping `channel % n_ssm`.
 - `discretization` - `"zoh"` by default or `"bilinear"` for the pinned
   reference S4 implementation.
 - `trainable_b` - learns complex `B` tensors. Omitted keeps fixed `B=1`.

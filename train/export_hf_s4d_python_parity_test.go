@@ -4,6 +4,7 @@ package train
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,8 +27,9 @@ func TestExportHFS4DContinuousNativePythonParity(t *testing.T) {
 	}
 
 	configs := []struct {
-		name   string
-		config string
+		name     string
+		config   string
+		mutators []hfExportWeightMutator
 	}{
 		{name: "bilinear_bidirectional_glu_post_residual", config: hfS4DContinuousConfig},
 		{name: "zoh_unidirectional_fixed_b_pre_norm", config: `{
@@ -53,18 +55,67 @@ func TestExportHFS4DContinuousNativePythonParity(t *testing.T) {
             "sobolev_filter":{"beta_init":0.5,"granularity":"layer","bounds":[-2,2],"trainable":false}}],
           "training":{"objective":"classification","classification":{"num_labels":3,"pooling":"mean","classifier_dropout":0},"steps":1,"batch_tokens":6,"seed":20260810}
         }`},
+		// n_ssm < model_dim is the only case where the grouped channel mapping is
+		// observable: with the default n_ssm == model_dim every group covers one
+		// channel, so an interleaved and a contiguous expansion agree and cannot
+		// distinguish a wrong template.
+		{name: "zoh_unidirectional_grouped_trainable_b", config: `{
+          "name":"s4d_continuous_grouped_export","model_dim":8,"seq_len":6,
+          "positional_embedding":"none","norm_type":"rmsnorm","norm_placement":"pre",
+          "input_adapter":{"kind":"linear_frames","feature_dim":1,"bias":true,"norm":"none"},
+          "blocks":[{"type":"s4d","state_size":4,"n_ssm":2,"trainable_b":true}],
+          "training":{"objective":"classification","classification":{"num_labels":3,"pooling":"mean","classifier_dropout":0},"steps":1,"batch_tokens":6,"seed":20260818}
+        }`, mutators: []hfExportWeightMutator{distinctS4DGroupRows}},
 	}
 	for _, tc := range configs {
 		t.Run(tc.name, func(t *testing.T) {
-			runExportHFS4DContinuousNativePythonParity(t, python, tc.config)
+			runExportHFS4DContinuousNativePythonParity(t, python, tc.config, tc.mutators...)
 		})
 	}
 }
 
-func runExportHFS4DContinuousNativePythonParity(t *testing.T, python, config string) {
+// distinctS4DGroupRows gives every grouped S4D tensor a different value per
+// group row. The initializers make all rows identical (log_A_real is a
+// constant, A_imag depends only on the state index, B is ones/zeros), and with
+// identical rows an interleaved and a contiguous group expansion produce the
+// same kernel — so a grouped fixture cannot detect a wrong channel mapping
+// unless the rows actually differ.
+func distinctS4DGroupRows(weights [][]float32, shapes []WeightShape) error {
+	for i, shape := range shapes {
+		switch shape.Name {
+		case "s4d_log_A_real", "s4d_A_imag", "s4d_B_real", "s4d_B_imag":
+		default:
+			continue
+		}
+		if len(shape.Shape) != 2 {
+			continue
+		}
+		rows, cols := shape.Shape[0], shape.Shape[1]
+		for r := 0; r < rows; r++ {
+			for c := 0; c < cols; c++ {
+				// Give each group a clearly different pole: distinct decay and a
+				// distinct oscillation frequency, so swapping which channels read
+				// which group changes the output far beyond FFT rounding.
+				switch shape.Name {
+				case "s4d_log_A_real":
+					weights[i][r*cols+c] = float32(math.Log(0.5) - float64(r)*1.5)
+				case "s4d_A_imag":
+					weights[i][r*cols+c] = float32(float64(r+1) * 2.0 * math.Pi * float64(c+1))
+				case "s4d_B_real":
+					weights[i][r*cols+c] = float32(1.0 + float64(r))
+				case "s4d_B_imag":
+					weights[i][r*cols+c] = float32(float64(r) * 0.75)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func runExportHFS4DContinuousNativePythonParity(t *testing.T, python, config string, mutators ...hfExportWeightMutator) {
 	t.Helper()
 	dir := t.TempDir()
-	cfgPath, weightsPath, _ := writeHFExportFixture(t, dir, config)
+	cfgPath, weightsPath, _ := writeHFExportFixtureWithMutators(t, dir, config, mutators...)
 	cfg, err := LoadArchConfig(cfgPath)
 	if err != nil {
 		t.Fatalf("LoadArchConfig: %v", err)

@@ -9,7 +9,7 @@ import (
 	ir "github.com/mrothroc/mixlab/arch"
 )
 
-func TestS4DReferenceBidirectionalGroupedBilinearForwardAndBackward(t *testing.T) {
+func TestS4DReferenceBidirectionalGroupedBilinearForward(t *testing.T) {
 	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX backend not available")
@@ -38,29 +38,10 @@ func TestS4DReferenceBidirectionalGroupedBilinearForwardAndBackward(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Generated from the pinned state-spaces/s4 v3.0.0 bilinear S4D
-	// construction. The backward half uses the reference's one-position offset.
-	fixtureKernel := []float32{
-		0.002147922309, 0.002149529379, 0.002150943803, 0.0021521658, 0.00215319562,
-		-0.001251425183, -0.001252519065, -0.001253468585, -0.001254273121, -0.00125493207,
-		-0.001265023278, -0.001243701524, -0.001221981124, -0.001199872575, -0.001177386449,
-		-0.0004572928295, -0.0004788437295, -0.0005006622494, -0.0005227429677, -0.0005450803376,
-		-0.00309085857, -0.003205462166, -0.003315747596, -0.003421483273, -0.003522447824,
-		0.003208791609, 0.003272809461, 0.00333249285, 0.00338764719, 0.003438085555,
-		0.005679525575, 0.005626399379, 0.005558132086, 0.005474932666, 0.005377062697,
-		-0.002837327262, -0.00276004643, -0.002672173386, -0.002573777497, -0.002464968007,
-	}
-	fixtureOutput := []float32{
-		0.002031188804, 0.006871779731, 0.01340578, 0.02431566743,
-		0.006880301958, 0.01127223151, 0.01272581847, 0.01732010161,
-		0.003182990792, 0.0002771852203, -0.006616455184, -0.01147814445,
-		-0.004067369576, -0.01125539348, -0.01853760893, -0.02322492008,
-		-0.005079413711, -0.007741502018, -0.006973650025, -0.002097363671,
-	}
-	if diff := maxAbsDiffFloat32(gotKernel, fixtureKernel); diff > 3e-5 {
+	if diff := maxAbsDiffFloat32(gotKernel, s4dOfficialAdvancedKernelFixture); diff > 3e-5 {
 		t.Fatalf("pinned reference kernel L_inf=%g want <=3e-5", diff)
 	}
-	if diff := maxAbsDiffFloat32(got, fixtureOutput); diff > 4e-5 {
+	if diff := maxAbsDiffFloat32(got, s4dOfficialAdvancedOutputFixture); diff > 4e-5 {
 		t.Fatalf("pinned reference output L_inf=%g want <=4e-5", diff)
 	}
 	want, wantKernel := cpuS4DReferenceForward(x, weights, B, T, D, N, nSSM, true)
@@ -70,7 +51,68 @@ func TestS4DReferenceBidirectionalGroupedBilinearForwardAndBackward(t *testing.T
 	if diff := maxAbsDiffFloat32(got, want); diff > 4e-5 {
 		t.Fatalf("reference bidirectional output L_inf=%g want <=4e-5\ngot=%v\nwant=%v", diff, got, want)
 	}
+}
 
+func TestS4DReferenceBidirectionalGroupedBilinearBackward(t *testing.T) {
+	lockMLXThread(t)
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	const B, T, D, N, nSSM = 1, 5, 4, 4, 2
+	x, weights := s4dReferenceFixture(B, T, D, N, nSSM)
+	gradients := s4dReferenceGradients(t, x, weights, B, T, D, N, nSSM)
+	if len(gradients) != len(s4dOfficialAdvancedGradientFixtures) {
+		t.Fatalf("gradient tensor count=%d want=%d", len(gradients), len(s4dOfficialAdvancedGradientFixtures))
+	}
+	// MLX and PyTorch use independent float32 FFT and complex-autodiff reduction
+	// orders. The mixed tolerance remains over four orders of magnitude tighter
+	// in absolute terms than the former one-coordinate finite-difference check.
+	const absoluteTolerance = float32(3e-7)
+	const relativeTolerance = float32(0.01)
+	for wi, gradient := range gradients {
+		want := s4dOfficialAdvancedGradientFixtures[wi]
+		if len(gradient) != len(want) {
+			t.Fatalf("gradient w%d length=%d want=%d", wi, len(gradient), len(want))
+		}
+		for i, value := range gradient {
+			tolerance := absoluteTolerance + relativeTolerance*float32(math.Abs(float64(want[i])))
+			if diff := float32(math.Abs(float64(value - want[i]))); diff > tolerance {
+				t.Fatalf("gradient w%d[%d]=%g reference=%g diff=%g tolerance=%g", wi, i, value, want[i], diff, tolerance)
+			}
+		}
+	}
+}
+
+func TestS4DReferenceBackwardFiniteDifferenceSelfConsistency(t *testing.T) {
+	lockMLXThread(t)
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	const B, T, D, N, nSSM = 1, 5, 4, 4, 2
+	x, weights := s4dReferenceFixture(B, T, D, N, nSSM)
+	gradients := s4dReferenceGradients(t, x, weights, B, T, D, N, nSSM)
+	for wi, gradient := range gradients {
+		for i, value := range gradient {
+			want := finiteDifferenceS4DReferenceWeight(x, weights, wi, i, B, T, D, N, nSSM)
+			tolerance := float32(5e-6 + 0.03*math.Abs(float64(want)))
+			if diff := float32(math.Abs(float64(value - want))); diff > tolerance {
+				t.Fatalf("self-consistency gradient w%d[%d]=%g finite_difference=%g diff=%g tolerance=%g", wi, i, value, want, diff, tolerance)
+			}
+		}
+	}
+}
+
+func s4dReferenceGradients(
+	t *testing.T,
+	x []float32,
+	weights [][]float32,
+	B, T, D, N, nSSM int,
+) [][]float32 {
+	t.Helper()
+	prog := lowerS4DReferenceProgram(t, B, T, D, N, nSSM, true)
+	defer prog.Destroy()
+	handles := s4dReferenceWeightHandles(t, weights, D, N, nSSM)
+	defer FreeHandles(handles)
 	optimizerWeights := make([]WeightOptimizer, len(weights))
 	for i := range optimizerWeights {
 		optimizerWeights[i] = WeightOptimizer{GroupIndex: 0}
@@ -85,25 +127,25 @@ func TestS4DReferenceBidirectionalGroupedBilinearForwardAndBackward(t *testing.T
 		t.Fatal(err)
 	}
 	defer TrainerDestroy(trainer)
+	inputs := []TensorInput{{
+		Name: "x", DType: TensorFloat32, Shape: []int{B * T, D}, Data: x,
+	}}
 	if _, err := TrainerComputeMeanSquareGrads(trainer, inputs, "output"); err != nil {
 		t.Fatal(err)
 	}
-	for wi := range weights {
-		grad := make([]float32, len(weights[wi]))
-		if err := TrainerReadGrad(trainer, wi, grad); err != nil {
+	gradients := make([][]float32, len(weights))
+	for wi, weight := range weights {
+		gradients[wi] = make([]float32, len(weight))
+		if err := TrainerReadGrad(trainer, wi, gradients[wi]); err != nil {
 			t.Fatalf("read gradient %d: %v", wi, err)
 		}
-		for _, value := range grad {
+		for _, value := range gradients[wi] {
 			if math.IsNaN(float64(value)) || math.IsInf(float64(value), 0) {
 				t.Fatalf("gradient %d contains non-finite value", wi)
 			}
 		}
-		wantGrad := finiteDifferenceS4DReferenceWeight(x, weights, wi, 0, B, T, D, N, nSSM)
-		tolerance := float32(5e-3 + 0.06*math.Abs(float64(wantGrad)))
-		if diff := float32(math.Abs(float64(grad[0] - wantGrad))); diff > tolerance {
-			t.Fatalf("gradient w%d[0]=%g want=%g diff=%g tolerance=%g", wi, grad[0], wantGrad, diff, tolerance)
-		}
 	}
+	return gradients
 }
 
 func TestS4DReferenceZeroBackwardRecoversUnidirectional(t *testing.T) {
@@ -287,7 +329,7 @@ func cpuS4DReferenceForward(
 	}
 	kernel := make([]float32, D*kernelT)
 	for d := 0; d < D; d++ {
-		group := d / (D / nSSM)
+		group := d % nSSM
 		dt := math.Exp(float64(weights[0][d]))
 		for n := 0; n < pairs; n++ {
 			stateIdx := group*pairs + n

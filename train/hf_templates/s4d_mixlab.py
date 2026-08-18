@@ -112,7 +112,10 @@ class MixlabS4DBlock(nn.Module):
         self.tie_dropout = bool(block_config.get("tie_dropout", False))
 
     def _broadcast_groups(self, value):
-        return value.repeat_interleave(self.channels_per_ssm, dim=0)
+        # Match state-spaces/s4's einops repeat("t n -> (v t) n"): group indices
+        # interleave over model channels, so channel c uses group c % n_ssm.
+        # repeat_interleave would assign contiguous channel blocks instead.
+        return value.repeat(self.channels_per_ssm, 1)
 
     def _discretize(self):
         dt = torch.exp(self.log_dt.float()).reshape(self.dim, 1)

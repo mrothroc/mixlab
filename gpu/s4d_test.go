@@ -30,13 +30,7 @@ func TestS4DKernelMatchesOfficialMinimalReferenceFixture(t *testing.T) {
 	x := make([]float32, B*T*D)
 
 	_, kernel := runS4DInputs(t, 0, x, logDT, logAReal, aImag, cReal, cImag, direct, B, T, D, N)
-	// Generated from state-spaces/s4 models/s4/s4d.py S4DKernel:
-	// A=-exp(log_A_real)+i*A_imag; C*=expm1(dt*A)/A;
-	// K=2*Re(sum(C*exp(dt*A*l))).
-	want := []float32{
-		0.01472856555, 0.01419255194, 0.01366707466, 0.01315246070, 0.01264902339, 0.01215706213,
-		0.10754305633, 0.10151069405, 0.09396679812, 0.08515372111, 0.07533367249, 0.06478128288,
-	}
+	want := s4dOfficialMinimalKernelFixture
 	if diff := maxAbsDiffFloat32(kernel, want); diff > 2e-6 {
 		t.Fatalf("S4D reference kernel L_inf=%g want <=2e-6\ngot=%v\nwant=%v", diff, kernel, want)
 	}

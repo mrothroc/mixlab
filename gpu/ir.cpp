@@ -2624,8 +2624,10 @@ mx::array s4d_broadcast_groups(
     int n_ssm,
     int D,
     int state_pairs) {
-  auto grouped = mx::reshape(mx::astype(raw, mx::float32), {n_ssm, 1, state_pairs});
-  auto expanded = mx::broadcast_to(grouped, {n_ssm, D / n_ssm, state_pairs});
+  // Match state-spaces/s4's einops repeat("t n -> (v t) n"): the n_ssm
+  // groups are interleaved over model channels, then the pattern repeats.
+  auto grouped = mx::reshape(mx::astype(raw, mx::float32), {1, n_ssm, state_pairs});
+  auto expanded = mx::broadcast_to(grouped, {D / n_ssm, n_ssm, state_pairs});
   return mx::reshape(expanded, {D, state_pairs});
 }
 
