@@ -14,6 +14,13 @@ FASTA, continuous-array, and codebook-array preparation require `numpy`.
 python3 -m pip install numpy tokenizers
 ```
 
+`requirements-prepare.txt` in the repository root pins the versions CI installs
+for the preparation tests; install from it when you want to match CI exactly:
+
+```bash
+python3 -m pip install -r requirements-prepare.txt
+```
+
 Set `MIXLAB_SCRIPTS=/path/to/scripts` only when intentionally testing modified
 development copies of `prepare.py` and `prepare_records.py`.
 

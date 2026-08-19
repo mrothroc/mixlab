@@ -16,10 +16,19 @@ jobs:
         with:
           go-version: '1.24'
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       # GPU package requires MLX headers (Metal/CUDA) — skip on CI.
       # Pure-Go packages (arch, data, train) compile and test without CGO.
       - name: Vet
         run: CGO_ENABLED=0 go vet ./arch/... ./cmd/mixlab ./data/... ./train/...
+
+      - name: Install prepare test dependencies
+        run: |
+          python -m pip install -r requirements-prepare.txt
+          python -c "import numpy, tokenizers"
 
       - name: Test
         run: CGO_ENABLED=0 go test ./arch/... ./cmd/mixlab ./data/... ./train/... -count=1 -timeout 120s

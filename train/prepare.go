@@ -2,6 +2,7 @@ package train
 
 import (
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"os/exec"
@@ -11,6 +12,60 @@ import (
 	"github.com/mrothroc/mixlab/data"
 	prepareassets "github.com/mrothroc/mixlab/scripts"
 )
+
+const (
+	prepareStderrTailBytes = 64 << 10
+	prepareStderrTailLines = 20
+)
+
+type boundedTailBuffer struct {
+	data      []byte
+	limit     int
+	truncated bool
+}
+
+func newBoundedTailBuffer(limit int) *boundedTailBuffer {
+	return &boundedTailBuffer{limit: limit}
+}
+
+func (b *boundedTailBuffer) Write(p []byte) (int, error) {
+	written := len(p)
+	if b.limit <= 0 || written == 0 {
+		return written, nil
+	}
+	if written >= b.limit {
+		b.data = append(b.data[:0], p[written-b.limit:]...)
+		b.truncated = true
+		return written, nil
+	}
+	if overflow := len(b.data) + written - b.limit; overflow > 0 {
+		copy(b.data, b.data[overflow:])
+		b.data = b.data[:len(b.data)-overflow]
+		b.truncated = true
+	}
+	b.data = append(b.data, p...)
+	return written, nil
+}
+
+func (b *boundedTailBuffer) String() string {
+	return string(b.data)
+}
+
+func prepareStderrDetail(stderr *boundedTailBuffer) string {
+	detail := strings.TrimSpace(stderr.String())
+	if detail == "" {
+		return ""
+	}
+	lines := strings.Split(detail, "\n")
+	if len(lines) > prepareStderrTailLines {
+		lines = lines[len(lines)-prepareStderrTailLines:]
+	}
+	detail = strings.Join(lines, "\n")
+	if stderr.truncated {
+		detail = "[stderr truncated]\n" + detail
+	}
+	return detail
+}
 
 // PrepareOptions holds flags for the prepare command.
 type PrepareOptions struct {
@@ -258,9 +313,13 @@ func runPrepare(opts PrepareOptions) error {
 	fmt.Printf("Running: %s %s\n", python, strings.Join(args, " "))
 	cmd := exec.Command(python, args...)
 	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	stderr := newBoundedTailBuffer(prepareStderrTailBytes)
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderr)
 
 	if err := cmd.Run(); err != nil {
+		if detail := prepareStderrDetail(stderr); detail != "" {
+			return fmt.Errorf("prepare.py failed using %s scripts: %w\nprepare.py stderr:\n%s", script.source, err, detail)
+		}
 		return fmt.Errorf("prepare.py failed using %s scripts: %w", script.source, err)
 	}
 
