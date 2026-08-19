@@ -98,6 +98,13 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"TTTMLPStatefulScan", ir.OpTTTMLPStatefulScan, OpTTTMLPStatefulScan},
 		{"StopGradient", ir.OpStopGradient, OpStopGradient},
 		{"FirstByteMaskedCrossEntropy", ir.OpFirstByteMaskedCE, OpFirstByteMaskedCE},
+		{"DepthwiseConv1D", ir.OpDepthwiseConv1D, OpDepthwiseConv1D},
+		{"Mamba3SelectiveScan", ir.OpMamba3SelectiveScan, OpMamba3SelectiveScan},
+		{"Mamba3CanonicalBlock", ir.OpMamba3CanonicalBlock, OpMamba3CanonicalBlock},
+		{"RandomNormal", ir.OpRandomNormal, OpRandomNormal},
+		{"DistillationKL", ir.OpDistillationKL, OpDistillationKL},
+		{"S4D", ir.OpS4D, OpS4D},
+		{"CodebookOffset", ir.OpCodebookOffset, OpCodebookOffset},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

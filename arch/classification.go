@@ -19,6 +19,7 @@ type ClassificationSpec struct {
 	NumLabels         int      `json:"num_labels"`
 	Pooling           string   `json:"pooling,omitempty"`
 	ClassifierDropout *float32 `json:"classifier_dropout,omitempty"`
+	Bias              *bool    `json:"bias,omitempty"`
 }
 
 func (s *ClassificationSpec) effectivePooling(blocks []BlockSpec) string {
@@ -75,14 +76,22 @@ func (c *ArchConfig) EffectiveClassifierDropout() float32 {
 	return c.Training.Classification.effectiveDropout(c.EffectiveHiddenDropout())
 }
 
+func (c *ArchConfig) EffectiveClassifierBias() bool {
+	if c == nil || c.Training.Classification == nil {
+		return false
+	}
+	return c.Training.Classification.Bias == nil || *c.Training.Classification.Bias
+}
+
 func classificationWeightShapes(modelDim int, spec *ClassificationSpec) []WeightMeta {
 	if spec == nil || spec.NumLabels <= 0 {
 		return nil
 	}
-	return []WeightMeta{
-		linearWeightMeta("head_classifier_proj", modelDim, spec.NumLabels),
-		linearBiasWeightMeta("head_classifier_bias", modelDim, spec.NumLabels),
+	out := []WeightMeta{linearWeightMeta("head_classifier_proj", modelDim, spec.NumLabels)}
+	if spec.Bias == nil || *spec.Bias {
+		out = append(out, linearBiasWeightMeta("head_classifier_bias", modelDim, spec.NumLabels))
 	}
+	return out
 }
 
 func validateTrainingClassification(cfg *ArchConfig, source string) error {

@@ -17,6 +17,9 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		return err
 	}
 	if manifest == nil {
+		if cfg.DiscreteCodebooksEnabled() {
+			return fmt.Errorf("config %q input_adapter.kind=%q requires a discrete-codebook mixlab.dataset.json", cfg.Name, arch.InputAdapterDiscreteCodebooks)
+		}
 		if cfg.LinearFramesEnabled() {
 			return fmt.Errorf("config %q input_adapter.kind=%q requires a continuous mixlab.dataset.json", cfg.Name, arch.InputAdapterLinearFrames)
 		}
@@ -29,6 +32,21 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		if cfg.Training.ReverseComplementProb > 0 {
 			return fmt.Errorf("config %q training.reverse_complement_prob requires a nucleotide mixlab.dataset.json", cfg.Name)
 		}
+		return nil
+	}
+	if cfg.DiscreteCodebooksEnabled() {
+		fmt.Printf(
+			"  [%s] dataset manifest: modality=%s representation=%s shape=[T=%d,Q=%d] codebook_vocab_size=%d dtype=%s (%s)\n",
+			name, manifest.Modality, manifest.Representation, manifest.RecordSeqLen,
+			manifest.NumCodebooks, manifest.CodebookVocabSize, manifest.TokenDType, manifestPath,
+		)
+		cfg.Training.DatasetClassification = true
+		cfg.Training.DatasetNumLabels = manifest.Task.NumLabels
+		fmt.Printf(
+			"  [%s] discrete codebooks: fusion=%s hidden_dim=%d norm=%s classification_labels=%d pooling=%s classifier_bias=%t\n",
+			name, cfg.EffectiveCodebookFusion(), cfg.EffectiveCodebookFusionHiddenDim(),
+			cfg.EffectiveInputAdapterNorm(), manifest.Task.NumLabels, cfg.EffectiveClassificationPooling(), cfg.EffectiveClassifierBias(),
+		)
 		return nil
 	}
 	if cfg.LinearFramesEnabled() {
@@ -259,6 +277,17 @@ func validateDatasetManifestForConfig(cfg *ArchConfig, shardPattern string) (*da
 	if cfg.LinearFramesEnabled() {
 		if err := manifest.ValidateContinuousFeatures(
 			cfg.InputAdapter.FeatureDim, cfg.SeqLen, cfg.Training.Classification.NumLabels,
+		); err != nil {
+			return nil, "", fmt.Errorf("dataset manifest %q is incompatible with config %q: %w", path, cfg.Name, err)
+		}
+		return manifest, path, nil
+	}
+	if cfg.DiscreteCodebooksEnabled() {
+		if err := manifest.ValidateDiscreteCodebooks(
+			cfg.InputAdapter.NumCodebooks,
+			cfg.InputAdapter.CodebookVocabSize,
+			cfg.SeqLen,
+			cfg.Training.Classification.NumLabels,
 		); err != nil {
 			return nil, "", fmt.Errorf("dataset manifest %q is incompatible with config %q: %w", path, cfg.Name, err)
 		}

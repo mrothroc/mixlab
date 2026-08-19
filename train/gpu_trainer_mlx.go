@@ -34,6 +34,8 @@ type mlxGPUTrainer struct {
 	targetsInputKnown          bool
 	continuousFramesInput      bool
 	continuousFeatureDim       int
+	codebookTokensInput        bool
+	codebookCount              int
 	rtdGeneratorBatchSize      int
 	rtdGeneratorSeqLen         int
 	rtdGeneratorMaskSlots      int
@@ -68,6 +70,7 @@ type mlxGPUTrainer struct {
 	trainingStep               int
 	// Pre-allocated input buffers to avoid per-step allocation.
 	tokBuf                 []int32
+	codebookBuf            []int32
 	continuousFrameBuf     []float32
 	tgtBuf                 []int32
 	lossMaskBuf            []float32
@@ -301,6 +304,8 @@ func initMLXGPUTrainerWithDistributedContext(
 	targetsInput := false
 	continuousFramesInput := false
 	continuousFeatureDim := 0
+	codebookTokensInput := false
+	codebookCount := 0
 	declaredBatchSize := 0
 	declaredSeqLen := 0
 	rtdGeneratorBatchSize := 0
@@ -343,6 +348,13 @@ func initMLXGPUTrainerWithDistributedContext(
 			declaredBatchSize = inp.Shape[0]
 			declaredSeqLen = inp.Shape[1]
 			continuousFeatureDim = inp.Shape[2]
+			batchElems = declaredBatchSize * declaredSeqLen
+		}
+		if inp.Name == "codebook_tokens" && len(inp.Shape) == 3 {
+			codebookTokensInput = true
+			declaredBatchSize = inp.Shape[0]
+			declaredSeqLen = inp.Shape[1]
+			codebookCount = inp.Shape[2]
 			batchElems = declaredBatchSize * declaredSeqLen
 		}
 		if inp.Name == "targets" && len(inp.Shape) == 1 {
@@ -509,6 +521,8 @@ func initMLXGPUTrainerWithDistributedContext(
 		targetsInputKnown:           true,
 		continuousFramesInput:       continuousFramesInput,
 		continuousFeatureDim:        continuousFeatureDim,
+		codebookTokensInput:         codebookTokensInput,
+		codebookCount:               codebookCount,
 		rtdGeneratorBatchSize:       rtdGeneratorBatchSize,
 		rtdGeneratorSeqLen:          rtdGeneratorSeqLen,
 		rtdGeneratorMaskSlots:       rtdGeneratorMaskSlots,
@@ -541,6 +555,7 @@ func initMLXGPUTrainerWithDistributedContext(
 		dropoutKeyCount:             dropoutKeyCount,
 		trainingSeed:                uint64(cfg.Training.Seed),
 		tokBuf:                      make([]int32, batchElems),
+		codebookBuf:                 make([]int32, batchElems*codebookCount),
 		continuousFrameBuf:          make([]float32, batchElems*continuousFeatureDim),
 		tgtBuf:                      make([]int32, batchElems),
 		lossMaskBuf:                 make([]float32, batchElems),
@@ -803,6 +818,8 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.targetsInputKnown = true
 	t.continuousFramesInput = programDeclaresInput(irProg, "continuous_frames")
 	t.continuousFeatureDim = 0
+	t.codebookTokensInput = programDeclaresInput(irProg, "codebook_tokens")
+	t.codebookCount = 0
 	t.classificationLabelsInput = programDeclaresInput(irProg, "classification_labels")
 	t.classificationMaskInput = programDeclaresInput(irProg, "classification_valid_mask")
 	t.classificationPosInput = programDeclaresInput(irProg, "classification_positions")
@@ -817,6 +834,9 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	for _, inp := range irProg.Inputs {
 		if inp.Name == "continuous_frames" && len(inp.Shape) == 3 {
 			t.continuousFeatureDim = inp.Shape[2]
+		}
+		if inp.Name == "codebook_tokens" && len(inp.Shape) == 3 {
+			t.codebookCount = inp.Shape[2]
 		}
 		if inp.Name == "ttt_inner_lr_scale" && len(inp.Shape) == 1 {
 			t.tttInnerLRScaleCount = inp.Shape[0]
@@ -840,6 +860,9 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	}
 	if t.continuousFramesInput && t.continuousFeatureDim <= 0 {
 		return fmt.Errorf("program declares continuous_frames with invalid feature dimension %d", t.continuousFeatureDim)
+	}
+	if t.codebookTokensInput && t.codebookCount <= 0 {
+		return fmt.Errorf("program declares codebook_tokens with invalid codebook count %d", t.codebookCount)
 	}
 	t.diffusionBlockStartInput = programDeclaresInput(irProg, "diffusion_block_start")
 	t.diffusionBlockEndInput = programDeclaresInput(irProg, "diffusion_block_end")
@@ -903,84 +926,4 @@ func (t *mlxGPUTrainer) CloseTrainer() {
 		t.lockedOSThread = false
 		runtime.UnlockOSThread()
 	}
-}
-
-// ReadWeights reads all weight tensors back from the GPU trainer.
-func (t *mlxGPUTrainer) ReadWeights() ([][]float32, error) {
-	if err := t.FlushGPU(); err != nil {
-		return nil, err
-	}
-	nWeights, err := gpu.TrainerNumWeights(t.handle)
-	if err != nil {
-		return nil, err
-	}
-	if nWeights != len(t.shapes) {
-		return nil, fmt.Errorf("weight count mismatch: trainer=%d expected=%d", nWeights, len(t.shapes))
-	}
-	weights := make([][]float32, nWeights)
-	for i := 0; i < nWeights; i++ {
-		size, err := gpu.TrainerWeightSize(t.handle, i)
-		if err != nil {
-			return nil, fmt.Errorf("weight %d size: %w", i, err)
-		}
-		data := make([]float32, size)
-		if err := gpu.TrainerReadWeight(t.handle, i, data); err != nil {
-			return nil, fmt.Errorf("read weight %d: %w", i, err)
-		}
-		weights[i] = data
-	}
-	return weights, nil
-}
-
-func (t *mlxGPUTrainer) ReadWeightsGPU(indexes []int) ([][]float32, error) {
-	if err := t.FlushGPU(); err != nil {
-		return nil, err
-	}
-	weights := make([][]float32, len(indexes))
-	for outIndex, weightIndex := range indexes {
-		if weightIndex < 0 || weightIndex >= len(t.shapes) {
-			return nil, fmt.Errorf("weight index %d out of range [0,%d)", weightIndex, len(t.shapes))
-		}
-		size, err := gpu.TrainerWeightSize(t.handle, weightIndex)
-		if err != nil {
-			return nil, fmt.Errorf("weight %d size: %w", weightIndex, err)
-		}
-		data := make([]float32, size)
-		if err := gpu.TrainerReadWeight(t.handle, weightIndex, data); err != nil {
-			return nil, fmt.Errorf("read weight %d: %w", weightIndex, err)
-		}
-		weights[outIndex] = data
-	}
-	return weights, nil
-}
-
-// ReadOutput reads a named output tensor cached by the last trainer step or eval.
-func (t *mlxGPUTrainer) ReadOutput(name string, shape []int) ([]float32, error) {
-	if err := t.FlushGPU(); err != nil {
-		return nil, err
-	}
-	return gpu.TrainerReadOutput(t.handle, name, shape)
-}
-
-// ReadComponentLossesGPU returns the declared scalar component losses from the
-// most recently collected training step without flushing a lookahead step.
-func (t *mlxGPUTrainer) ReadComponentLossesGPU() (map[string]float64, error) {
-	if !t.captureComponentLosses {
-		return nil, fmt.Errorf("component loss capture is not enabled")
-	}
-	if len(t.componentLossOutputs) == 0 {
-		return nil, nil
-	}
-	result := make(map[string]float64, len(t.componentLossOutputs))
-	for _, name := range t.componentLossOutputs {
-		out, err := gpu.TrainerReadCachedOutput(t.handle, name, []int{1})
-		if err != nil {
-			return nil, fmt.Errorf("read cached component loss %q: %w", name, err)
-		}
-		if len(out) != 1 {
-			return nil, fmt.Errorf("cached component loss %q returned %d values, want 1", name, len(out))
-		}
-		result[name] = float64(out[0])
-	}
-	return result, nil
 }

@@ -94,6 +94,7 @@ var irToGPUOp = map[int]int{
 	ir.OpSpanPLLPool:          OpSpanPLLPool,
 	ir.OpSpanPLLPairwise:      OpSpanPLLPairwise,
 	ir.OpMaskedDistillationKL: OpMaskedDistillationKL,
+	ir.OpCodebookOffset:       OpCodebookOffset,
 	ir.OpMaskedSymmetricKL:    OpMaskedSymmetricKL,
 	ir.OpMaskedMarginPLL:      OpMaskedMarginPLL,
 	ir.OpMaskedZLoss:          OpMaskedZLoss,

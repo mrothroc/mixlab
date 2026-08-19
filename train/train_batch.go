@@ -7,6 +7,7 @@ import "github.com/mrothroc/mixlab/data"
 // eval loss is measured on un-augmented data.
 type trainBatch struct {
 	x, y                []int
+	codebooks           []int32
 	frames              []float32
 	lossMask            []float32
 	segmentIDs          []int32
@@ -19,7 +20,7 @@ type trainBatch struct {
 
 func trainBatchFromDataBatch(batch data.Batch, err error) trainBatch {
 	return trainBatch{
-		x: batch.X, y: batch.Y, frames: batch.Frames, lossMask: batch.LossMask,
+		x: batch.X, y: batch.Y, codebooks: batch.Codebooks, frames: batch.Frames, lossMask: batch.LossMask,
 		segmentIDs: batch.SegmentIDs, maskEligible: batch.MaskEligible,
 		labels: batch.Labels, validMask: batch.ValidMask, err: err,
 	}
@@ -27,7 +28,7 @@ func trainBatchFromDataBatch(batch data.Batch, err error) trainBatch {
 
 func trainBatchFromValBatch(batch data.ValBatch) trainBatch {
 	return trainBatch{
-		x: batch.X, y: batch.Y, frames: batch.Frames, lossMask: batch.LossMask,
+		x: batch.X, y: batch.Y, codebooks: batch.Codebooks, frames: batch.Frames, lossMask: batch.LossMask,
 		segmentIDs: batch.SegmentIDs, maskEligible: batch.MaskEligible,
 		labels: batch.Labels, validMask: batch.ValidMask,
 		disableAugmentation: true,

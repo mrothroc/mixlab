@@ -21,11 +21,16 @@ func EstimateFLOPs(cfg *ArchConfig) FLOPsEstimate {
 	if cfg == nil || cfg.ModelDim <= 0 || cfg.SeqLen <= 0 || cfg.Training.BatchTokens <= 0 {
 		return FLOPsEstimate{}
 	}
-	if cfg.LinearFramesEnabled() {
+	switch {
+	case cfg.LinearFramesEnabled():
 		if cfg.InputFeatureDim() <= 0 {
 			return FLOPsEstimate{}
 		}
-	} else if cfg.VocabSize <= 0 {
+	case cfg.DiscreteCodebooksEnabled():
+		if cfg.CodebookEmbeddingRows() <= 0 {
+			return FLOPsEstimate{}
+		}
+	case cfg.VocabSize <= 0:
 		return FLOPsEstimate{}
 	}
 	paramCount, expandedParamCount, err := ParameterCountsFromConfig(cfg)
@@ -78,6 +83,8 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 	V := cfg.VocabSize
 	if cfg.LinearFramesEnabled() {
 		V = cfg.InputFeatureDim()
+	} else if cfg.DiscreteCodebooksEnabled() {
+		V = cfg.CodebookEmbeddingRows()
 	}
 	ffn := ffnDim(D, cfg.MLPMult)
 
@@ -117,6 +124,25 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 			forward += i64(B) * i64(T) * i64(D)
 		}
 	}
+	if cfg.DiscreteCodebooksEnabled() {
+		Q := cfg.InputAdapter.NumCodebooks
+		if cfg.EffectiveCodebookFusion() == InputAdapterFusionAttentionMLP {
+			H := cfg.EffectiveCodebookFusionHiddenDim()
+			forward += 2 * i64(B) * i64(T) * i64(Q) * i64(D) * i64(H)
+			forward += i64(B) * i64(T) * i64(Q) * i64(H)
+			forward += 2 * i64(B) * i64(T) * i64(Q) * i64(H)
+			forward += 5 * i64(B) * i64(T) * i64(Q)
+			forward += 2 * i64(B) * i64(T) * i64(Q) * i64(D)
+		} else {
+			forward += i64(B) * i64(T) * i64(Q) * i64(D)
+		}
+		if cfg.EffectiveInputAdapterNorm() == InputAdapterNormLayerNorm {
+			forward += 7 * i64(B) * i64(T) * i64(D)
+		}
+		if cfg.EffectivePositionalEmbedding() == PositionalEmbeddingLearnedAbsolute {
+			forward += i64(B) * i64(T) * i64(D)
+		}
+	}
 	if cfg.CharVocabSize > 0 {
 		charDim := cfg.EffectiveCharDim()
 		charSlots := cfg.EffectiveCharMaxPerToken()
@@ -126,7 +152,7 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 		}
 		forward += 2 * i64(B) * i64(T) * i64(D) // learned scale + residual add
 	}
-	if cfg.LinearFramesEnabled() && cfg.ClassificationEnabled() {
+	if (cfg.LinearFramesEnabled() || cfg.DiscreteCodebooksEnabled()) && cfg.ClassificationEnabled() {
 		forward += 2 * i64(B) * i64(D) * i64(cfg.Training.Classification.NumLabels)
 	} else {
 		forward += 2 * i64(B) * i64(T) * i64(D) * i64(V)
@@ -168,6 +194,17 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 			return 0, 0, err
 		}
 		expandedShapes, err := collectLinearFramesWeightShapesWithRefs(cfg, identityWeightRefs(cfg.Blocks))
+		if err != nil {
+			return 0, 0, err
+		}
+		return countWeightMetaElements(uniqueShapes), countWeightMetaElements(expandedShapes), nil
+	}
+	if cfg.DiscreteCodebooksEnabled() {
+		uniqueShapes, err := collectDiscreteCodebookWeightShapesWithRefs(cfg, uniqueRefs)
+		if err != nil {
+			return 0, 0, err
+		}
+		expandedShapes, err := collectDiscreteCodebookWeightShapesWithRefs(cfg, identityWeightRefs(cfg.Blocks))
 		if err != nil {
 			return 0, 0, err
 		}

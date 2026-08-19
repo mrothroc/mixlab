@@ -18,12 +18,15 @@ const (
 	DatasetManifestVersion                 = 1
 	DatasetRepresentationDiscreteTokens    = "discrete_tokens"
 	DatasetRepresentationContinuousFrames  = "continuous_frames"
+	DatasetRepresentationDiscreteCodebooks = "discrete_codebooks"
 	DatasetTokenDTypeUint16                = "uint16"
+	DatasetTokenDTypeInt32                 = "int32"
 	DatasetFeatureDTypeFloat32             = "float32"
 	DatasetShardFormatTokenStreamV1        = "mixlab_token_shard_v1"
 	DatasetShardFormatSequenceV1           = "mixlab_sequence_shard_v1"
 	DatasetShardFormatLabeledSequenceV1    = "mixlab_labeled_sequence_shard_v1"
 	DatasetShardFormatContinuousSequenceV1 = "mixlab_continuous_sequence_shard_v1"
+	DatasetShardFormatCodebookSequenceV1   = "mixlab_codebook_sequence_shard_v1"
 	DatasetSequenceLayoutContinuousStream  = "continuous_stream"
 	DatasetSequenceLayoutPackedSegments    = "packed_segments"
 	DatasetSequenceLayoutOneRecordRow      = "one_record_per_row"
@@ -34,21 +37,23 @@ const (
 // shards. It is optional for legacy datasets and required for new modality
 // adapters introduced after the discrete-token foundation release.
 type DatasetManifest struct {
-	Format          string                   `json:"format"`
-	Version         int                      `json:"version"`
-	Representation  string                   `json:"representation"`
-	Modality        string                   `json:"modality"`
-	VocabSize       int                      `json:"vocab_size,omitempty"`
-	TokenDType      string                   `json:"token_dtype,omitempty"`
-	FeatureDType    string                   `json:"feature_dtype,omitempty"`
-	FeatureDim      int                      `json:"feature_dim,omitempty"`
-	ShardFormat     string                   `json:"shard_format"`
-	SequenceLayout  string                   `json:"sequence_layout,omitempty"`
-	RecordSeqLen    int                      `json:"record_seq_len,omitempty"`
-	SpecialTokenIDs map[string]int           `json:"special_token_ids,omitempty"`
-	Artifacts       DatasetManifestArtifacts `json:"artifacts,omitempty"`
-	Task            *DatasetTask             `json:"task,omitempty"`
-	Splits          map[string]DatasetSplit  `json:"splits"`
+	Format            string                   `json:"format"`
+	Version           int                      `json:"version"`
+	Representation    string                   `json:"representation"`
+	Modality          string                   `json:"modality"`
+	VocabSize         int                      `json:"vocab_size,omitempty"`
+	TokenDType        string                   `json:"token_dtype,omitempty"`
+	FeatureDType      string                   `json:"feature_dtype,omitempty"`
+	FeatureDim        int                      `json:"feature_dim,omitempty"`
+	NumCodebooks      int                      `json:"num_codebooks,omitempty"`
+	CodebookVocabSize int                      `json:"codebook_vocab_size,omitempty"`
+	ShardFormat       string                   `json:"shard_format"`
+	SequenceLayout    string                   `json:"sequence_layout,omitempty"`
+	RecordSeqLen      int                      `json:"record_seq_len,omitempty"`
+	SpecialTokenIDs   map[string]int           `json:"special_token_ids,omitempty"`
+	Artifacts         DatasetManifestArtifacts `json:"artifacts,omitempty"`
+	Task              *DatasetTask             `json:"task,omitempty"`
+	Splits            map[string]DatasetSplit  `json:"splits"`
 }
 
 // DatasetTask describes supervised labels stored atomically with records.
@@ -146,13 +151,16 @@ func (m *DatasetManifest) Validate() error {
 	if m.Representation == DatasetRepresentationContinuousFrames {
 		return m.validateContinuousFrames()
 	}
+	if m.Representation == DatasetRepresentationDiscreteCodebooks {
+		return m.validateDiscreteCodebooks()
+	}
 	if m.Representation != DatasetRepresentationDiscreteTokens {
 		return fmt.Errorf(
-			"representation=%q is unsupported; this release supports %q or %q",
-			m.Representation, DatasetRepresentationDiscreteTokens, DatasetRepresentationContinuousFrames,
+			"representation=%q is unsupported; this release supports %q, %q, or %q",
+			m.Representation, DatasetRepresentationDiscreteTokens, DatasetRepresentationContinuousFrames, DatasetRepresentationDiscreteCodebooks,
 		)
 	}
-	if m.FeatureDType != "" || m.FeatureDim != 0 {
+	if m.FeatureDType != "" || m.FeatureDim != 0 || m.NumCodebooks != 0 || m.CodebookVocabSize != 0 {
 		return fmt.Errorf("feature_dtype/feature_dim are valid only with representation=%q", DatasetRepresentationContinuousFrames)
 	}
 	if m.VocabSize <= 0 || m.VocabSize > 1<<16 {
@@ -295,6 +303,12 @@ func (m *DatasetManifest) EffectiveSequenceLayout() string {
 		}
 		return layout
 	}
+	if m.ShardFormat == DatasetShardFormatCodebookSequenceV1 {
+		if layout == "" {
+			return DatasetSequenceLayoutOneRecordRow
+		}
+		return layout
+	}
 	if m.ShardFormat == DatasetShardFormatTokenStreamV1 {
 		return layout
 	}
@@ -305,6 +319,34 @@ func (m *DatasetManifest) EffectiveSequenceLayout() string {
 		return DatasetSequenceLayoutPackedSegments
 	}
 	return layout
+}
+
+// ValidateDiscreteCodebooks checks the model/data contract for synchronized
+// multi-codebook integer inputs before trainer or GPU construction.
+func (m *DatasetManifest) ValidateDiscreteCodebooks(numCodebooks, codebookVocabSize, seqLen, numLabels int) error {
+	if err := m.Validate(); err != nil {
+		return err
+	}
+	if m.Representation != DatasetRepresentationDiscreteCodebooks {
+		return fmt.Errorf("dataset representation=%q does not provide discrete codebooks", m.Representation)
+	}
+	if numCodebooks != m.NumCodebooks {
+		return fmt.Errorf("dataset num_codebooks=%d does not match input_adapter.num_codebooks=%d", m.NumCodebooks, numCodebooks)
+	}
+	if codebookVocabSize != m.CodebookVocabSize {
+		return fmt.Errorf("dataset codebook_vocab_size=%d does not match input_adapter.codebook_vocab_size=%d", m.CodebookVocabSize, codebookVocabSize)
+	}
+	if seqLen != m.RecordSeqLen {
+		return fmt.Errorf("dataset record_seq_len=%d does not match model seq_len=%d", m.RecordSeqLen, seqLen)
+	}
+	if m.Task == nil || m.Task.NumLabels != numLabels {
+		got := 0
+		if m.Task != nil {
+			got = m.Task.NumLabels
+		}
+		return fmt.Errorf("dataset task.num_labels=%d does not match training.classification.num_labels=%d", got, numLabels)
+	}
+	return nil
 }
 
 // ValidateModelVocab rejects using a token dataset with an incompatible model
@@ -403,6 +445,78 @@ func (m *DatasetManifest) validateContinuousFrames() error {
 				"splits.%s.frames=%d does not equal sequences(%d)*record_seq_len(%d)",
 				name, split.Frames, split.Sequences, m.RecordSeqLen,
 			)
+		}
+		var classCount int64
+		for rawLabel, count := range split.ClassCounts {
+			label, err := strconv.Atoi(rawLabel)
+			if err != nil || label < 0 || label >= m.Task.NumLabels {
+				return fmt.Errorf("splits.%s.class_counts contains invalid label %q for num_labels=%d", name, rawLabel, m.Task.NumLabels)
+			}
+			if count < 0 {
+				return fmt.Errorf("splits.%s.class_counts[%q]=%d must be >= 0", name, rawLabel, count)
+			}
+			classCount += count
+		}
+		if classCount != split.Sequences {
+			return fmt.Errorf("splits.%s.class_counts sum=%d does not match sequences=%d", name, classCount, split.Sequences)
+		}
+	}
+	return nil
+}
+
+func (m *DatasetManifest) validateDiscreteCodebooks() error {
+	if m.VocabSize != 0 || m.FeatureDType != "" || m.FeatureDim != 0 {
+		return fmt.Errorf("discrete codebook manifests must omit vocab_size and continuous feature fields")
+	}
+	if m.TokenDType != DatasetTokenDTypeInt32 {
+		return fmt.Errorf("token_dtype=%q is unsupported for discrete codebooks; want %q", m.TokenDType, DatasetTokenDTypeInt32)
+	}
+	if m.NumCodebooks < 1 {
+		return fmt.Errorf("num_codebooks=%d must be >= 1", m.NumCodebooks)
+	}
+	if m.CodebookVocabSize < 2 {
+		return fmt.Errorf("codebook_vocab_size=%d must be >= 2", m.CodebookVocabSize)
+	}
+	if int64(m.NumCodebooks)*int64(m.CodebookVocabSize) > math.MaxInt32 {
+		return fmt.Errorf("num_codebooks*codebook_vocab_size exceeds int32 indexing")
+	}
+	if m.ShardFormat != DatasetShardFormatCodebookSequenceV1 {
+		return fmt.Errorf("shard_format=%q is unsupported for discrete codebooks; want %q", m.ShardFormat, DatasetShardFormatCodebookSequenceV1)
+	}
+	if m.EffectiveSequenceLayout() != DatasetSequenceLayoutOneRecordRow {
+		return fmt.Errorf("discrete codebooks require sequence_layout=%q", DatasetSequenceLayoutOneRecordRow)
+	}
+	if m.RecordSeqLen <= 0 {
+		return fmt.Errorf("record_seq_len=%d must be > 0 for discrete codebooks", m.RecordSeqLen)
+	}
+	if len(m.SpecialTokenIDs) != 0 || m.Artifacts.Tokenizer != "" || m.Artifacts.Vocabulary != "" {
+		return fmt.Errorf("discrete codebook manifests cannot contain tokenizer artifacts or special_token_ids")
+	}
+	if m.Task == nil || m.Task.Type != DatasetTaskSingleLabelClassification || m.Task.NumLabels < 2 {
+		return fmt.Errorf("discrete codebook v1 requires task.type=%q with num_labels >= 2", DatasetTaskSingleLabelClassification)
+	}
+	if len(m.Splits) == 0 {
+		return fmt.Errorf("splits must contain at least one dataset split")
+	}
+	for name, split := range m.Splits {
+		if !validDatasetIdentifier(name) {
+			return fmt.Errorf("split name %q must be a lowercase identifier", name)
+		}
+		if err := validateManifestArtifactPath("splits."+name+".pattern", split.Pattern); err != nil {
+			return err
+		}
+		if split.Frames != 0 {
+			return fmt.Errorf("splits.%s.frames must be zero/omitted for discrete codebooks", name)
+		}
+		if split.Tokens < 0 || split.Shards < 0 || split.Sequences < 0 {
+			return fmt.Errorf("splits.%s token/shard/sequence counts must be >= 0", name)
+		}
+		wantTokens := split.Sequences * int64(m.RecordSeqLen) * int64(m.NumCodebooks)
+		if split.Tokens != wantTokens {
+			return fmt.Errorf("splits.%s.tokens=%d does not equal sequences(%d)*record_seq_len(%d)*num_codebooks(%d)", name, split.Tokens, split.Sequences, m.RecordSeqLen, m.NumCodebooks)
+		}
+		if split.Tokens > 0 && split.Shards == 0 {
+			return fmt.Errorf("splits.%s has %d tokens but zero shards", name, split.Tokens)
 		}
 		var classCount int64
 		for rawLabel, count := range split.ClassCounts {

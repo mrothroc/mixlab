@@ -89,7 +89,15 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		// trainers always discover the input contract from their IR program.
 		targetsInput = true
 	}
-	if t.continuousFramesInput {
+	if t.codebookTokensInput {
+		codebookNeed := need * t.codebookCount
+		if t.codebookCount <= 0 {
+			return nil, fmt.Errorf("program declares codebook_tokens with invalid codebook count %d", t.codebookCount)
+		}
+		if len(batch.codebooks) < codebookNeed {
+			return nil, fmt.Errorf("input size mismatch: codebook_tokens=%d need=%d", len(batch.codebooks), codebookNeed)
+		}
+	} else if t.continuousFramesInput {
 		frameNeed := need * t.continuousFeatureDim
 		if t.continuousFeatureDim <= 0 {
 			return nil, fmt.Errorf("program declares continuous_frames with invalid feature dimension %d", t.continuousFeatureDim)
@@ -121,6 +129,10 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		t.trigramBuf = make([]int32, need)
 		t.rcTokenBuf = make([]int32, need)
 		t.rcAlignmentBuf = make([]int32, need)
+	}
+	codebookNeed := need * t.codebookCount
+	if t.codebookTokensInput && len(t.codebookBuf) < codebookNeed {
+		t.codebookBuf = make([]int32, codebookNeed)
 	}
 	frameNeed := need * t.continuousFeatureDim
 	if t.continuousFramesInput && len(t.continuousFrameBuf) < frameNeed {
@@ -183,7 +195,15 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		}
 	}
 	var inputs []gpu.TensorInput
-	if t.continuousFramesInput {
+	if t.codebookTokensInput {
+		copy(t.codebookBuf[:codebookNeed], batch.codebooks[:codebookNeed])
+		inputs = []gpu.TensorInput{{
+			Name:  "codebook_tokens",
+			DType: gpu.TensorInt32,
+			Shape: []int{batchSize, seqLen, t.codebookCount},
+			Data:  t.codebookBuf[:codebookNeed],
+		}}
+	} else if t.continuousFramesInput {
 		copy(t.continuousFrameBuf[:frameNeed], batch.frames[:frameNeed])
 		inputs = []gpu.TensorInput{{
 			Name:  "continuous_frames",

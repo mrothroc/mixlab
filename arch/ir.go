@@ -110,6 +110,8 @@ const OpS4D = 105 // OP_S4D
 
 const OpBatchNorm = 106 // OP_BATCHNORM
 
+const OpCodebookOffset = 107 // OP_CODEBOOK_OFFSET
+
 const (
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -172,6 +174,12 @@ func (p *Program) AddOp(code int, inputs, outputs []string, floatParams []float3
 // Embed emits an embedding lookup: output = table[indices].
 func (p *Program) Embed(table, indices, output string) {
 	p.AddOp(OpEmbed, []string{table, indices}, []string{output}, nil, nil)
+}
+
+// CodebookOffset adds codebook_index*vocab_size to raw [B,T,Q] IDs using
+// integer arithmetic, producing collision-free indices into one shared table.
+func (p *Program) CodebookOffset(tokens string, numCodebooks, vocabSize int, output string) {
+	p.AddOp(OpCodebookOffset, []string{tokens}, []string{output}, nil, []int{numCodebooks, vocabSize})
 }
 
 // MatMul emits a matrix multiply: output = a @ b.

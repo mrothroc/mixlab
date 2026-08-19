@@ -703,6 +703,9 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if cfg.LinearFramesEnabled() {
 		return collectLinearFramesWeightShapesFromConfig(cfg)
 	}
+	if cfg.DiscreteCodebooksEnabled() {
+		return collectDiscreteCodebookWeightShapesFromConfig(cfg)
+	}
 	refs, err := normalizeWeightRefs(cfg.Blocks, cfg.Recurrence)
 	if err != nil {
 		return nil, fmt.Errorf("blocks: %w", err)

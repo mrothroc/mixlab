@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-prepare.py — Convert raw text, FASTA, or continuous arrays into Mixlab shards.
+prepare.py — Convert raw text, FASTA, continuous arrays, or codebooks into Mixlab shards.
 
 Shard format (matching cmd/mixlab/data/loader.go):
   256 x int32 header: [magic=20240520, version=1, nTok, 0, ...]
@@ -11,6 +11,7 @@ Usage:
   python3 prepare.py --input corpus/ --output shards/ --vocab-size 1024 --val-split 0.1
   python3 prepare.py --input data.jsonl --output shards/ --vocab-size 1024 --text-field text
   python3 prepare.py --input features.npy --input-format continuous --label-file labels.tsv --output shards/
+  python3 prepare.py --input codes.npy --input-format codebooks --codebook-vocab-size 1024 --label-file labels.tsv --output shards/
 """
 
 import argparse
@@ -44,6 +45,9 @@ LABELED_SEQUENCE_SHARD_VERSION = 1
 CONTINUOUS_SEQUENCE_SHARD_MAGIC = 20260726
 CONTINUOUS_SEQUENCE_SHARD_VERSION = 1
 CONTINUOUS_FEATURE_DTYPE_FLOAT32 = 1
+CODEBOOK_SEQUENCE_SHARD_MAGIC = 20260819
+CODEBOOK_SEQUENCE_SHARD_VERSION = 1
+CODEBOOK_TOKEN_DTYPE_INT32 = 1
 CHAR_FEATURE_MAGIC = 20260526
 CHAR_FEATURE_VERSION = 1
 CHAR_FEATURE_ENCODING_BYTELEVEL = 1
@@ -172,6 +176,166 @@ def load_continuous_features(path: str):
             source.close()
         raise ValueError(f"continuous input dtype must be real-valued numeric, got {features.dtype}")
     return source, features
+
+
+def load_codebook_tokens(path: str):
+    source = np.load(path, mmap_mode="r", allow_pickle=False)
+    lengths = None
+    if isinstance(source, np.lib.npyio.NpzFile):
+        if "codebook_tokens" not in source.files:
+            source.close()
+            raise ValueError("codebook .npz input must contain an array named 'codebook_tokens'")
+        tokens = source["codebook_tokens"]
+        if "lengths" in source.files:
+            lengths = source["lengths"]
+    else:
+        tokens = source
+    if not isinstance(tokens, np.ndarray) or tokens.ndim != 3:
+        shape = getattr(tokens, "shape", None)
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
+        raise ValueError(f"codebook input must have shape [N,T,Q], got {shape}")
+    if any(int(dim) <= 0 for dim in tokens.shape):
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
+        raise ValueError(f"codebook input dimensions must be positive, got {tokens.shape}")
+    if not np.issubdtype(tokens.dtype, np.integer):
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
+        raise ValueError(f"codebook input dtype must be integer, got {tokens.dtype}")
+    return source, tokens, lengths
+
+
+def codebook_row_values(path: str, n_records: int, field: str) -> list[int]:
+    values = read_label_tsv(path)
+    expected_ids = {str(index) for index in range(n_records)}
+    actual_ids = set(values)
+    missing = sorted(expected_ids - actual_ids, key=int)
+    extra = sorted(actual_ids - expected_ids)
+    if missing or extra:
+        raise ValueError(
+            f"codebook {field} must cover row IDs 0..{n_records - 1}; "
+            f"missing={missing[:5]} extra={extra[:5]}"
+        )
+    return [values[str(index)] for index in range(n_records)]
+
+
+def write_codebook_shards(output_dir: str, split: str, tokens, lengths, labels, indexes, records_per_shard: int, vocab_size: int):
+    os.makedirs(output_dir, exist_ok=True)
+    written = 0
+    shard_count = 0
+    seq_len = int(tokens.shape[1])
+    num_codebooks = int(tokens.shape[2])
+    for start in range(0, len(indexes), records_per_shard):
+        shard_indexes = indexes[start : start + records_per_shard]
+        raw_tokens = np.asarray(tokens[shard_indexes])
+        invalid = np.argwhere((raw_tokens < 0) | (raw_tokens >= vocab_size))
+        if invalid.size:
+            record, timestep, codebook = (int(value) for value in invalid[0])
+            source_row = shard_indexes[record]
+            value = int(raw_tokens[record, timestep, codebook])
+            raise ValueError(
+                f"{split} codebook token row={source_row} timestep={timestep} codebook={codebook} "
+                f"value={value} outside [0,{vocab_size})"
+            )
+        shard_tokens = np.asarray(raw_tokens, dtype="<i4", order="C")
+        shard_labels = np.asarray([labels[index] for index in shard_indexes], dtype="<i4")
+        shard_lengths = np.asarray([lengths[index] for index in shard_indexes], dtype="<i4")
+        header = np.zeros(HEADER_INTS, dtype="<i4")
+        header[:9] = [
+            CODEBOOK_SEQUENCE_SHARD_MAGIC, CODEBOOK_SEQUENCE_SHARD_VERSION,
+            len(shard_indexes), seq_len, num_codebooks, vocab_size,
+            CODEBOOK_TOKEN_DTYPE_INT32, 1, 1,
+        ]
+        path = os.path.join(output_dir, f"{split}_{shard_count:05d}.bin")
+        with open(path, "wb") as output:
+            output.write(header.tobytes())
+            output.write(shard_labels.tobytes())
+            output.write(shard_lengths.tobytes())
+            output.write(shard_tokens.tobytes(order="C"))
+        written += len(shard_indexes)
+        shard_count += 1
+    return written, shard_count
+
+
+def prepare_codebooks(args):
+    if args.label_field:
+        raise ValueError("--label-field is not valid for codebook arrays; use --label-file")
+    if not args.label_file:
+        raise ValueError("codebook classification preparation requires --label-file with row_index<TAB>label")
+    if args.codebook_vocab_size < 2 or args.codebook_vocab_size > 2_147_483_647:
+        raise ValueError("--codebook-vocab-size must be in [2,2147483647]")
+    if not re.fullmatch(r"[a-z][a-z0-9_-]*", args.codebook_modality):
+        raise ValueError("--codebook-modality must be a lowercase identifier")
+    source, tokens, embedded_lengths = load_codebook_tokens(args.input)
+    try:
+        n_records, seq_len, num_codebooks = (int(value) for value in tokens.shape)
+        if num_codebooks * args.codebook_vocab_size > 2_147_483_647:
+            raise ValueError("num_codebooks*codebook_vocab_size exceeds int32 indexing")
+        labels = codebook_row_values(args.label_file, n_records, "labels")
+        if args.length_file and embedded_lengths is not None:
+            raise ValueError("codebook lengths must come from either the .npz 'lengths' array or --length-file, not both")
+        if args.length_file:
+            lengths = codebook_row_values(args.length_file, n_records, "lengths")
+        elif embedded_lengths is not None:
+            if not isinstance(embedded_lengths, np.ndarray) or embedded_lengths.shape != (n_records,) or not np.issubdtype(embedded_lengths.dtype, np.integer):
+                raise ValueError(f"codebook .npz lengths must be an integer [N] array, got shape={getattr(embedded_lengths, 'shape', None)} dtype={getattr(embedded_lengths, 'dtype', None)}")
+            lengths = [int(value) for value in embedded_lengths]
+        else:
+            lengths = [seq_len] * n_records
+        for row, length in enumerate(lengths):
+            if length <= 0 or length > seq_len:
+                raise ValueError(f"codebook length row={row} value={length} outside [1,{seq_len}]")
+        records = [(str(index), "", labels[index]) for index in range(n_records)]
+        num_labels = validate_label_space(records)
+        train_records, val_records = split_labeled_records(records, args.val_split)
+        train_indexes = [int(record[0]) for record in train_records]
+        val_indexes = [int(record[0]) for record in val_records]
+        records_per_shard = max(1, args.tokens_per_shard // (seq_len * num_codebooks))
+        train_written, train_shards = write_codebook_shards(
+            args.output, "train", tokens, lengths, labels, train_indexes, records_per_shard, args.codebook_vocab_size
+        )
+        val_written, val_shards = write_codebook_shards(
+            args.output, "val", tokens, lengths, labels, val_indexes, records_per_shard, args.codebook_vocab_size
+        )
+
+        def split_doc(name, indexes, shard_count):
+            counts = Counter(labels[index] for index in indexes)
+            return {
+                "pattern": f"{name}_*.bin",
+                "tokens": len(indexes) * seq_len * num_codebooks,
+                "shards": shard_count,
+                "sequences": len(indexes),
+                "mean_sequence_tokens": float(sum(lengths[index] for index in indexes) / len(indexes)) if indexes else 0,
+                "max_sequence_tokens": max((lengths[index] for index in indexes), default=0),
+                "class_counts": {str(label): int(counts.get(label, 0)) for label in range(num_labels)},
+            }
+
+        splits = {"train": split_doc("train", train_indexes, train_shards)}
+        if val_indexes:
+            splits["val"] = split_doc("val", val_indexes, val_shards)
+        manifest = {
+            "format": "mixlab.dataset", "version": 1,
+            "representation": "discrete_codebooks", "modality": args.codebook_modality,
+            "token_dtype": "int32", "num_codebooks": num_codebooks,
+            "codebook_vocab_size": args.codebook_vocab_size,
+            "shard_format": "mixlab_codebook_sequence_shard_v1",
+            "sequence_layout": "one_record_per_row", "record_seq_len": seq_len,
+            "task": {"type": "single_label_classification", "num_labels": num_labels},
+            "splits": splits,
+        }
+        path = os.path.join(args.output, "mixlab.dataset.json")
+        with open(path, "w", encoding="utf-8") as output:
+            json.dump(manifest, output, indent=2, sort_keys=True)
+            output.write("\n")
+        print(
+            f"Saved codebook dataset N={n_records} T={seq_len} Q={num_codebooks} V={args.codebook_vocab_size} "
+            f"train={train_written} val={val_written} to {args.output}"
+        )
+        print(f"Saved codebook dataset manifest to {path}")
+    finally:
+        if isinstance(source, np.lib.npyio.NpzFile):
+            source.close()
 
 
 def write_continuous_shards(output_dir: str, split: str, features, labels, indexes, records_per_shard: int):
@@ -1308,9 +1472,9 @@ def write_minimal_pairs(
 
 def main():
     parser = argparse.ArgumentParser(description="Prepare binary shards for mixlab training")
-    parser.add_argument("--input", required=True, help="Input text/JSONL/FASTA path, directory, or continuous .npy/.npz array")
+    parser.add_argument("--input", required=True, help="Input text/JSONL/FASTA path, directory, or continuous/codebook .npy/.npz array")
     parser.add_argument("--output", required=True, help="Output directory for shards")
-    parser.add_argument("--input-format", choices=["text", "fasta", "continuous"], default="text", help="Input representation (default: text)")
+    parser.add_argument("--input-format", choices=["text", "fasta", "continuous", "codebooks"], default="text", help="Input representation (default: text)")
     parser.add_argument("--vocab-size", type=int, default=1024, help="BPE vocabulary size (default: 1024)")
     parser.add_argument("--val-split", type=float, default=0.1, help="Fraction of tokens for validation (default: 0.1)")
     parser.add_argument("--tokenizer-path", default="", help="Path to pre-trained tokenizer.json (skip training)")
@@ -1319,6 +1483,9 @@ def main():
     parser.add_argument("--label-field", default="", help="JSON integer-label field; enables labeled per-record classification shards")
     parser.add_argument("--label-file", default="", help="Label TSV: FASTA id<TAB>label or continuous row_index<TAB>label")
     parser.add_argument("--continuous-modality", default="continuous", help="lowercase modality identifier recorded for continuous arrays")
+    parser.add_argument("--codebook-vocab-size", type=int, default=0, help="exclusive upper bound for codebook IDs")
+    parser.add_argument("--codebook-modality", default="audio", help="lowercase modality identifier recorded for codebook arrays")
+    parser.add_argument("--length-file", default="", help="optional row_index<TAB>valid_length file for codebook arrays")
     parser.add_argument("--frame-per-record", action="store_true", help="preserve each text/JSONL record as one framed training row")
     parser.add_argument("--record-seq-len", type=int, default=0, help="fixed training row length for --frame-per-record")
     parser.add_argument("--record-pad-id", type=int, default=-1, help="PAD token ID for --frame-per-record")
@@ -1363,6 +1530,12 @@ def main():
         if args.frame_per_record:
             raise ValueError("--frame-per-record is not used with fixed-shape continuous arrays")
         prepare_continuous(args)
+        return
+
+    if args.input_format == "codebooks":
+        if args.frame_per_record:
+            raise ValueError("--frame-per-record is not used with fixed-shape codebook arrays")
+        prepare_codebooks(args)
         return
 
     if args.input_format == "fasta":

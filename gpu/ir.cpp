@@ -3831,6 +3831,20 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mx::take(get(op, 0), mx::astype(get(op, 1), mx::int32), 0));
         break;
       }
+      case OP_CODEBOOK_OFFSET: {
+        if (op.n_int_params < 2 || op.int_params[0] <= 0 || op.int_params[1] <= 0) {
+          throw std::runtime_error("OP_CODEBOOK_OFFSET requires positive num_codebooks and vocab_size");
+        }
+        const int num_codebooks = op.int_params[0];
+        const int vocab_size = op.int_params[1];
+        auto tokens = mx::astype(get(op, 0), mx::int32);
+        if (tokens.ndim() != 3 || tokens.shape(2) != num_codebooks) {
+          throw std::runtime_error("OP_CODEBOOK_OFFSET input must have shape [B,T,num_codebooks]");
+        }
+        auto offsets = mx::arange(0, num_codebooks, 1, mx::int32) * mx::array(vocab_size, mx::int32);
+        set_out(op, 0, tokens + offsets);
+        break;
+      }
       case OP_MATMUL: {
         set_out(op, 0, mx::matmul(get(op, 0), get(op, 1)));
         break;

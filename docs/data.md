@@ -1,7 +1,7 @@
 # Data preparation
 
-mixlab trains on binary sequence shards. These can contain discrete token IDs
-or fixed-shape continuous feature frames. Use `prepare` for your own data, or
+mixlab trains on binary sequence shards. These can contain discrete token IDs,
+multi-codebook codec IDs, or fixed-shape continuous feature frames. Use `prepare` for your own data, or
 the provided scripts for example and FineWeb-Edu text data.
 
 ## Example data
@@ -77,14 +77,31 @@ mixlab -mode prepare -input corpus.txt -prepare-output-dir data/my_data \
 
 The installed binary embeds Mixlab's preparation scripts, so `prepare` does not
 require a source checkout. Text preparation requires Python 3 with `numpy` and
-`tokenizers`; FASTA and continuous-array preparation require Python 3 with
+`tokenizers`; FASTA, continuous-array, and codebook-array preparation require Python 3 with
 `numpy`.
 
 ```bash
 pip install numpy tokenizers
 ```
 
-Tokens are stored as uint16, so `vocab-size` must be 65,535 or less.
+Text and nucleotide tokens are stored as uint16, so `vocab-size` must be
+65,535 or less. Multi-codebook arrays use their dedicated int32 shard format.
+
+## Discrete codebook arrays
+
+Native classifiers can consume integer `.npy` arrays shaped `[N,T,Q]`, or
+`.npz` archives containing `codebook_tokens` and optional `lengths`. Prepare
+with an explicit codebook vocabulary bound and row-index labels:
+
+```bash
+mixlab -mode prepare -input codec_tokens.npy -input-format codebooks \
+  -codebook-vocab-size 1024 -label-file labels.tsv \
+  -length-file lengths.tsv -prepare-output-dir data/audio_codes
+```
+
+This path stores int32 IDs and rejects any value outside `[0,V)`, naming its
+row, timestep, and codebook. `lengths.tsv` is optional; without it every record
+has valid length `T`. See [Discrete codebook input](discrete-codebooks-input.md).
 
 ## Continuous feature arrays
 
@@ -160,16 +177,19 @@ Common flags:
 
 | Flag | Description |
 |------|-------------|
-| `-input` | Input text/JSONL/FASTA path, directory, or continuous `.npy`/`.npz` array. |
-| `-input-format` | `text` (default), `fasta`, or `continuous`. |
+| `-input` | Input text/JSONL/FASTA path, directory, or continuous/codebook `.npy`/`.npz` array. |
+| `-input-format` | `text` (default), `fasta`, `continuous`, or `codebooks`. |
 | `-prepare-output-dir` | Output directory for binary shards. Preferred alias for legacy `-output`. |
 | `-vocab-size` | BPE vocabulary size. Default: `1024`. |
 | `-val-split` | Fraction of tokens reserved for validation. Default: `0.1`. |
 | `-tokenizer-path` | Path to a pre-trained `tokenizer.json`. |
 | `-text-field` | JSON field name for text in JSONL input. Default: `text`. |
 | `-label-field` | JSONL integer-label field for sequence classification. |
-| `-label-file` | FASTA `id<TAB>label` or continuous `row_index<TAB>label` TSV. |
+| `-label-file` | FASTA `id<TAB>label` or continuous/codebook `row_index<TAB>label` TSV. |
 | `-continuous-modality` | Manifest modality identifier for continuous arrays. Default: `continuous`. |
+| `-codebook-vocab-size` | Exclusive code-ID upper bound for codebook arrays. |
+| `-codebook-modality` | Manifest modality identifier for codebook arrays. Default: `audio`. |
+| `-length-file` | Optional codebook row-index valid-length TSV. |
 | `-char-vocab-size` | Generate tokenizer-level byte/character feature lookup when enabled. |
 | `-char-max-per-token` | Maximum byte/character slots per token for char features. |
 
@@ -200,7 +220,9 @@ modify the binary shard format. A prepared text dataset currently looks like:
 Paths and patterns are relative to the manifest directory. When a manifest is
 present, Mixlab validates its schema before constructing a trainer. Discrete
 data must match model `vocab_size`; continuous data must match adapter
-`feature_dim`, model `seq_len`, and classifier `num_labels`. Existing discrete
+`feature_dim`, model `seq_len`, and classifier `num_labels`. Codebook data must
+match adapter `num_codebooks`, `codebook_vocab_size`, model `seq_len`, and
+classifier `num_labels`. Existing discrete
 shard directories without a manifest remain supported for backward
 compatibility.
 
@@ -220,6 +242,12 @@ report records rather than token counts, and task metadata declares
 single-label classification. Each binary record stores one label and one
 `[T,F]` frame matrix together, so shuffle order cannot detach labels from
 features.
+
+Codebook manifests use `representation: "discrete_codebooks"`,
+`token_dtype: "int32"`, `num_codebooks: Q`, `codebook_vocab_size: V`, and
+`shard_format: "mixlab_codebook_sequence_shard_v1"`. Every binary record owns
+one label, one valid timestep length, and one `[T,Q]` code matrix. Valid lengths
+control temporal classification pooling; code ID `0` remains an ordinary input.
 
 Text datasets prepared with `-frame-per-record` also use
 `mixlab_sequence_shard_v1`, with `sequence_layout: "one_record_per_row"` and a

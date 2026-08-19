@@ -1,0 +1,35 @@
+{
+  "name": "discrete-codebooks-gated-deltanet-classification-tiny",
+  "model_dim": 64,
+  "seq_len": 128,
+  "positional_embedding": "none",
+  "input_adapter": {
+    "kind": "discrete_codebooks",
+    "num_codebooks": 2,
+    "codebook_vocab_size": 1024,
+    "fusion": "attention_mlp",
+    "fusion_hidden_dim": 64,
+    "norm": "none"
+  },
+  "blocks": [
+    {"type": "gated_deltanet", "heads": 4, "d_k": 16},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {
+      "num_labels": 10,
+      "pooling": "mean",
+      "classifier_dropout": 0.1,
+      "bias": false
+    },
+    "optimizer": "adamw",
+    "batch_tokens": 1024,
+    "steps": 1000,
+    "lr": 0.0003,
+    "warmup_steps": 100,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "seed": 42
+  }
+}

@@ -98,6 +98,7 @@ const (
 	OpTTTMLPStatefulScan   = 104
 	OpS4D                  = 105
 	OpBatchNorm            = 106
+	OpCodebookOffset       = 107
 )
 
 // HandleInput binds an existing GPU array handle to a declared IR input.

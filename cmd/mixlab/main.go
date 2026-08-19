@@ -95,7 +95,7 @@ func main() {
 
 	// prepare mode flags
 	prepInput := flag.String("input", "", "input text file, JSONL, or directory (prepare mode)")
-	prepInputFormat := flag.String("input-format", "text", "prepare input representation: text, fasta, or continuous")
+	prepInputFormat := flag.String("input-format", "text", "prepare input representation: text, fasta, continuous, or codebooks")
 	prepOutput := flag.String("output", "", "legacy output path for prepare, export-hf, or hiddenstats; prefer mode-specific output aliases in new scripts")
 	prepareOutputDir := flag.String("prepare-output-dir", "", "output directory for shards; clearer alias for -output in prepare mode")
 	exportDir := flag.String("export-dir", "", "Hugging Face output directory; clearer alias for -output in export-hf mode")
@@ -108,6 +108,9 @@ func main() {
 	prepLabelField := flag.String("label-field", "", "JSON integer-label field; emits labeled classification shards (prepare mode)")
 	prepLabelFile := flag.String("label-file", "", "label TSV: FASTA id<TAB>label or continuous row_index<TAB>label (prepare mode)")
 	prepContinuousModality := flag.String("continuous-modality", "continuous", "manifest modality identifier for continuous arrays (prepare mode)")
+	prepCodebookVocabSize := flag.Int("codebook-vocab-size", 0, "exclusive upper bound for every codebook ID (prepare codebooks mode)")
+	prepCodebookModality := flag.String("codebook-modality", "audio", "manifest modality identifier for codebook arrays (prepare mode)")
+	prepLengthFile := flag.String("length-file", "", "optional row_index<TAB>valid_length TSV for codebook arrays (prepare mode)")
 	prepFramePerRecord := flag.Bool("frame-per-record", false, "preserve each text/JSONL record as one BOS/EOS/PAD-framed training row")
 	prepRecordSeqLen := flag.Int("record-seq-len", 0, "fixed row length for -frame-per-record")
 	prepRecordPADID := flag.Int("record-pad-id", -1, "PAD token ID for -frame-per-record")
@@ -234,6 +237,9 @@ func main() {
 			NucleotideFraming:         *prepNucleotideFraming,
 			NucleotideStreamSeparator: *prepNucleotideStreamSeparator,
 			ContinuousModality:        *prepContinuousModality,
+			CodebookVocabSize:         *prepCodebookVocabSize,
+			CodebookModality:          *prepCodebookModality,
+			LengthFile:                *prepLengthFile,
 		}))
 		return
 	}
@@ -450,6 +456,7 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Text tokenizer/data", []string{"vocab-size", "tokenizer-path", "wwm-compatible-tokenizer", "text-field"}},
 		{"Sequence classification labels", []string{"label-field", "label-file"}},
 		{"Continuous feature arrays", []string{"continuous-modality"}},
+		{"Discrete codebook arrays", []string{"codebook-vocab-size", "codebook-modality", "length-file"}},
 		{"Per-record framing", []string{"frame-per-record", "record-seq-len", "record-pad-id", "record-bos-id", "record-eos-id", "record-overflow"}},
 		{"FASTA nucleotide data", []string{"nucleotide-alphabet", "nucleotide-ambiguous-symbols", "nucleotide-invalid-symbol-policy", "nucleotide-framing", "nucleotide-stream-separator"}},
 		{"Character feature artifact", []string{"char-vocab-size", "char-max-per-token"}},

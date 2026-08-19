@@ -3,6 +3,7 @@ package arch
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -282,5 +283,165 @@ func TestLinearFramesNormalizesBeforeTopLevelPositions(t *testing.T) {
 	}
 	if normOp < 0 || positionAddOp < 0 || normOp >= positionAddOp {
 		t.Fatalf("adapter norm op=%d position add op=%d; ops=%+v", normOp, positionAddOp, prog.Ops)
+	}
+}
+
+func discreteCodebookTestConfig() ArchConfig {
+	bias := false
+	return ArchConfig{
+		Name:                "codebook_classifier",
+		ModelDim:            6,
+		SeqLen:              4,
+		PositionalEmbedding: PositionalEmbeddingNone,
+		InputAdapter: &InputAdapterSpec{
+			Kind: InputAdapterDiscreteCodebooks, NumCodebooks: 2, CodebookVocabSize: 8,
+			Fusion: InputAdapterFusionAttentionMLP, FusionHiddenDim: 6, Norm: InputAdapterNormNone,
+		},
+		Blocks: []BlockSpec{{Type: "swiglu"}},
+		Training: TrainingSpec{
+			Objective: ObjectiveClassification, BatchTokens: 8, Steps: 2, LR: 1e-3,
+			Classification: &ClassificationSpec{NumLabels: 3, Pooling: ClassificationPoolingMean, Bias: &bias},
+		},
+	}
+}
+
+func TestDiscreteCodebooksConfigValidation(t *testing.T) {
+	cfg := parseInputAdapterTestConfig(t, discreteCodebookTestConfig())
+	if !cfg.DiscreteCodebooksEnabled() || cfg.CodebookEmbeddingRows() != 16 ||
+		cfg.EffectiveCodebookFusion() != InputAdapterFusionAttentionMLP || cfg.EffectiveCodebookFusionHiddenDim() != 6 {
+		t.Fatalf("resolved adapter=%+v rows=%d fusion=%q hidden=%d", cfg.InputAdapter, cfg.CodebookEmbeddingRows(), cfg.EffectiveCodebookFusion(), cfg.EffectiveCodebookFusionHiddenDim())
+	}
+
+	tests := []struct {
+		name string
+		edit func(*ArchConfig)
+		want string
+	}{
+		{"codebooks", func(c *ArchConfig) { c.InputAdapter.NumCodebooks = 0 }, "num_codebooks"},
+		{"domain", func(c *ArchConfig) { c.InputAdapter.CodebookVocabSize = 1 }, "codebook_vocab_size"},
+		{"overflow", func(c *ArchConfig) { c.InputAdapter.NumCodebooks = math.MaxInt32; c.InputAdapter.CodebookVocabSize = 2 }, "int32"},
+		{"fusion", func(c *ArchConfig) { c.InputAdapter.Fusion = "concat" }, "fusion"},
+		{"mean hidden", func(c *ArchConfig) { c.InputAdapter.Fusion = "mean"; c.InputAdapter.FusionHiddenDim = 4 }, "fusion_hidden_dim"},
+		{"feature dim", func(c *ArchConfig) { c.InputAdapter.FeatureDim = 3 }, "feature_dim"},
+		{"bias", func(c *ArchConfig) { value := true; c.InputAdapter.Bias = &value }, "bias"},
+		{"vocabulary", func(c *ArchConfig) { c.VocabSize = 16 }, "vocab_size"},
+		{"causal", func(c *ArchConfig) { c.Training.Objective = ObjectiveCausal; c.Training.Classification = nil }, "classification"},
+		{"token features", func(c *ArchConfig) { c.CharVocabSize = 257 }, "feature channels"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := discreteCodebookTestConfig()
+			tt.edit(&candidate)
+			raw, _ := json.Marshal(candidate)
+			if _, err := ParseArchConfig(raw, tt.name); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error=%v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestDiscreteCodebooksWeightsIRAndCounts(t *testing.T) {
+	cfg := parseInputAdapterTestConfig(t, discreteCodebookTestConfig())
+	weights, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAdapter := map[string]WeightMeta{
+		"input_adapter_codebook_embedding": {Name: "input_adapter_codebook_embedding", Shape: []int{16, 6}, InitMode: "torch_embedding_normal_1"},
+		"input_adapter_codebook_attn_w1":   {Name: "input_adapter_codebook_attn_w1", Shape: []int{6, 6}, InitMode: "torch_linear_uniform"},
+		"input_adapter_codebook_attn_b1":   {Name: "input_adapter_codebook_attn_b1", Shape: []int{6}, InitMode: "torch_linear_bias_uniform", PyTorchLinearFanIn: 6},
+		"input_adapter_codebook_attn_w2":   {Name: "input_adapter_codebook_attn_w2", Shape: []int{6, 1}, InitMode: "torch_linear_uniform"},
+	}
+	for name, want := range wantAdapter {
+		found := false
+		for _, weight := range weights {
+			if weight.Name == name {
+				found = true
+				if !reflect.DeepEqual(weight, want) {
+					t.Fatalf("weight %q=%+v want=%+v", name, weight, want)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("missing %q in %+v", name, weights)
+		}
+	}
+	var adapterParams int64
+	for _, weight := range weights {
+		if strings.HasPrefix(weight.Name, "input_adapter_codebook_") {
+			adapterParams += countWeightMetaElements([]WeightMeta{weight})
+		}
+	}
+	// Q*V*D embedding + D*H + H first linear + H second linear.
+	if want := int64(2*8*6 + 6*6 + 6 + 6); adapterParams != want {
+		t.Fatalf("adapter params=%d want=%d", adapterParams, want)
+	}
+	if got := weights[len(weights)-1]; got.Name != "head_classifier_proj" || !reflect.DeepEqual(got.Shape, []int{6, 3}) {
+		t.Fatalf("bias-free classifier tail=%+v", got)
+	}
+	for _, weight := range weights {
+		if weight.Name == "head_classifier_bias" || weight.Name == "embed" || weight.Name == "head" {
+			t.Fatalf("unexpected weight %+v", weight)
+		}
+	}
+
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !programHasInput(prog, "codebook_tokens") || programHasInput(prog, "tokens") || programHasInput(prog, "continuous_frames") {
+		t.Fatalf("codebook IR inputs=%+v", prog.Inputs)
+	}
+	var offset, codebookSoftmax, fusionMatMul bool
+	for _, op := range prog.Ops {
+		if op.Code == OpCodebookOffset && reflect.DeepEqual(op.IntParams, []int{2, 8}) {
+			offset = true
+		}
+		if op.Code == OpSoftmax && len(op.Outputs) == 1 && op.Outputs[0] == "codebook_attn_weights" && reflect.DeepEqual(op.IntParams, []int{-1}) {
+			codebookSoftmax = true
+		}
+		if op.Code == OpMatMul && reflect.DeepEqual(op.Inputs, []string{"codebook_attn_weights_b1q", "codebook_embeddings_bqd"}) {
+			fusionMatMul = true
+		}
+	}
+	if !offset || !codebookSoftmax || !fusionMatMul {
+		t.Fatalf("offset=%t softmax=%t fusion_matmul=%t", offset, codebookSoftmax, fusionMatMul)
+	}
+	params, expanded, err := ParameterCountsFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantParams := countWeightMetaElements(weights)
+	if params != wantParams || expanded != wantParams {
+		t.Fatalf("params=%d expanded=%d want=%d", params, expanded, wantParams)
+	}
+}
+
+func TestDiscreteCodebooksMeanFusionHasNoAttentionWeights(t *testing.T) {
+	candidate := discreteCodebookTestConfig()
+	candidate.InputAdapter.Fusion = InputAdapterFusionMean
+	candidate.InputAdapter.FusionHiddenDim = 0
+	cfg := parseInputAdapterTestConfig(t, candidate)
+	weights, err := CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, weight := range weights {
+		if strings.Contains(weight.Name, "codebook_attn") {
+			t.Fatalf("mean fusion retained attention weight %+v", weight)
+		}
+	}
+	prog, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, op := range prog.Ops {
+		if op.Code == OpMeanAxis && reflect.DeepEqual(op.Inputs, []string{"codebook_embeddings"}) && reflect.DeepEqual(op.IntParams, []int{2}) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("mean fusion did not reduce codebook axis 2")
 	}
 }

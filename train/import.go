@@ -101,8 +101,13 @@ func loadClassificationWarmStartWeights(path string, shapes []WeightShape, seed 
 			break
 		}
 	}
-	if headStart <= 0 || len(shapes)-headStart != 2 || shapes[headStart+1].Name != "head_classifier_bias" {
-		return nil, 0, fmt.Errorf("classification weight layout must end with head_classifier_proj and head_classifier_bias")
+	headWeights := len(shapes) - headStart
+	validHead := headStart > 0 && (headWeights == 1 || headWeights == 2)
+	if validHead && headWeights == 2 {
+		validHead = shapes[headStart+1].Name == "head_classifier_bias"
+	}
+	if !validHead {
+		return nil, 0, fmt.Errorf("classification weight layout must end with head_classifier_proj and optional head_classifier_bias")
 	}
 	backbone, err := loadSafetensorsWeights(path, shapes[:headStart])
 	if err != nil {

@@ -28,9 +28,9 @@ This page is the short path through the top-level model fields. Use
 | Field | Purpose |
 |------|---------|
 | `model_dim` | Hidden size used by blocks and embeddings. |
-| `vocab_size` | Token vocabulary size for the default `token_embedding` adapter. Omit for continuous frames. |
+| `vocab_size` | Token vocabulary size for the default `token_embedding` adapter. Omit for continuous frames and discrete codebooks. |
 | `seq_len` | Sequence length in tokens or continuous timesteps. |
-| `input_adapter` | Omitted/default `token_embedding`, or native classification `linear_frames` for float32 `[B,T,F]` data. |
+| `input_adapter` | Omitted/default `token_embedding`, native `linear_frames` for float32 `[B,T,F]`, or `discrete_codebooks` for int32 `[B,T,Q]` classification data. |
 | `mlp_mult` | FFN expansion multiplier used by FFN-style blocks and experts. |
 | `blocks` | Ordered architecture stack. See [config-blocks.md](config-blocks.md). |
 | `training` | Training objective, optimizer, schedule, and runtime settings. See [config-training.md](config-training.md). |
@@ -70,6 +70,13 @@ Continuous v1 supports native sequence classification and uses the top-level
 `positional_embedding` field for position policy. It does not allocate token
 embeddings or an LM head and is not HF-exportable. See
 [Continuous input](continuous-input.md).
+
+`{"kind":"discrete_codebooks","num_codebooks":Q,"codebook_vocab_size":V}`
+uses one shared `[Q*V,D]` table with codebook offsets. The default
+`attention_mlp` fusion learns a softmax over codebooks; `mean` is a
+parameter-free ablation. This native classification path requires a matching
+manifest and does not allocate a language-model vocabulary/head. See
+[Discrete codebook input](discrete-codebooks-input.md).
 
 ## Embedding Channels
 

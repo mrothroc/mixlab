@@ -2,6 +2,7 @@ package train
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -46,12 +47,15 @@ type PrepareOptions struct {
 	NucleotideFraming         string
 	NucleotideStreamSeparator string
 	ContinuousModality        string
+	CodebookVocabSize         int
+	CodebookModality          string
+	LengthFile                string
 }
 
 // runPrepare invokes the bundled prepare.py to tokenize raw text into binary shards.
 func runPrepare(opts PrepareOptions) error {
 	if opts.Input == "" {
-		return fmt.Errorf("-input is required for prepare mode; pass text, JSONL, FASTA, a directory, or a continuous .npy/.npz array")
+		return fmt.Errorf("-input is required for prepare mode; pass text, JSONL, FASTA, a directory, or a continuous/codebook .npy/.npz array")
 	}
 	if opts.Output == "" {
 		return fmt.Errorf("-prepare-output-dir (or legacy -output) is required for prepare mode; pass an output directory, e.g.: mixlab -mode prepare -input corpus.jsonl -prepare-output-dir data/")
@@ -87,8 +91,8 @@ func runPrepare(opts PrepareOptions) error {
 	if opts.LabelFieldName != "" && inputFormat != "text" {
 		return fmt.Errorf("-label-field requires -input-format=text JSONL")
 	}
-	if opts.LabelFile != "" && inputFormat != "fasta" && inputFormat != "continuous" {
-		return fmt.Errorf("-label-file requires -input-format=fasta or continuous")
+	if opts.LabelFile != "" && inputFormat != "fasta" && inputFormat != "continuous" && inputFormat != "codebooks" {
+		return fmt.Errorf("-label-file requires -input-format=fasta, continuous, or codebooks")
 	}
 	recordIDsRequired := opts.FramePerRecord || opts.LabelFieldName != ""
 	recordLengthRequired := recordIDsRequired || (opts.LabelFile != "" && inputFormat == "fasta")
@@ -99,6 +103,19 @@ func runPrepare(opts PrepareOptions) error {
 		if opts.FramePerRecord {
 			return fmt.Errorf("-frame-per-record is not used with fixed-shape continuous arrays")
 		}
+	}
+	if inputFormat == "codebooks" {
+		if opts.LabelFile == "" {
+			return fmt.Errorf("-input-format=codebooks requires -label-file with row_index<TAB>label")
+		}
+		if opts.CodebookVocabSize < 2 || int64(opts.CodebookVocabSize) > math.MaxInt32 {
+			return fmt.Errorf("-input-format=codebooks requires -codebook-vocab-size in [2,%d]", math.MaxInt32)
+		}
+		if opts.FramePerRecord {
+			return fmt.Errorf("-frame-per-record is not used with fixed-shape codebook arrays")
+		}
+	} else if opts.LengthFile != "" {
+		return fmt.Errorf("-length-file requires -input-format=codebooks")
 	}
 	if opts.FramePerRecord && inputFormat != "text" && opts.LabelFile == "" {
 		return fmt.Errorf("-frame-per-record requires -input-format=text")
@@ -150,6 +167,15 @@ func runPrepare(opts PrepareOptions) error {
 	}
 	if opts.ContinuousModality != "" {
 		args = append(args, "--continuous-modality", opts.ContinuousModality)
+	}
+	if opts.CodebookVocabSize > 0 {
+		args = append(args, "--codebook-vocab-size", fmt.Sprintf("%d", opts.CodebookVocabSize))
+	}
+	if opts.CodebookModality != "" {
+		args = append(args, "--codebook-modality", opts.CodebookModality)
+	}
+	if opts.LengthFile != "" {
+		args = append(args, "--length-file", opts.LengthFile)
 	}
 	if opts.NucleotideAlphabet != "" {
 		args = append(args, "--nucleotide-alphabet", opts.NucleotideAlphabet)
@@ -255,10 +281,15 @@ func runPrepare(opts PrepareOptions) error {
 	if err != nil {
 		return fmt.Errorf("validate prepared dataset manifest: %w", err)
 	}
-	if manifest.Representation == data.DatasetRepresentationContinuousFrames {
+	switch manifest.Representation {
+	case data.DatasetRepresentationContinuousFrames:
 		fmt.Printf("Validation: dataset modality=%s representation=%s shape=[T=%d,F=%d] dtype=%s\n",
 			manifest.Modality, manifest.Representation, manifest.RecordSeqLen, manifest.FeatureDim, manifest.FeatureDType)
-	} else {
+	case data.DatasetRepresentationDiscreteCodebooks:
+		fmt.Printf("Validation: dataset modality=%s representation=%s shape=[T=%d,Q=%d] codebook_vocab_size=%d dtype=%s\n",
+			manifest.Modality, manifest.Representation, manifest.RecordSeqLen, manifest.NumCodebooks,
+			manifest.CodebookVocabSize, manifest.TokenDType)
+	default:
 		fmt.Printf("Validation: dataset modality=%s representation=%s vocab_size=%d\n",
 			manifest.Modality, manifest.Representation, manifest.VocabSize)
 	}
@@ -342,7 +373,7 @@ func preparePython(inputFormat string) (string, error) {
 
 	modules := []string{"numpy"}
 	install := "numpy"
-	if inputFormat != "fasta" && inputFormat != "continuous" {
+	if inputFormat != "fasta" && inputFormat != "continuous" && inputFormat != "codebooks" {
 		modules = append(modules, "tokenizers")
 		install += " tokenizers"
 	}

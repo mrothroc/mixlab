@@ -27,6 +27,9 @@ func NewClassificationValSet(pattern string, maxBatches, batchTokens, seqLen int
 	if manifest.ShardFormat == DatasetShardFormatContinuousSequenceV1 {
 		return newContinuousClassificationValSet(pattern, manifest, maxBatches, batchTokens, seqLen)
 	}
+	if manifest.ShardFormat == DatasetShardFormatCodebookSequenceV1 {
+		return newCodebookClassificationValSet(pattern, manifest, maxBatches, batchTokens, seqLen)
+	}
 	if manifest.ShardFormat != DatasetShardFormatLabeledSequenceV1 ||
 		manifest.EffectiveSequenceLayout() != DatasetSequenceLayoutOneRecordRow {
 		return nil, fmt.Errorf(
@@ -101,6 +104,75 @@ func NewClassificationValSet(pattern string, maxBatches, batchTokens, seqLen int
 			SegmentIDs: batch.SegmentIDs, MaskEligible: batch.MaskEligible,
 			Labels: batch.Labels, ValidMask: batch.ValidMask,
 			ExampleCount: realRows,
+		})
+	}
+	return vs, nil
+}
+
+func newCodebookClassificationValSet(
+	pattern string,
+	manifest *DatasetManifest,
+	maxBatches, batchTokens, seqLen int,
+) (*ValSet, error) {
+	if manifest == nil || manifest.Representation != DatasetRepresentationDiscreteCodebooks {
+		return nil, fmt.Errorf("codebook classification validation requires a discrete codebook manifest")
+	}
+	if seqLen != manifest.RecordSeqLen {
+		return nil, fmt.Errorf("codebook classification validation requires seq_len=%d, got %d", manifest.RecordSeqLen, seqLen)
+	}
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no codebook classification validation shard files matched %q", pattern)
+	}
+	Q := manifest.NumCodebooks
+	var tokens, lengths, labels []int32
+	for _, file := range files {
+		shard, err := LoadCodebookSequenceShard(file)
+		if err != nil {
+			return nil, err
+		}
+		if shard.SeqLen != seqLen || shard.NumCodebooks != Q || shard.CodebookVocabSize != manifest.CodebookVocabSize {
+			return nil, fmt.Errorf("codebook validation shard %q domain does not match manifest", file)
+		}
+		tokens = append(tokens, shard.Tokens...)
+		lengths = append(lengths, shard.Lengths...)
+		labels = append(labels, shard.Labels...)
+	}
+	if len(labels) == 0 {
+		return nil, fmt.Errorf("codebook classification validation split %q contains no records", pattern)
+	}
+	batchSize := batchTokens / seqLen
+	evaluated := len(labels)
+	if maxBatches > 0 && maxBatches*batchSize < evaluated {
+		evaluated = maxBatches * batchSize
+	}
+	batchCount := (evaluated + batchSize - 1) / batchSize
+	vs := &ValSet{Batches: make([]ValBatch, 0, batchCount), TotalExamples: len(labels), EvaluatedExamples: evaluated}
+	recordWidth := seqLen * Q
+	for start := 0; start < evaluated; start += batchSize {
+		realRows := minInt(batchSize, evaluated-start)
+		batchTokensData := make([]int32, batchSize*recordWidth)
+		batchLabels := make([]int32, batchSize)
+		validMask := make([]float32, batchTokens)
+		for row := 0; row < realRows; row++ {
+			source := start + row
+			copy(batchTokensData[row*recordWidth:], tokens[source*recordWidth:(source+1)*recordWidth])
+			batchLabels[row] = labels[source]
+			for pos := 0; pos < int(lengths[source]); pos++ {
+				validMask[row*seqLen+pos] = 1
+			}
+		}
+		for row := realRows; row < batchSize; row++ {
+			copy(batchTokensData[row*recordWidth:], batchTokensData[:recordWidth])
+			batchLabels[row] = batchLabels[0]
+			copy(validMask[row*seqLen:(row+1)*seqLen], validMask[:seqLen])
+		}
+		vs.Batches = append(vs.Batches, ValBatch{
+			Codebooks: batchTokensData, Labels: batchLabels, ValidMask: validMask, ExampleCount: realRows,
 		})
 	}
 	return vs, nil

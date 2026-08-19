@@ -285,6 +285,13 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		builderTieEmbeddings = true
 		reserveHead = false
 		useTiedHead = true
+	} else if cfg.DiscreteCodebooksEnabled() {
+		// As with linear_frames, classification conversion removes the temporary
+		// LM tail. The shared embedding rows are the flattened codebook domain.
+		builderVocabSize = cfg.CodebookEmbeddingRows()
+		builderTieEmbeddings = true
+		reserveHead = false
+		useTiedHead = true
 	}
 	activeMTP := mtp
 	if state.MTPAuxInactive {

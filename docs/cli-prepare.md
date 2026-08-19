@@ -1,13 +1,14 @@
 # CLI: Data Preparation
 
-`prepare` converts text, FASTA, or continuous feature arrays into binary shards
+`prepare` converts text, FASTA, continuous feature arrays, or discrete
+multi-codebook arrays into binary shards
 that Mixlab can train and evaluate against. See [data.md](data.md) for examples
 and representation compatibility notes.
 
 The installed `mixlab` binary contains the preparation scripts; a Mixlab source
 checkout and `MIXLAB_SCRIPTS` are not required. The scripts run through
 `python3` from `PATH`. Text preparation requires `numpy` and `tokenizers`;
-FASTA and continuous-array preparation require `numpy`.
+FASTA, continuous-array, and codebook-array preparation require `numpy`.
 
 ```bash
 python3 -m pip install numpy tokenizers
@@ -26,8 +27,8 @@ development copies of `prepare.py` and `prepare_records.py`.
 
 | Flag | Description |
 |------|-------------|
-| `-input` | Required. Input text/JSONL/FASTA path, directory, or continuous `.npy`/`.npz` array. |
-| `-input-format` | Input representation: `text` (default), `fasta`, or `continuous`. |
+| `-input` | Required. Input text/JSONL/FASTA path, directory, or continuous/codebook `.npy`/`.npz` array. |
+| `-input-format` | Input representation: `text` (default), `fasta`, `continuous`, or `codebooks`. |
 | `-prepare-output-dir` | Output directory for shards and tokenizer artifacts. Preferred alias for legacy `-output`. |
 | `-output` | Legacy output directory. |
 | `-vocab-size` | BPE vocabulary size when training a tokenizer. Default: `1024`. |
@@ -36,8 +37,11 @@ development copies of `prepare.py` and `prepare_records.py`.
 | `-wwm-compatible-tokenizer` | Train or validate tokenizer metadata suitable for whole-word MLM. The built-in path uses prefix-space ByteLevel BPE and reserves `[PAD]`, `[CLS]`, `[SEP]`, `[UNK]`, and `[MASK]` as ids `0..4`. |
 | `-text-field` | JSONL field that contains text. Default: `text`. |
 | `-label-field` | JSONL integer-label field. Enables labeled one-record-per-row classification shards. |
-| `-label-file` | Label TSV: FASTA `id<TAB>label` or continuous `row_index<TAB>label`. |
+| `-label-file` | Label TSV: FASTA `id<TAB>label` or continuous/codebook `row_index<TAB>label`. |
 | `-continuous-modality` | Lowercase manifest modality identifier for continuous arrays. Default: `continuous`. |
+| `-codebook-vocab-size` | Required for codebook arrays. Exclusive upper bound for every code ID. |
+| `-codebook-modality` | Lowercase manifest modality identifier for codebook arrays. Default: `audio`. |
+| `-length-file` | Optional codebook `row_index<TAB>valid_length` TSV. |
 | `-frame-per-record` | Preserve each input text/JSONL record and train it as one independently framed row. |
 | `-record-seq-len` | Required with `-frame-per-record`. Fixed row length including BOS/EOS and PAD. |
 | `-record-pad-id` | Required PAD token ID for per-record rows. |
@@ -128,6 +132,26 @@ dataset manifest. It does not train or require a tokenizer. The manifest
 records `T`, `F`, dtype, modality, label count, and split class counts; all
 shape/task fields are checked against the model before trainer construction.
 See [Continuous sequence input](continuous-input.md).
+
+## Discrete codebook arrays
+
+Use `codebooks` for frozen codec/RVQ outputs shaped `[N,T,Q]`. A `.npz` must
+contain `codebook_tokens` and may contain integer `lengths: [N]`. Labels must
+cover every row exactly once.
+
+```bash
+./mixlab -mode prepare \
+  -input data/codec_tokens.npy \
+  -input-format codebooks \
+  -codebook-vocab-size 1024 \
+  -label-file data/labels.tsv \
+  -length-file data/lengths.tsv \
+  -prepare-output-dir data/audio_codes
+```
+
+Preparation rejects non-integer arrays and every ID outside the declared
+codebook vocabulary. It writes atomic int32 code-plus-label-plus-length shards;
+no tokenizer is used. See [Discrete codebook input](discrete-codebooks-input.md).
 
 ## Per-record causal examples
 

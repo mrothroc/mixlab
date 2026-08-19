@@ -31,9 +31,9 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 |------|------|----------|---------|-------|
 | `name` | string | No | Source filename/path | Human-readable run name. |
 | `model_dim` | integer | Yes | None | Hidden size `D`. Must be `> 0`. |
-| `vocab_size` | integer | Token inputs only | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` for `token_embedding`. Omit it for `input_adapter.kind: "linear_frames"`. |
+| `vocab_size` | integer | Token inputs only | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` for `token_embedding`. Omit it for `input_adapter.kind: "linear_frames"` or `"discrete_codebooks"`. |
 | `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
-| `input_adapter` | object | No | `{"kind":"token_embedding"}` | Selects the model input representation. `linear_frames` accepts float32 `[B,T,F]` data and requires `feature_dim > 0`; optional `bias` defaults to `true`, and `norm` defaults to `"none"` and also accepts `"layernorm"`. Continuous v1 is native sequence classification only. |
+| `input_adapter` | object | No | `{"kind":"token_embedding"}` | Selects the model input representation. `linear_frames` accepts float32 `[B,T,F]`. `discrete_codebooks` accepts int32 `[B,T,Q]`, requires `num_codebooks >= 1` and `codebook_vocab_size >= 2`, and supports `fusion: "attention_mlp"` (default) or `"mean"`; `fusion_hidden_dim` defaults to `model_dim`. Both non-token adapters support `norm: "none"|"layernorm"` and native classification only in v1. |
 | `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `geglu`, `mlp`, `moe` experts, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
 | `smear_embeddings` | boolean | No | `false` | Enables 1-token-lookback smearing on token embeddings before the first block. |
@@ -143,6 +143,20 @@ and the zero-initialized projection bias it cancels input magnitude exactly and
 passes only the sign at initialization. Mixlab warns when post-projection
 LayerNorm is selected with `feature_dim <= 4`; higher-dimensional use remains
 available when scale invariance is intentional.
+
+### Discrete codebook input
+
+`input_adapter.kind: "discrete_codebooks"` consumes integer `[B,T,Q]` codec
+tokens. It allocates one `[Q*V,D]` table and indexes each codebook through the
+integer-safe offset `code + codebook*V`. The default `attention_mlp` fusion
+uses `Linear(D,H) -> ReLU -> Linear(H,1,bias=false)`, softmax over `Q`, and a
+weighted sum. `fusion: "mean"` allocates no attention weights.
+
+`num_codebooks` and `codebook_vocab_size` are required. `fusion_hidden_dim`
+defaults to `model_dim`; `norm` accepts `none` or `layernorm`. V1 requires
+native classification, `vocab_size: 0`/omitted, and a matching
+`discrete_codebooks` manifest. See
+[Discrete codebook input](discrete-codebooks-input.md).
 
 ## Smear Token Embeddings
 
@@ -1111,7 +1125,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
 | `lr` | number | No | `3e-4` | Base learning rate. Must be `> 0`. |
 | `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, `"hybrid"`, `"block_diffusion"`, `"multihead"`, or `"classification"`. Existing configs default to causal next-token training. |
-| `classification` | object | Required for `objective: "classification"` | Disabled | Native sequence-level single-label classification. Requires `num_labels >= 2`; optional `pooling` is `"last"` or `"mean"` and optional `classifier_dropout` is in `[0,1]`. |
+| `classification` | object | Required for `objective: "classification"` | Disabled | Native sequence-level single-label classification. Requires `num_labels >= 2`; optional `pooling` is `"last"` or `"mean"`, optional `classifier_dropout` is in `[0,1]`, and optional `bias` defaults to `true`. |
 | `diffusion` | object | No | Defaults | Block-diffusion corruption and sampler knobs. Only valid with `objective: "block_diffusion"` or `objective: "hybrid"` plus `hybrid_secondary_objective: "block_diffusion"`. Multihead configs put diffusion settings on the block-diffusion head instead. Omit it to use conservative defaults. |
 | `heads` | array | Required for `objective: "multihead"` | None | Per-head objective specs for shared-trunk multihead training. V1 supports head objectives `"causal"`, `"mlm"`, `"mntp"`, `"block_diffusion"`, `"rtd"`, and `"energy"`. |
 | `export_head` | string | No | First non-native-only scorer head | Multihead scorer head exported by `export-hf`. Must not name a `block_diffusion`, `rtd`, or `energy` head. |

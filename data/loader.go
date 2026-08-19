@@ -156,6 +156,7 @@ type Loader struct {
 	stream     *tokenStream
 	sequences  *sequenceStream
 	continuous *continuousSequenceStream
+	codebooks  *codebookSequenceStream
 	framing    ExampleFraming
 	packing    *sequencePacking
 }
@@ -174,6 +175,7 @@ type Batch struct {
 	X            []int
 	Y            []int
 	Frames       []float32
+	Codebooks    []int32
 	LossMask     []float32
 	SegmentIDs   []int32
 	MaskEligible []uint8
@@ -223,6 +225,15 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 		}
 		return &Loader{continuous: continuous}, nil
 	}
+	if found && manifest.ShardFormat == DatasetShardFormatCodebookSequenceV1 {
+		codebooks, err := newCodebookSequenceStream(
+			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.NumCodebooks, manifest.CodebookVocabSize,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return &Loader{codebooks: codebooks}, nil
+	}
 	if found && (manifest.ShardFormat == DatasetShardFormatSequenceV1 || manifest.ShardFormat == DatasetShardFormatLabeledSequenceV1) {
 		pad, padOK := manifest.SpecialTokenIDs["pad"]
 		bos, bosOK := manifest.SpecialTokenIDs["bos"]
@@ -264,6 +275,9 @@ func (l *Loader) NextBatchDetailed(batchTokens, seqLen int) (Batch, error) {
 	if l.continuous != nil {
 		return l.nextContinuousBatch(batchTokens, seqLen)
 	}
+	if l.codebooks != nil {
+		return l.nextCodebookBatch(batchTokens, seqLen)
+	}
 	if l.sequences != nil {
 		if l.packing.layout == DatasetSequenceLayoutOneRecordRow {
 			return l.nextRecordBatch(batchTokens, seqLen)
@@ -285,6 +299,29 @@ func (l *Loader) NextBatchDetailed(batchTokens, seqLen int) (Batch, error) {
 		y[i] = int(tok[i+1])
 	}
 	return Batch{X: x, Y: y}, nil
+}
+
+func (l *Loader) nextCodebookBatch(batchTokens, seqLen int) (Batch, error) {
+	if seqLen != l.codebooks.seqLen {
+		return Batch{}, fmt.Errorf("codebook dataset requires seq_len=%d, got %d", l.codebooks.seqLen, seqLen)
+	}
+	batchSize := batchTokens / seqLen
+	Q := l.codebooks.numCodebooks
+	tokens := make([]int32, batchTokens*Q)
+	labels := make([]int32, batchSize)
+	validMask := make([]float32, batchTokens)
+	for row := 0; row < batchSize; row++ {
+		record, length, label, err := l.codebooks.takeRecord()
+		if err != nil {
+			return Batch{}, err
+		}
+		copy(tokens[row*seqLen*Q:], record)
+		labels[row] = label
+		for pos := 0; pos < int(length); pos++ {
+			validMask[row*seqLen+pos] = 1
+		}
+	}
+	return Batch{Codebooks: tokens, Labels: labels, ValidMask: validMask}, nil
 }
 
 func (l *Loader) nextContinuousBatch(batchTokens, seqLen int) (Batch, error) {
@@ -416,6 +453,7 @@ type ValBatch struct {
 	X            []int
 	Y            []int
 	Frames       []float32
+	Codebooks    []int32
 	LossMask     []float32
 	SegmentIDs   []int32
 	MaskEligible []uint8
@@ -457,7 +495,7 @@ func NewValSetWithOptions(pattern string, seed int64, nBatches, batchTokens, seq
 			break
 		}
 		vs.Batches = append(vs.Batches, ValBatch{
-			X: batch.X, Y: batch.Y, Frames: batch.Frames, LossMask: batch.LossMask,
+			X: batch.X, Y: batch.Y, Frames: batch.Frames, Codebooks: batch.Codebooks, LossMask: batch.LossMask,
 			SegmentIDs: batch.SegmentIDs, MaskEligible: batch.MaskEligible,
 			Labels: batch.Labels, ValidMask: batch.ValidMask,
 		})

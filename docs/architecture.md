@@ -37,10 +37,18 @@ channels, and flattens the result to `[B*T, model_dim]` before block 0.
 records directly to the same hidden stream. Backbone blocks remain
 modality-unaware.
 
+`input_adapter.kind: "discrete_codebooks"` embeds synchronized int32 codec
+tokens `[B,T,Q]` through one offset shared table, then fuses codebooks by a
+learned codebook-axis attention MLP or a mean. It produces the same `[B,T,D]`
+backbone contract.
+
 Dataset representation and modality are recorded independently in
 [`mixlab.dataset.json`](data.md#dataset-manifest). The continuous adapter
 requires matching feature width, sequence length, and classification labels
-before trainer setup. See [Continuous input](continuous-input.md).
+before trainer setup. Codebook manifests similarly require matching sequence
+length, codebook count, codebook vocabulary, and labels. See
+[Continuous input](continuous-input.md) and
+[Discrete codebook input](discrete-codebooks-input.md).
 
 ## Block families
 

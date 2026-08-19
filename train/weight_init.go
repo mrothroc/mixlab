@@ -230,6 +230,17 @@ func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool
 		return true
 	}
 	switch ws.InitMode {
+	case "torch_embedding_normal_1":
+		for i := range data {
+			data[i] = float32(rng.NormFloat64())
+		}
+		return true
+	case "torch_linear_bias_uniform":
+		if ws.PyTorchLinearFanIn <= 0 {
+			return false
+		}
+		fillFanInUniform(data, ws.PyTorchLinearFanIn, rng)
+		return true
 	case "s4d_log_dt":
 		dtMin := ws.DtMin
 		if dtMin <= 0 {

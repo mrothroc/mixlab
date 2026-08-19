@@ -48,7 +48,8 @@ Classification configs use `training.classification`:
   "classification": {
     "num_labels": 2,
     "pooling": "last",
-    "classifier_dropout": 0.1
+    "classifier_dropout": 0.1,
+    "bias": true
   }
 }
 ```
@@ -57,7 +58,8 @@ Classification configs use `training.classification`:
 `"last"` for causal, recurrent, SSM, or mixed stacks. Both modes ignore
 padding: mean pooling divides by the number of valid tokens and last pooling
 selects the final non-padding token. The classifier is a linear projection
-with bias trained jointly with the backbone. V1 supports single-label
+trained jointly with the backbone; `bias` defaults to `true` and may be
+disabled for bias-free reference recipes. V1 supports single-label
 cross-entropy only and requires a labeled one-record-per-row dataset whose
 manifest `task.num_labels` matches the config.
 

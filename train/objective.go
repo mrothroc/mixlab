@@ -13,6 +13,7 @@ import (
 type objectiveBatch struct {
 	x                     []int
 	y                     []int
+	codebooks             []int32
 	frames                []float32
 	batchSizeOverride     int
 	lossMask              []float32
@@ -125,12 +126,18 @@ func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int
 	if need <= 0 {
 		return objectiveBatch{}, fmt.Errorf("invalid batch_tokens=%d", need)
 	}
-	if cfg.LinearFramesEnabled() {
+	switch {
+	case cfg.DiscreteCodebooksEnabled():
+		codebookNeed := need * cfg.InputAdapter.NumCodebooks
+		if len(batch.codebooks) < codebookNeed {
+			return objectiveBatch{}, fmt.Errorf("input size mismatch: codebook_tokens=%d need=%d", len(batch.codebooks), codebookNeed)
+		}
+	case cfg.LinearFramesEnabled():
 		frameNeed := need * cfg.InputAdapter.FeatureDim
 		if len(batch.frames) < frameNeed {
 			return objectiveBatch{}, fmt.Errorf("input size mismatch: continuous_frames=%d need=%d", len(batch.frames), frameNeed)
 		}
-	} else if len(batch.x) < need || len(batch.y) < need {
+	case len(batch.x) < need || len(batch.y) < need:
 		return objectiveBatch{}, fmt.Errorf("input size mismatch: tokens=%d targets=%d need=%d", len(batch.x), len(batch.y), need)
 	}
 	var err error
@@ -261,15 +268,27 @@ func prepareClassificationBatch(cfg *ArchConfig, batch trainBatch, need, seqLen 
 		}
 		positions[row] = int32(row*seqLen + last)
 	}
+	codebookNeed := 0
+	if cfg.DiscreteCodebooksEnabled() {
+		codebookNeed = need * cfg.InputAdapter.NumCodebooks
+	}
 	return objectiveBatch{
 		x:                    sliceIntsIfAvailable(batch.x, need),
 		y:                    sliceIntsIfAvailable(batch.y, need),
+		codebooks:            sliceInt32sIfAvailable(batch.codebooks, codebookNeed),
 		frames:               sliceFloat32IfAvailable(batch.frames, need*cfg.InputFeatureDim()),
 		unmaskedX:            sliceIntsIfAvailable(batch.x, need),
 		classificationLabels: labels,
 		classificationMask:   validMask,
 		classificationPos:    positions,
 	}, nil
+}
+
+func sliceInt32sIfAvailable(values []int32, count int) []int32 {
+	if count <= 0 || len(values) < count {
+		return nil
+	}
+	return values[:count]
 }
 
 func sliceIntsIfAvailable(values []int, count int) []int {

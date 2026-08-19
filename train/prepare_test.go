@@ -911,3 +911,40 @@ func writeNPYFloat32(t *testing.T, path string, shape []int, values []float32) {
 		t.Fatal(err)
 	}
 }
+
+func writeNPYInt32(t *testing.T, path string, shape []int, values []int32) {
+	t.Helper()
+	count := 1
+	parts := make([]string, len(shape))
+	for i, dim := range shape {
+		if dim <= 0 {
+			t.Fatalf("invalid NPY shape %v", shape)
+		}
+		count *= dim
+		parts[i] = strconv.Itoa(dim)
+	}
+	if len(values) != count {
+		t.Fatalf("NPY values=%d shape=%v product=%d", len(values), shape, count)
+	}
+	shapeText := strings.Join(parts, ", ")
+	if len(shape) == 1 {
+		shapeText += ","
+	}
+	header := "{'descr': '<i4', 'fortran_order': False, 'shape': (" + shapeText + "), }"
+	padding := (16 - ((10 + len(header) + 1) % 16)) % 16
+	header += strings.Repeat(" ", padding) + "\n"
+	var output bytes.Buffer
+	output.Write([]byte{0x93, 'N', 'U', 'M', 'P', 'Y', 1, 0})
+	if err := binary.Write(&output, binary.LittleEndian, uint16(len(header))); err != nil {
+		t.Fatal(err)
+	}
+	output.WriteString(header)
+	for _, value := range values {
+		if err := binary.Write(&output, binary.LittleEndian, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, output.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}

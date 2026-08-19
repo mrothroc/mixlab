@@ -72,7 +72,11 @@ func convertToClassificationIR(cfg *ArchConfig, state TrainingProgramState, prog
 		classifierInput = "classification_pooled_dropout"
 	}
 	prog.MatMul(classifierInput, weightName(baseWeights), "classification_logits_linear")
-	prog.Add("classification_logits_linear", weightName(baseWeights+1), "classification_logits")
+	if cfg.EffectiveClassifierBias() {
+		prog.Add("classification_logits_linear", weightName(baseWeights+1), "classification_logits")
+	} else {
+		prog.ScalarMul("classification_logits_linear", 1, "classification_logits")
+	}
 	prog.CrossEntropy("classification_logits", "classification_labels", "classification_task_loss")
 	prog.ScalarMul("classification_task_loss", 1, "loss")
 	prog.ScalarMul("classification_task_loss", 1, "eval_loss")
