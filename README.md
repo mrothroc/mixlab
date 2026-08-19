@@ -29,7 +29,7 @@ Prerequisites:
 ```bash
 # 1. Set up Python environment and install dependencies
 python3 -m venv .venv && source .venv/bin/activate
-pip install mlx numpy tokenizers
+pip install mlx -r requirements-prepare.txt
 
 # 2. Build mixlab
 make build
@@ -83,7 +83,7 @@ Requires Go 1.24+ and MLX 0.32.0+ (`brew install mlx` or `pip install mlx`).
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install mlx numpy tokenizers
+pip install mlx -r requirements-prepare.txt
 make build
 ```
 

@@ -14,8 +14,8 @@ FASTA, continuous-array, and codebook-array preparation require `numpy`.
 python3 -m pip install numpy tokenizers
 ```
 
-`requirements-prepare.txt` in the repository root pins the versions CI installs
-for the preparation tests; install from it when you want to match CI exactly:
+From a source checkout, `requirements-prepare.txt` pins the versions CI installs
+for the preparation tests:
 
 ```bash
 python3 -m pip install -r requirements-prepare.txt

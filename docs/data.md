@@ -23,8 +23,11 @@ For serious architecture exploration, use
 curated and deduplicated web-text corpus. The download script fetches data from
 Hugging Face, trains a BPE tokenizer, and writes binary shards.
 
+The download script needs `datasets` in addition to the preparation
+dependencies pinned in `requirements-prepare.txt`.
+
 ```bash
-pip install numpy tokenizers datasets
+pip install -r requirements-prepare.txt datasets
 
 # Quick test (~30 seconds, streams 5000 documents)
 python3 scripts/download_fineweb.py --output data/fineweb_sp1024 \
@@ -82,6 +85,13 @@ require a source checkout. Text preparation requires Python 3 with `numpy` and
 
 ```bash
 pip install numpy tokenizers
+```
+
+From a source checkout, `requirements-prepare.txt` pins the versions CI installs
+for the preparation tests:
+
+```bash
+pip install -r requirements-prepare.txt
 ```
 
 Text and nucleotide tokens are stored as uint16, so `vocab-size` must be
