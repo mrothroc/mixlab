@@ -97,7 +97,7 @@ func (t *TrainingSpec) ApplyDefaults() {
 	if t.Seed <= 0 {
 		t.Seed = d.Seed
 	}
-	if t.BatchTokens <= 0 {
+	if t.BatchTokens <= 0 && !t.BatchSizeConfigured() {
 		t.BatchTokens = d.BatchTokens
 	}
 	t.Objective = normalizeTrainingObjective(t.Objective)

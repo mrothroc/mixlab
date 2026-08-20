@@ -8,6 +8,7 @@ import (
 type lengthBucketBatch struct {
 	seqLen   int
 	indices  []int
+	sources  []int
 	realRows int
 }
 
@@ -76,6 +77,111 @@ func buildLengthBucketSchedule(order []int, lengths []int32, buckets []int, toke
 	}
 	if len(buckets) > 1 && len(schedule) > 1 && rng != nil {
 		rng.Shuffle(len(schedule), func(i, j int) { schedule[i], schedule[j] = schedule[j], schedule[i] })
+	}
+	return schedule, nil
+}
+
+type fixedLengthBucketRecord struct {
+	source int
+	index  int
+	width  int
+}
+
+// buildFixedLengthBucketSchedule preserves full homogeneous bucket batches,
+// then packs all source/bucket remainders together. Packing remainders is what
+// makes an epoch exactly ceil(totalRecords/batchSize) batches instead of
+// flushing one partial batch per bucket or shard.
+func buildFixedLengthBucketSchedule(
+	lengthsBySource [][]int32,
+	buckets []int,
+	batchSize int,
+	rng *rand.Rand,
+) ([]lengthBucketBatch, error) {
+	if len(buckets) == 0 {
+		return nil, fmt.Errorf("length buckets are empty")
+	}
+	if err := validateLengthBuckets(buckets); err != nil {
+		return nil, err
+	}
+	if batchSize <= 0 {
+		return nil, fmt.Errorf("fixed length-bucket batch size %d must be > 0", batchSize)
+	}
+
+	schedule := make([]lengthBucketBatch, 0)
+	remainders := make([]fixedLengthBucketRecord, 0)
+	for source, lengths := range lengthsBySource {
+		remainderStart := len(remainders)
+		order := make([]int, len(lengths))
+		for i := range order {
+			order[i] = i
+		}
+		if rng != nil && len(order) > 1 {
+			rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+		}
+		byWidth := make(map[int][]int, len(buckets))
+		for _, index := range order {
+			width, ok := bucketForLength(int(lengths[index]), buckets)
+			if !ok {
+				return nil, fmt.Errorf(
+					"source %d record %d valid length %d exceeds largest length bucket %d",
+					source, index, lengths[index], buckets[len(buckets)-1],
+				)
+			}
+			byWidth[width] = append(byWidth[width], index)
+		}
+
+		sourceBatches := make([]lengthBucketBatch, 0)
+		for _, width := range buckets {
+			indices := byWidth[width]
+			fullEnd := len(indices) - len(indices)%batchSize
+			for start := 0; start < fullEnd; start += batchSize {
+				batchIndices := append([]int(nil), indices[start:start+batchSize]...)
+				batchSources := make([]int, batchSize)
+				for row := range batchSources {
+					batchSources[row] = source
+				}
+				sourceBatches = append(sourceBatches, lengthBucketBatch{
+					seqLen: width, indices: batchIndices, sources: batchSources, realRows: batchSize,
+				})
+			}
+			for _, index := range indices[fullEnd:] {
+				remainders = append(remainders, fixedLengthBucketRecord{source: source, index: index, width: width})
+			}
+		}
+		if rng != nil && len(sourceBatches) > 1 && len(buckets) > 1 {
+			rng.Shuffle(len(sourceBatches), func(i, j int) { sourceBatches[i], sourceBatches[j] = sourceBatches[j], sourceBatches[i] })
+		}
+		if rng != nil && len(remainders)-remainderStart > 1 {
+			sourceRemainders := remainders[remainderStart:]
+			rng.Shuffle(len(sourceRemainders), func(i, j int) {
+				sourceRemainders[i], sourceRemainders[j] = sourceRemainders[j], sourceRemainders[i]
+			})
+		}
+		schedule = append(schedule, sourceBatches...)
+	}
+	for start := 0; start < len(remainders); start += batchSize {
+		end := start + batchSize
+		if end > len(remainders) {
+			end = len(remainders)
+		}
+		realRows := end - start
+		indices := make([]int, batchSize)
+		sources := make([]int, batchSize)
+		width := 0
+		for row, record := range remainders[start:end] {
+			indices[row] = record.index
+			sources[row] = record.source
+			if record.width > width {
+				width = record.width
+			}
+		}
+		for row := realRows; row < batchSize; row++ {
+			indices[row] = indices[0]
+			sources[row] = sources[0]
+		}
+		schedule = append(schedule, lengthBucketBatch{
+			seqLen: width, indices: indices, sources: sources, realRows: realRows,
+		})
 	}
 	return schedule, nil
 }

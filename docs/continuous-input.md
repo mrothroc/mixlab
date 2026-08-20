@@ -92,7 +92,9 @@ example per batch. `feature_dim` is the per-timestep channel width, not the
 number of records.
 
 For skewed record lengths, set `training.length_buckets` to compile and reuse
-several shorter batch shapes. See
+several shorter batch shapes. Use `training.batch_size` instead of
+`training.batch_tokens` when every bucket must contain the same number of
+records as a reference data loader. See
 [Length-bucketed classification](config-training.md#length-bucketed-classification).
 
 For a linear time-invariant FFT-convolution baseline, replace the canonical

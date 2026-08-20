@@ -67,3 +67,20 @@ func TestSingleFullWidthLengthBucketUsesLegacyLoaderOptions(t *testing.T) {
 		t.Fatalf("legacy no-op path passed length buckets to loader: %v", got)
 	}
 }
+
+func TestFixedBatchSizeLengthBucketLoaderOptions(t *testing.T) {
+	cfg := discreteCodebookTrainTestConfig(t)
+	cfg.Training.BatchTokens = 2 * cfg.SeqLen
+	cfg.Training.BatchSize = 2
+	cfg.Training.LengthBuckets = []int{2, 4}
+	opts := effectiveLoaderOptions(cfg)
+	if opts.LengthBucketBatchSize != 2 || !reflect.DeepEqual(opts.LengthBuckets, []int{2, 4}) {
+		t.Fatalf("fixed bucket loader options=%+v", opts)
+	}
+
+	cfg.Training.LengthBuckets = []int{cfg.SeqLen}
+	opts = effectiveLoaderOptions(cfg)
+	if opts.LengthBucketBatchSize != 0 || len(opts.LengthBuckets) != 0 {
+		t.Fatalf("fixed full-width no-op options=%+v", opts)
+	}
+}

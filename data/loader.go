@@ -17,12 +17,14 @@ const (
 	legacyShuffleChunkTokens = 2048
 )
 
-// LoaderOptions controls training/eval shard traversal.
+// LoaderOptions controls training/eval shard traversal. LengthBucketBatchSize
+// fixes the row count for every configured bucket when it is positive.
 type LoaderOptions struct {
-	ChunkSize      int
-	NoShardShuffle bool
-	Framing        ExampleFraming
-	LengthBuckets  []int
+	ChunkSize             int
+	NoShardShuffle        bool
+	Framing               ExampleFraming
+	LengthBuckets         []int
+	LengthBucketBatchSize int
 }
 
 // ExampleFraming configures loader-side BOS/EOS wrapping for raw token
@@ -223,7 +225,8 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 	}
 	if found && isContinuousSequenceShardFormat(manifest.ShardFormat) {
 		continuous, err := newContinuousSequenceStream(
-			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.FeatureDim, opts.LengthBuckets,
+			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.FeatureDim,
+			opts.LengthBuckets, opts.LengthBucketBatchSize,
 		)
 		if err != nil {
 			return nil, err
@@ -232,7 +235,8 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 	}
 	if found && manifest.ShardFormat == DatasetShardFormatCodebookSequenceV1 {
 		codebooks, err := newCodebookSequenceStream(
-			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.NumCodebooks, manifest.CodebookVocabSize, opts.LengthBuckets,
+			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.NumCodebooks,
+			manifest.CodebookVocabSize, opts.LengthBuckets, opts.LengthBucketBatchSize,
 		)
 		if err != nil {
 			return nil, err

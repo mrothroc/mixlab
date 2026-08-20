@@ -79,13 +79,32 @@ running every record at the corpus-wide padded width:
 Each record is assigned to the smallest bucket that contains its valid length.
 `batch_tokens` is a ceiling in this mode: bucket width `T` uses
 `B = floor(batch_tokens / T)`, so effective tokens are `B*T` and may be below
-the configured ceiling. Bucket visits and within-shard record order are
+the configured ceiling. To reproduce a fixed-record-count data loader instead,
+set `batch_size` in place of `batch_tokens`:
+
+```jsonc
+"training": {
+  "objective": "classification",
+  "batch_size": 2,
+  "length_buckets": [256, 384, 512, 768, 1024, 1792]
+}
+```
+
+Every bucket then uses exactly two rows and the token count varies as `2*T`.
+`batch_size` and `batch_tokens` are mutually exclusive, and `batch_size` is
+available only with length bucketing. Full bucket batches stay homogeneous;
+remainders are combined across buckets and shards so an epoch takes exactly
+`ceil(records / batch_size)` steps. Only the final corpus remainder receives
+masked filler rows.
+
+Bucket visits and within-shard record order are
 deterministic from `training.seed`; fixed-shape programs are cached per `(B,T)`
 and share one weight set. Final partial bucket batches duplicate a harmless row
 for shape stability and mask those filler rows out of classifier loss and
 metrics, so records are not dropped.
 
-A single bucket equal to `seq_len` with a divisible token budget takes the
+A single bucket equal to `seq_len` with a divisible token budget, or with a
+fixed `batch_size`, takes the
 legacy fixed-shape loader and loss path exactly. This makes bucketing a strict
 no-op for fixed-length reproduction runs.
 

@@ -78,7 +78,9 @@ Set `training.classification.bias: false` for a DASB-style bias-free output
 linear; classifier bias otherwise defaults to `true`.
 
 For skewed valid lengths, set `training.length_buckets` to slice each batch to
-the smallest configured width that fits its records. See
+the smallest configured width that fits its records. Set `training.batch_size`
+instead of `training.batch_tokens` to hold the record count constant across
+buckets. See
 [Length-bucketed classification](config-training.md#length-bucketed-classification).
 
 V1 supports native single-label classification only. Token feature channels,

@@ -20,14 +20,18 @@ func runArch(configPath, trainPattern string, opts TrainOptions) error {
 	}
 	fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
 		cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
+	batchSummary := fmt.Sprintf("batch_tokens=%d", cfg.Training.BatchTokens)
+	if fixed := cfg.Training.FixedLengthBucketBatchSize(); fixed > 0 {
+		batchSummary = fmt.Sprintf("batch_size=%d max_batch_tokens=%d", fixed, cfg.Training.BatchTokens)
+	}
 	if len(cfg.Training.Phases) > 0 {
-		fmt.Printf("  training: phases=%d steps=%d grad_clip=%g weight_decay=%g seed=%d batch_tokens=%d\n",
+		fmt.Printf("  training: phases=%d steps=%d grad_clip=%g weight_decay=%g seed=%d %s\n",
 			len(cfg.Training.Phases), cfg.Training.TotalSteps(), cfg.Training.GradClip, cfg.Training.WeightDecay,
-			cfg.Training.Seed, cfg.Training.BatchTokens)
+			cfg.Training.Seed, batchSummary)
 	} else {
-		fmt.Printf("  training: steps=%d lr=%g grad_clip=%g weight_decay=%g seed=%d batch_tokens=%d\n",
+		fmt.Printf("  training: steps=%d lr=%g grad_clip=%g weight_decay=%g seed=%d %s\n",
 			cfg.Training.Steps, cfg.Training.LR, cfg.Training.GradClip, cfg.Training.WeightDecay,
-			cfg.Training.Seed, cfg.Training.BatchTokens)
+			cfg.Training.Seed, batchSummary)
 	}
 
 	if trainPattern == "" {

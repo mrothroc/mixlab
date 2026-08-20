@@ -395,6 +395,7 @@ type TrainingSpec struct {
 	LAMBTrustRatioCap                 float32                      `json:"lamb_trust_ratio_cap"`
 	Seed                              int64                        `json:"seed"`
 	BatchTokens                       int                          `json:"batch_tokens"`
+	BatchSize                         int                          `json:"batch_size,omitempty"`
 	LengthBuckets                     []int                        `json:"length_buckets,omitempty"`
 	ShuffleChunkTokens                int                          `json:"shuffle_chunk_tokens,omitempty"`
 	ReverseComplementProb             float64                      `json:"reverse_complement_prob,omitempty"`
@@ -463,6 +464,9 @@ type TrainingSpec struct {
 	lambTrustRatioCapSet               bool
 	swaDecaySet                        bool
 	swaIntervalSet                     bool
+	batchTokensSet                     bool
+	batchSizeSet                       bool
+	batchTokensDerivedFromBatchSize    bool
 }
 
 // EarlyStopSpec controls optional validation-loss early stopping beyond the

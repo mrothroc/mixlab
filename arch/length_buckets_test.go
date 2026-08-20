@@ -2,6 +2,7 @@ package arch
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -20,6 +21,32 @@ func lengthBucketConfig() ArchConfig {
 			LengthBuckets:  []int{2, 4, 8},
 			Classification: &ClassificationSpec{NumLabels: 3, Pooling: ClassificationPoolingMean},
 		},
+	}
+}
+
+func TestFixedBatchSizeLengthBucketShapes(t *testing.T) {
+	cfg := lengthBucketConfig()
+	cfg.Training.BatchTokens = 0
+	cfg.Training.BatchSize = 2
+	parsed, err := parseLengthBucketConfig(t, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Training.BatchTokens != 16 || parsed.Training.FixedLengthBucketBatchSize() != 2 {
+		t.Fatalf("normalized training=%+v", parsed.Training)
+	}
+	for _, width := range parsed.Training.LengthBuckets {
+		rows, tokens := parsed.Training.LengthBucketBatchShape(width)
+		if rows != 2 || tokens != 2*width {
+			t.Fatalf("bucket %d shape=%dx%d", width, rows, tokens)
+		}
+	}
+	raw, err := json.Marshal(parsed.Training)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "batch_tokens") || !strings.Contains(string(raw), `"batch_size":2`) {
+		t.Fatalf("fixed-size round trip=%s", raw)
 	}
 }
 
@@ -82,6 +109,61 @@ func TestSingleFullWidthLengthBucketUsesLegacyIR(t *testing.T) {
 	}
 	if programHasInput(prog, "classification_example_mask") || countOps(prog, OpCrossEntropy) != 1 || countOps(prog, OpMaskedCrossEntropy) != 0 {
 		t.Fatalf("single full-width bucket did not preserve legacy IR")
+	}
+}
+
+func TestSingleFullWidthFixedBatchSizeMatchesLegacyIR(t *testing.T) {
+	fixed := lengthBucketConfig()
+	fixed.Training.BatchTokens = 0
+	fixed.Training.BatchSize = 2
+	fixed.Training.LengthBuckets = []int{fixed.SeqLen}
+	fixedParsed, err := parseLengthBucketConfig(t, fixed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := lengthBucketConfig()
+	legacy.Training.BatchTokens = 2 * legacy.SeqLen
+	legacy.Training.LengthBuckets = nil
+	legacyParsed, err := parseLengthBucketConfig(t, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixedProgram, err := BuildIRProgramFromConfig(fixedParsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyProgram, err := BuildIRProgramFromConfig(legacyParsed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fixedParsed.Training.LengthBucketsChangeShape(fixedParsed.SeqLen) || !reflect.DeepEqual(fixedProgram, legacyProgram) {
+		t.Fatal("single full-width fixed batch_size did not preserve the legacy program")
+	}
+}
+
+func TestBatchSizeValidation(t *testing.T) {
+	base := lengthBucketConfig()
+	raw, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	both := strings.Replace(string(raw), `"batch_tokens":10`, `"batch_tokens":10,"batch_size":2`, 1)
+	if _, err := ParseArchConfig([]byte(both), "both"); err == nil ||
+		!strings.Contains(err.Error(), "batch_size") || !strings.Contains(err.Error(), "batch_tokens") {
+		t.Fatalf("both-fields error=%v", err)
+	}
+
+	outside := base
+	outside.Training.BatchTokens = 0
+	outside.Training.BatchSize = 2
+	outside.Training.LengthBuckets = nil
+	if _, err := parseLengthBucketConfig(t, outside); err == nil || !strings.Contains(err.Error(), "requires training.length_buckets") {
+		t.Fatalf("outside-bucketing error=%v", err)
+	}
+
+	zero := strings.Replace(string(raw), `"batch_tokens":10`, `"batch_size":0`, 1)
+	if _, err := ParseArchConfig([]byte(zero), "zero"); err == nil || !strings.Contains(err.Error(), "batch_size=0") {
+		t.Fatalf("zero batch_size error=%v", err)
 	}
 }
 

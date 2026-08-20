@@ -76,3 +76,68 @@ func TestLengthBucketsMLXProgramSwitchAndPartialBatch(t *testing.T) {
 		t.Fatalf("compiled program cache entries=%d want=2", len(trainer.programCache))
 	}
 }
+
+func TestFixedBatchSizeLengthBucketsMLXKeepRowsConstant(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	cfg := discreteCodebookTrainTestConfig(t)
+	cfg.Training.BatchSize = 2
+	cfg.Training.BatchTokens = 2 * cfg.SeqLen
+	cfg.Training.LengthBuckets = []int{2, 4}
+	baseProgram, err := BuildIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainerInterface, err := initGPUTrainer(baseProgram, cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainer := trainerInterface.(*mlxGPUTrainer)
+	defer trainer.CloseTrainer()
+
+	shortCfg := *cfg
+	shortCfg.SeqLen = 2
+	shortCfg.Training = cfg.Training
+	shortCfg.Training.BatchTokens = 2 * shortCfg.SeqLen
+	shortProgram, err := BuildIRProgramFromConfig(&shortCfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := trainer.SetProgramGPU(shortProgram); err != nil {
+		t.Fatal(err)
+	}
+	shortBatch, err := prepareObjectiveBatchWithShape(cfg, trainBatch{
+		codebooks:   make([]int32, 2*2*cfg.InputAdapter.NumCodebooks),
+		labels:      []int32{0, 1},
+		validMask:   []float32{1, 1, 1, 1},
+		exampleMask: []float32{1, 0},
+	}, 0, arch.ObjectiveClassification, 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shortLoss, err := trainer.TrainObjectiveStepGPU(shortBatch, 2, 2, 1e-3)
+	if err != nil || math.IsNaN(float64(shortLoss)) || math.IsInf(float64(shortLoss), 0) {
+		t.Fatalf("short fixed-size bucket loss=%g err=%v", shortLoss, err)
+	}
+
+	if err := trainer.SetProgramGPU(baseProgram); err != nil {
+		t.Fatal(err)
+	}
+	fullBatch, err := prepareObjectiveBatchWithShape(cfg, trainBatch{
+		codebooks:   make([]int32, 2*4*cfg.InputAdapter.NumCodebooks),
+		labels:      []int32{1, 2},
+		validMask:   []float32{1, 1, 1, 1, 1, 1, 1, 1},
+		exampleMask: []float32{1, 1},
+	}, 1, arch.ObjectiveClassification, 2, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fullLoss, err := trainer.TrainObjectiveStepGPU(fullBatch, 2, 4, 1e-3)
+	if err != nil || math.IsNaN(float64(fullLoss)) || math.IsInf(float64(fullLoss), 0) {
+		t.Fatalf("full fixed-size bucket loss=%g err=%v", fullLoss, err)
+	}
+	if len(trainer.programCache) != 2 {
+		t.Fatalf("compiled program cache entries=%d want=2", len(trainer.programCache))
+	}
+}

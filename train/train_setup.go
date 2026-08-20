@@ -61,7 +61,11 @@ func logTrainingRunSetup(
 			rows, effectiveTokens := cfg.Training.LengthBucketBatchShape(bucket)
 			shapes = append(shapes, fmt.Sprintf("%d:%dx%d", bucket, rows, effectiveTokens))
 		}
-		fmt.Printf("  [%s] length buckets: widths=%v batch_token_ceiling=%d shapes=%s\n", name, cfg.Training.LengthBuckets, batchTokens, strings.Join(shapes, ","))
+		if fixed := cfg.Training.FixedLengthBucketBatchSize(); fixed > 0 {
+			fmt.Printf("  [%s] length buckets: widths=%v fixed_batch_size=%d shapes=%s\n", name, cfg.Training.LengthBuckets, fixed, strings.Join(shapes, ","))
+		} else {
+			fmt.Printf("  [%s] length buckets: widths=%v batch_token_ceiling=%d shapes=%s\n", name, cfg.Training.LengthBuckets, batchTokens, strings.Join(shapes, ","))
+		}
 	}
 	if cfg.RCEquivarianceEnabled() {
 		fmt.Printf("  [%s] DNA reverse-complement equivariance: shared weights, branch_dim=%d, paired_backbone_rows=%d\n",

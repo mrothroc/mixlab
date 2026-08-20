@@ -2,6 +2,20 @@ package arch
 
 import "fmt"
 
+// BatchSizeConfigured reports whether fixed-row length bucketing was selected.
+func (t TrainingSpec) BatchSizeConfigured() bool {
+	return t.batchSizeSet || t.BatchSize != 0
+}
+
+// FixedLengthBucketBatchSize returns the configured fixed row count, or zero
+// when bucket row counts are derived from the batch-token ceiling.
+func (t TrainingSpec) FixedLengthBucketBatchSize() int {
+	if !t.BatchSizeConfigured() {
+		return 0
+	}
+	return t.BatchSize
+}
+
 // LengthBucketingEnabled reports whether classification batches use
 // variable-width programs selected from training.length_buckets.
 func (t TrainingSpec) LengthBucketingEnabled() bool {
@@ -10,7 +24,7 @@ func (t TrainingSpec) LengthBucketingEnabled() bool {
 
 // LengthBucketsChangeShape reports whether the configured buckets require
 // dynamic batch shapes. A single full-width bucket with an exactly divisible
-// token budget takes the legacy loader and loss path for strict parity.
+// token budget or fixed batch size takes the legacy path for strict parity.
 func (t TrainingSpec) LengthBucketsChangeShape(seqLen int) bool {
 	if !t.LengthBucketingEnabled() {
 		return false
@@ -20,10 +34,16 @@ func (t TrainingSpec) LengthBucketsChangeShape(seqLen int) bool {
 }
 
 // LengthBucketBatchShape returns the fixed program shape for one bucket.
-// Under length bucketing batch_tokens is a ceiling, so the effective token
-// count can be smaller when the bucket width does not divide it exactly.
+// batch_size fixes rows and varies tokens; otherwise batch_tokens is a ceiling
+// and the effective token count may be smaller when width does not divide it.
 func (t TrainingSpec) LengthBucketBatchShape(seqLen int) (batchSize, effectiveBatchTokens int) {
-	if seqLen <= 0 || t.BatchTokens < seqLen {
+	if seqLen <= 0 {
+		return 0, 0
+	}
+	if fixed := t.FixedLengthBucketBatchSize(); fixed > 0 {
+		return fixed, fixed * seqLen
+	}
+	if t.BatchTokens < seqLen {
 		return 0, 0
 	}
 	batchSize = t.BatchTokens / seqLen
@@ -31,10 +51,32 @@ func (t TrainingSpec) LengthBucketBatchShape(seqLen int) (batchSize, effectiveBa
 }
 
 func validateLengthBuckets(cfg *ArchConfig, source string) error {
-	if cfg == nil || !cfg.Training.LengthBucketingEnabled() {
+	if cfg == nil {
 		return nil
 	}
 	t := &cfg.Training
+	hasBatchSize := t.batchSizeSet || t.BatchSize != 0
+	hasBatchTokens := t.batchTokensSet || (t.BatchTokens != 0 && !t.batchTokensDerivedFromBatchSize)
+	if hasBatchSize && hasBatchTokens {
+		return fmt.Errorf("config %q training.batch_size and training.batch_tokens are mutually exclusive; set exactly one", source)
+	}
+	if hasBatchSize {
+		if !t.LengthBucketingEnabled() {
+			return fmt.Errorf("config %q training.batch_size requires training.length_buckets", source)
+		}
+		if t.BatchSize <= 0 {
+			return fmt.Errorf("config %q training.batch_size=%d must be > 0", source, t.BatchSize)
+		}
+		maxInt := int(^uint(0) >> 1)
+		if cfg.SeqLen > 0 && t.BatchSize > maxInt/cfg.SeqLen {
+			return fmt.Errorf("config %q training.batch_size=%d overflows the maximum batch shape at seq_len=%d", source, t.BatchSize, cfg.SeqLen)
+		}
+		t.BatchTokens = t.BatchSize * cfg.SeqLen
+		t.batchTokensDerivedFromBatchSize = true
+	}
+	if !t.LengthBucketingEnabled() {
+		return nil
+	}
 	if t.EffectiveObjective() != ObjectiveClassification {
 		return fmt.Errorf("config %q training.length_buckets requires training.objective=%q", source, ObjectiveClassification)
 	}
@@ -52,7 +94,7 @@ func validateLengthBuckets(cfg *ArchConfig, source string) error {
 		previous = width
 	}
 	largest := t.LengthBuckets[len(t.LengthBuckets)-1]
-	if t.BatchTokens < largest {
+	if t.FixedLengthBucketBatchSize() == 0 && t.BatchTokens < largest {
 		return fmt.Errorf("config %q training.batch_tokens=%d must be >= largest length bucket %d", source, t.BatchTokens, largest)
 	}
 	if cfg.EffectiveNormSpec().Type == NormTypeBatchNorm {

@@ -41,6 +41,8 @@ func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	_, t.lambTrustRatioCapSet = fields["lamb_trust_ratio_cap"]
 	_, t.swaDecaySet = fields["swa_decay"]
 	_, t.swaIntervalSet = fields["swa_interval"]
+	_, t.batchTokensSet = fields["batch_tokens"]
+	_, t.batchSizeSet = fields["batch_size"]
 	return nil
 }
 
@@ -71,6 +73,9 @@ func (t TrainingSpec) MarshalJSON() ([]byte, error) {
 	}
 	if !t.lambTrustRatioCapSet && t.LAMBTrustRatioCap == 0 {
 		delete(fields, "lamb_trust_ratio_cap")
+	}
+	if (!t.batchTokensSet && t.BatchTokens == 0) || t.batchTokensDerivedFromBatchSize {
+		delete(fields, "batch_tokens")
 	}
 	return json.Marshal(fields)
 }

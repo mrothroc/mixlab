@@ -167,12 +167,21 @@ type continuousSequenceStream struct {
 	seqLen            int
 	featureDim        int
 	lengthBuckets     []int
+	bucketBatchSize   int
+	fileLengths       [][]int32
 	bucketSchedule    []lengthBucketBatch
 	bucketCursor      int
 	bucketTokenBudget int
 }
 
-func newContinuousSequenceStream(pattern string, seed int64, noShuffle bool, seqLen, featureDim int, lengthBuckets []int) (*continuousSequenceStream, error) {
+func newContinuousSequenceStream(
+	pattern string,
+	seed int64,
+	noShuffle bool,
+	seqLen, featureDim int,
+	lengthBuckets []int,
+	bucketBatchSize int,
+) (*continuousSequenceStream, error) {
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return nil, err
@@ -184,6 +193,7 @@ func newContinuousSequenceStream(pattern string, seed int64, noShuffle bool, seq
 	if err := validateLengthBuckets(lengthBuckets); err != nil && len(lengthBuckets) > 0 {
 		return nil, err
 	}
+	lengthsByPath := make(map[string][]int32, len(files))
 	for _, file := range files {
 		lengths, fileSeqLen, fileFeatureDim, err := loadContinuousSequenceLengths(file)
 		if err != nil {
@@ -195,6 +205,7 @@ func newContinuousSequenceStream(pattern string, seed int64, noShuffle bool, seq
 		if err := validateRecordLengthsForBuckets(file, lengths, lengthBuckets); err != nil {
 			return nil, err
 		}
+		lengthsByPath[file] = lengths
 	}
 	rng := rand.New(rand.NewSource(seed))
 	if !noShuffle {
@@ -202,12 +213,56 @@ func newContinuousSequenceStream(pattern string, seed int64, noShuffle bool, seq
 	}
 	stream := &continuousSequenceStream{
 		files: files, rng: rng, shuffle: !noShuffle, seqLen: seqLen, featureDim: featureDim,
-		lengthBuckets: append([]int(nil), lengthBuckets...),
+		lengthBuckets: append([]int(nil), lengthBuckets...), bucketBatchSize: bucketBatchSize,
+	}
+	stream.fileLengths = make([][]int32, len(files))
+	for i, file := range files {
+		stream.fileLengths[i] = lengthsByPath[file]
+	}
+	if bucketBatchSize > 0 {
+		if err := stream.rebuildFixedBucketSchedule(); err != nil {
+			return nil, err
+		}
+		return stream, nil
 	}
 	if err := stream.loadFile(0); err != nil {
 		return nil, err
 	}
 	return stream, nil
+}
+
+func (s *continuousSequenceStream) rebuildFixedBucketSchedule() error {
+	var rng *rand.Rand
+	if s.shuffle {
+		rng = s.rng
+	}
+	schedule, err := buildFixedLengthBucketSchedule(s.fileLengths, s.lengthBuckets, s.bucketBatchSize, rng)
+	if err != nil {
+		return fmt.Errorf("build fixed-size continuous length buckets: %w", err)
+	}
+	if len(schedule) == 0 {
+		return fmt.Errorf("fixed-size continuous length buckets contain no records")
+	}
+	s.bucketSchedule, s.bucketCursor = schedule, 0
+	return nil
+}
+
+func (s *continuousSequenceStream) fixedBucketShard(source int) (*ContinuousSequenceShard, error) {
+	if source < 0 || source >= len(s.files) {
+		return nil, fmt.Errorf("continuous length-bucket source %d outside [0,%d)", source, len(s.files))
+	}
+	if s.shard != nil && s.fileIdx == source {
+		return s.shard, nil
+	}
+	shard, err := LoadContinuousSequenceShard(s.files[source])
+	if err != nil {
+		return nil, err
+	}
+	if shard.SeqLen != s.seqLen || shard.FeatureDim != s.featureDim {
+		return nil, fmt.Errorf("continuous shard %q changed shape after startup validation", s.files[source])
+	}
+	s.fileIdx, s.shard = source, shard
+	return shard, nil
 }
 
 func (s *continuousSequenceStream) loadFile(index int) error {
@@ -242,6 +297,11 @@ func (s *continuousSequenceStream) nextLengthBucketBatch(tokenBudget int) (Batch
 		return Batch{}, fmt.Errorf("continuous length bucketing is disabled")
 	}
 	for {
+		if s.bucketBatchSize > 0 && s.bucketCursor >= len(s.bucketSchedule) {
+			if err := s.rebuildFixedBucketSchedule(); err != nil {
+				return Batch{}, err
+			}
+		}
 		if s.bucketSchedule == nil {
 			if s.bucketTokenBudget != 0 && s.bucketTokenBudget != tokenBudget {
 				return Batch{}, fmt.Errorf("length-bucket token budget changed from %d to %d", s.bucketTokenBudget, tokenBudget)
@@ -272,15 +332,29 @@ func (s *continuousSequenceStream) nextLengthBucketBatch(tokenBudget int) (Batch
 	validMask := make([]float32, batchSize*plan.seqLen)
 	exampleMask := make([]float32, batchSize)
 	storedWidth := s.seqLen * s.featureDim
+	batchShards := make(map[int]*ContinuousSequenceShard)
 	for row, index := range plan.indices {
-		source := s.shard.Frames[index*storedWidth : (index+1)*storedWidth]
+		shard := s.shard
+		if len(plan.sources) > 0 {
+			sourceIndex := plan.sources[row]
+			shard = batchShards[sourceIndex]
+			if shard == nil {
+				var err error
+				shard, err = s.fixedBucketShard(sourceIndex)
+				if err != nil {
+					return Batch{}, err
+				}
+				batchShards[sourceIndex] = shard
+			}
+		}
+		source := shard.Frames[index*storedWidth : (index+1)*storedWidth]
 		copyTimesteps := plan.seqLen
 		if copyTimesteps > s.seqLen {
 			copyTimesteps = s.seqLen
 		}
 		copy(frames[row*plan.seqLen*s.featureDim:], source[:copyTimesteps*s.featureDim])
-		labels[row] = s.shard.Labels[index]
-		for pos := 0; pos < int(s.shard.Lengths[index]); pos++ {
+		labels[row] = shard.Labels[index]
+		for pos := 0; pos < int(shard.Lengths[index]); pos++ {
 			validMask[row*plan.seqLen+pos] = 1
 		}
 		if row < plan.realRows {
