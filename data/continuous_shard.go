@@ -332,19 +332,17 @@ func (s *continuousSequenceStream) nextLengthBucketBatch(tokenBudget int) (Batch
 	validMask := make([]float32, batchSize*plan.seqLen)
 	exampleMask := make([]float32, batchSize)
 	storedWidth := s.seqLen * s.featureDim
-	batchShards := make(map[int]*ContinuousSequenceShard)
+	// plan.indices is grouped by source, so the single-slot cache in
+	// fixedBucketShard resolves the whole batch with one shard resident and
+	// loads each source exactly once. Holding every source's shard here would
+	// peak at batch_size shards, which is gigabytes at realistic feature dims.
 	for row, index := range plan.indices {
 		shard := s.shard
 		if len(plan.sources) > 0 {
-			sourceIndex := plan.sources[row]
-			shard = batchShards[sourceIndex]
-			if shard == nil {
-				var err error
-				shard, err = s.fixedBucketShard(sourceIndex)
-				if err != nil {
-					return Batch{}, err
-				}
-				batchShards[sourceIndex] = shard
+			var err error
+			shard, err = s.fixedBucketShard(plan.sources[row])
+			if err != nil {
+				return Batch{}, err
 			}
 		}
 		source := shard.Frames[index*storedWidth : (index+1)*storedWidth]

@@ -175,9 +175,14 @@ func buildFixedLengthBucketSchedule(
 				width = record.width
 			}
 		}
+		// Filler rows duplicate the LAST real row, not the first. Remainders are
+		// appended per source, so a batch's rows are already grouped by source;
+		// duplicating row 0 would send the tail back to the first source and
+		// force the streams' single-slot shard cache to reload it. These rows
+		// are masked out of loss and metrics either way.
 		for row := realRows; row < batchSize; row++ {
-			indices[row] = indices[0]
-			sources[row] = sources[0]
+			indices[row] = indices[realRows-1]
+			sources[row] = sources[realRows-1]
 		}
 		schedule = append(schedule, lengthBucketBatch{
 			seqLen: width, indices: indices, sources: sources, realRows: realRows,

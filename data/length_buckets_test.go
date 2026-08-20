@@ -268,3 +268,56 @@ func TestContinuousFixedBatchSizeLengthBuckets(t *testing.T) {
 		t.Fatalf("continuous fixed epoch examples=%d want=%d", totalReal, len(lengths))
 	}
 }
+
+// A remainder batch may draw rows from many shards. Rows must be grouped by
+// source so the streams' single-slot shard cache resolves the whole batch with
+// one shard resident at a time; otherwise peak residency is batch_size shards,
+// which at realistic feature dims is gigabytes.
+func TestFixedBatchSizeRemainderRowsAreGroupedBySource(t *testing.T) {
+	const sources, batchSize = 64, 64
+	// Each shard fills whole batches in the wide bucket and leaves exactly one
+	// row over, so a remainder batch spans every shard.
+	lengths := make([][]int32, sources)
+	for s := range lengths {
+		row := make([]int32, batchSize*2+1)
+		for i := range row {
+			row[i] = 6
+		}
+		lengths[s] = row
+	}
+	// One source short of a full remainder batch, so the final batch carries
+	// filler rows -- the case where duplicating row 0 would break contiguity.
+	lengths = lengths[:sources-1]
+	schedule, err := buildFixedLengthBucketSchedule(lengths, []int{3, 6}, batchSize, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spanning := 0
+	for step, batch := range schedule {
+		distinct := map[int]bool{}
+		for _, source := range batch.sources {
+			distinct[source] = true
+		}
+		if len(distinct) > 1 {
+			spanning++
+		}
+		// Walking rows in order must touch each source in one contiguous run,
+		// so a single-slot cache never reloads and never holds two shards.
+		runs, seen := 0, map[int]bool{}
+		for row, source := range batch.sources {
+			if row == 0 || source != batch.sources[row-1] {
+				if seen[source] {
+					t.Fatalf("step %d source %d reappears after another source: %v", step, source, batch.sources)
+				}
+				seen[source] = true
+				runs++
+			}
+		}
+		if runs != len(distinct) {
+			t.Fatalf("step %d contiguous runs=%d distinct sources=%d", step, runs, len(distinct))
+		}
+	}
+	if spanning == 0 {
+		t.Fatal("fixture did not produce a multi-shard remainder batch")
+	}
+}
