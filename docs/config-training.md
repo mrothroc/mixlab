@@ -89,6 +89,9 @@ A single bucket equal to `seq_len` with a divisible token budget takes the
 legacy fixed-shape loader and loss path exactly. This makes bucketing a strict
 no-op for fixed-length reproduction runs.
 
+A runnable recipe lives in
+[`examples/continuous_s4d_length_bucketed_classification_tiny.json`](../examples/continuous_s4d_length_bucketed_classification_tiny.json).
+
 Codebook shards already carry valid lengths. Continuous arrays should provide
 an integer `lengths: [N]` member in `.npz` input or use
 `mixlab -mode prepare -length-file row_lengths.tsv`; older continuous shards

@@ -1,0 +1,68 @@
+{
+  "name": "continuous_s4d_length_bucketed_classification_tiny",
+
+  // Continuous-frame classifier that trains skewed-length records at several
+  // shorter widths instead of padding everything to seq_len. S4D's FFT
+  // convolution is the clearest beneficiary: cost tracks the bucket width, not
+  // the corpus-wide maximum.
+  //
+  // Requires data prepared with per-record valid lengths:
+  //   mixlab -mode prepare -input features.npz -input-format continuous \
+  //     -label-file labels.tsv -length-file lengths.tsv \
+  //     -continuous-modality waveform -prepare-output-dir data/waveform
+  // Lengths may instead ride along as an integer `lengths: [N]` member inside
+  // the .npz. Legacy v1 shards without lengths load as fully valid, so they
+  // cannot benefit from the shorter buckets.
+
+  "model_dim": 32,
+  "seq_len": 64,
+  "positional_embedding": "none",
+  "input_adapter": {
+    "kind": "linear_frames",
+    "feature_dim": 4,
+    "bias": true,
+    "norm": "none"
+  },
+  "mlp_mult": 2.0,
+  "blocks": [
+    {
+      "type": "s4d",
+      "state_size": 64,
+      "init": "s4d-lin",
+      "dt_min": 0.001,
+      "dt_max": 0.1
+    },
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {
+      "num_labels": 3,
+
+      // "last" pooling reads each row's final *valid* position, so it stays
+      // correct once rows are padded to their bucket width.
+      "pooling": "last",
+      "classifier_dropout": 0.1
+    },
+    "optimizer": "adamw",
+    "steps": 100,
+    "lr": 0.0003,
+    "scalar_lr": 0.0001,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+
+    // With length_buckets, batch_tokens is a ceiling rather than an exact
+    // budget: bucket width T runs B = floor(batch_tokens / T) rows.
+    //   16 -> 16x16 = 256    32 -> 8x32 = 256
+    //   48 ->  5x48 = 240    64 -> 4x64 = 256
+    // The 48 bucket lands under the ceiling because 48 does not divide 256.
+    "batch_tokens": 256,
+
+    // Strictly increasing, each <= seq_len, largest <= batch_tokens. Every
+    // record joins the smallest bucket that contains its valid length; a
+    // record longer than the largest bucket fails at loader startup.
+    "length_buckets": [16, 32, 48, 64],
+
+    "seed": 42
+  }
+}
