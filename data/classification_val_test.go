@@ -18,7 +18,7 @@ func TestNewClassificationValSetTraversesFullSplitAndPadsFinalBatch(t *testing.T
 		t, filepath.Join(dir, "val_00001.bin"),
 		[][]uint16{{8, 9}, {10}}, []int32{1, 1},
 	)
-	writeClassificationValManifest(t, dir, 7, 5, 2, map[string]int64{"0": 2, "1": 3})
+	writeClassificationValManifest(t, dir, 7, 2, map[string]int64{"0": 2, "1": 3})
 
 	got, err := NewClassificationValSet(filepath.Join(dir, "val_*.bin"), 0, 10, 5)
 	if err != nil {
@@ -49,7 +49,7 @@ func TestNewClassificationValSetExplicitBatchCapReportsSplitTotal(t *testing.T) 
 		t, filepath.Join(dir, "val_00000.bin"),
 		[][]uint16{{4}, {5}, {6}, {7}, {8}}, []int32{0, 1, 0, 1, 0},
 	)
-	writeClassificationValManifest(t, dir, 5, 5, 1, map[string]int64{"0": 3, "1": 2})
+	writeClassificationValManifest(t, dir, 5, 1, map[string]int64{"0": 3, "1": 2})
 
 	got, err := NewClassificationValSet(filepath.Join(dir, "val_*.bin"), 2, 10, 5)
 	if err != nil {
@@ -60,7 +60,59 @@ func TestNewClassificationValSetExplicitBatchCapReportsSplitTotal(t *testing.T) 
 	}
 }
 
-func writeClassificationValManifest(t *testing.T, dir string, tokens, sequences int64, shards int, classCounts map[string]int64) {
+func TestNewClassificationValSetExactExampleCap(t *testing.T) {
+	dir := t.TempDir()
+	writeLabeledSequenceShardFixture(
+		t, filepath.Join(dir, "val_00000.bin"),
+		[][]uint16{{4}, {5}, {6}, {7}, {8}}, []int32{0, 1, 0, 1, 0},
+	)
+	writeClassificationValManifest(t, dir, 5, 1, map[string]int64{"0": 3, "1": 2})
+
+	got, err := NewClassificationValSetWithExampleLimit(filepath.Join(dir, "val_*.bin"), 3, 10, 5, LoaderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TotalExamples != 5 || got.EvaluatedExamples != 3 || len(got.Batches) != 2 {
+		t.Fatalf("validation set totals=%d/%d batches=%d, want 3/5/2", got.EvaluatedExamples, got.TotalExamples, len(got.Batches))
+	}
+	if counts := []int{got.Batches[0].ExampleCount, got.Batches[1].ExampleCount}; !reflect.DeepEqual(counts, []int{2, 1}) {
+		t.Fatalf("batch example counts=%v", counts)
+	}
+	var labels []int32
+	for _, batch := range got.Batches {
+		labels = append(labels, batch.Labels[:batch.ExampleCount]...)
+	}
+	if !reflect.DeepEqual(labels, []int32{0, 1, 0}) {
+		t.Fatalf("labels=%v", labels)
+	}
+}
+
+func TestNewClassificationValSetZeroExampleLimitMatchesStandaloneFullSplit(t *testing.T) {
+	dir := t.TempDir()
+	writeLabeledSequenceShardFixture(
+		t, filepath.Join(dir, "val_00000.bin"),
+		[][]uint16{{4}, {5, 6}, {7}, {8, 9}, {10}}, []int32{0, 1, 0, 1, 0},
+	)
+	writeClassificationValManifest(t, dir, 7, 1, map[string]int64{"0": 3, "1": 2})
+	pattern := filepath.Join(dir, "val_*.bin")
+	configured, err := NewClassificationValSetWithExampleLimit(pattern, 0, 10, 5, LoaderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	standalone, err := NewClassificationValSetWithOptions(pattern, 0, 10, 5, LoaderOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(configured, standalone) {
+		t.Fatalf("configured full validation differs from standalone full validation\nconfigured=%+v\nstandalone=%+v", configured, standalone)
+	}
+}
+
+// classificationValManifestSequences is the record count every fixture in
+// this file writes; the manifest and shard must agree on it.
+const classificationValManifestSequences = 5
+
+func writeClassificationValManifest(t *testing.T, dir string, tokens int64, shards int, classCounts map[string]int64) {
 	t.Helper()
 	manifest := DatasetManifest{
 		Format: DatasetManifestFormat, Version: DatasetManifestVersion,
@@ -75,7 +127,7 @@ func writeClassificationValManifest(t *testing.T, dir string, tokens, sequences 
 		Task: &DatasetTask{Type: DatasetTaskSingleLabelClassification, NumLabels: 2},
 		Splits: map[string]DatasetSplit{
 			"val": {
-				Pattern: "val_*.bin", Tokens: tokens, Shards: shards, Sequences: sequences,
+				Pattern: "val_*.bin", Tokens: tokens, Shards: shards, Sequences: classificationValManifestSequences,
 				MaxSequenceTokens: 2, ClassCounts: classCounts,
 			},
 		},

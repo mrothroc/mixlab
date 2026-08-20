@@ -7,20 +7,18 @@ import (
 )
 
 type resumeRunSetup struct {
-	Scheduler          trainingScheduler
-	Steps              int
-	StartStep          int
-	CheckpointSchedule resumeSchedule
-	Loaded             *resumeLoadedState
+	Scheduler trainingScheduler
+	Steps     int
+	StartStep int
+	Loaded    *resumeLoadedState
 }
 
 func prepareResumeRun(cfg *ArchConfig, trainPattern, resumePath string, earlyStop *earlyStopState) (resumeRunSetup, error) {
 	scheduler, steps := buildTrainingScheduler(cfg.Training)
-	checkpointSchedule, err := resumeScheduleFrom(cfg.Training, scheduler, steps)
-	if err != nil {
+	if _, err := resumeScheduleFrom(cfg.Training, scheduler, steps); err != nil {
 		return resumeRunSetup{}, fmt.Errorf("snapshot training schedule: %w", err)
 	}
-	setup := resumeRunSetup{Scheduler: scheduler, Steps: steps, CheckpointSchedule: checkpointSchedule}
+	setup := resumeRunSetup{Scheduler: scheduler, Steps: steps}
 	if resumePath == "" {
 		return setup, nil
 	}
@@ -62,7 +60,6 @@ func prepareResumeRun(cfg *ArchConfig, trainPattern, resumePath string, earlySto
 	setup.Scheduler = scheduler
 	setup.Steps = steps
 	setup.StartStep = manifest.GlobalStep
-	setup.CheckpointSchedule = manifest.Schedule
 	setup.Loaded = &loaded
 	return setup, nil
 }

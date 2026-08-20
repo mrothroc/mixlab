@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/gpu"
 )
 
@@ -93,6 +94,72 @@ func TestResumableCheckpointBundleRoundTripAndNewestComplete(t *testing.T) {
 	}
 	if resolved.GlobalStep != 2 {
 		t.Fatalf("resolved step=%d want=2", resolved.GlobalStep)
+	}
+}
+
+func TestResumableCheckpointManifestPersistsLiveNewBobState(t *testing.T) {
+	cfg := smallSWAArtifactConfig()
+	cfg.Training.Steps = 10
+	cfg.Training.LRSchedule = arch.LRScheduleNewBob
+	cfg.Training.NewBob = &arch.NewBobSpec{
+		AnnealingFactor: 0.5, ImprovementThreshold: 0.1,
+		Patient: 0, Metric: arch.NewBobMetricValErrorRate,
+	}
+	scheduler, steps := buildTrainingScheduler(cfg.Training)
+	metricScheduler := scheduler.(metricTrainingScheduler)
+	for _, metric := range []float64{0.5, 0.5} {
+		if _, err := metricScheduler.Observe(metric); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schedule, err := resumeScheduleFrom(cfg.Training, scheduler, steps)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shapes, weights := smallSWAArtifactWeights(t, cfg)
+	spec := gpu.TrainerOptimizerSpec{
+		Groups:        []gpu.OptimizerGroup{{Kind: gpu.OptimizerAdamW, LR: 1e-3, Beta1: 0.9, Beta2: 0.99, Epsilon: 1e-8}},
+		Weights:       make([]gpu.WeightOptimizer, len(shapes)),
+		DefaultBaseLR: 1e-3,
+	}
+	trainer := fakeResumeTrainer{
+		fakeWeightReader: fakeWeightReader{weights: weights},
+		state: gpu.TrainerStateSnapshot{Optimizer: gpu.TrainerOptimizerStats{
+			AttemptedSteps: 2, CommittedSteps: 2,
+		}},
+		spec: spec,
+	}
+	dir := t.TempDir()
+	shard := filepath.Join(dir, "train_000.bin")
+	if err := os.WriteFile(shard, []byte("dataset identity"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, manifestPath, err := writeResumableCheckpoint(cfg, trainer, shapes, dir, 2, resumableCheckpointContext{
+		TrainPattern: filepath.Join(dir, "train_*.bin"), Schedule: schedule,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := readResumeManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadResumeState(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := loaded.Manifest.Schedule.NewBob
+	want := scheduler.(*newBobSchedule).snapshot()
+	if got == nil || !reflect.DeepEqual(*got, want) {
+		t.Fatalf("checkpoint NewBob state=%+v want=%+v", got, want)
+	}
+	restored, _, err := schedulerForResume(loaded.Manifest.Schedule, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(restored.(*newBobSchedule).snapshot(), want) {
+		t.Fatalf("restored NewBob state=%+v want=%+v", restored.(*newBobSchedule).snapshot(), want)
 	}
 }
 
@@ -203,5 +270,25 @@ func TestDropoutKeysAreStepAndOpDeterministic(t *testing.T) {
 	fillDropoutKeys(b, 17, 24)
 	if reflect.DeepEqual(a, b) {
 		t.Fatal("different steps produced identical dropout keys")
+	}
+}
+
+// A resumed cosine run keeps replaying its saved schedule through a
+// resumedScheduler. Checkpoints written after that resume must snapshot the
+// original saved schedule, including its horizon and extension policy, rather
+// than failing on an unhandled scheduler type.
+func TestResumeScheduleFromHandlesResumedScheduler(t *testing.T) {
+	saved := resumeSchedule{
+		Kind:               "cosine",
+		OriginalTotalSteps: 1000,
+		Standard:           &LRSchedule{BaseLR: 0.001, MaxSteps: 1000, Warmup: 10},
+		ExtensionPolicy:    "original_then_floor",
+	}
+	got, err := resumeScheduleFrom(TrainingSpec{}, resumedScheduler{saved: saved}, 2000)
+	if err != nil {
+		t.Fatalf("snapshot resumed schedule: %v", err)
+	}
+	if !reflect.DeepEqual(got, saved) {
+		t.Fatalf("snapshot=%+v want the saved schedule %+v", got, saved)
 	}
 }

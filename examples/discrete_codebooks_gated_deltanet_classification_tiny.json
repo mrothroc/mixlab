@@ -24,6 +24,7 @@
       "bias": false
     },
     "optimizer": "adamw",
+    "weight_init": "pytorch_linear",
     "batch_tokens": 1024,
     "steps": 1000,
     "lr": 0.0003,

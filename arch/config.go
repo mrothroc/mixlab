@@ -331,6 +331,10 @@ type TrainingSpec struct {
 	Steps                             int                          `json:"steps"`
 	LRScheduleSteps                   int                          `json:"lr_schedule_steps,omitempty"`
 	LR                                float64                      `json:"lr"`
+	LRSchedule                        string                       `json:"lr_schedule,omitempty"`
+	NewBob                            *NewBobSpec                  `json:"newbob,omitempty"`
+	ValEverySteps                     int                          `json:"val_every_steps,omitempty"`
+	ValExamples                       int                          `json:"val_examples,omitempty"`
 	Phases                            []TrainingPhase              `json:"phases,omitempty"`
 	Objective                         string                       `json:"objective,omitempty"`
 	ExportHead                        string                       `json:"export_head,omitempty"`
@@ -467,6 +471,8 @@ type TrainingSpec struct {
 	batchTokensSet                     bool
 	batchSizeSet                       bool
 	batchTokensDerivedFromBatchSize    bool
+	valEveryStepsSet                   bool
+	valExamplesSet                     bool
 }
 
 // EarlyStopSpec controls optional validation-loss early stopping beyond the
@@ -717,6 +723,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 	if err := validateTrainingObjective(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateMetricDrivenLRSchedule(cfg, source); err != nil {
 		return nil, err
 	}
 	if err := validateBatchNormPolicy(cfg, source); err != nil {

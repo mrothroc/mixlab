@@ -1125,6 +1125,10 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
 | `lr` | number | No | `3e-4` | Base learning rate. Must be `> 0`. |
 | `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, `"hybrid"`, `"block_diffusion"`, `"multihead"`, or `"classification"`. Existing configs default to causal next-token training. |
+| `lr_schedule` | string | No | `"cosine"` | Outer learning-rate schedule: existing step-driven `"cosine"` behavior or validation-driven `"newbob"`. NewBob is classification-only in v1. |
+| `newbob` | object | Required for `lr_schedule: "newbob"` | Disabled | NewBob controls: `annealing_factor`, `improvement_threshold`, `patient`, and `metric` (`"val_loss"` or `"val_error_rate"`). |
+| `val_every_steps` | integer | Required for NewBob | omitted | Positive completed-optimizer-step cadence for configured full-split classification validation. |
+| `val_examples` | integer | No | `0` | Maximum classification validation examples for configured validation; `0` evaluates the full finite split. |
 | `classification` | object | Required for `objective: "classification"` | Disabled | Native sequence-level single-label classification. Requires `num_labels >= 2`; optional `pooling` is `"last"` or `"mean"`, optional `classifier_dropout` is in `[0,1]`, and optional `bias` defaults to `true`. |
 | `diffusion` | object | No | Defaults | Block-diffusion corruption and sampler knobs. Only valid with `objective: "block_diffusion"` or `objective: "hybrid"` plus `hybrid_secondary_objective: "block_diffusion"`. Multihead configs put diffusion settings on the block-diffusion head instead. Omit it to use conservative defaults. |
 | `heads` | array | Required for `objective: "multihead"` | None | Per-head objective specs for shared-trunk multihead training. V1 supports head objectives `"causal"`, `"mlm"`, `"mntp"`, `"block_diffusion"`, `"rtd"`, and `"energy"`. |
@@ -1241,6 +1245,12 @@ mixers are all bidirectional `plain` attention and to `"last"` for causal,
 recurrent, SSM, or mixed stacks. Mean pooling uses the validity-mask-weighted
 mean. Last pooling selects the final non-padding token. Both reject empty rows.
 `classifier_dropout` defaults to top-level `hidden_dropout`.
+
+The classifier projection follows the model-wide `training.weight_init`
+policy. The default remains Xavier uniform for backward compatibility. Use
+`weight_init: "pytorch_linear"` when reproducing a PyTorch classifier; Mixlab
+then initializes both the classifier weight and its optional bias from
+`Uniform(-1/sqrt(model_dim), +1/sqrt(model_dim))`.
 
 Classification requires a manifest-backed
 `mixlab_labeled_sequence_shard_v1` dataset with
@@ -1373,6 +1383,20 @@ sequence-length transition after two passes uses `ceil(2*T/B)`.
 `weight_init: "pytorch_linear"` matches `torch.nn.Linear.reset_parameters()` for affine tensors explicitly identified by the architecture: weights and paired biases use `Uniform(-1/sqrt(fan_in), +1/sqrt(fan_in))`. This includes continuous `linear_frames` input projections, S4D GLU output projections, and native classification heads. Per-weight initialization modes, SSM state parameters, embeddings, and other unmarked tensors keep their existing initialization. Omission remains byte-compatible with the historical Xavier default.
 
 `lr_schedule_steps` separates the standard cosine schedule horizon from the number of optimizer updates. For example, `steps: 180000` with `lr_schedule_steps: 200000` stops after 180,000 updates while evaluating every learning rate against a 200,000-step cosine. When omitted, both horizons remain identical as before.
+
+`lr_schedule: "newbob"` selects a stateful classification-only schedule driven
+by configured validation. It requires `newbob` and a positive
+`val_every_steps`; validation runs at completed-step boundaries and at the
+final update independently of progress logging. `val_examples: 0` means the
+full finite validation split, while a positive value takes an exact
+deterministic prefix. `newbob.metric` is a lower-is-better `"val_loss"` or
+`"val_error_rate"`. The first observation never anneals. Later observations
+use relative improvement against the immediately previous metric; when it is
+below `improvement_threshold`, the LR is multiplied by `annealing_factor`
+after the configured patience is exhausted. A previous metric of zero is
+defined as zero improvement. NewBob cannot be combined with phases,
+`lr_schedule_steps`, or cosine warmup/hold/warmdown fields. Resumable
+checkpoints preserve its live LR, previous metric, and patience counter.
 
 `seq_len_schedule` changes the training graph shape at configured step boundaries while keeping `batch_tokens` fixed. Mixlab caches one program per active scheduled shape/objective combination and switches at boundaries; validation, full eval, generation, and final unmasked loss use the top-level maximum `seq_len`. This v1 schedule is intentionally disabled with fixed-teacher distillation and active data2vec because those teacher runtimes are built around the configured sequence length.
 

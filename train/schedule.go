@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/mrothroc/mixlab/arch"
 )
 
 // LRSchedule defines a cosine learning rate schedule with warmup and hold.
@@ -216,6 +218,9 @@ func newPhaseSchedule(phases []TrainingPhase, warmdown int, minLRFraction float3
 }
 
 func buildTrainingScheduler(spec TrainingSpec) (trainingScheduler, int) {
+	if spec.EffectiveLRSchedule() == arch.LRScheduleNewBob {
+		return newNewBobSchedule(float32(spec.LR), spec.NewBob), spec.Steps
+	}
 	if len(spec.Phases) > 0 {
 		totalSteps := spec.TotalSteps()
 		return newPhaseSchedule(spec.Phases, spec.WarmdownSteps, spec.MinLRFraction), totalSteps

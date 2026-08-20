@@ -63,6 +63,11 @@ disabled for bias-free reference recipes. V1 supports single-label
 cross-entropy only and requires a labeled one-record-per-row dataset whose
 manifest `task.num_labels` matches the config.
 
+The classifier follows the model-wide `weight_init` policy. Omission uses the
+historical Xavier-uniform default. Set `weight_init: "pytorch_linear"` when a
+reference recipe expects `torch.nn.Linear.reset_parameters()`; this uses
+`model_dim` as fan-in for both the classifier projection and optional bias.
+
 Classification with an external `linear_frames` or `discrete_codebooks` input
 adapter may set `blocks: []` to train a pure representation probe. The forward
 is adapter, optional final norm, pooling, then classifier. Token-embedding
@@ -140,6 +145,46 @@ LAMB caps its per-tensor trust ratio at `lamb_trust_ratio_cap` (`10.0` by
 default) to avoid post-warmup amplification when an update norm becomes very
 small. Set `lamb_trust_ratio_cap: 0` only when intentionally testing uncapped
 LAMB behavior.
+
+## Learning-Rate Schedules
+
+Omitting `lr_schedule` keeps Mixlab's existing step-driven warmup, hold, and
+cosine schedule unchanged. Classification recipes that need validation-driven
+annealing can opt into NewBob:
+
+```jsonc
+"training": {
+  "objective": "classification",
+  "lr": 0.0002,
+  "lr_schedule": "newbob",
+  "newbob": {
+    "annealing_factor": 0.9,
+    "improvement_threshold": 0.0025,
+    "patient": 0,
+    "metric": "val_error_rate"
+  },
+  "val_every_steps": 25314,
+  "val_examples": 0
+}
+```
+
+Configured validation runs after each completed `val_every_steps` optimizer
+updates and once at the final update. `val_examples: 0` evaluates the full
+finite validation split; a positive value evaluates an exact deterministic
+prefix. This path is independent of progress logging and replaces the legacy
+10-batch monitoring sample only for configs that opt into it.
+
+NewBob compares each lower-is-better metric to the immediately previous
+observation. The first observation does not anneal. When relative improvement
+is below `improvement_threshold`, `patient: 0` changes the learning rate
+immediately; larger patience values delay the change by exactly that many bad
+observations. NewBob is classification-only in v1 and cannot be combined with
+phases or the cosine warmup/hold/warmdown fields.
+
+Periodic resumable checkpoints preserve the current learning rate, previous
+metric, and patience counter. The `-val-every` CLI flag and
+`MIXLAB_VAL_EVERY` environment variable remain run-level cadence overrides;
+they do not change the configured validation example count.
 
 ### Choosing an optimizer for architecture comparison
 
@@ -287,6 +332,7 @@ is applied before the model-wide gradient clip.
 
 ## Validation And Logging
 
-Use `val_every`, early-stop fields, and target validation loss settings in the
-config for repeatable runs. CLI flags such as `-log-every`, `-val-every`, and
-`-eval-after-train` are run-level overrides; see [cli-train.md](cli-train.md).
+Use `val_every_steps`, early-stop fields, and target validation loss settings
+in the config for repeatable runs. CLI flags such as `-log-every`,
+`-val-every`, and `-eval-after-train` are run-level overrides; see
+[cli-train.md](cli-train.md).

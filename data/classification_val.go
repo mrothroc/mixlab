@@ -118,6 +118,40 @@ func NewClassificationValSetWithOptions(pattern string, maxBatches, batchTokens,
 	return vs, nil
 }
 
+// NewClassificationValSetWithExampleLimit loads a deterministic prefix of a
+// finite classification split. maxExamples=0 traverses the full split. The
+// final fixed-shape batch remains intact for GPU execution while ExampleCount
+// excludes rows beyond the requested cap from loss and metrics.
+func NewClassificationValSetWithExampleLimit(pattern string, maxExamples, batchTokens, seqLen int, opts LoaderOptions) (*ValSet, error) {
+	if maxExamples < 0 {
+		return nil, fmt.Errorf("classification validation example limit must be >= 0, got %d", maxExamples)
+	}
+	vs, err := NewClassificationValSetWithOptions(pattern, 0, batchTokens, seqLen, opts)
+	if err != nil || maxExamples == 0 || maxExamples >= vs.EvaluatedExamples {
+		return vs, err
+	}
+	remaining := maxExamples
+	batches := make([]ValBatch, 0, len(vs.Batches))
+	for _, batch := range vs.Batches {
+		if remaining <= 0 {
+			break
+		}
+		keep := batch.ExampleCount
+		if keep > remaining {
+			keep = remaining
+		}
+		batch.ExampleCount = keep
+		batches = append(batches, batch)
+		remaining -= keep
+	}
+	if remaining != 0 {
+		return nil, fmt.Errorf("classification validation requested %d examples but loaded only %d", maxExamples, maxExamples-remaining)
+	}
+	vs.Batches = batches
+	vs.EvaluatedExamples = maxExamples
+	return vs, nil
+}
+
 func newBucketedClassificationValSet(pattern string, manifest *DatasetManifest, maxBatches, batchTokens, seqLen int, opts LoaderOptions) (*ValSet, error) {
 	if manifest == nil || (!isContinuousSequenceShardFormat(manifest.ShardFormat) && manifest.ShardFormat != DatasetShardFormatCodebookSequenceV1) {
 		return nil, fmt.Errorf("length-bucketed classification validation requires continuous-frame or discrete-codebook shards")

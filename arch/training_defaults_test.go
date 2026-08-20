@@ -183,3 +183,21 @@ func TestGPT2StrictSmallWeightDecayZero(t *testing.T) {
 	}
 	assertWeightDecays(t, cfg, 0, 0, 0, 0, 0)
 }
+
+func TestDiscreteCodebookClassificationExamplesUsePyTorchLinearInit(t *testing.T) {
+	for _, name := range []string{
+		"discrete_codebooks_linear_probe_tiny.json",
+		"discrete_codebooks_linear_probe_newbob_tiny.json",
+		"discrete_codebooks_gated_deltanet_classification_tiny.json",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg, err := LoadArchConfig(filepath.Join("..", "examples", name))
+			if err != nil {
+				t.Fatalf("LoadArchConfig: %v", err)
+			}
+			if cfg.Training.WeightInit != "pytorch_linear" {
+				t.Fatalf("weight_init=%q, want pytorch_linear", cfg.Training.WeightInit)
+			}
+		})
+	}
+}

@@ -28,8 +28,10 @@ type WeightMeta struct {
 	InitScale     float64
 	GPTBERTScale  float32
 	GPT2Scale     float32
-	// PyTorchLinearFanIn marks a tensor as an nn.Linear-style weight or paired
-	// bias. It is ignored unless training.weight_init="pytorch_linear".
+	// PyTorchLinearFanIn conditionally marks a tensor as an nn.Linear-style
+	// weight or paired bias. It is consumed only when
+	// training.weight_init="pytorch_linear"; InitMode is the unconditional
+	// per-weight initialization mechanism.
 	PyTorchLinearFanIn   int
 	OptimizerRole        string
 	OptimizerLR          float32

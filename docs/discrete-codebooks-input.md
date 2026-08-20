@@ -60,6 +60,7 @@ split class counts. Model/manifest mismatches fail before trainer creation.
   "training": {
     "objective": "classification",
     "classification": {"num_labels": 10, "pooling": "mean", "bias": false},
+    "weight_init": "pytorch_linear",
     "batch_tokens": 1024
   }
 }
@@ -72,10 +73,14 @@ sum over codebooks. `fusion: "mean"` is a parameter-free ablation.
 `fusion_hidden_dim` defaults to `model_dim` and is valid only for
 `attention_mlp`. `norm` accepts `none` or `layernorm`.
 
-The embedding uses PyTorch `nn.Embedding` normal initialization. Attention
-linears and the first-linear bias use PyTorch fan-in uniform initialization.
-Set `training.classification.bias: false` for a DASB-style bias-free output
-linear; classifier bias otherwise defaults to `true`.
+The adapter embedding uses PyTorch `nn.Embedding` normal initialization.
+Adapter attention linears and the first-linear bias use PyTorch fan-in uniform
+initialization regardless of the model-wide policy. The classification head
+follows `training.weight_init`: set it to `"pytorch_linear"`, as the examples
+do, to match `torch.nn.Linear.reset_parameters()`; omission keeps Mixlab's
+historical Xavier default. Set `training.classification.bias: false` for a
+DASB-style bias-free output linear; classifier bias otherwise defaults to
+`true`.
 
 ### Linear probes
 
@@ -96,7 +101,8 @@ stack:
   "blocks": [],
   "training": {
     "objective": "classification",
-    "classification": {"num_labels": 18, "pooling": "mean", "bias": false}
+    "classification": {"num_labels": 18, "pooling": "mean", "bias": false},
+    "weight_init": "pytorch_linear"
   }
 }
 ```

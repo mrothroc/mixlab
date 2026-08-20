@@ -73,6 +73,49 @@ func TestPyTorchLinearPreservesS4DSpecialInitializerStream(t *testing.T) {
 	assertAnyNonZero(t, "input_adapter_bias", got[1])
 }
 
+func TestPyTorchLinearClassificationHeadUsesModelDimFanIn(t *testing.T) {
+	cfg := nativeClassificationTestConfig()
+	cfg.ModelDim = 1024
+	cfg.Blocks[0].Heads = 8
+	cfg.Training.Classification.NumLabels = 18
+	cfg.Training.WeightInit = "pytorch_linear"
+
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var head WeightShape
+	for _, shape := range shapes {
+		if shape.Name == "head_classifier_proj" {
+			head = shape
+			break
+		}
+	}
+	if head.Name == "" {
+		t.Fatal("classification head weight is missing")
+	}
+	if head.PyTorchLinearFanIn != cfg.ModelDim {
+		t.Fatalf("classification fan_in=%d, want model_dim=%d", head.PyTorchLinearFanIn, cfg.ModelDim)
+	}
+
+	values := initWeightData([]WeightShape{head}, cfg.Training.Seed, cfg.Training.WeightInit, 0)[0]
+	bound := 1 / math.Sqrt(float64(cfg.ModelDim))
+	assertValuesWithin(t, head.Name, values, bound)
+
+	var sum, sumSquares float64
+	for _, value := range values {
+		v := float64(value)
+		sum += v
+		sumSquares += v * v
+	}
+	mean := sum / float64(len(values))
+	std := math.Sqrt(sumSquares/float64(len(values)) - mean*mean)
+	wantStd := bound / math.Sqrt(3)
+	if relativeError := math.Abs(std-wantStd) / wantStd; relativeError > 0.03 {
+		t.Fatalf("classification std=%g, want approximately %g (relative error %g)", std, wantStd, relativeError)
+	}
+}
+
 func assertValuesWithin(t *testing.T, name string, values []float32, bound float64) {
 	t.Helper()
 	for i, value := range values {

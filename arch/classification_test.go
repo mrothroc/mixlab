@@ -91,10 +91,10 @@ func TestClassificationWeightsAppendWithoutChangingLMPrefix(t *testing.T) {
 	}
 	proj := classificationWeights[len(baseWeights)]
 	bias := classificationWeights[len(baseWeights)+1]
-	if proj.Name != "head_classifier_proj" || !equalShape(proj.Shape, []int{16, 3}) {
+	if proj.Name != "head_classifier_proj" || !equalShape(proj.Shape, []int{16, 3}) || proj.PyTorchLinearFanIn != 16 {
 		t.Fatalf("classifier projection=%+v", proj)
 	}
-	if bias.Name != "head_classifier_bias" || !equalShape(bias.Shape, []int{3}) || !bias.InitZero {
+	if bias.Name != "head_classifier_bias" || !equalShape(bias.Shape, []int{3}) || !bias.InitZero || bias.PyTorchLinearFanIn != 16 {
 		t.Fatalf("classifier bias=%+v", bias)
 	}
 }

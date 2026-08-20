@@ -141,6 +141,9 @@ func (t *TrainingSpec) ApplyDefaults() {
 	if t.WordStructuralObjective != nil {
 		t.WordStructuralObjective.applyDefaults(t.MLMMaskTokenID)
 	}
+	if t.NewBob != nil {
+		t.NewBob.applyDefaults()
+	}
 	if !t.weightDecaySet && t.WeightDecay == 0 {
 		t.WeightDecay = d.WeightDecay
 	}

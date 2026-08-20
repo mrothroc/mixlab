@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -88,7 +87,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	sched := resumeSetup.Scheduler
 	steps := resumeSetup.Steps
 	startStep := resumeSetup.StartStep
-	checkpointSchedule := resumeSetup.CheckpointSchedule
 	resumed := resumeSetup.Loaded
 	if resumed != nil {
 		fmt.Printf("  [%s] resuming complete checkpoint %s at step %d/%d\n", name, resumed.Manifest.ManifestPath, startStep, steps)
@@ -352,22 +350,31 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		}
 	}
 
-	// Load validation set
-	const defaultValBatchCount = 10
-	valPattern := strings.Replace(trainPattern, "train", "val", 1)
-	valSet, valErr := data.NewValSetWithOptions(valPattern, seed, defaultValBatchCount, batchTokens, seqLen, effectiveLoaderOptions(cfg))
-	if valErr != nil {
-		fmt.Printf("  [%s] no val set: %v\n", name, valErr)
+	valSet, valPattern, err := loadTrainingValidationSet(cfg, trainPattern, name, seed, batchTokens, seqLen)
+	if err != nil {
+		return TrainResult{}, err
 	}
 
 	phaseSched, hasPhases := sched.(phaseSchedule)
+	metricSched, hasMetricSchedule := sched.(metricTrainingScheduler)
+	if cfg.Training.EffectiveLRSchedule() == arch.LRScheduleNewBob && !hasMetricSchedule {
+		return TrainResult{}, fmt.Errorf("training.lr_schedule=%q did not construct a metric-driven scheduler", arch.LRScheduleNewBob)
+	}
 
 	var firstLoss, lastLoss float64
 	lastUnmaskedLoss := math.NaN()
 	lastValLoss := math.NaN()
 	hasValLoss := false
 	logEvery := effectiveTrainEvery(opts.LogEvery, "MIXLAB_LOG_EVERY", 100)
-	valEvery := effectiveTrainEvery(opts.ValEvery, "MIXLAB_VAL_EVERY", 100)
+	valEveryFallback := 100
+	if cfg.Training.ConfiguredMetricValidation() {
+		valEveryFallback = cfg.Training.ValEverySteps
+	}
+	valEvery := effectiveTrainEvery(opts.ValEvery, "MIXLAB_VAL_EVERY", valEveryFallback)
+	if cfg.Training.ConfiguredMetricValidation() {
+		fmt.Printf("  [%s] configured validation: every=%d completed steps examples=%d/%d\n",
+			name, valEvery, valSet.EvaluatedExamples, valSet.TotalExamples)
+	}
 	mlxMemLogEvery := effectiveTrainEvery(0, mlxMemLogEveryEnv, 0)
 	mlxClearCacheEvery := effectiveTrainEvery(0, mlxClearCacheEveryEnv, 0)
 	telemetry := opts.telemetry
@@ -586,6 +593,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				rtdActive(cfg) ||
 				step >= steps-1 ||
 				shouldLogTrainingStep(step, steps, logEvery) ||
+				shouldRunTrainingValidationStep(cfg.Training, step, steps, valEvery) ||
 				shouldWriteCheckpoint(step, opts.CheckpointEvery) ||
 				shouldUpdateSWA(step, swaStart, swaInterval) {
 				return false
@@ -615,6 +623,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		}
 
 		for step := startStep; step < steps; step++ {
+			appliedLR := sched.At(step)
 			dataDuration := time.Duration(0)
 			if step == startStep {
 				dataDuration = initialDataDuration
@@ -738,7 +747,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				HasLoss:       true,
 				ValLoss:       lastValLoss,
 				HasValLoss:    hasValLoss,
-				LR:            sched.At(step),
+				LR:            appliedLR,
 				Objective:     currentObjective,
 				SeqLen:        currentSeqLen,
 				BatchTokens:   stepTokens,
@@ -786,54 +795,28 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				updateEMAWeights(swaEMA, weights, swaDecay)
 			}
 
-			if shouldLogTrainingStep(step, steps, logEvery) {
+			validation, err := runTrainingValidation(trainingValidationRequest{
+				cfg: cfg, name: name, valSet: valSet, trainer: trainer, causalEval: causalEval,
+				currentProgramKey: currentProgramKey, pairSampler: pairSampler,
+				invarianceSampler: invarianceSampler, pllMarginSampler: pllMarginSampler,
+				step: step, totalSteps: steps, valEvery: valEvery, batchSize: batchSize, seqLen: seqLen,
+				metricScheduler: metricSched,
+			})
+			if err != nil {
+				return TrainResult{}, err
+			}
+			valDuration, valStr, ranValidation := validation.duration, validation.log, validation.ran
+			if ranValidation {
+				lastValLoss = validation.loss
+				hasValLoss = true
+			}
+
+			logStep := shouldLogTrainingStep(step, steps, logEvery)
+			if ranValidation && !logStep {
+				fmt.Printf("  [%s] completed_steps=%d%s\n", name, step+1, valStr)
+			}
+			if logStep {
 				logStart := time.Now()
-				valDuration := time.Duration(0)
-				valStr := ""
-				ranValidation := false
-				if valSet != nil && len(valSet.Batches) > 0 && shouldRunValidationStep(step, steps, valEvery) {
-					valStart := time.Now()
-					stopValidation := startSlowTrainingPhaseLogger(name, step, "validation")
-					var valAvg float64
-					classificationSummary := ""
-					var err error
-					switch {
-					case cfg.ClassificationEnabled():
-						runShape := func(evalBatchSize, evalSeqLen int, fn func() error) error {
-							evalKey := currentProgramKey
-							evalKey.dropoutInactive = true
-							evalKey.batchSize = evalBatchSize
-							evalKey.seqLen = evalSeqLen
-							return causalEval.withProgramKey(currentProgramKey, evalKey, fn)
-						}
-						metrics, evalErr := evaluateClassificationValidationWithTrainer(cfg, valSet, trainer, step, batchSize, seqLen, nil, runShape)
-						err = evalErr
-						if evalErr == nil {
-							valAvg = metrics.Loss
-							classificationSummary = metrics.summary()
-						}
-					case cfg.Training.MultiheadEnabled():
-						err = causalEval.withCausalEvalProgram(currentProgramKey, func() error {
-							var evalErr error
-							valAvg, evalErr = meanMultiheadValidationLoss(cfg, valSet, trainer, pairSampler, invarianceSampler, pllMarginSampler, step, batchSize, seqLen)
-							return evalErr
-						})
-					default:
-						valAvg, err = causalEval.meanValidationLossCausal(currentProgramKey, valSet)
-					}
-					stopValidation()
-					valDuration = time.Since(valStart)
-					if err == nil {
-						lastValLoss = valAvg
-						hasValLoss = true
-						ranValidation = true
-						if classificationSummary != "" {
-							valStr = " val_" + classificationSummary
-						} else {
-							valStr = fmt.Sprintf(" val=%.4f", valAvg)
-						}
-					}
-				}
 				// Use wall-clock average for tok/s and MFU — per-step EMA is
 				// unreliable with pipelined training because collect returns
 				// near-instantly when the GPU has already finished.
@@ -850,7 +833,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					phaseStr = fmt.Sprintf(" phase=%s", phaseDisplayLabel(phase, currentPhaseIdx))
 				}
 				fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f%s tok/s=%.0f%s %s\n",
-					name, step, steps, v, valStr, sched.At(step), phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), steadyElapsed, stepsForRate, step, steps))
+					name, step, steps, v, valStr, appliedLR, phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), steadyElapsed, stepsForRate, step, steps))
 				if masking := formatMLMMaskStatsForLog(currentDiagnosticBatch.mlmMaskStats); masking != "" {
 					fmt.Printf("  [%s] [masking] %s\n", name, masking)
 				}
@@ -879,7 +862,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					HasLoss:       true,
 					ValLoss:       lastValLoss,
 					HasValLoss:    hasValLoss,
-					LR:            sched.At(step),
+					LR:            appliedLR,
 					Objective:     currentObjective,
 					SeqLen:        currentSeqLen,
 					BatchTokens:   stepTokens,
@@ -905,20 +888,24 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				if err := telemetry.writeSnapshot(true); err != nil {
 					return TrainResult{}, err
 				}
-				if ranValidation && hasValLoss && targetValLoss > 0 && lastValLoss <= targetValLoss {
-					fmt.Printf("  [%s] target val loss %.4f reached at step %d (val=%.4f), stopping early\n",
-						name, targetValLoss, step, lastValLoss)
+			}
+			if ranValidation && hasValLoss && targetValLoss > 0 && lastValLoss <= targetValLoss {
+				fmt.Printf("  [%s] target val loss %.4f reached at step %d (val=%.4f), stopping early\n",
+					name, targetValLoss, step, lastValLoss)
+				break
+			}
+			if ranValidation && earlyStop != nil {
+				if stop, reason := earlyStop.observe(step, lastValLoss); stop {
+					fmt.Printf("  [%s] early stop at step %d: %s\n", name, step, reason)
 					break
-				}
-				if ranValidation && earlyStop != nil {
-					if stop, reason := earlyStop.observe(step, lastValLoss); stop {
-						fmt.Printf("  [%s] early stop at step %d: %s\n", name, step, reason)
-						break
-					}
 				}
 			}
 
 			if shouldWriteCheckpoint(step, opts.CheckpointEvery) {
+				checkpointSchedule, err := resumeScheduleFrom(cfg.Training, sched, steps)
+				if err != nil {
+					return TrainResult{}, fmt.Errorf("snapshot live training schedule at step %d: %w", step+1, err)
+				}
 				stopCheckpoint := startSlowTrainingPhaseLogger(name, step, "checkpoint")
 				artifacts, manifestPath, err := writeResumableCheckpoint(cfg, trainer, shapes, opts.CheckpointDir, step+1, resumableCheckpointContext{
 					TrainPattern: trainPattern,

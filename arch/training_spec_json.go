@@ -43,6 +43,8 @@ func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	_, t.swaIntervalSet = fields["swa_interval"]
 	_, t.batchTokensSet = fields["batch_tokens"]
 	_, t.batchSizeSet = fields["batch_size"]
+	_, t.valEveryStepsSet = fields["val_every_steps"]
+	_, t.valExamplesSet = fields["val_examples"]
 	return nil
 }
 

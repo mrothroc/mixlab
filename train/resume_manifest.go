@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/gpu"
 )
 
@@ -23,13 +24,14 @@ type resumeTensorRef struct {
 }
 
 type resumeSchedule struct {
-	Kind               string          `json:"kind"`
-	OriginalTotalSteps int             `json:"original_total_steps"`
-	Standard           *LRSchedule     `json:"standard,omitempty"`
-	Phases             []TrainingPhase `json:"phases,omitempty"`
-	WarmdownSteps      int             `json:"warmdown_steps,omitempty"`
-	MinLRFraction      float32         `json:"min_lr_fraction,omitempty"`
-	ExtensionPolicy    string          `json:"extension_policy"`
+	Kind               string               `json:"kind"`
+	OriginalTotalSteps int                  `json:"original_total_steps"`
+	Standard           *LRSchedule          `json:"standard,omitempty"`
+	NewBob             *newBobScheduleState `json:"newbob,omitempty"`
+	Phases             []TrainingPhase      `json:"phases,omitempty"`
+	WarmdownSteps      int                  `json:"warmdown_steps,omitempty"`
+	MinLRFraction      float32              `json:"min_lr_fraction,omitempty"`
+	ExtensionPolicy    string               `json:"extension_policy"`
 }
 
 type resumeEarlyStop struct {
@@ -87,6 +89,12 @@ func resumeScheduleFrom(spec TrainingSpec, scheduler trainingScheduler, total in
 		ExtensionPolicy:    "original_then_floor",
 	}
 	switch s := scheduler.(type) {
+	case resumedScheduler:
+		// A resumed cosine run replays the schedule saved in its checkpoint,
+		// including the original horizon that the extension policy floors
+		// against. Re-deriving it from the current step count would move that
+		// horizon, so persist the saved schedule unchanged.
+		return s.saved, nil
 	case LRSchedule:
 		copy := s
 		out.Kind = "cosine"
@@ -96,6 +104,14 @@ func resumeScheduleFrom(spec TrainingSpec, scheduler trainingScheduler, total in
 		out.Phases = append([]TrainingPhase(nil), spec.Phases...)
 		out.WarmdownSteps = spec.WarmdownSteps
 		out.MinLRFraction = spec.MinLRFraction
+	case *newBobSchedule:
+		state := s.snapshot()
+		if err := validateNewBobScheduleState(state); err != nil {
+			return resumeSchedule{}, err
+		}
+		out.Kind = arch.LRScheduleNewBob
+		out.NewBob = &state
+		out.ExtensionPolicy = "continue_metric_state"
 	default:
 		return resumeSchedule{}, fmt.Errorf("unsupported scheduler type %T", scheduler)
 	}
@@ -115,8 +131,18 @@ func schedulerForResume(saved resumeSchedule, configuredSteps int) (trainingSche
 	if saved.Kind == "cosine" && saved.Standard == nil {
 		return nil, 0, fmt.Errorf("checkpoint cosine schedule is missing parameters")
 	}
-	if saved.Kind != "cosine" && saved.Kind != "phases" {
+	if saved.Kind != "cosine" && saved.Kind != "phases" && saved.Kind != arch.LRScheduleNewBob {
 		return nil, 0, fmt.Errorf("checkpoint has unsupported schedule kind %q", saved.Kind)
+	}
+	if saved.Kind == arch.LRScheduleNewBob {
+		if saved.NewBob == nil {
+			return nil, 0, fmt.Errorf("checkpoint NewBob schedule is missing state")
+		}
+		scheduler, err := newNewBobScheduleFromState(*saved.NewBob)
+		if err != nil {
+			return nil, 0, err
+		}
+		return scheduler, configuredSteps, nil
 	}
 	if saved.Kind == "phases" {
 		return newPhaseSchedule(saved.Phases, saved.WarmdownSteps, saved.MinLRFraction), configuredSteps, nil

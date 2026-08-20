@@ -605,6 +605,21 @@ func TestShouldRunValidationStep_IndependentCadence(t *testing.T) {
 	}
 }
 
+func TestShouldRunConfiguredValidationStepUsesCompletedSteps(t *testing.T) {
+	var got []int
+	for step := 0; step < 12; step++ {
+		if shouldRunConfiguredValidationStep(step, 12, 5) {
+			got = append(got, step+1)
+		}
+	}
+	if want := []int{5, 10, 12}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("completed-step validation=%v want=%v", got, want)
+	}
+	if shouldRunConfiguredValidationStep(0, 12, 5) {
+		t.Fatal("configured validation ran after the first update")
+	}
+}
+
 // ---------- TrainResult.formatSummary ----------
 
 func TestFormatSummary_WithValLoss(t *testing.T) {

@@ -85,3 +85,22 @@ func shouldRunValidationStep(step, totalSteps, every int) bool {
 	}
 	return step%every == 0
 }
+
+// shouldRunConfiguredValidationStep interprets cadence in completed optimizer
+// steps. A cadence of N therefore observes updates N, 2N, ... and also the
+// final partial interval. This differs intentionally from legacy sampled
+// monitoring, whose historical zero-based cadence remains unchanged.
+func shouldRunConfiguredValidationStep(step, totalSteps, every int) bool {
+	if totalSteps <= 0 || every <= 0 || step < 0 || step >= totalSteps {
+		return false
+	}
+	completed := step + 1
+	return completed%every == 0 || completed == totalSteps
+}
+
+func shouldRunTrainingValidationStep(spec TrainingSpec, step, totalSteps, every int) bool {
+	if spec.ConfiguredMetricValidation() {
+		return shouldRunConfiguredValidationStep(step, totalSteps, every)
+	}
+	return shouldRunValidationStep(step, totalSteps, every)
+}

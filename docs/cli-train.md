@@ -30,7 +30,7 @@ Common flags:
 | `-eval` | Legacy alias for `-eval-after-train`. |
 | `-lut-dir DIR` | Directory for BPB lookup tables. Default: `data`. |
 | `-log-every N` | Print progress every `N` training steps. `0` uses config/defaults; `MIXLAB_LOG_EVERY` overrides. |
-| `-val-every N` | Run validation every `N` training steps. `0` uses config/defaults; `MIXLAB_VAL_EVERY` overrides. |
+| `-val-every N` | Run validation every `N` steps. Configs with `training.val_every_steps` count completed optimizer steps; otherwise the legacy step-index cadence applies, which also validates at step `0`. `0` uses `training.val_every_steps` when configured, otherwise the legacy default; `MIXLAB_VAL_EVERY` overrides both. |
 | `-timing` | Print data/GPU/validation/log timing at progress intervals. |
 | `-swa-start N` | Override `training.swa_start`. `0` disables. |
 | `-swa-decay X` | Override `training.swa_decay`. |
@@ -67,6 +67,11 @@ step, deterministic dropout keys, objective RNG position, and the training data
 position. Mixlab restores the loader position by replaying prior batches from
 `training.seed`; this avoids serializing prefetch internals but can make startup
 noticeable for very large step counts.
+
+Validation-driven NewBob schedules additionally restore the current learning
+rate, previous validation metric, and patience counter. Resuming therefore
+continues the same annealing trajectory rather than treating the next
+validation as a first observation.
 
 The manifest is written last. Directory resume ignores partial model/state
 files left by an interrupted write and selects the highest complete step.

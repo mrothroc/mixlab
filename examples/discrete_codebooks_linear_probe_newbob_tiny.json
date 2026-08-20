@@ -1,5 +1,5 @@
 {
-  "name": "discrete-codebooks-linear-probe-tiny",
+  "name": "discrete-codebooks-linear-probe-newbob-tiny",
   "model_dim": 64,
   "seq_len": 128,
   "positional_embedding": "none",
@@ -25,10 +25,18 @@
     "weight_init": "pytorch_linear",
     "batch_tokens": 1024,
     "steps": 1000,
-    "lr": 0.0003,
-    "warmup_steps": 100,
+    "lr": 0.0002,
+    "lr_schedule": "newbob",
+    "newbob": {
+      "annealing_factor": 0.9,
+      "improvement_threshold": 0.0025,
+      "patient": 0,
+      "metric": "val_error_rate"
+    },
+    "val_every_steps": 100,
+    "val_examples": 0,
     "grad_clip": 1.0,
-    "weight_decay": 0.01,
+    "weight_decay": 0.0,
     "seed": 42
   }
 }
