@@ -678,9 +678,6 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		}
 	}
 
-	if len(cfg.Blocks) == 0 {
-		return nil, fmt.Errorf("config %q must define at least one block", source)
-	}
 	if err := validateBackout(cfg, source); err != nil {
 		return nil, err
 	}
@@ -710,6 +707,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 
 	cfg.Training.ApplyDefaults()
+	if err := validateBlockPresence(cfg, source); err != nil {
+		return nil, err
+	}
 	if err := validateTTTMLPPolicy(cfg, source); err != nil {
 		return nil, err
 	}

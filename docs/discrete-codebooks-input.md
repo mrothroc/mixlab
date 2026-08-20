@@ -77,13 +77,48 @@ linears and the first-linear bias use PyTorch fan-in uniform initialization.
 Set `training.classification.bias: false` for a DASB-style bias-free output
 linear; classifier bias otherwise defaults to `true`.
 
+### Linear probes
+
+For a representation-only baseline, classification may use an empty block
+stack:
+
+```jsonc
+{
+  "final_norm": false,
+  "input_adapter": {
+    "kind": "discrete_codebooks",
+    "num_codebooks": 2,
+    "codebook_vocab_size": 1024,
+    "fusion": "attention_mlp",
+    "fusion_hidden_dim": 1024,
+    "norm": "none"
+  },
+  "blocks": [],
+  "training": {
+    "objective": "classification",
+    "classification": {"num_labels": 18, "pooling": "mean", "bias": false}
+  }
+}
+```
+
+This runs adapter, optional final norm, temporal pooling, and classifier only.
+The shape above with `model_dim: 1024` has exactly `3,166,208` trainable
+parameters. Set `pooling` explicitly for zero-block probes; the general
+classification default is `last` when no bidirectional mixer establishes a
+mean-pooling default. See
+[`discrete_codebooks_linear_probe_tiny.json`](../examples/discrete_codebooks_linear_probe_tiny.json)
+for a runnable small recipe.
+
 For skewed valid lengths, set `training.length_buckets` to slice each batch to
 the smallest configured width that fits its records. Set `training.batch_size`
 instead of `training.batch_tokens` to hold the record count constant across
 buckets. See
 [Length-bucketed classification](config-training.md#length-bucketed-classification).
 
-V1 supports native single-label classification only. Token feature channels,
+V1 supports native single-label classification only. Empty block stacks are
+accepted only with `linear_frames` or `discrete_codebooks` classification;
+language-model objectives and token-embedding classifiers still require at
+least one block. Token feature channels,
 LM objectives, framing, segment masks, reverse-complement features, generation,
 and Hugging Face export are rejected explicitly. Valid lengths affect temporal
 classification pooling; they do not mask ID `0` or the codebook fusion.

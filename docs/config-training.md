@@ -63,6 +63,12 @@ disabled for bias-free reference recipes. V1 supports single-label
 cross-entropy only and requires a labeled one-record-per-row dataset whose
 manifest `task.num_labels` matches the config.
 
+Classification with an external `linear_frames` or `discrete_codebooks` input
+adapter may set `blocks: []` to train a pure representation probe. The forward
+is adapter, optional final norm, pooling, then classifier. Token-embedding
+classification and every language-model objective continue to require at
+least one block. Specify `pooling` explicitly for an empty stack.
+
 ### Length-bucketed classification
 
 Variable-length continuous-frame and discrete-codebook datasets can avoid
