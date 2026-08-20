@@ -45,6 +45,9 @@ func convertToClassificationIR(cfg *ArchConfig, state TrainingProgramState, prog
 	baseWeights := prog.NumWeights
 	prog.NumWeights += len(classificationWeightShapes(D, cfg.Training.Classification))
 	prog.DeclareInput("classification_labels", TensorInt32, []int{B})
+	if cfg.Training.LengthBucketsChangeShape(cfg.SeqLen) {
+		prog.DeclareInput("classification_example_mask", TensorFloat32, []int{B})
+	}
 
 	pooled := "classification_pooled"
 	switch cfg.EffectiveClassificationPooling() {
@@ -77,7 +80,11 @@ func convertToClassificationIR(cfg *ArchConfig, state TrainingProgramState, prog
 	} else {
 		prog.ScalarMul("classification_logits_linear", 1, "classification_logits")
 	}
-	prog.CrossEntropy("classification_logits", "classification_labels", "classification_task_loss")
+	if cfg.Training.LengthBucketsChangeShape(cfg.SeqLen) {
+		prog.MaskedCrossEntropy("classification_logits", "classification_labels", "classification_example_mask", "classification_task_loss")
+	} else {
+		prog.CrossEntropy("classification_logits", "classification_labels", "classification_task_loss")
+	}
 	prog.ScalarMul("classification_task_loss", 1, "loss")
 	prog.ScalarMul("classification_task_loss", 1, "eval_loss")
 	moeEnabled := emitMoEAuxiliaryAggregatesIR(prog, true)

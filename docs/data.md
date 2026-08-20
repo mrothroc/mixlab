@@ -127,12 +127,15 @@ an exact row-index map:
 
 ```bash
 mixlab -mode prepare -input features.npy -input-format continuous \
-  -label-file labels.tsv -continuous-modality waveform \
+  -label-file labels.tsv -length-file lengths.tsv \
+  -continuous-modality waveform \
   -prepare-output-dir data/waveform
 ```
 
-Preparation writes labels and little-endian float32 frames atomically in
-`mixlab_continuous_sequence_shard_v1`. It rejects non-finite values, missing or
+Preparation writes labels, valid lengths, and little-endian float32 frames
+atomically in `mixlab_continuous_sequence_shard_v2`. Lengths may also come from
+an integer `lengths: [N]` member in `.npz` input; without either source every
+record has length `T`. It rejects non-finite values, invalid lengths, missing or
 duplicate label rows, and non-contiguous label IDs. See
 [Continuous sequence input](continuous-input.md) for model configuration and
 the current native-only compatibility boundary.
@@ -247,11 +250,13 @@ describes the sequence domain without changing the backbone.
 
 Continuous manifests use `representation: "continuous_frames"`,
 `feature_dtype: "float32"`, `feature_dim: F`, and
-`shard_format: "mixlab_continuous_sequence_shard_v1"`. Their split entries
+`shard_format: "mixlab_continuous_sequence_shard_v2"`. Their split entries
 report records rather than token counts, and task metadata declares
-single-label classification. Each binary record stores one label and one
-`[T,F]` frame matrix together, so shuffle order cannot detach labels from
-features.
+single-label classification. Each current binary record stores one label, one
+valid timestep length, and one `[T,F]` frame matrix together, so shuffle order
+cannot detach labels from features. Legacy binary v1 shards and
+`mixlab_continuous_sequence_shard_v1` manifests remain readable and are treated
+as fully valid.
 
 Codebook manifests use `representation: "discrete_codebooks"`,
 `token_dtype: "int32"`, `num_codebooks: Q`, `codebook_vocab_size: V`, and

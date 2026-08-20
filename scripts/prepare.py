@@ -43,7 +43,7 @@ SEQUENCE_SHARD_VERSION = 1
 LABELED_SEQUENCE_SHARD_MAGIC = 20260724
 LABELED_SEQUENCE_SHARD_VERSION = 1
 CONTINUOUS_SEQUENCE_SHARD_MAGIC = 20260726
-CONTINUOUS_SEQUENCE_SHARD_VERSION = 1
+CONTINUOUS_SEQUENCE_SHARD_VERSION = 2
 CONTINUOUS_FEATURE_DTYPE_FLOAT32 = 1
 CODEBOOK_SEQUENCE_SHARD_MAGIC = 20260819
 CODEBOOK_SEQUENCE_SHARD_VERSION = 1
@@ -155,11 +155,14 @@ def read_label_tsv(path: str) -> dict[str, int]:
 
 def load_continuous_features(path: str):
     source = np.load(path, mmap_mode="r", allow_pickle=False)
+    lengths = None
     if isinstance(source, np.lib.npyio.NpzFile):
         if "features" not in source.files:
             source.close()
             raise ValueError("continuous .npz input must contain an array named 'features'")
         features = source["features"]
+        if "lengths" in source.files:
+            lengths = source["lengths"]
     else:
         features = source
     if not isinstance(features, np.ndarray) or features.ndim != 3:
@@ -175,7 +178,7 @@ def load_continuous_features(path: str):
         if isinstance(source, np.lib.npyio.NpzFile):
             source.close()
         raise ValueError(f"continuous input dtype must be real-valued numeric, got {features.dtype}")
-    return source, features
+    return source, features, lengths
 
 
 def load_codebook_tokens(path: str):
@@ -206,7 +209,7 @@ def load_codebook_tokens(path: str):
     return source, tokens, lengths
 
 
-def codebook_row_values(path: str, n_records: int, field: str) -> list[int]:
+def indexed_row_values(path: str, n_records: int, field: str) -> list[int]:
     values = read_label_tsv(path)
     expected_ids = {str(index) for index in range(n_records)}
     actual_ids = set(values)
@@ -214,7 +217,7 @@ def codebook_row_values(path: str, n_records: int, field: str) -> list[int]:
     extra = sorted(actual_ids - expected_ids)
     if missing or extra:
         raise ValueError(
-            f"codebook {field} must cover row IDs 0..{n_records - 1}; "
+            f"{field} must cover row IDs 0..{n_records - 1}; "
             f"missing={missing[:5]} extra={extra[:5]}"
         )
     return [values[str(index)] for index in range(n_records)]
@@ -272,11 +275,11 @@ def prepare_codebooks(args):
         n_records, seq_len, num_codebooks = (int(value) for value in tokens.shape)
         if num_codebooks * args.codebook_vocab_size > 2_147_483_647:
             raise ValueError("num_codebooks*codebook_vocab_size exceeds int32 indexing")
-        labels = codebook_row_values(args.label_file, n_records, "labels")
+        labels = indexed_row_values(args.label_file, n_records, "codebook labels")
         if args.length_file and embedded_lengths is not None:
             raise ValueError("codebook lengths must come from either the .npz 'lengths' array or --length-file, not both")
         if args.length_file:
-            lengths = codebook_row_values(args.length_file, n_records, "lengths")
+            lengths = indexed_row_values(args.length_file, n_records, "codebook lengths")
         elif embedded_lengths is not None:
             if not isinstance(embedded_lengths, np.ndarray) or embedded_lengths.shape != (n_records,) or not np.issubdtype(embedded_lengths.dtype, np.integer):
                 raise ValueError(f"codebook .npz lengths must be an integer [N] array, got shape={getattr(embedded_lengths, 'shape', None)} dtype={getattr(embedded_lengths, 'dtype', None)}")
@@ -338,7 +341,7 @@ def prepare_codebooks(args):
             source.close()
 
 
-def write_continuous_shards(output_dir: str, split: str, features, labels, indexes, records_per_shard: int):
+def write_continuous_shards(output_dir: str, split: str, features, lengths, labels, indexes, records_per_shard: int):
     os.makedirs(output_dir, exist_ok=True)
     written = 0
     shard_count = 0
@@ -354,6 +357,7 @@ def write_continuous_shards(output_dir: str, split: str, features, labels, index
                 f"{tuple(int(v) for v in bad)}"
             )
         shard_labels = np.asarray([labels[index] for index in shard_indexes], dtype="<i4")
+        shard_lengths = np.asarray([lengths[index] for index in shard_indexes], dtype="<i4")
         header = np.zeros(HEADER_INTS, dtype="<i4")
         header[0] = CONTINUOUS_SEQUENCE_SHARD_MAGIC
         header[1] = CONTINUOUS_SEQUENCE_SHARD_VERSION
@@ -362,10 +366,12 @@ def write_continuous_shards(output_dir: str, split: str, features, labels, index
         header[4] = feature_dim
         header[5] = CONTINUOUS_FEATURE_DTYPE_FLOAT32
         header[6] = 1
+        header[7] = 1
         path = os.path.join(output_dir, f"{split}_{shard_count:05d}.bin")
         with open(path, "wb") as output:
             output.write(header.tobytes())
             output.write(shard_labels.tobytes())
+            output.write(shard_lengths.tobytes())
             output.write(shard_frames.tobytes(order="C"))
         written += len(shard_indexes)
         shard_count += 1
@@ -379,7 +385,7 @@ def prepare_continuous(args):
         raise ValueError("continuous classification preparation requires --label-file with row_index<TAB>label")
     if not re.fullmatch(r"[a-z][a-z0-9_-]*", args.continuous_modality):
         raise ValueError("--continuous-modality must be a lowercase identifier")
-    source, features = load_continuous_features(args.input)
+    source, features, embedded_lengths = load_continuous_features(args.input)
     try:
         n_records, seq_len, feature_dim = (int(value) for value in features.shape)
         label_map = read_label_tsv(args.label_file)
@@ -393,6 +399,19 @@ def prepare_continuous(args):
                 f"missing={missing[:5]} extra={extra[:5]}"
             )
         labels = [label_map[str(index)] for index in range(n_records)]
+        if args.length_file and embedded_lengths is not None:
+            raise ValueError("continuous lengths must come from either the .npz 'lengths' array or --length-file, not both")
+        if args.length_file:
+            lengths = indexed_row_values(args.length_file, n_records, "continuous lengths")
+        elif embedded_lengths is not None:
+            if not isinstance(embedded_lengths, np.ndarray) or embedded_lengths.shape != (n_records,) or not np.issubdtype(embedded_lengths.dtype, np.integer):
+                raise ValueError(f"continuous .npz lengths must be an integer [N] array, got shape={getattr(embedded_lengths, 'shape', None)} dtype={getattr(embedded_lengths, 'dtype', None)}")
+            lengths = [int(value) for value in embedded_lengths]
+        else:
+            lengths = [seq_len] * n_records
+        for row, length in enumerate(lengths):
+            if length <= 0 or length > seq_len:
+                raise ValueError(f"continuous length row={row} value={length} outside [1,{seq_len}]")
         records = [(str(index), "", labels[index]) for index in range(n_records)]
         num_labels = validate_label_space(records)
         train_records, val_records = split_labeled_records(records, args.val_split)
@@ -401,10 +420,10 @@ def prepare_continuous(args):
         records_per_shard = max(1, args.tokens_per_shard // seq_len)
         os.makedirs(args.output, exist_ok=True)
         train_written, train_shards = write_continuous_shards(
-            args.output, "train", features, labels, train_indexes, records_per_shard
+            args.output, "train", features, lengths, labels, train_indexes, records_per_shard
         )
         val_written, val_shards = write_continuous_shards(
-            args.output, "val", features, labels, val_indexes, records_per_shard
+            args.output, "val", features, lengths, labels, val_indexes, records_per_shard
         )
 
         def split_doc(name, indexes, shard_count):
@@ -412,11 +431,15 @@ def prepare_continuous(args):
             return {
                 "pattern": f"{name}_*.bin",
                 "tokens": 0,
+                # frames is the stored footprint (padded rows), matching the
+                # codebook split_doc's "tokens" and the manifest invariant
+                # frames == sequences*record_seq_len. Real content lengths are
+                # reported through mean/max_sequence_tokens below.
                 "frames": len(indexes) * seq_len,
                 "shards": shard_count,
                 "sequences": len(indexes),
-                "mean_sequence_tokens": float(seq_len),
-                "max_sequence_tokens": seq_len,
+                "mean_sequence_tokens": float(sum(lengths[index] for index in indexes) / len(indexes)) if indexes else 0,
+                "max_sequence_tokens": max((lengths[index] for index in indexes), default=0),
                 "class_counts": {str(label): int(counts.get(label, 0)) for label in range(num_labels)},
             }
 
@@ -430,7 +453,7 @@ def prepare_continuous(args):
             "modality": args.continuous_modality,
             "feature_dtype": "float32",
             "feature_dim": feature_dim,
-            "shard_format": "mixlab_continuous_sequence_shard_v1",
+            "shard_format": "mixlab_continuous_sequence_shard_v2",
             "sequence_layout": "one_record_per_row",
             "record_seq_len": seq_len,
             "task": {"type": "single_label_classification", "num_labels": num_labels},

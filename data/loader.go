@@ -22,6 +22,7 @@ type LoaderOptions struct {
 	ChunkSize      int
 	NoShardShuffle bool
 	Framing        ExampleFraming
+	LengthBuckets  []int
 }
 
 // ExampleFraming configures loader-side BOS/EOS wrapping for raw token
@@ -181,6 +182,10 @@ type Batch struct {
 	MaskEligible []uint8
 	Labels       []int32
 	ValidMask    []float32
+	ExampleMask  []float32
+	SeqLen       int
+	BatchSize    int
+	ExampleCount int
 }
 
 // NewLoader creates a Loader from a glob pattern for binary shard files.
@@ -216,9 +221,9 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 	if err != nil {
 		return nil, err
 	}
-	if found && manifest.ShardFormat == DatasetShardFormatContinuousSequenceV1 {
+	if found && isContinuousSequenceShardFormat(manifest.ShardFormat) {
 		continuous, err := newContinuousSequenceStream(
-			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.FeatureDim,
+			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.FeatureDim, opts.LengthBuckets,
 		)
 		if err != nil {
 			return nil, err
@@ -227,7 +232,7 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 	}
 	if found && manifest.ShardFormat == DatasetShardFormatCodebookSequenceV1 {
 		codebooks, err := newCodebookSequenceStream(
-			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.NumCodebooks, manifest.CodebookVocabSize,
+			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.NumCodebooks, manifest.CodebookVocabSize, opts.LengthBuckets,
 		)
 		if err != nil {
 			return nil, err
@@ -269,7 +274,16 @@ func (l *Loader) NextBatch(batchTokens, seqLen int) (x []int, y []int, err error
 
 // NextBatchDetailed returns token rows plus optional representation metadata.
 func (l *Loader) NextBatchDetailed(batchTokens, seqLen int) (Batch, error) {
-	if batchTokens <= 0 || seqLen <= 0 || batchTokens%seqLen != 0 {
+	if batchTokens <= 0 || seqLen <= 0 {
+		return Batch{}, fmt.Errorf("invalid batch shape: batchTokens=%d seqLen=%d; pass positive values", batchTokens, seqLen)
+	}
+	if l.continuous != nil && len(l.continuous.lengthBuckets) > 0 {
+		return l.continuous.nextLengthBucketBatch(batchTokens)
+	}
+	if l.codebooks != nil && len(l.codebooks.lengthBuckets) > 0 {
+		return l.codebooks.nextLengthBucketBatch(batchTokens)
+	}
+	if batchTokens%seqLen != 0 {
 		return Batch{}, fmt.Errorf("invalid batch shape: batchTokens=%d seqLen=%d; pass positive values with batchTokens divisible by seqLen", batchTokens, seqLen)
 	}
 	if l.continuous != nil {
@@ -334,13 +348,13 @@ func (l *Loader) nextContinuousBatch(batchTokens, seqLen int) (Batch, error) {
 	labels := make([]int32, batchSize)
 	validMask := make([]float32, batchTokens)
 	for row := 0; row < batchSize; row++ {
-		record, label, err := l.continuous.takeRecord()
+		record, length, label, err := l.continuous.takeRecord()
 		if err != nil {
 			return Batch{}, err
 		}
 		copy(frames[row*seqLen*featureDim:], record)
 		labels[row] = label
-		for pos := 0; pos < seqLen; pos++ {
+		for pos := 0; pos < int(length); pos++ {
 			validMask[row*seqLen+pos] = 1
 		}
 	}
@@ -459,6 +473,9 @@ type ValBatch struct {
 	MaskEligible []uint8
 	Labels       []int32
 	ValidMask    []float32
+	ExampleMask  []float32
+	SeqLen       int
+	BatchSize    int
 	// ExampleCount is the number of real rows in a padded fixed-shape batch.
 	// Zero means all rows are real for backward compatibility.
 	ExampleCount int
@@ -494,11 +511,7 @@ func NewValSetWithOptions(pattern string, seed int64, nBatches, batchTokens, seq
 		if err != nil {
 			break
 		}
-		vs.Batches = append(vs.Batches, ValBatch{
-			X: batch.X, Y: batch.Y, Frames: batch.Frames, Codebooks: batch.Codebooks, LossMask: batch.LossMask,
-			SegmentIDs: batch.SegmentIDs, MaskEligible: batch.MaskEligible,
-			Labels: batch.Labels, ValidMask: batch.ValidMask,
-		})
+		vs.Batches = append(vs.Batches, ValBatch(batch))
 	}
 	if len(vs.Batches) == 0 {
 		return nil, fmt.Errorf("no validation batches loaded from %q; check the validation glob or reduce seq_len/batch_tokens", pattern)

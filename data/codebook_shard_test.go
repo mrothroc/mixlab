@@ -10,7 +10,11 @@ import (
 	"testing"
 )
 
-func writeCodebookTestShard(t *testing.T, path string, records, seqLen, codebooks, vocab int, labels, lengths, tokens []int32) {
+// codebookTestVocabSize is the codebook domain every fixture in this package
+// uses; the shard header and manifest must agree on it.
+const codebookTestVocabSize = 8
+
+func writeCodebookTestShard(t *testing.T, path string, records, seqLen, codebooks int, labels, lengths, tokens []int32) {
 	t.Helper()
 	header := make([]int32, headerInts)
 	header[0] = codebookSequenceShardMagic
@@ -18,7 +22,7 @@ func writeCodebookTestShard(t *testing.T, path string, records, seqLen, codebook
 	header[2] = int32(records)
 	header[3] = int32(seqLen)
 	header[4] = int32(codebooks)
-	header[5] = int32(vocab)
+	header[5] = int32(codebookTestVocabSize)
 	header[6] = codebookTokenDTypeInt32
 	header[7] = 1
 	header[8] = 1
@@ -38,13 +42,13 @@ func writeCodebookTestShard(t *testing.T, path string, records, seqLen, codebook
 	}
 }
 
-func writeCodebookTestManifest(t *testing.T, dir string, records, seqLen, codebooks, vocab int) {
+func writeCodebookTestManifest(t *testing.T, dir string, records, seqLen, codebooks int) {
 	t.Helper()
 	manifest := DatasetManifest{
 		Format: DatasetManifestFormat, Version: DatasetManifestVersion,
 		Representation: DatasetRepresentationDiscreteCodebooks,
 		Modality:       "audio", TokenDType: DatasetTokenDTypeInt32,
-		NumCodebooks: codebooks, CodebookVocabSize: vocab,
+		NumCodebooks: codebooks, CodebookVocabSize: codebookTestVocabSize,
 		ShardFormat:    DatasetShardFormatCodebookSequenceV1,
 		SequenceLayout: DatasetSequenceLayoutOneRecordRow,
 		RecordSeqLen:   seqLen,
@@ -53,7 +57,7 @@ func writeCodebookTestManifest(t *testing.T, dir string, records, seqLen, codebo
 			"train": {
 				Pattern: "train_*.bin", Tokens: int64(records * seqLen * codebooks), Shards: 1,
 				Sequences: int64(records), MeanSequenceTokens: float64(seqLen), MaxSequenceTokens: seqLen,
-				ClassCounts: map[string]int64{"0": 2, "1": 1},
+				ClassCounts: map[string]int64{"0": int64((records + 1) / 2), "1": int64(records / 2)},
 			},
 		},
 	}
@@ -74,8 +78,8 @@ func TestCodebookShardLoaderAndClassificationValidation(t *testing.T) {
 		6, 7, 0, 1, 2, 3,
 		4, 5, 6, 7, 1, 0,
 	}
-	writeCodebookTestShard(t, path, 3, 3, 2, 8, []int32{0, 1, 0}, []int32{3, 2, 1}, tokens)
-	writeCodebookTestManifest(t, dir, 3, 3, 2, 8)
+	writeCodebookTestShard(t, path, 3, 3, 2, []int32{0, 1, 0}, []int32{3, 2, 1}, tokens)
+	writeCodebookTestManifest(t, dir, 3, 3, 2)
 
 	shard, err := LoadCodebookSequenceShard(path)
 	if err != nil {
@@ -119,11 +123,11 @@ func TestCodebookShardLoaderAndClassificationValidation(t *testing.T) {
 func TestCodebookShardRejectsOutOfRangeIDAndBadLength(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "train_00000.bin")
-	writeCodebookTestShard(t, path, 1, 2, 2, 8, []int32{0}, []int32{2}, []int32{0, 1, 2, 8})
+	writeCodebookTestShard(t, path, 1, 2, 2, []int32{0}, []int32{2}, []int32{0, 1, 2, 8})
 	if _, err := LoadCodebookSequenceShard(path); err == nil || !strings.Contains(err.Error(), "token[0,1,1]=8 outside [0,8)") {
 		t.Fatalf("range error=%v", err)
 	}
-	writeCodebookTestShard(t, path, 1, 2, 2, 8, []int32{0}, []int32{0}, []int32{0, 1, 2, 3})
+	writeCodebookTestShard(t, path, 1, 2, 2, []int32{0}, []int32{0}, []int32{0, 1, 2, 3})
 	if _, err := LoadCodebookSequenceShard(path); err == nil || !strings.Contains(err.Error(), "length[0]=0") {
 		t.Fatalf("length error=%v", err)
 	}
@@ -131,7 +135,7 @@ func TestCodebookShardRejectsOutOfRangeIDAndBadLength(t *testing.T) {
 
 func TestCodebookManifestContractMismatch(t *testing.T) {
 	dir := t.TempDir()
-	writeCodebookTestManifest(t, dir, 3, 3, 2, 8)
+	writeCodebookTestManifest(t, dir, 3, 3, 2)
 	manifest, err := LoadDatasetManifest(filepath.Join(dir, DatasetManifestFilename))
 	if err != nil {
 		t.Fatal(err)

@@ -26,7 +26,7 @@ func writeContinuousTestShard(
 	header := make([]byte, headerInts*4)
 	values := []int32{
 		continuousSequenceShardMagic,
-		continuousSequenceShardVersion,
+		continuousSequenceShardV1,
 		int32(records),
 		int32(seqLen),
 		int32(featureDim),
@@ -67,7 +67,7 @@ func writeContinuousTestManifest(t *testing.T, dir string, records, seqLen, feat
 		Splits: map[string]DatasetSplit{
 			"train": {
 				Pattern: "train_*.bin", Frames: int64(records * seqLen), Shards: 1,
-				Sequences: int64(records), ClassCounts: map[string]int64{"0": 2, "1": 1},
+				Sequences: int64(records), ClassCounts: map[string]int64{"0": int64((records + 1) / 2), "1": int64(records / 2)},
 			},
 		},
 	}

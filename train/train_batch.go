@@ -14,6 +14,10 @@ type trainBatch struct {
 	maskEligible        []uint8
 	labels              []int32
 	validMask           []float32
+	exampleMask         []float32
+	seqLen              int
+	batchSize           int
+	exampleCount        int
 	disableAugmentation bool
 	err                 error
 }
@@ -22,7 +26,8 @@ func trainBatchFromDataBatch(batch data.Batch, err error) trainBatch {
 	return trainBatch{
 		x: batch.X, y: batch.Y, codebooks: batch.Codebooks, frames: batch.Frames, lossMask: batch.LossMask,
 		segmentIDs: batch.SegmentIDs, maskEligible: batch.MaskEligible,
-		labels: batch.Labels, validMask: batch.ValidMask, err: err,
+		labels: batch.Labels, validMask: batch.ValidMask, exampleMask: batch.ExampleMask,
+		seqLen: batch.SeqLen, batchSize: batch.BatchSize, exampleCount: batch.ExampleCount, err: err,
 	}
 }
 
@@ -30,7 +35,19 @@ func trainBatchFromValBatch(batch data.ValBatch) trainBatch {
 	return trainBatch{
 		x: batch.X, y: batch.Y, codebooks: batch.Codebooks, frames: batch.Frames, lossMask: batch.LossMask,
 		segmentIDs: batch.SegmentIDs, maskEligible: batch.MaskEligible,
-		labels: batch.Labels, validMask: batch.ValidMask,
+		labels: batch.Labels, validMask: batch.ValidMask, exampleMask: batch.ExampleMask,
+		seqLen: batch.SeqLen, batchSize: batch.BatchSize, exampleCount: batch.ExampleCount,
 		disableAugmentation: true,
 	}
+}
+
+func (b trainBatch) effectiveShape(defaultBatchSize, defaultSeqLen int) (batchSize, seqLen int) {
+	batchSize, seqLen = defaultBatchSize, defaultSeqLen
+	if b.batchSize > 0 {
+		batchSize = b.batchSize
+	}
+	if b.seqLen > 0 {
+		seqLen = b.seqLen
+	}
+	return batchSize, seqLen
 }

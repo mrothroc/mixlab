@@ -3,6 +3,7 @@ package data
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math"
 	"math/rand"
 	"os"
@@ -12,17 +13,58 @@ import (
 
 const (
 	continuousSequenceShardMagic   = 20260726
-	continuousSequenceShardVersion = 1
+	continuousSequenceShardVersion = 2
+	continuousSequenceShardV1      = 1
 	continuousFeatureDTypeFloat32  = 1
 )
 
 // ContinuousSequenceShard is one fixed-shape, atomically labeled frame shard.
 type ContinuousSequenceShard struct {
 	Frames     []float32
+	Lengths    []int32
 	Labels     []int32
 	Records    int
 	SeqLen     int
 	FeatureDim int
+}
+
+func loadContinuousSequenceLengths(path string) ([]int32, int, int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	defer func() { _ = file.Close() }()
+	header := make([]byte, headerInts*4)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return nil, 0, 0, fmt.Errorf("read continuous sequence shard %q header: %w", path, err)
+	}
+	readHeader := func(index int) int { return int(int32(binary.LittleEndian.Uint32(header[index*4:]))) }
+	magic, version := readHeader(0), readHeader(1)
+	records, seqLen, featureDim := readHeader(2), readHeader(3), readHeader(4)
+	if magic != continuousSequenceShardMagic || (version != continuousSequenceShardV1 && version != continuousSequenceShardVersion) || records <= 0 || seqLen <= 0 || featureDim <= 0 {
+		return nil, 0, 0, fmt.Errorf("continuous sequence shard %q has invalid header", path)
+	}
+	if _, err := file.Seek(int64(records*4), io.SeekCurrent); err != nil {
+		return nil, 0, 0, fmt.Errorf("seek continuous sequence shard %q lengths: %w", path, err)
+	}
+	lengths := make([]int32, records)
+	if version == continuousSequenceShardV1 {
+		for i := range lengths {
+			lengths[i] = int32(seqLen)
+		}
+		return lengths, seqLen, featureDim, nil
+	}
+	raw := make([]byte, records*4)
+	if _, err := io.ReadFull(file, raw); err != nil {
+		return nil, 0, 0, fmt.Errorf("read continuous sequence shard %q lengths: %w", path, err)
+	}
+	for i := range lengths {
+		lengths[i] = int32(binary.LittleEndian.Uint32(raw[i*4:]))
+		if lengths[i] <= 0 || int(lengths[i]) > seqLen {
+			return nil, 0, 0, fmt.Errorf("continuous sequence shard %q length[%d]=%d must be in [1,%d]", path, i, lengths[i], seqLen)
+		}
+	}
+	return lengths, seqLen, featureDim, nil
 }
 
 // LoadContinuousSequenceShard reads [N,T,F] float32 frames plus one int32
@@ -47,7 +89,7 @@ func LoadContinuousSequenceShard(path string) (*ContinuousSequenceShard, error) 
 	featureDim := readHeader(4)
 	dtype := readHeader(5)
 	hasLabels := readHeader(6)
-	if magic != continuousSequenceShardMagic || version != continuousSequenceShardVersion {
+	if magic != continuousSequenceShardMagic || (version != continuousSequenceShardV1 && version != continuousSequenceShardVersion) {
 		return nil, fmt.Errorf("continuous sequence shard %q has unsupported magic/version %d/%d", path, magic, version)
 	}
 	if records <= 0 || seqLen <= 0 || featureDim <= 0 {
@@ -72,7 +114,11 @@ func LoadContinuousSequenceShard(path string) (*ContinuousSequenceShard, error) 
 	}
 	frameCount := int(frameCount64)
 	labelBytes := int(labelBytes64)
-	expected := int64(headerBytes) + labelBytes64 + frameCount64*4
+	lengthBytes64 := int64(0)
+	if version >= continuousSequenceShardVersion {
+		lengthBytes64 = labelBytes64
+	}
+	expected := int64(headerBytes) + labelBytes64 + lengthBytes64 + frameCount64*4
 	if int64(len(blob)) != expected {
 		return nil, fmt.Errorf("continuous sequence shard %q size mismatch: got=%d bytes want=%d bytes", path, len(blob), expected)
 	}
@@ -83,7 +129,21 @@ func LoadContinuousSequenceShard(path string) (*ContinuousSequenceShard, error) 
 			return nil, fmt.Errorf("continuous sequence shard %q label[%d]=%d must be non-negative", path, i, labels[i])
 		}
 	}
+	lengths := make([]int32, records)
 	frameStart := headerBytes + labelBytes
+	if version >= continuousSequenceShardVersion {
+		for i := range lengths {
+			lengths[i] = int32(binary.LittleEndian.Uint32(blob[frameStart+i*4:]))
+			if lengths[i] <= 0 || int(lengths[i]) > seqLen {
+				return nil, fmt.Errorf("continuous sequence shard %q length[%d]=%d must be in [1,%d]", path, i, lengths[i], seqLen)
+			}
+		}
+		frameStart += labelBytes
+	} else {
+		for i := range lengths {
+			lengths[i] = int32(seqLen)
+		}
+	}
 	frames := make([]float32, frameCount)
 	for i := range frames {
 		frames[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[frameStart+i*4:]))
@@ -92,23 +152,27 @@ func LoadContinuousSequenceShard(path string) (*ContinuousSequenceShard, error) 
 		}
 	}
 	return &ContinuousSequenceShard{
-		Frames: frames, Labels: labels, Records: records, SeqLen: seqLen, FeatureDim: featureDim,
+		Frames: frames, Lengths: lengths, Labels: labels, Records: records, SeqLen: seqLen, FeatureDim: featureDim,
 	}, nil
 }
 
 type continuousSequenceStream struct {
-	files      []string
-	fileIdx    int
-	shard      *ContinuousSequenceShard
-	order      []int
-	record     int
-	rng        *rand.Rand
-	shuffle    bool
-	seqLen     int
-	featureDim int
+	files             []string
+	fileIdx           int
+	shard             *ContinuousSequenceShard
+	order             []int
+	record            int
+	rng               *rand.Rand
+	shuffle           bool
+	seqLen            int
+	featureDim        int
+	lengthBuckets     []int
+	bucketSchedule    []lengthBucketBatch
+	bucketCursor      int
+	bucketTokenBudget int
 }
 
-func newContinuousSequenceStream(pattern string, seed int64, noShuffle bool, seqLen, featureDim int) (*continuousSequenceStream, error) {
+func newContinuousSequenceStream(pattern string, seed int64, noShuffle bool, seqLen, featureDim int, lengthBuckets []int) (*continuousSequenceStream, error) {
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return nil, err
@@ -117,12 +181,28 @@ func newContinuousSequenceStream(pattern string, seed int64, noShuffle bool, seq
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no continuous sequence shard files matched %q", pattern)
 	}
+	if err := validateLengthBuckets(lengthBuckets); err != nil && len(lengthBuckets) > 0 {
+		return nil, err
+	}
+	for _, file := range files {
+		lengths, fileSeqLen, fileFeatureDim, err := loadContinuousSequenceLengths(file)
+		if err != nil {
+			return nil, err
+		}
+		if fileSeqLen != seqLen || fileFeatureDim != featureDim {
+			return nil, fmt.Errorf("continuous shard %q shape [T=%d,F=%d] does not match manifest [T=%d,F=%d]", file, fileSeqLen, fileFeatureDim, seqLen, featureDim)
+		}
+		if err := validateRecordLengthsForBuckets(file, lengths, lengthBuckets); err != nil {
+			return nil, err
+		}
+	}
 	rng := rand.New(rand.NewSource(seed))
 	if !noShuffle {
 		rng.Shuffle(len(files), func(i, j int) { files[i], files[j] = files[j], files[i] })
 	}
 	stream := &continuousSequenceStream{
 		files: files, rng: rng, shuffle: !noShuffle, seqLen: seqLen, featureDim: featureDim,
+		lengthBuckets: append([]int(nil), lengthBuckets...),
 	}
 	if err := stream.loadFile(0); err != nil {
 		return nil, err
@@ -152,22 +232,80 @@ func (s *continuousSequenceStream) loadFile(index int) error {
 	s.shard = shard
 	s.order = order
 	s.record = 0
+	s.bucketSchedule = nil
+	s.bucketCursor = 0
 	return nil
 }
 
-func (s *continuousSequenceStream) takeRecord() ([]float32, int32, error) {
+func (s *continuousSequenceStream) nextLengthBucketBatch(tokenBudget int) (Batch, error) {
+	if len(s.lengthBuckets) == 0 {
+		return Batch{}, fmt.Errorf("continuous length bucketing is disabled")
+	}
+	for {
+		if s.bucketSchedule == nil {
+			if s.bucketTokenBudget != 0 && s.bucketTokenBudget != tokenBudget {
+				return Batch{}, fmt.Errorf("length-bucket token budget changed from %d to %d", s.bucketTokenBudget, tokenBudget)
+			}
+			s.bucketTokenBudget = tokenBudget
+			var rng *rand.Rand
+			if s.shuffle {
+				rng = s.rng
+			}
+			schedule, err := buildLengthBucketSchedule(s.order, s.shard.Lengths, s.lengthBuckets, tokenBudget, rng)
+			if err != nil {
+				return Batch{}, fmt.Errorf("build continuous length buckets for %q: %w", s.files[s.fileIdx], err)
+			}
+			s.bucketSchedule = schedule
+		}
+		if s.bucketCursor < len(s.bucketSchedule) {
+			break
+		}
+		if err := s.loadFile((s.fileIdx + 1) % len(s.files)); err != nil {
+			return Batch{}, err
+		}
+	}
+	plan := s.bucketSchedule[s.bucketCursor]
+	s.bucketCursor++
+	batchSize := len(plan.indices)
+	frames := make([]float32, batchSize*plan.seqLen*s.featureDim)
+	labels := make([]int32, batchSize)
+	validMask := make([]float32, batchSize*plan.seqLen)
+	exampleMask := make([]float32, batchSize)
+	storedWidth := s.seqLen * s.featureDim
+	for row, index := range plan.indices {
+		source := s.shard.Frames[index*storedWidth : (index+1)*storedWidth]
+		copyTimesteps := plan.seqLen
+		if copyTimesteps > s.seqLen {
+			copyTimesteps = s.seqLen
+		}
+		copy(frames[row*plan.seqLen*s.featureDim:], source[:copyTimesteps*s.featureDim])
+		labels[row] = s.shard.Labels[index]
+		for pos := 0; pos < int(s.shard.Lengths[index]); pos++ {
+			validMask[row*plan.seqLen+pos] = 1
+		}
+		if row < plan.realRows {
+			exampleMask[row] = 1
+		}
+	}
+	return Batch{
+		Frames: frames, Labels: labels, ValidMask: validMask, ExampleMask: exampleMask,
+		SeqLen: plan.seqLen, BatchSize: batchSize, ExampleCount: plan.realRows,
+	}, nil
+}
+
+func (s *continuousSequenceStream) takeRecord() ([]float32, int32, int32, error) {
 	if s == nil || s.shard == nil {
-		return nil, 0, fmt.Errorf("continuous sequence stream is not initialized")
+		return nil, 0, 0, fmt.Errorf("continuous sequence stream is not initialized")
 	}
 	if s.record >= len(s.order) {
 		next := (s.fileIdx + 1) % len(s.files)
 		if err := s.loadFile(next); err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 	}
 	index := s.order[s.record]
 	s.record++
 	width := s.seqLen * s.featureDim
 	start := index * width
-	return s.shard.Frames[start : start+width], s.shard.Labels[index], nil
+	return s.shard.Frames[start : start+width], s.shard.Lengths[index], s.shard.Labels[index], nil
 }

@@ -22,14 +22,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	if trainPattern == "" {
 		return TrainResult{}, fmt.Errorf("training data pattern is required; pass -train 'data/train_*.bin'")
 	}
-	if opts.CheckpointEvery < 0 {
-		return TrainResult{}, fmt.Errorf("checkpoint interval must be >= 0")
-	}
-	if opts.CheckpointEvery > 0 && opts.CheckpointDir == "" {
-		return TrainResult{}, fmt.Errorf("-checkpoint-dir is required when -checkpoint-every > 0")
-	}
-	if opts.Resume != "" && opts.SafetensorsLoad != "" {
-		return TrainResult{}, fmt.Errorf("-resume and -safetensors-load are mutually exclusive; use -resume for full training state or -safetensors-load for a weights-only warm start")
+	if err := validateRunTrainOptions(opts); err != nil {
+		return TrainResult{}, err
 	}
 	swaOverrideLogs, err := applyTrainingSWAOverrides(cfg, opts)
 	if err != nil {
@@ -41,7 +35,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	swaStart := cfg.Training.SWAStart
 	swaDecay := cfg.Training.SWADecay
 	swaInterval := cfg.Training.SWAInterval
-	if batchTokens%seqLen != 0 {
+	if !cfg.Training.LengthBucketsChangeShape(seqLen) && batchTokens%seqLen != 0 {
 		return TrainResult{}, fmt.Errorf("batch_tokens (%d) must be divisible by seq_len (%d)", batchTokens, seqLen)
 	}
 	batchSize := batchTokens / seqLen
@@ -50,49 +44,14 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	if err := configureDatasetForTraining(cfg, trainPattern, name); err != nil {
 		return TrainResult{}, err
 	}
-	if cfg.RCEquivarianceEnabled() {
-		fmt.Printf("  [%s] DNA reverse-complement equivariance: shared weights, branch_dim=%d, paired_backbone_rows=%d\n",
-			name, cfg.ModelDim, 2*batchSize)
-	}
-	for _, msg := range swaOverrideLogs {
-		fmt.Printf("  [%s] %s\n", name, msg)
-	}
-	if swaStart > 0 {
-		fmt.Printf("  [%s] SWA/EMA enabled: start=%d interval=%d decay=%g\n", name, swaStart, swaInterval, swaDecay)
-	}
 	targetValLoss := cfg.Training.TargetValLoss
 	earlyStop := newEarlyStopState(cfg.Training.EarlyStop)
-	if earlyStop != nil {
-		fmt.Printf("  [%s] early stop enabled: patience=%d min_delta=%g min_steps=%d val_gt=%g at_step=%d\n",
-			name, cfg.Training.EarlyStop.Patience, cfg.Training.EarlyStop.MinDelta,
-			cfg.Training.EarlyStop.MinSteps, cfg.Training.EarlyStop.ValGT, cfg.Training.EarlyStop.AtStep)
-	}
 	flops := arch.EstimateFLOPs(cfg)
-	if !flops.TrainingFLOPsReliable {
-		fmt.Printf("  [%s] training FLOPs/MFU unavailable: TTT full-meta-gradient backward is not modeled\n", name)
-	}
+	logTrainingRunSetup(cfg, name, batchSize, batchTokens, swaOverrideLogs, swaStart, swaInterval, swaDecay, earlyStop, &flops)
 	recurrencePhaseStarts := cfg.PhaseStartSteps()
 	recurrencePhasesScheduled := len(recurrencePhaseStarts) > 0
-	if cfg.Training.FirstByteMask {
-		source, err := configureFirstByteMaskForTraining(cfg, trainPattern)
-		if err != nil {
-			return TrainResult{}, err
-		}
-		fmt.Printf("  [%s] first-byte mask enabled (%s)\n", name, source)
-	}
-	if cfg.Training.UsesWholeWordMasking() {
-		source, err := configureMLMWordBoundariesForTraining(cfg, trainPattern)
-		if err != nil {
-			return TrainResult{}, err
-		}
-		fmt.Printf("  [%s] MLM whole-word boundaries enabled (%s)\n", name, source)
-	}
-	if cfg.CharVocabSize > 0 {
-		source, err := configureCharFeaturesForTraining(cfg, trainPattern)
-		if err != nil {
-			return TrainResult{}, err
-		}
-		fmt.Printf("  [%s] char features enabled (%s)\n", name, source)
+	if err := configureTrainingTokenFeatures(cfg, trainPattern, name); err != nil {
+		return TrainResult{}, err
 	}
 	logDatasetFraming(cfg, name, batchSize)
 	pairSampler, err := newMinimalPairSampler(cfg)
@@ -163,9 +122,20 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			return cached, nil
 		}
 		programCfg := cfg
-		if key.seqLen > 0 && key.seqLen != cfg.SeqLen {
+		effectiveSeqLen := key.seqLen
+		if effectiveSeqLen <= 0 {
+			effectiveSeqLen = cfg.SeqLen
+		}
+		effectiveBatchSize := key.batchSize
+		if effectiveBatchSize <= 0 {
+			effectiveBatchSize = cfg.Training.BatchTokens / effectiveSeqLen
+		}
+		effectiveBatchTokens := effectiveBatchSize * effectiveSeqLen
+		if effectiveSeqLen != cfg.SeqLen || effectiveBatchTokens != cfg.Training.BatchTokens {
 			clone := *cfg
-			clone.SeqLen = key.seqLen
+			clone.SeqLen = effectiveSeqLen
+			clone.Training = cfg.Training
+			clone.Training.BatchTokens = effectiveBatchTokens
 			programCfg = &clone
 		}
 		state := TrainingProgramState{
@@ -195,6 +165,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		mtpAuxOn:        mtpAuxActive,
 		objective:       currentObjective,
 		seqLen:          currentSeqLen,
+		batchSize:       currentBatchSize,
 	}
 	initialProg, err := trainingProgramForKey(currentProgramKey)
 	if err != nil {
@@ -420,7 +391,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		LR:          sched.At(startStep),
 		Objective:   currentObjective,
 		SeqLen:      currentSeqLen,
-		BatchTokens: batchTokens,
+		BatchTokens: batchSize * currentSeqLen,
 	})
 	done := make(chan struct{})
 	batchCh := make(chan trainBatch, 4)
@@ -461,6 +432,24 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		if batch.err != nil {
 			return TrainResult{}, fmt.Errorf("load initial batch: %w", batch.err)
 		}
+		initialBatchSize, initialSeqLen := batch.effectiveShape(currentBatchSize, currentSeqLen)
+		if initialBatchSize != currentBatchSize || initialSeqLen != currentSeqLen {
+			initialKey := currentProgramKey
+			initialKey.batchSize = initialBatchSize
+			initialKey.seqLen = initialSeqLen
+			initialBucketProg, err := trainingProgramForKey(initialKey)
+			if err != nil {
+				return TrainResult{}, fmt.Errorf("build initial length-bucket program: %w", err)
+			}
+			switcher, ok := trainer.(gpuProgramSwitcher)
+			if !ok {
+				return TrainResult{}, fmt.Errorf("trainer does not support length-bucket program switching")
+			}
+			if err := switcher.SetProgramGPU(initialBucketProg); err != nil {
+				return TrainResult{}, fmt.Errorf("switch initial length-bucket program: %w", err)
+			}
+			currentBatchSize, currentSeqLen, currentProgramKey = initialBatchSize, initialSeqLen, initialKey
+		}
 		lastTrainBatch := batch
 		initialSubmitStart := time.Now()
 		stopInitialSubmit := startSlowTrainingPhaseLogger(name, startStep, "submit_step")
@@ -482,6 +471,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		stopInitialSubmit()
 		currentSubmitDuration := time.Since(initialSubmitStart)
 		currentPhaseIdx := -1
+		var processedTokens int64
+		var steadyTokens int64
 		currentMLMMaskUnit := cfg.Training.EffectiveMLMMaskUnitForStep(startStep)
 		submitStepWithScheduledState := func(nextStep int, batch trainBatch) (time.Duration, error) {
 			if nextMode := qatModeForStep(cfg.Training, nextStep); nextMode != qatModeForStep(cfg.Training, nextStep-1) {
@@ -507,6 +498,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			nextObjective := objectiveForStep(cfg.Training, nextStep)
 			nextSeqLen := cfg.Training.EffectiveSeqLenForStep(seqLen, nextStep)
 			nextBatchSize := batchTokens / nextSeqLen
+			nextBatchSize, nextSeqLen = batch.effectiveShape(nextBatchSize, nextSeqLen)
 			nextProgramKey := trainingProgramCacheKey{
 				recurrencePhase: nextRecurrencePhase,
 				recurrenceOn:    nextRecurrenceActive,
@@ -514,6 +506,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				mtpAuxOn:        nextMTPAuxActive,
 				objective:       nextObjective,
 				seqLen:          nextSeqLen,
+				batchSize:       nextBatchSize,
 			}
 			if nextProgramKey != currentProgramKey {
 				switcher, ok := trainer.(gpuProgramSwitcher)
@@ -586,7 +579,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			lastTrainBatch = batch
 			return time.Since(submitStart), nil
 		}
-		canSubmitNextBeforeCollect := func(step int) bool {
+		canSubmitNextBeforeCollect := func(step int, batch trainBatch) bool {
 			if !trainerAllowsStepLookahead(trainer, stepLookaheadEnabled) ||
 				data2vec != nil ||
 				distiller != nil ||
@@ -604,7 +597,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			if objectiveForStep(cfg.Training, nextStep) != currentObjective {
 				return false
 			}
-			if cfg.Training.EffectiveSeqLenForStep(seqLen, nextStep) != currentSeqLen {
+			nextBatchSize, nextSeqLen := batch.effectiveShape(batchTokens/cfg.Training.EffectiveSeqLenForStep(seqLen, nextStep), cfg.Training.EffectiveSeqLenForStep(seqLen, nextStep))
+			if nextSeqLen != currentSeqLen || nextBatchSize != currentBatchSize {
 				return false
 			}
 			nextRecurrenceActive := recurrenceActive || (recurrenceScheduled && nextStep >= recurrenceActivationStep)
@@ -652,7 +646,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 			submittedNextEarly := false
 			earlySubmitDuration := time.Duration(0)
-			if step < steps-1 && canSubmitNextBeforeCollect(step) {
+			if step < steps-1 && canSubmitNextBeforeCollect(step, nextBatch) {
 				var err error
 				earlySubmitDuration, err = submitStepWithScheduledState(step+1, nextBatch)
 				if err != nil {
@@ -670,6 +664,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step, err)
 			}
 			v := float64(lossV)
+			stepTokens := currentDiagnosticBatchSize * currentDiagnosticSeqLen
+			processedTokens += int64(stepTokens)
+			if step > startStep {
+				steadyTokens += int64(stepTokens)
+			}
 			componentLosses, err := readTrainingStepComponentLosses(trainer, componentTelemetryEnabled)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("read component losses at step %d: %w", step, err)
@@ -725,7 +724,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 			var tokensPerSec float64
 			if steadyElapsed > 0 {
-				tokensPerSec = float64(batchTokens) * float64(stepsForRate) / steadyElapsed.Seconds()
+				tokens := processedTokens
+				if !steadyStart.IsZero() && step > startStep {
+					tokens = steadyTokens
+				}
+				tokensPerSec = float64(tokens) / steadyElapsed.Seconds()
 			}
 			telemetry.state.update(telemetryUpdate{
 				Model:         name,
@@ -738,7 +741,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				LR:            sched.At(step),
 				Objective:     currentObjective,
 				SeqLen:        currentSeqLen,
-				BatchTokens:   batchTokens,
+				BatchTokens:   stepTokens,
 				Elapsed:       elapsed,
 				SteadyElapsed: steadyElapsed,
 				TokensPerSec:  tokensPerSec,
@@ -796,16 +799,19 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					var err error
 					switch {
 					case cfg.ClassificationEnabled():
-						evalKey := currentProgramKey
-						evalKey.dropoutInactive = true
-						err = causalEval.withProgramKey(currentProgramKey, evalKey, func() error {
-							metrics, evalErr := evaluateClassificationValidation(cfg, valSet, trainer, step, batchSize, seqLen)
-							if evalErr == nil {
-								valAvg = metrics.Loss
-								classificationSummary = metrics.summary()
-							}
-							return evalErr
-						})
+						runShape := func(evalBatchSize, evalSeqLen int, fn func() error) error {
+							evalKey := currentProgramKey
+							evalKey.dropoutInactive = true
+							evalKey.batchSize = evalBatchSize
+							evalKey.seqLen = evalSeqLen
+							return causalEval.withProgramKey(currentProgramKey, evalKey, fn)
+						}
+						metrics, evalErr := evaluateClassificationValidationWithTrainer(cfg, valSet, trainer, step, batchSize, seqLen, nil, runShape)
+						err = evalErr
+						if evalErr == nil {
+							valAvg = metrics.Loss
+							classificationSummary = metrics.summary()
+						}
 					case cfg.Training.MultiheadEnabled():
 						err = causalEval.withCausalEvalProgram(currentProgramKey, func() error {
 							var evalErr error
@@ -876,7 +882,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					LR:            sched.At(step),
 					Objective:     currentObjective,
 					SeqLen:        currentSeqLen,
-					BatchTokens:   batchTokens,
+					BatchTokens:   stepTokens,
 					Elapsed:       time.Since(start),
 					SteadyElapsed: steadyElapsed,
 					TokensPerSec:  tokensPerSec,
@@ -944,7 +950,11 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				}
 			}
 		}
-		evalLoss, err := computeFinalTrainingLoss(cfg, lastTrainBatch, steps, seqLen, batchSize,
+		finalSeqLen, finalBatchSize := seqLen, batchSize
+		if cfg.Training.LengthBucketsChangeShape(seqLen) {
+			finalBatchSize, finalSeqLen = lastTrainBatch.effectiveShape(currentBatchSize, currentSeqLen)
+		}
+		evalLoss, err := computeFinalTrainingLoss(cfg, lastTrainBatch, steps, finalSeqLen, finalBatchSize,
 			trainer, causalEval, currentProgramKey, pairSampler, invarianceSampler, pllMarginSampler)
 		if err != nil {
 			return TrainResult{}, err

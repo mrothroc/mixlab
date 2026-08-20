@@ -169,8 +169,8 @@ func runPrepare(opts PrepareOptions) error {
 		if opts.FramePerRecord {
 			return fmt.Errorf("-frame-per-record is not used with fixed-shape codebook arrays")
 		}
-	} else if opts.LengthFile != "" {
-		return fmt.Errorf("-length-file requires -input-format=codebooks")
+	} else if opts.LengthFile != "" && inputFormat != "continuous" {
+		return fmt.Errorf("-length-file requires -input-format=continuous or codebooks")
 	}
 	if opts.FramePerRecord && inputFormat != "text" && opts.LabelFile == "" {
 		return fmt.Errorf("-frame-per-record requires -input-format=text")

@@ -59,6 +59,7 @@ type mlxGPUTrainer struct {
 	tttInnerLRScaleInput       bool
 	classificationLabelsInput  bool
 	classificationMaskInput    bool
+	classificationRowMaskInput bool
 	classificationPosInput     bool
 	batchNorm                  bool
 	rcTokensInput              bool
@@ -69,42 +70,43 @@ type mlxGPUTrainer struct {
 	trainingSeed               uint64
 	trainingStep               int
 	// Pre-allocated input buffers to avoid per-step allocation.
-	tokBuf                 []int32
-	codebookBuf            []int32
-	continuousFrameBuf     []float32
-	tgtBuf                 []int32
-	lossMaskBuf            []float32
-	distillLossMaskBuf     []float32
-	wordStructTargetBuf    []int32
-	wordStructLossMaskBuf  []float32
-	invarianceLossMaskBuf  []float32
-	pllMarginLossMaskBuf   []float32
-	energySpanMaskBuf      []float32
-	attentionCausalBuf     []int32
-	segmentIDBuf           []int32
-	diffusionBlockStartBuf []int32
-	diffusionBlockEndBuf   []int32
-	diffusionTimestepBuf   []float32
-	teacherProbBuf         []float32
-	data2VecTargetBuf      []float32
-	data2VecMaskBuf        []float32
-	rtdGeneratorTokBuf     []int32
-	rtdGeneratorPosBuf     []int32
-	rtdGeneratorTgtBuf     []int32
-	rtdGeneratorLossBuf    []float32
-	charBuf                []int32
-	bigramBuf              []int32
-	trigramBuf             []int32
-	tttInnerLRScaleBuf     []float32
-	dropoutKeyBuf          []int32
-	classificationLabelBuf []int32
-	classificationMaskBuf  []float32
-	classificationPosBuf   []int32
-	rcTokenBuf             []int32
-	rcAlignmentBuf         []int32
-	rcComplementIDs        []int32
-	charFeatures           []int32
-	firstByteValid         []int32
+	tokBuf                   []int32
+	codebookBuf              []int32
+	continuousFrameBuf       []float32
+	tgtBuf                   []int32
+	lossMaskBuf              []float32
+	distillLossMaskBuf       []float32
+	wordStructTargetBuf      []int32
+	wordStructLossMaskBuf    []float32
+	invarianceLossMaskBuf    []float32
+	pllMarginLossMaskBuf     []float32
+	energySpanMaskBuf        []float32
+	attentionCausalBuf       []int32
+	segmentIDBuf             []int32
+	diffusionBlockStartBuf   []int32
+	diffusionBlockEndBuf     []int32
+	diffusionTimestepBuf     []float32
+	teacherProbBuf           []float32
+	data2VecTargetBuf        []float32
+	data2VecMaskBuf          []float32
+	rtdGeneratorTokBuf       []int32
+	rtdGeneratorPosBuf       []int32
+	rtdGeneratorTgtBuf       []int32
+	rtdGeneratorLossBuf      []float32
+	charBuf                  []int32
+	bigramBuf                []int32
+	trigramBuf               []int32
+	tttInnerLRScaleBuf       []float32
+	dropoutKeyBuf            []int32
+	classificationLabelBuf   []int32
+	classificationMaskBuf    []float32
+	classificationRowMaskBuf []float32
+	classificationPosBuf     []int32
+	rcTokenBuf               []int32
+	rcAlignmentBuf           []int32
+	rcComplementIDs          []int32
+	charFeatures             []int32
+	firstByteValid           []int32
 	// MLX registers GPU streams per OS thread; keep trainer setup and steps pinned.
 	lockedOSThread              bool
 	distributed                 *DistributedTrainerContext
@@ -331,6 +333,7 @@ func initMLXGPUTrainerWithDistributedContext(
 	tttInnerLRScaleInput := false
 	classificationLabelsInput := false
 	classificationMaskInput := false
+	classificationRowMaskInput := false
 	classificationPosInput := false
 	rcTokensInput := false
 	rcAlignmentInput := false
@@ -431,6 +434,9 @@ func initMLXGPUTrainerWithDistributedContext(
 		}
 		if inp.Name == "classification_valid_mask" {
 			classificationMaskInput = true
+		}
+		if inp.Name == "classification_example_mask" {
+			classificationRowMaskInput = true
 		}
 		if inp.Name == "classification_positions" {
 			classificationPosInput = true
@@ -546,6 +552,7 @@ func initMLXGPUTrainerWithDistributedContext(
 		tttInnerLRScaleInput:        tttInnerLRScaleInput,
 		classificationLabelsInput:   classificationLabelsInput,
 		classificationMaskInput:     classificationMaskInput,
+		classificationRowMaskInput:  classificationRowMaskInput,
 		batchNorm:                   cfg.EffectiveNormSpec().Type == ir.NormTypeBatchNorm,
 		classificationPosInput:      classificationPosInput,
 		rcTokensInput:               rcTokensInput,
@@ -584,6 +591,7 @@ func initMLXGPUTrainerWithDistributedContext(
 		dropoutKeyBuf:               make([]int32, dropoutKeyCount*2),
 		classificationLabelBuf:      make([]int32, declaredBatchSize),
 		classificationMaskBuf:       make([]float32, batchElems),
+		classificationRowMaskBuf:    make([]float32, declaredBatchSize),
 		classificationPosBuf:        make([]int32, declaredBatchSize),
 		rcTokenBuf:                  make([]int32, batchElems),
 		rcAlignmentBuf:              make([]int32, batchElems),
@@ -822,6 +830,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.codebookCount = 0
 	t.classificationLabelsInput = programDeclaresInput(irProg, "classification_labels")
 	t.classificationMaskInput = programDeclaresInput(irProg, "classification_valid_mask")
+	t.classificationRowMaskInput = programDeclaresInput(irProg, "classification_example_mask")
 	t.classificationPosInput = programDeclaresInput(irProg, "classification_positions")
 	t.rcTokensInput = programDeclaresInput(irProg, "rc_tokens")
 	t.rcAlignmentInput = programDeclaresInput(irProg, "rc_alignment_positions")

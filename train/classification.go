@@ -36,8 +36,24 @@ type classificationOutputEvaluator interface {
 	ReadOutput(name string, shape []int) ([]float32, error)
 }
 
-func evaluateClassificationValidation(cfg *ArchConfig, valSet *data.ValSet, trainer GPUTrainer, step, batchSize, seqLen int) (ClassificationMetrics, error) {
-	return evaluateClassificationValidationWithPredictions(cfg, valSet, trainer, step, batchSize, seqLen, nil)
+type classificationShapeRunner func(batchSize, seqLen int, fn func() error) error
+
+// evaluateClassificationValidationWithTrainer is the trainer-level entry point.
+// predictionsOut and runShape are both optional: pass nil to skip per-example
+// prediction dumps and to evaluate every batch at the trainer's active shape.
+func evaluateClassificationValidationWithTrainer(
+	cfg *ArchConfig,
+	valSet *data.ValSet,
+	trainer GPUTrainer,
+	step, batchSize, seqLen int,
+	predictionsOut io.Writer,
+	runShape classificationShapeRunner,
+) (ClassificationMetrics, error) {
+	evaluator, ok := trainer.(classificationOutputEvaluator)
+	if !ok {
+		return ClassificationMetrics{}, fmt.Errorf("trainer does not support classification logits readback")
+	}
+	return evaluateClassificationValidationWithShapeRunner(cfg, valSet, evaluator, step, batchSize, seqLen, predictionsOut, runShape)
 }
 
 type classificationPredictionRecord struct {
@@ -47,20 +63,6 @@ type classificationPredictionRecord struct {
 	Logits     []float32 `json:"logits"`
 }
 
-func evaluateClassificationValidationWithPredictions(
-	cfg *ArchConfig,
-	valSet *data.ValSet,
-	trainer GPUTrainer,
-	step, batchSize, seqLen int,
-	predictionsOut io.Writer,
-) (ClassificationMetrics, error) {
-	evaluator, ok := trainer.(classificationOutputEvaluator)
-	if !ok {
-		return ClassificationMetrics{}, fmt.Errorf("trainer does not support classification logits readback")
-	}
-	return evaluateClassificationValidationWithEvaluator(cfg, valSet, evaluator, step, batchSize, seqLen, predictionsOut)
-}
-
 func evaluateClassificationValidationWithOptionalPredictions(
 	cfg *ArchConfig,
 	valSet *data.ValSet,
@@ -68,14 +70,25 @@ func evaluateClassificationValidationWithOptionalPredictions(
 	step, batchSize, seqLen int,
 	predictionsPath string,
 ) (ClassificationMetrics, error) {
+	return evaluateClassificationValidationWithOptionalPredictionsAndShapeRunner(cfg, valSet, evaluator, step, batchSize, seqLen, predictionsPath, nil)
+}
+
+func evaluateClassificationValidationWithOptionalPredictionsAndShapeRunner(
+	cfg *ArchConfig,
+	valSet *data.ValSet,
+	evaluator classificationOutputEvaluator,
+	step, batchSize, seqLen int,
+	predictionsPath string,
+	runShape classificationShapeRunner,
+) (ClassificationMetrics, error) {
 	if predictionsPath == "" {
-		return evaluateClassificationValidationWithEvaluator(cfg, valSet, evaluator, step, batchSize, seqLen, nil)
+		return evaluateClassificationValidationWithShapeRunner(cfg, valSet, evaluator, step, batchSize, seqLen, nil, runShape)
 	}
 	out, err := os.Create(predictionsPath)
 	if err != nil {
 		return ClassificationMetrics{}, fmt.Errorf("create classification output %q: %w", predictionsPath, err)
 	}
-	metrics, evalErr := evaluateClassificationValidationWithEvaluator(cfg, valSet, evaluator, step, batchSize, seqLen, out)
+	metrics, evalErr := evaluateClassificationValidationWithShapeRunner(cfg, valSet, evaluator, step, batchSize, seqLen, out, runShape)
 	closeErr := out.Close()
 	if evalErr != nil {
 		return ClassificationMetrics{}, evalErr
@@ -93,6 +106,17 @@ func evaluateClassificationValidationWithEvaluator(
 	step, batchSize, seqLen int,
 	predictionsOut io.Writer,
 ) (ClassificationMetrics, error) {
+	return evaluateClassificationValidationWithShapeRunner(cfg, valSet, evaluator, step, batchSize, seqLen, predictionsOut, nil)
+}
+
+func evaluateClassificationValidationWithShapeRunner(
+	cfg *ArchConfig,
+	valSet *data.ValSet,
+	evaluator classificationOutputEvaluator,
+	step, defaultBatchSize, defaultSeqLen int,
+	predictionsOut io.Writer,
+	runShape classificationShapeRunner,
+) (ClassificationMetrics, error) {
 	if cfg == nil || !cfg.ClassificationEnabled() || cfg.Training.Classification == nil {
 		return ClassificationMetrics{}, fmt.Errorf("classification validation requires an active classification config")
 	}
@@ -103,7 +127,7 @@ func evaluateClassificationValidationWithEvaluator(
 		return ClassificationMetrics{}, fmt.Errorf("no classification validation batches")
 	}
 	numLabels := cfg.Training.Classification.NumLabels
-	labels := make([]int, 0, len(valSet.Batches)*batchSize)
+	labels := make([]int, 0, len(valSet.Batches)*defaultBatchSize)
 	predictions := make([]int, 0, cap(labels))
 	positiveScores := make([]float64, 0, cap(labels))
 	lossSum := 0.0
@@ -112,6 +136,13 @@ func evaluateClassificationValidationWithEvaluator(
 		predictionEncoder = json.NewEncoder(predictionsOut)
 	}
 	for batchIndex, vb := range valSet.Batches {
+		batchSize, seqLen := defaultBatchSize, defaultSeqLen
+		if vb.BatchSize > 0 {
+			batchSize = vb.BatchSize
+		}
+		if vb.SeqLen > 0 {
+			seqLen = vb.SeqLen
+		}
 		realRows := vb.ExampleCount
 		if realRows == 0 {
 			realRows = batchSize
@@ -122,17 +153,31 @@ func evaluateClassificationValidationWithEvaluator(
 				batchIndex, realRows, batchSize,
 			)
 		}
-		prepared, err := prepareObjectiveBatchWithSeqLen(cfg, trainBatchFromValBatch(vb), step, arch.ObjectiveClassification, seqLen)
+		prepared, err := prepareObjectiveBatchWithShape(cfg, trainBatchFromValBatch(vb), step, arch.ObjectiveClassification, batchSize, seqLen)
 		if err != nil {
 			return ClassificationMetrics{}, fmt.Errorf("prepare classification validation batch %d: %w", batchIndex, err)
 		}
-		loss, err := evaluator.EvaluateObjectiveGPUWithOutputs(prepared, batchSize, seqLen, []string{"classification_logits"})
-		if err != nil {
-			return ClassificationMetrics{}, fmt.Errorf("evaluate classification validation batch %d: %w", batchIndex, err)
+		var loss float32
+		var logits []float32
+		evaluate := func() error {
+			var evalErr error
+			loss, evalErr = evaluator.EvaluateObjectiveGPUWithOutputs(prepared, batchSize, seqLen, []string{"classification_logits"})
+			if evalErr != nil {
+				return fmt.Errorf("evaluate classification validation batch %d: %w", batchIndex, evalErr)
+			}
+			logits, evalErr = evaluator.ReadOutput("classification_logits", []int{batchSize, numLabels})
+			if evalErr != nil {
+				return fmt.Errorf("read classification validation logits for batch %d: %w", batchIndex, evalErr)
+			}
+			return nil
 		}
-		logits, err := evaluator.ReadOutput("classification_logits", []int{batchSize, numLabels})
+		if runShape != nil {
+			err = runShape(batchSize, seqLen, evaluate)
+		} else {
+			err = evaluate()
+		}
 		if err != nil {
-			return ClassificationMetrics{}, fmt.Errorf("read classification validation logits for batch %d: %w", batchIndex, err)
+			return ClassificationMetrics{}, err
 		}
 		if len(logits) != batchSize*numLabels {
 			return ClassificationMetrics{}, fmt.Errorf("classification logits size=%d, want %d", len(logits), batchSize*numLabels)

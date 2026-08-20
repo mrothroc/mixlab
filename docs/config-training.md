@@ -63,6 +63,40 @@ disabled for bias-free reference recipes. V1 supports single-label
 cross-entropy only and requires a labeled one-record-per-row dataset whose
 manifest `task.num_labels` matches the config.
 
+### Length-bucketed classification
+
+Variable-length continuous-frame and discrete-codebook datasets can avoid
+running every record at the corpus-wide padded width:
+
+```jsonc
+"training": {
+  "objective": "classification",
+  "batch_tokens": 6144,
+  "length_buckets": [256, 384, 512, 768, 1024, 1792]
+}
+```
+
+Each record is assigned to the smallest bucket that contains its valid length.
+`batch_tokens` is a ceiling in this mode: bucket width `T` uses
+`B = floor(batch_tokens / T)`, so effective tokens are `B*T` and may be below
+the configured ceiling. Bucket visits and within-shard record order are
+deterministic from `training.seed`; fixed-shape programs are cached per `(B,T)`
+and share one weight set. Final partial bucket batches duplicate a harmless row
+for shape stability and mask those filler rows out of classifier loss and
+metrics, so records are not dropped.
+
+A single bucket equal to `seq_len` with a divisible token budget takes the
+legacy fixed-shape loader and loss path exactly. This makes bucketing a strict
+no-op for fixed-length reproduction runs.
+
+Codebook shards already carry valid lengths. Continuous arrays should provide
+an integer `lengths: [N]` member in `.npz` input or use
+`mixlab -mode prepare -length-file row_lengths.tsv`; older continuous shards
+remain readable but are treated as fully valid and cannot benefit from shorter
+buckets. A record longer than the largest bucket fails at loader startup.
+Length bucketing is currently incompatible with BatchNorm and is not available
+for language-model objectives.
+
 ## Optimizers
 
 | `training.optimizer` | Behavior |

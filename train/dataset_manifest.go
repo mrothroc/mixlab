@@ -275,18 +275,32 @@ func validateDatasetManifestForConfig(cfg *ArchConfig, shardPattern string) (*da
 		return nil, "", nil
 	}
 	if cfg.LinearFramesEnabled() {
+		validationSeqLen := cfg.SeqLen
+		if cfg.Training.LengthBucketsChangeShape(cfg.SeqLen) {
+			if cfg.SeqLen < manifest.RecordSeqLen {
+				return nil, "", fmt.Errorf("dataset manifest %q record_seq_len=%d exceeds config seq_len=%d", path, manifest.RecordSeqLen, cfg.SeqLen)
+			}
+			validationSeqLen = manifest.RecordSeqLen
+		}
 		if err := manifest.ValidateContinuousFeatures(
-			cfg.InputAdapter.FeatureDim, cfg.SeqLen, cfg.Training.Classification.NumLabels,
+			cfg.InputAdapter.FeatureDim, validationSeqLen, cfg.Training.Classification.NumLabels,
 		); err != nil {
 			return nil, "", fmt.Errorf("dataset manifest %q is incompatible with config %q: %w", path, cfg.Name, err)
 		}
 		return manifest, path, nil
 	}
 	if cfg.DiscreteCodebooksEnabled() {
+		validationSeqLen := cfg.SeqLen
+		if cfg.Training.LengthBucketsChangeShape(cfg.SeqLen) {
+			if cfg.SeqLen < manifest.RecordSeqLen {
+				return nil, "", fmt.Errorf("dataset manifest %q record_seq_len=%d exceeds config seq_len=%d", path, manifest.RecordSeqLen, cfg.SeqLen)
+			}
+			validationSeqLen = manifest.RecordSeqLen
+		}
 		if err := manifest.ValidateDiscreteCodebooks(
 			cfg.InputAdapter.NumCodebooks,
 			cfg.InputAdapter.CodebookVocabSize,
-			cfg.SeqLen,
+			validationSeqLen,
 			cfg.Training.Classification.NumLabels,
 		); err != nil {
 			return nil, "", fmt.Errorf("dataset manifest %q is incompatible with config %q: %w", path, cfg.Name, err)

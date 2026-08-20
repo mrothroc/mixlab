@@ -17,6 +17,7 @@ type trainingProgramCacheKey struct {
 	dropoutInactive bool
 	objective       string
 	seqLen          int
+	batchSize       int
 }
 
 // gpuProgramSwitcher is implemented by trainers that can swap their active
@@ -96,6 +97,7 @@ func (c causalEvalSwitcher) withCausalEvalProgram(currentKey trainingProgramCach
 		causalKey.objective = arch.ObjectiveCausal
 	}
 	causalKey.seqLen = c.seqLen
+	causalKey.batchSize = c.batchSize
 	switched := causalKey != restoreKey
 	if switched {
 		return c.withProgramKey(restoreKey, causalKey, fn)

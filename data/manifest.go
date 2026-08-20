@@ -26,12 +26,17 @@ const (
 	DatasetShardFormatSequenceV1           = "mixlab_sequence_shard_v1"
 	DatasetShardFormatLabeledSequenceV1    = "mixlab_labeled_sequence_shard_v1"
 	DatasetShardFormatContinuousSequenceV1 = "mixlab_continuous_sequence_shard_v1"
+	DatasetShardFormatContinuousSequenceV2 = "mixlab_continuous_sequence_shard_v2"
 	DatasetShardFormatCodebookSequenceV1   = "mixlab_codebook_sequence_shard_v1"
 	DatasetSequenceLayoutContinuousStream  = "continuous_stream"
 	DatasetSequenceLayoutPackedSegments    = "packed_segments"
 	DatasetSequenceLayoutOneRecordRow      = "one_record_per_row"
 	DatasetTaskSingleLabelClassification   = "single_label_classification"
 )
+
+func isContinuousSequenceShardFormat(format string) bool {
+	return format == DatasetShardFormatContinuousSequenceV1 || format == DatasetShardFormatContinuousSequenceV2
+}
 
 // DatasetManifest describes the representation shared by a set of Mixlab
 // shards. It is optional for legacy datasets and required for new modality
@@ -297,7 +302,7 @@ func (m *DatasetManifest) EffectiveSequenceLayout() string {
 		return ""
 	}
 	layout := strings.ToLower(strings.TrimSpace(m.SequenceLayout))
-	if m.ShardFormat == DatasetShardFormatContinuousSequenceV1 {
+	if isContinuousSequenceShardFormat(m.ShardFormat) {
 		if layout == "" {
 			return DatasetSequenceLayoutOneRecordRow
 		}
@@ -406,8 +411,8 @@ func (m *DatasetManifest) validateContinuousFrames() error {
 	if m.FeatureDim <= 0 {
 		return fmt.Errorf("feature_dim=%d must be > 0", m.FeatureDim)
 	}
-	if m.ShardFormat != DatasetShardFormatContinuousSequenceV1 {
-		return fmt.Errorf("shard_format=%q is unsupported for continuous frames; want %q", m.ShardFormat, DatasetShardFormatContinuousSequenceV1)
+	if !isContinuousSequenceShardFormat(m.ShardFormat) {
+		return fmt.Errorf("shard_format=%q is unsupported for continuous frames; want %q or %q", m.ShardFormat, DatasetShardFormatContinuousSequenceV1, DatasetShardFormatContinuousSequenceV2)
 	}
 	if m.EffectiveSequenceLayout() != DatasetSequenceLayoutOneRecordRow {
 		return fmt.Errorf("continuous frames require sequence_layout=%q", DatasetSequenceLayoutOneRecordRow)
@@ -419,7 +424,7 @@ func (m *DatasetManifest) validateContinuousFrames() error {
 		return fmt.Errorf("continuous frame manifests cannot contain token artifacts or special_token_ids")
 	}
 	if m.Task == nil || m.Task.Type != DatasetTaskSingleLabelClassification || m.Task.NumLabels < 2 {
-		return fmt.Errorf("continuous frame v1 requires task.type=%q with num_labels >= 2", DatasetTaskSingleLabelClassification)
+		return fmt.Errorf("continuous frames require task.type=%q with num_labels >= 2", DatasetTaskSingleLabelClassification)
 	}
 	if len(m.Splits) == 0 {
 		return fmt.Errorf("splits must contain at least one dataset split")

@@ -110,7 +110,7 @@ func main() {
 	prepContinuousModality := flag.String("continuous-modality", "continuous", "manifest modality identifier for continuous arrays (prepare mode)")
 	prepCodebookVocabSize := flag.Int("codebook-vocab-size", 0, "exclusive upper bound for every codebook ID (prepare codebooks mode)")
 	prepCodebookModality := flag.String("codebook-modality", "audio", "manifest modality identifier for codebook arrays (prepare mode)")
-	prepLengthFile := flag.String("length-file", "", "optional row_index<TAB>valid_length TSV for codebook arrays (prepare mode)")
+	prepLengthFile := flag.String("length-file", "", "optional row_index<TAB>valid_length TSV for continuous or codebook arrays (prepare mode)")
 	prepFramePerRecord := flag.Bool("frame-per-record", false, "preserve each text/JSONL record as one BOS/EOS/PAD-framed training row")
 	prepRecordSeqLen := flag.Int("record-seq-len", 0, "fixed row length for -frame-per-record")
 	prepRecordPADID := flag.Int("record-pad-id", -1, "PAD token ID for -frame-per-record")

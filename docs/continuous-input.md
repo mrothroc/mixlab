@@ -14,7 +14,9 @@ does not add modality-specific preprocessing.
 ## Prepare data
 
 Write features as a NumPy `.npy` array with shape `[N,T,F]`, or an `.npz`
-archive containing an array named `features`. Labels use the existing
+archive containing an array named `features`. Variable-length inputs may put an
+integer `lengths: [N]` array in the `.npz`, or provide the same values through
+`-length-file lengths.tsv`. Labels use the existing
 `-label-file` surface with exact row indexes:
 
 ```text
@@ -31,15 +33,18 @@ mixlab -mode prepare \
   -input features.npy \
   -input-format continuous \
   -label-file labels.tsv \
+  -length-file lengths.tsv \
   -continuous-modality waveform \
   -val-split 0.1 \
   -prepare-output-dir data/waveform
 ```
 
 `prepare` converts numeric inputs to little-endian float32, rejects non-finite
-values, stratifies labeled records deterministically, and writes
-`mixlab_continuous_sequence_shard_v1` shards. Each shard stores labels and
-frames atomically. The adjacent `mixlab.dataset.json` records:
+values, validates lengths in `[1,T]`, stratifies labeled records
+deterministically, and writes `mixlab_continuous_sequence_shard_v2` shards.
+Each shard stores labels, valid lengths, and frames atomically. Legacy binary
+v1 shards and manifests remain readable and are treated as fully valid. The adjacent
+`mixlab.dataset.json` records:
 
 - `representation: "continuous_frames"`
 - `feature_dtype: "float32"`
@@ -85,6 +90,10 @@ before trainer construction.
 `batch_tokens` continues to mean `B*T`, so `16000` is one 16k-timestep
 example per batch. `feature_dim` is the per-timestep channel width, not the
 number of records.
+
+For skewed record lengths, set `training.length_buckets` to compile and reuse
+several shorter batch shapes. See
+[Length-bucketed classification](config-training.md#length-bucketed-classification).
 
 For a linear time-invariant FFT-convolution baseline, replace the canonical
 Mamba block with:

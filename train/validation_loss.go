@@ -37,7 +37,7 @@ func meanMultiheadValidationLoss(cfg *ArchConfig, valSet *data.ValSet, trainer G
 	count := 0
 	failures := 0
 	for _, vb := range valSet.Batches {
-		batch, err := prepareObjectiveBatchWithSeqLen(cfg, trainBatchFromValBatch(vb), step, arch.ObjectiveMultihead, seqLen)
+		batch, err := prepareObjectiveBatchWithShape(cfg, trainBatchFromValBatch(vb), step, arch.ObjectiveMultihead, batchSize, seqLen)
 		if err != nil {
 			return 0, err
 		}

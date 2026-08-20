@@ -39,6 +39,7 @@ type objectiveBatch struct {
 	tttInnerLRScale       []float32
 	classificationLabels  []int32
 	classificationMask    []float32
+	classificationRowMask []float32
 	classificationPos     []int32
 	rcTokens              []int
 	rcAlignmentPositions  []int32
@@ -116,15 +117,22 @@ func prepareObjectiveBatch(cfg *ArchConfig, batch trainBatch, step int, objectiv
 }
 
 func prepareObjectiveBatchWithSeqLen(cfg *ArchConfig, batch trainBatch, step int, objective string, seqLen int) (objectiveBatch, error) {
+	if cfg == nil || seqLen <= 0 {
+		return objectiveBatch{}, fmt.Errorf("invalid objective batch shape: seq_len=%d", seqLen)
+	}
+	return prepareObjectiveBatchWithShape(cfg, batch, step, objective, cfg.Training.BatchTokens/seqLen, seqLen)
+}
+
+func prepareObjectiveBatchWithShape(cfg *ArchConfig, batch trainBatch, step int, objective string, batchSize, seqLen int) (objectiveBatch, error) {
 	if cfg == nil {
 		return objectiveBatch{}, fmt.Errorf("nil config")
 	}
 	if batch.err != nil {
 		return objectiveBatch{}, batch.err
 	}
-	need := cfg.Training.BatchTokens
-	if need <= 0 {
-		return objectiveBatch{}, fmt.Errorf("invalid batch_tokens=%d", need)
+	need := batchSize * seqLen
+	if batchSize <= 0 || seqLen <= 0 || need <= 0 {
+		return objectiveBatch{}, fmt.Errorf("invalid objective batch shape: batch_size=%d seq_len=%d", batchSize, seqLen)
 	}
 	switch {
 	case cfg.DiscreteCodebooksEnabled():
@@ -255,12 +263,34 @@ func prepareClassificationBatch(cfg *ArchConfig, batch trainBatch, need, seqLen 
 		}
 	}
 	validMask := append([]float32(nil), batch.validMask[:need]...)
+	var exampleMask []float32
+	if cfg.Training.LengthBucketsChangeShape(cfg.SeqLen) {
+		if len(batch.exampleMask) < batchSize {
+			return objectiveBatch{}, fmt.Errorf("classification batch example mask has %d entries, need %d", len(batch.exampleMask), batchSize)
+		}
+		exampleMask = append([]float32(nil), batch.exampleMask[:batchSize]...)
+		active := 0
+		for row, value := range exampleMask {
+			if value != 0 && value != 1 {
+				return objectiveBatch{}, fmt.Errorf("classification batch example mask row %d=%g must be 0 or 1", row, value)
+			}
+			if value > 0 {
+				active++
+			}
+		}
+		if active == 0 {
+			return objectiveBatch{}, fmt.Errorf("classification batch example mask has no active rows")
+		}
+	}
 	positions := make([]int32, batchSize)
+	segmentIDs := make([]int32, need)
 	for row := 0; row < batchSize; row++ {
 		last := -1
 		for pos := 0; pos < seqLen; pos++ {
 			if validMask[row*seqLen+pos] > 0 {
 				last = pos
+			} else {
+				segmentIDs[row*seqLen+pos] = 1
 			}
 		}
 		if last < 0 {
@@ -273,14 +303,16 @@ func prepareClassificationBatch(cfg *ArchConfig, batch trainBatch, need, seqLen 
 		codebookNeed = need * cfg.InputAdapter.NumCodebooks
 	}
 	return objectiveBatch{
-		x:                    sliceIntsIfAvailable(batch.x, need),
-		y:                    sliceIntsIfAvailable(batch.y, need),
-		codebooks:            sliceInt32sIfAvailable(batch.codebooks, codebookNeed),
-		frames:               sliceFloat32IfAvailable(batch.frames, need*cfg.InputFeatureDim()),
-		unmaskedX:            sliceIntsIfAvailable(batch.x, need),
-		classificationLabels: labels,
-		classificationMask:   validMask,
-		classificationPos:    positions,
+		x:                     sliceIntsIfAvailable(batch.x, need),
+		y:                     sliceIntsIfAvailable(batch.y, need),
+		codebooks:             sliceInt32sIfAvailable(batch.codebooks, codebookNeed),
+		frames:                sliceFloat32IfAvailable(batch.frames, need*cfg.InputFeatureDim()),
+		unmaskedX:             sliceIntsIfAvailable(batch.x, need),
+		classificationLabels:  labels,
+		classificationMask:    validMask,
+		classificationRowMask: exampleMask,
+		classificationPos:     positions,
+		segmentIDs:            segmentIDs,
 	}, nil
 }
 

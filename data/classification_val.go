@@ -10,10 +10,16 @@ import (
 // maxBatches value of zero evaluates the full split; a positive value caps the
 // number of fixed-shape batches while retaining the split total for reporting.
 func NewClassificationValSet(pattern string, maxBatches, batchTokens, seqLen int) (*ValSet, error) {
+	return NewClassificationValSetWithOptions(pattern, maxBatches, batchTokens, seqLen, LoaderOptions{})
+}
+
+// NewClassificationValSetWithOptions loads classification validation data,
+// optionally using the same deterministic length buckets as training.
+func NewClassificationValSetWithOptions(pattern string, maxBatches, batchTokens, seqLen int, opts LoaderOptions) (*ValSet, error) {
 	if maxBatches < 0 {
 		return nil, fmt.Errorf("classification validation batch limit must be >= 0, got %d", maxBatches)
 	}
-	if batchTokens <= 0 || seqLen <= 0 || batchTokens%seqLen != 0 {
+	if batchTokens <= 0 || seqLen <= 0 || (len(opts.LengthBuckets) == 0 && batchTokens%seqLen != 0) {
 		return nil, fmt.Errorf("invalid classification validation batch shape: batchTokens=%d seqLen=%d", batchTokens, seqLen)
 	}
 
@@ -24,7 +30,10 @@ func NewClassificationValSet(pattern string, maxBatches, batchTokens, seqLen int
 	if !found {
 		return nil, fmt.Errorf("classification validation requires %s beside the labeled shards", DatasetManifestFilename)
 	}
-	if manifest.ShardFormat == DatasetShardFormatContinuousSequenceV1 {
+	if len(opts.LengthBuckets) > 0 {
+		return newBucketedClassificationValSet(pattern, manifest, maxBatches, batchTokens, seqLen, opts)
+	}
+	if isContinuousSequenceShardFormat(manifest.ShardFormat) {
 		return newContinuousClassificationValSet(pattern, manifest, maxBatches, batchTokens, seqLen)
 	}
 	if manifest.ShardFormat == DatasetShardFormatCodebookSequenceV1 {
@@ -105,6 +114,57 @@ func NewClassificationValSet(pattern string, maxBatches, batchTokens, seqLen int
 			Labels: batch.Labels, ValidMask: batch.ValidMask,
 			ExampleCount: realRows,
 		})
+	}
+	return vs, nil
+}
+
+func newBucketedClassificationValSet(pattern string, manifest *DatasetManifest, maxBatches, batchTokens, seqLen int, opts LoaderOptions) (*ValSet, error) {
+	if manifest == nil || (!isContinuousSequenceShardFormat(manifest.ShardFormat) && manifest.ShardFormat != DatasetShardFormatCodebookSequenceV1) {
+		return nil, fmt.Errorf("length-bucketed classification validation requires continuous-frame or discrete-codebook shards")
+	}
+	if seqLen < manifest.RecordSeqLen {
+		return nil, fmt.Errorf("classification validation config seq_len=%d is smaller than dataset record_seq_len=%d", seqLen, manifest.RecordSeqLen)
+	}
+	files, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no classification validation shard files matched %q", pattern)
+	}
+	total := 0
+	for _, file := range files {
+		var lengths []int32
+		if manifest.ShardFormat == DatasetShardFormatCodebookSequenceV1 {
+			lengths, _, _, _, err = loadCodebookSequenceLengths(file)
+		} else {
+			lengths, _, _, err = loadContinuousSequenceLengths(file)
+		}
+		if err != nil {
+			return nil, err
+		}
+		total += len(lengths)
+	}
+	opts.NoShardShuffle = true
+	loader, err := NewLoaderWithOptions(pattern, 0, opts)
+	if err != nil {
+		return nil, err
+	}
+	vs := &ValSet{Batches: make([]ValBatch, 0), TotalExamples: total}
+	for vs.EvaluatedExamples < total && (maxBatches == 0 || len(vs.Batches) < maxBatches) {
+		batch, err := loader.NextBatchDetailed(batchTokens, seqLen)
+		if err != nil {
+			return nil, err
+		}
+		if batch.ExampleCount <= 0 {
+			return nil, fmt.Errorf("length-bucketed validation batch has no real examples")
+		}
+		vs.Batches = append(vs.Batches, ValBatch(batch))
+		vs.EvaluatedExamples += batch.ExampleCount
+	}
+	if len(vs.Batches) == 0 {
+		return nil, fmt.Errorf("classification validation split %q contains no records", pattern)
 	}
 	return vs, nil
 }

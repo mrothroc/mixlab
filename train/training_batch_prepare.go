@@ -16,7 +16,7 @@ func prepareTrainingBatch(
 	distiller *distillationEnsemble,
 	data2vec *data2VecTeacher,
 ) (objectiveBatch, error) {
-	prepared, err := prepareObjectiveBatchWithSeqLen(cfg, raw, step, objective, seqLen)
+	prepared, err := prepareObjectiveBatchWithShape(cfg, raw, step, objective, batchSize, seqLen)
 	if err != nil {
 		return objectiveBatch{}, trainingStepError(step, "objective batch", err)
 	}

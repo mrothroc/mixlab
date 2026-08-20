@@ -109,14 +109,14 @@ func runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, op
 
 	batchTokens := cfg.Training.BatchTokens
 	seqLen := cfg.SeqLen
-	if batchTokens%seqLen != 0 {
+	if !cfg.Training.LengthBucketsChangeShape(seqLen) && batchTokens%seqLen != 0 {
 		return fmt.Errorf("batch_tokens (%d) must be divisible by seq_len (%d)", batchTokens, seqLen)
 	}
 	batchSize := batchTokens / seqLen
 
 	var valSet *data.ValSet
 	if cfg.ClassificationEnabled() {
-		valSet, err = data.NewClassificationValSet(valPattern, opts.ValBatches, batchTokens, seqLen)
+		valSet, err = data.NewClassificationValSetWithOptions(valPattern, opts.ValBatches, batchTokens, seqLen, effectiveLoaderOptions(cfg))
 	} else {
 		const defaultValBatchCount = 10
 		valSet, err = data.NewValSetWithOptions(valPattern, cfg.Training.Seed, defaultValBatchCount, batchTokens, seqLen, effectiveLoaderOptions(cfg))
@@ -129,8 +129,40 @@ func runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, op
 		if !ok {
 			return fmt.Errorf("evaluate classification validation: trainer does not support classification logits readback")
 		}
-		metrics, err := evaluateClassificationValidationWithOptionalPredictions(
-			cfg, valSet, evaluator, 0, batchSize, seqLen, opts.ClassificationOut,
+		var runShape classificationShapeRunner
+		if cfg.Training.LengthBucketsChangeShape(seqLen) {
+			switcher, ok := trainer.(gpuProgramSwitcher)
+			if !ok {
+				return fmt.Errorf("evaluate length-bucketed classification: trainer does not support program switching")
+			}
+			programs := map[[2]int]*Program{{batchSize, seqLen}: prog}
+			activeShape := [2]int{batchSize, seqLen}
+			runShape = func(evalBatchSize, evalSeqLen int, fn func() error) error {
+				shape := [2]int{evalBatchSize, evalSeqLen}
+				if shape != activeShape {
+					target := programs[shape]
+					if target == nil {
+						clone := *cfg
+						clone.SeqLen = evalSeqLen
+						clone.Training = cfg.Training
+						clone.Training.BatchTokens = evalBatchSize * evalSeqLen
+						var buildErr error
+						target, buildErr = BuildEvalIRProgramFromConfig(&clone)
+						if buildErr != nil {
+							return fmt.Errorf("build classification eval bucket [B=%d,T=%d]: %w", evalBatchSize, evalSeqLen, buildErr)
+						}
+						programs[shape] = target
+					}
+					if err := switcher.SetProgramGPU(target); err != nil {
+						return fmt.Errorf("switch classification eval bucket [B=%d,T=%d]: %w", evalBatchSize, evalSeqLen, err)
+					}
+					activeShape = shape
+				}
+				return fn()
+			}
+		}
+		metrics, err := evaluateClassificationValidationWithOptionalPredictionsAndShapeRunner(
+			cfg, valSet, evaluator, 0, batchSize, seqLen, opts.ClassificationOut, runShape,
 		)
 		if err != nil {
 			return fmt.Errorf("evaluate classification validation: %w", err)

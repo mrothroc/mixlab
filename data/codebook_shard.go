@@ -3,6 +3,7 @@ package data
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -25,6 +26,40 @@ type CodebookSequenceShard struct {
 	SeqLen            int
 	NumCodebooks      int
 	CodebookVocabSize int
+}
+
+func loadCodebookSequenceLengths(path string) ([]int32, int, int, int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	defer func() { _ = file.Close() }()
+	header := make([]byte, headerInts*4)
+	if _, err := io.ReadFull(file, header); err != nil {
+		return nil, 0, 0, 0, fmt.Errorf("read codebook sequence shard %q header: %w", path, err)
+	}
+	readHeader := func(index int) int { return int(int32(binary.LittleEndian.Uint32(header[index*4:]))) }
+	magic, version := readHeader(0), readHeader(1)
+	records, seqLen, numCodebooks := readHeader(2), readHeader(3), readHeader(4)
+	codebookVocabSize := readHeader(5)
+	if magic != codebookSequenceShardMagic || version != codebookSequenceShardVersion || records <= 0 || seqLen <= 0 || numCodebooks <= 0 {
+		return nil, 0, 0, 0, fmt.Errorf("codebook sequence shard %q has invalid header", path)
+	}
+	if _, err := file.Seek(int64(records*4), io.SeekCurrent); err != nil {
+		return nil, 0, 0, 0, fmt.Errorf("seek codebook sequence shard %q lengths: %w", path, err)
+	}
+	raw := make([]byte, records*4)
+	if _, err := io.ReadFull(file, raw); err != nil {
+		return nil, 0, 0, 0, fmt.Errorf("read codebook sequence shard %q lengths: %w", path, err)
+	}
+	lengths := make([]int32, records)
+	for i := range lengths {
+		lengths[i] = int32(binary.LittleEndian.Uint32(raw[i*4:]))
+		if lengths[i] <= 0 || int(lengths[i]) > seqLen {
+			return nil, 0, 0, 0, fmt.Errorf("codebook sequence shard %q length[%d]=%d must be in [1,%d]", path, i, lengths[i], seqLen)
+		}
+	}
+	return lengths, seqLen, numCodebooks, codebookVocabSize, nil
 }
 
 func LoadCodebookSequenceShard(path string) (*CodebookSequenceShard, error) {
@@ -106,9 +141,13 @@ type codebookSequenceStream struct {
 	seqLen            int
 	numCodebooks      int
 	codebookVocabSize int
+	lengthBuckets     []int
+	bucketSchedule    []lengthBucketBatch
+	bucketCursor      int
+	bucketTokenBudget int
 }
 
-func newCodebookSequenceStream(pattern string, seed int64, noShuffle bool, seqLen, numCodebooks, codebookVocabSize int) (*codebookSequenceStream, error) {
+func newCodebookSequenceStream(pattern string, seed int64, noShuffle bool, seqLen, numCodebooks, codebookVocabSize int, lengthBuckets []int) (*codebookSequenceStream, error) {
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return nil, err
@@ -117,6 +156,21 @@ func newCodebookSequenceStream(pattern string, seed int64, noShuffle bool, seqLe
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no codebook sequence shard files matched %q", pattern)
 	}
+	if err := validateLengthBuckets(lengthBuckets); err != nil && len(lengthBuckets) > 0 {
+		return nil, err
+	}
+	for _, file := range files {
+		lengths, fileSeqLen, fileCodebooks, fileVocab, err := loadCodebookSequenceLengths(file)
+		if err != nil {
+			return nil, err
+		}
+		if fileSeqLen != seqLen || fileCodebooks != numCodebooks || fileVocab != codebookVocabSize {
+			return nil, fmt.Errorf("codebook shard %q domain [T=%d,Q=%d,V=%d] does not match manifest [T=%d,Q=%d,V=%d]", file, fileSeqLen, fileCodebooks, fileVocab, seqLen, numCodebooks, codebookVocabSize)
+		}
+		if err := validateRecordLengthsForBuckets(file, lengths, lengthBuckets); err != nil {
+			return nil, err
+		}
+	}
 	rng := rand.New(rand.NewSource(seed))
 	if !noShuffle {
 		rng.Shuffle(len(files), func(i, j int) { files[i], files[j] = files[j], files[i] })
@@ -124,6 +178,7 @@ func newCodebookSequenceStream(pattern string, seed int64, noShuffle bool, seqLe
 	stream := &codebookSequenceStream{
 		files: files, rng: rng, shuffle: !noShuffle, seqLen: seqLen,
 		numCodebooks: numCodebooks, codebookVocabSize: codebookVocabSize,
+		lengthBuckets: append([]int(nil), lengthBuckets...),
 	}
 	if err := stream.loadFile(0); err != nil {
 		return nil, err
@@ -147,7 +202,66 @@ func (s *codebookSequenceStream) loadFile(index int) error {
 		s.rng.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
 	}
 	s.fileIdx, s.shard, s.order, s.record = index, shard, order, 0
+	s.bucketSchedule = nil
+	s.bucketCursor = 0
 	return nil
+}
+
+func (s *codebookSequenceStream) nextLengthBucketBatch(tokenBudget int) (Batch, error) {
+	if len(s.lengthBuckets) == 0 {
+		return Batch{}, fmt.Errorf("codebook length bucketing is disabled")
+	}
+	for {
+		if s.bucketSchedule == nil {
+			if s.bucketTokenBudget != 0 && s.bucketTokenBudget != tokenBudget {
+				return Batch{}, fmt.Errorf("length-bucket token budget changed from %d to %d", s.bucketTokenBudget, tokenBudget)
+			}
+			s.bucketTokenBudget = tokenBudget
+			var rng *rand.Rand
+			if s.shuffle {
+				rng = s.rng
+			}
+			schedule, err := buildLengthBucketSchedule(s.order, s.shard.Lengths, s.lengthBuckets, tokenBudget, rng)
+			if err != nil {
+				return Batch{}, fmt.Errorf("build codebook length buckets for %q: %w", s.files[s.fileIdx], err)
+			}
+			s.bucketSchedule = schedule
+		}
+		if s.bucketCursor < len(s.bucketSchedule) {
+			break
+		}
+		if err := s.loadFile((s.fileIdx + 1) % len(s.files)); err != nil {
+			return Batch{}, err
+		}
+	}
+	plan := s.bucketSchedule[s.bucketCursor]
+	s.bucketCursor++
+	batchSize := len(plan.indices)
+	Q := s.numCodebooks
+	tokens := make([]int32, batchSize*plan.seqLen*Q)
+	labels := make([]int32, batchSize)
+	validMask := make([]float32, batchSize*plan.seqLen)
+	exampleMask := make([]float32, batchSize)
+	storedWidth := s.seqLen * Q
+	for row, index := range plan.indices {
+		source := s.shard.Tokens[index*storedWidth : (index+1)*storedWidth]
+		copyTimesteps := plan.seqLen
+		if copyTimesteps > s.seqLen {
+			copyTimesteps = s.seqLen
+		}
+		copy(tokens[row*plan.seqLen*Q:], source[:copyTimesteps*Q])
+		labels[row] = s.shard.Labels[index]
+		for pos := 0; pos < int(s.shard.Lengths[index]); pos++ {
+			validMask[row*plan.seqLen+pos] = 1
+		}
+		if row < plan.realRows {
+			exampleMask[row] = 1
+		}
+	}
+	return Batch{
+		Codebooks: tokens, Labels: labels, ValidMask: validMask, ExampleMask: exampleMask,
+		SeqLen: plan.seqLen, BatchSize: batchSize, ExampleCount: plan.realRows,
+	}, nil
 }
 
 func (s *codebookSequenceStream) takeRecord() ([]int32, int32, int32, error) {

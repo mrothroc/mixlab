@@ -136,6 +136,44 @@ func TestClassificationValidationExcludesPaddedFinalRowsAndWritesPredictions(t *
 	}
 }
 
+func TestClassificationValidationRunsEachLengthBucketShape(t *testing.T) {
+	cfg := nativeClassificationTestConfig()
+	cfg.Training.LengthBuckets = []int{3, 6}
+	evaluator := &scriptedClassificationEvaluator{
+		losses: []float32{0.25, 0.5},
+		logits: [][]float32{
+			{3, 0, 0, 3, 3, 0, 0, 3},
+			{3, 0, 0, 3},
+		},
+	}
+	validThree := make([]float32, 12)
+	for i := range validThree {
+		validThree[i] = 1
+	}
+	validSix := make([]float32, 12)
+	for i := range validSix {
+		validSix[i] = 1
+	}
+	valSet := &data.ValSet{Batches: []data.ValBatch{
+		{X: make([]int, 12), Y: make([]int, 12), Labels: []int32{0, 1, 0, 1}, ValidMask: validThree,
+			ExampleMask: []float32{1, 1, 1, 1}, BatchSize: 4, SeqLen: 3, ExampleCount: 4},
+		{X: make([]int, 12), Y: make([]int, 12), Labels: []int32{0, 1}, ValidMask: validSix,
+			ExampleMask: []float32{1, 0}, BatchSize: 2, SeqLen: 6, ExampleCount: 1},
+	}}
+	var shapes [][2]int
+	runShape := func(batchSize, seqLen int, fn func() error) error {
+		shapes = append(shapes, [2]int{batchSize, seqLen})
+		return fn()
+	}
+	metrics, err := evaluateClassificationValidationWithShapeRunner(cfg, valSet, evaluator, 0, 2, 6, nil, runShape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(shapes, [][2]int{{4, 3}, {2, 6}}) || metrics.Examples != 5 || metrics.Accuracy != 1 {
+		t.Fatalf("shapes=%v metrics=%+v", shapes, metrics)
+	}
+}
+
 func TestClassificationValidationWithoutPredictionOutputMatchesMetricsOnly(t *testing.T) {
 	cfg := nativeClassificationTestConfig()
 	valSet := &data.ValSet{

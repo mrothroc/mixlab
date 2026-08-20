@@ -119,7 +119,7 @@ func TestNativeClassificationValidationAcceptsPartialFinalBatch(t *testing.T) {
 		},
 	}
 	var predictions bytes.Buffer
-	metrics, err := evaluateClassificationValidationWithPredictions(cfg, valSet, trainer, 0, 2, 6, &predictions)
+	metrics, err := evaluateClassificationValidationWithTrainer(cfg, valSet, trainer, 0, 2, 6, &predictions, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

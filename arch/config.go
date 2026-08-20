@@ -395,6 +395,7 @@ type TrainingSpec struct {
 	LAMBTrustRatioCap                 float32                      `json:"lamb_trust_ratio_cap"`
 	Seed                              int64                        `json:"seed"`
 	BatchTokens                       int                          `json:"batch_tokens"`
+	LengthBuckets                     []int                        `json:"length_buckets,omitempty"`
 	ShuffleChunkTokens                int                          `json:"shuffle_chunk_tokens,omitempty"`
 	ReverseComplementProb             float64                      `json:"reverse_complement_prob,omitempty"`
 	EmbedLR                           float32                      `json:"embed_lr,omitempty"`

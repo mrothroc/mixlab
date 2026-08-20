@@ -77,6 +77,10 @@ linears and the first-linear bias use PyTorch fan-in uniform initialization.
 Set `training.classification.bias: false` for a DASB-style bias-free output
 linear; classifier bias otherwise defaults to `true`.
 
+For skewed valid lengths, set `training.length_buckets` to slice each batch to
+the smallest configured width that fits its records. See
+[Length-bucketed classification](config-training.md#length-bucketed-classification).
+
 V1 supports native single-label classification only. Token feature channels,
 LM objectives, framing, segment masks, reverse-complement features, generation,
 and Hugging Face export are rejected explicitly. Valid lengths affect temporal
@@ -89,4 +93,3 @@ Run it with `--check` to re-verify the checked-in values without rewriting
 them, or `--output <path>` to regenerate. The fixture values are bit-identical
 across interpreter versions, so `--check` compares them while ignoring the
 recorded runtime comment.
-

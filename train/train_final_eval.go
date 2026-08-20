@@ -19,13 +19,13 @@ func computeFinalTrainingLoss(
 	switch {
 	case cfg.ClassificationEnabled():
 		var err error
-		finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveClassification, seqLen)
+		finalEvalBatch, err = prepareObjectiveBatchWithShape(cfg, lastTrainBatch, steps, arch.ObjectiveClassification, batchSize, seqLen)
 		if err != nil {
 			return 0, fmt.Errorf("prepare final classification training loss batch: %w", err)
 		}
 	case cfg.Training.MultiheadEnabled():
 		var err error
-		finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveMultihead, seqLen)
+		finalEvalBatch, err = prepareObjectiveBatchWithShape(cfg, lastTrainBatch, steps, arch.ObjectiveMultihead, batchSize, seqLen)
 		if err != nil {
 			return 0, fmt.Errorf("prepare final multihead training loss batch: %w", err)
 		}
@@ -43,7 +43,7 @@ func computeFinalTrainingLoss(
 		}
 	case cfg.Training.ExampleFramingEnabled() || cfg.Training.DatasetSequencePacking || cfg.Training.RecordFramingEnabled():
 		var err error
-		finalEvalBatch, err = prepareObjectiveBatchWithSeqLen(cfg, lastTrainBatch, steps, arch.ObjectiveCausal, seqLen)
+		finalEvalBatch, err = prepareObjectiveBatchWithShape(cfg, lastTrainBatch, steps, arch.ObjectiveCausal, batchSize, seqLen)
 		if err != nil {
 			return 0, fmt.Errorf("prepare final framed training loss batch: %w", err)
 		}
@@ -90,15 +90,18 @@ func runFullEvaluation(
 			fmt.Printf("  [%s] native classification evaluation failed: validation set is unavailable\n", name)
 			return
 		}
-		evalKey := currentProgramKey
-		evalKey.dropoutInactive = true
-		if err := causalEval.withProgramKey(currentProgramKey, evalKey, func() error {
-			metrics, evalErr := evaluateClassificationValidation(cfg, valSet, trainer, steps, batchSize, seqLen)
-			if evalErr == nil {
-				fmt.Printf("  [%s] classification validation: %s examples=%d\n", name, metrics.summary(), metrics.Examples)
-			}
-			return evalErr
-		}); err != nil {
+		runShape := func(evalBatchSize, evalSeqLen int, fn func() error) error {
+			evalKey := currentProgramKey
+			evalKey.dropoutInactive = true
+			evalKey.batchSize = evalBatchSize
+			evalKey.seqLen = evalSeqLen
+			return causalEval.withProgramKey(currentProgramKey, evalKey, fn)
+		}
+		metrics, err := evaluateClassificationValidationWithTrainer(cfg, valSet, trainer, steps, batchSize, seqLen, nil, runShape)
+		if err == nil {
+			fmt.Printf("  [%s] classification validation: %s examples=%d\n", name, metrics.summary(), metrics.Examples)
+		}
+		if err != nil {
 			fmt.Printf("  [%s] native classification evaluation failed: %v\n", name, err)
 		}
 	case cfg.Training.MultiheadEnabled():

@@ -96,6 +96,9 @@ func classificationWeightShapes(modelDim int, spec *ClassificationSpec) []Weight
 
 func validateTrainingClassification(cfg *ArchConfig, source string) error {
 	t := &cfg.Training
+	if err := validateLengthBuckets(cfg, source); err != nil {
+		return err
+	}
 	if t.EffectiveObjective() != ObjectiveClassification {
 		if t.Classification != nil {
 			return fmt.Errorf("config %q sets training.classification but training.objective=%q; classification settings require objective=%q", source, t.EffectiveObjective(), ObjectiveClassification)

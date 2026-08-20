@@ -277,6 +277,18 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 			Name: "classification_labels", DType: gpu.TensorInt32, Shape: []int{batchSize}, Data: t.classificationLabelBuf[:batchSize],
 		})
 	}
+	if t.classificationRowMaskInput {
+		if len(batch.classificationRowMask) < batchSize {
+			return nil, fmt.Errorf("objective batch missing classification_example_mask: got=%d need=%d", len(batch.classificationRowMask), batchSize)
+		}
+		if len(t.classificationRowMaskBuf) < batchSize {
+			t.classificationRowMaskBuf = make([]float32, batchSize)
+		}
+		copy(t.classificationRowMaskBuf[:batchSize], batch.classificationRowMask[:batchSize])
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "classification_example_mask", DType: gpu.TensorFloat32, Shape: []int{batchSize}, Data: t.classificationRowMaskBuf[:batchSize],
+		})
+	}
 	if t.classificationMaskInput {
 		if len(batch.classificationMask) < need {
 			return nil, fmt.Errorf("objective batch missing classification_valid_mask: got=%d need=%d", len(batch.classificationMask), need)
