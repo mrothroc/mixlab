@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mrothroc/mixlab/arch"
 )
 
 func TestExportHFMamba3TemplateContainsCanonicalScan(t *testing.T) {
@@ -155,6 +157,25 @@ func TestExportHFMamba3WithoutShortConv(t *testing.T) {
 	}
 	if _, ok := blocks[0]["conv_kernel"]; ok {
 		t.Fatal("no-conv Mamba-3 config unexpectedly exports conv_kernel")
+	}
+}
+
+func TestExportHFBidirectionalMamba3IsExplicitlyNativeOnly(t *testing.T) {
+	useConv := false
+	cfg := &ArchConfig{
+		ModelDim: 8, VocabSize: 13, SeqLen: 4,
+		Blocks: []BlockSpec{{
+			Type: "mamba3-canonical", InnerDim: 8, StateSize: 4, NGroups: 2, DTRank: 2,
+			UseConv: &useConv, Bidirectional: true,
+		}},
+		Training: TrainingSpec{
+			Objective: arch.ObjectiveClassification, Classification: &arch.ClassificationSpec{NumLabels: 2}, Steps: 1, BatchTokens: 4,
+		},
+	}
+	parsed := parseHFTestConfig(t, cfg)
+	err := validateHFExportConfig(parsed)
+	if err == nil || !strings.Contains(err.Error(), "valid-prefix reversal") {
+		t.Fatalf("validateHFExportConfig error=%v want valid-prefix reversal parity error", err)
 	}
 }
 

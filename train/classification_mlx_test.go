@@ -21,6 +21,8 @@ func TestNativeClassificationTinyTrainingPlainAndRecurrent(t *testing.T) {
 	for _, block := range []string{
 		`{"type":"plain","heads":2}`,
 		`{"type":"gated_deltanet","heads":2,"d_k":4}`,
+		`{"type":"gated_deltanet","heads":2,"d_k":4,"bidirectional":true}`,
+		`{"type":"mamba3-canonical","inner_dim":8,"state_size":4,"n_groups":2,"dt_rank":2,"use_conv":false,"bidirectional":true}`,
 	} {
 		t.Run(block, func(t *testing.T) {
 			raw := fmt.Sprintf(`{
@@ -89,6 +91,136 @@ func TestNativeClassificationTinyTrainingPlainAndRecurrent(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBidirectionalRecurrentClassificationPaddingInvariance(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	for _, block := range []string{
+		`{"type":"gated_deltanet","heads":2,"d_k":2,"d_v":4,"bidirectional":true}`,
+		`{"type":"mamba3-canonical","inner_dim":8,"state_size":4,"n_groups":2,"dt_rank":2,"use_conv":false,"bidirectional":true}`,
+		`{"type":"s4d","state_size":4,"bidirectional":true}`,
+	} {
+		t.Run(block, func(t *testing.T) {
+			shortCfg := bidirectionalClassificationMLXConfig(t, block, 4)
+			longCfg := bidirectionalClassificationMLXConfig(t, block, 6)
+			shortShapes, err := computeWeightShapes(shortCfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			longShapes, err := computeWeightShapes(longCfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(shortShapes) != len(longShapes) {
+				t.Fatalf("weight count changes with padding: short=%d long=%d", len(shortShapes), len(longShapes))
+			}
+			weights := initWeightData(shortShapes, 23, shortCfg.Training.WeightInit, shortCfg.Training.WeightInitStd)
+			shortHidden, shortLogits := evaluateBidirectionalOutputs(t, shortCfg, weights, []int{1, 2, 3, 4}, []float32{1, 1, 1, 1})
+			longHidden, longLogits := evaluateBidirectionalOutputs(t, longCfg, weights, []int{1, 2, 3, 4, 7, 6}, []float32{1, 1, 1, 1, 0, 0})
+			if diff := maxAbsDiffBidirectional(shortLogits, longLogits); diff > 2e-4 {
+				t.Fatalf("classification logits changed with right padding: diff=%g short=%v long=%v", diff, shortLogits, longLogits)
+			}
+			for i := 0; i < 4*shortCfg.ModelDim; i++ {
+				if diff := math.Abs(float64(shortHidden[i] - longHidden[i])); diff > 2e-4 {
+					t.Fatalf("valid-prefix hidden[%d] differs with right padding: short=%g long=%g diff=%g", i, shortHidden[i], longHidden[i], diff)
+				}
+			}
+			for i := 4 * longCfg.ModelDim; i < len(longHidden); i++ {
+				if longHidden[i] != 0 {
+					t.Fatalf("padded hidden[%d]=%g want zero", i, longHidden[i])
+				}
+			}
+		})
+	}
+}
+
+func TestBidirectionalRecurrentMixerUsesFutureContext(t *testing.T) {
+	if !mlxAvailable() {
+		t.Skip("MLX backend not available")
+	}
+	for _, baseBlock := range []string{
+		`{"type":"gated_deltanet","heads":2,"d_k":2,"d_v":4`,
+		`{"type":"mamba3-canonical","inner_dim":8,"state_size":4,"n_groups":2,"dt_rank":2,"use_conv":false`,
+	} {
+		t.Run(baseBlock, func(t *testing.T) {
+			causalCfg := bidirectionalClassificationMLXConfig(t, baseBlock+`}`, 4)
+			bidirectionalCfg := bidirectionalClassificationMLXConfig(t, baseBlock+`,"bidirectional":true}`, 4)
+			shapes, err := computeWeightShapes(causalCfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			weights := initWeightData(shapes, 31, causalCfg.Training.WeightInit, causalCfg.Training.WeightInitStd)
+			mask := []float32{1, 1, 1, 1}
+			first := []int{1, 2, 3, 4}
+			changedFuture := []int{1, 2, 3, 7}
+			causalA, _ := evaluateBidirectionalOutputs(t, causalCfg, weights, first, mask)
+			causalB, _ := evaluateBidirectionalOutputs(t, causalCfg, weights, changedFuture, mask)
+			if diff := maxAbsDiffBidirectional(causalA[:causalCfg.ModelDim], causalB[:causalCfg.ModelDim]); diff > 1e-6 {
+				t.Fatalf("causal first position changed from a future token: diff=%g", diff)
+			}
+			bidirA, _ := evaluateBidirectionalOutputs(t, bidirectionalCfg, weights, first, mask)
+			bidirB, _ := evaluateBidirectionalOutputs(t, bidirectionalCfg, weights, changedFuture, mask)
+			if diff := maxAbsDiffBidirectional(bidirA[:bidirectionalCfg.ModelDim], bidirB[:bidirectionalCfg.ModelDim]); diff < 1e-7 {
+				t.Fatalf("bidirectional first position did not respond to a future token: diff=%g", diff)
+			}
+		})
+	}
+}
+
+func bidirectionalClassificationMLXConfig(t *testing.T, block string, seqLen int) *ArchConfig {
+	t.Helper()
+	raw := fmt.Sprintf(`{
+		"model_dim":8,"vocab_size":8,"seq_len":%d,"positional_embedding":"none",
+		"blocks":[%s],
+		"training":{"objective":"classification","classification":{"num_labels":2,"pooling":"mean","classifier_dropout":0},"optimizer":"adamw","steps":2,"lr":0.001,"grad_clip":1,"weight_decay":0,"seed":23,"batch_tokens":%d}
+	}`, seqLen, block, seqLen)
+	cfg, err := ParseArchConfig([]byte(raw), t.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func evaluateBidirectionalOutputs(t *testing.T, cfg *ArchConfig, weights [][]float32, tokens []int, validMask []float32) ([]float32, []float32) {
+	t.Helper()
+	prog, err := BuildEvalIRProgramFromConfig(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainerInterface, err := initGPUTrainer(prog, cfg, weights, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trainer := trainerInterface.(*mlxGPUTrainer)
+	defer trainer.CloseTrainer()
+	batch := objectiveBatch{
+		x: tokens, classificationLabels: []int32{0}, classificationMask: validMask,
+	}
+	if _, err := trainer.EvaluateObjectiveGPUWithOutputs(batch, 1, cfg.SeqLen, []string{"x_hidden", "classification_logits"}); err != nil {
+		t.Fatal(err)
+	}
+	hidden, err := readTrainerOutput(trainer, "x_hidden", []int{1, cfg.SeqLen, cfg.ModelDim})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logits, err := readTrainerOutput(trainer, "classification_logits", []int{1, cfg.Training.Classification.NumLabels})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return hidden, logits
+}
+
+func maxAbsDiffBidirectional(a, b []float32) float32 {
+	var max float32
+	for i := range a {
+		diff := float32(math.Abs(float64(a[i] - b[i])))
+		if diff > max {
+			max = diff
+		}
+	}
+	return max
 }
 
 func TestNativeClassificationValidationAcceptsPartialFinalBatch(t *testing.T) {

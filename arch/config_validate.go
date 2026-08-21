@@ -243,15 +243,15 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		if strings.TrimSpace(b.Init) != "" {
 			return fmt.Errorf("config %q %s[%d] init is valid only for type=s4d", source, groupName, idx)
 		}
-		if b.Bidirectional {
-			return fmt.Errorf("config %q %s[%d] bidirectional is valid only for type=s4d", source, groupName, idx)
-		}
 		if strings.TrimSpace(b.OutputTransform) != "" {
 			return fmt.Errorf("config %q %s[%d] output_transform is valid only for type=s4d", source, groupName, idx)
 		}
 		if b.NSSM != 0 || strings.TrimSpace(b.Discretization) != "" || b.TrainableB || b.StateLR != nil || b.TieDropout {
 			return fmt.Errorf("config %q %s[%d] n_ssm, discretization, trainable_b, state_lr, and tie_dropout are valid only for type=s4d", source, groupName, idx)
 		}
+	}
+	if b.Bidirectional && !supportsBidirectionalMixer(b) {
+		return fmt.Errorf("config %q %s[%d] bidirectional is supported only for type=s4d, type=mamba3-canonical, or type=gated_deltanet", source, groupName, idx)
 	}
 	switch b.Type {
 	case "mamba":

@@ -105,6 +105,7 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"DistillationKL", ir.OpDistillationKL, OpDistillationKL},
 		{"S4D", ir.OpS4D, OpS4D},
 		{"CodebookOffset", ir.OpCodebookOffset, OpCodebookOffset},
+		{"ReverseValidPrefix", ir.OpReverseValidPrefix, OpReverseValidPrefix},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

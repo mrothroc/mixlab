@@ -573,6 +573,7 @@ Optional fields:
 - `scan_chunk_size` — exact affine scan chunk size; defaults to `64`. `0` uses the original full-sequence parallel scan, mainly for debugging.
 - `dt_min` — lower initialization bound for the learned time step; defaults to `0.001`.
 - `dt_max` — upper initialization bound for the learned time step; defaults to `0.1` and must be greater than `dt_min`.
+- `bidirectional` — shared-weight two-direction mixing for classification, MLM, or MNTP. Mixlab reverses only each row's valid prefix, sums forward and backward deltas, and adds the residual once. Parameter count is unchanged and mixer FLOPs are approximately doubled. Native-only in v1.
 
 Example:
 
@@ -622,6 +623,9 @@ Optional fields:
   tensors while sharing `A`, `B`, and `dt`. The two length-`T` kernels are
   combined into the official length-`2T` circular FFT kernel, including its
   one-position reverse offset. Output width remains `model_dim`.
+  Bidirectional S4D is accepted only for classification, MLM, or MNTP; causal
+  objectives reject it to prevent future-token leakage. Padded classification
+  inputs are masked before convolution and after the residual path.
 - `n_ssm` - independent `A`/`B` groups. Omitted uses one group per model
   channel, preserving the legacy layout. Must divide `model_dim`. Shared groups
   follow the upstream interleaved channel mapping `channel % n_ssm`.
@@ -721,6 +725,7 @@ Optional fields:
 - `d_v` — value dim per head. Defaults to `2 * d_k`. Total value dim is `heads * d_v`.
 - `kv_share` — when `true` (default), the K and V projections share a single `[D, heads*d_v]` weight (V projection is reused for K, with `d_v >= d_k` required). When `false`, K and V get separate projections of width `heads*d_k` and `heads*d_v` respectively. The shared form is the recipe used by Yang et al. and saves one projection matrix per block.
 - `scan_chunk_size` — chunk size for the chunked delta scan. When omitted, defaults to `64`, the Metal-tested safe chunk width. `0` explicitly uses the naive per-step scan (slower but simpler; useful for debugging). Positive values enable the chunked scan with the custom CUDA kernel when available on CUDA; larger values such as `128` or `256` are explicit performance experiments until validated on the target backend. Must be `>= 0`.
+- `bidirectional` — shared-weight two-direction mixing for classification, MLM, or MNTP. The valid prefix is reversed per row, both recurrent deltas are summed, and padding is zeroed before the next block. Parameter count is unchanged and mixer FLOPs are approximately doubled. Native-only in v1.
 - `parallel_residual` — when `true`, fuses this block with the immediately following `swiglu` block into a parallel residual pair. See [`parallel_residual`](#parallel_residual).
 
 Example:
@@ -1240,10 +1245,11 @@ as a warm-startable prefix. Its two appended weights are
 `head_classifier_proj: [model_dim, num_labels]` and
 `head_classifier_bias: [num_labels]`. The bias initializes to zero.
 
-`training.classification.pooling` defaults to `"mean"` for a stack whose token
-mixers are all bidirectional `plain` attention and to `"last"` for causal,
-recurrent, SSM, or mixed stacks. Mean pooling uses the validity-mask-weighted
-mean. Last pooling selects the final non-padding token. Both reject empty rows.
+`training.classification.pooling` defaults to `"mean"` when every token mixer
+is bidirectional, including bidirectional `plain`, `s4d`, `mamba3-canonical`,
+and `gated_deltanet` blocks. It defaults to `"last"` for causal or mixed stacks.
+Mean pooling uses the validity-mask-weighted mean. Last pooling selects the
+final non-padding token. Both reject empty rows.
 `classifier_dropout` defaults to top-level `hidden_dropout`.
 
 The classifier projection follows the model-wide `training.weight_init`

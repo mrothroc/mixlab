@@ -581,6 +581,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	default:
 		prog.DeclareInput("tokens", TensorInt32, []int{B, T})
 	}
+	if rootObjective == ObjectiveClassification && containsBidirectionalMixer(blocks) {
+		prog.DeclareInput(sequenceValidMaskInput, TensorFloat32, []int{B, T})
+	}
 	if rcEquivariant {
 		prog.DeclareInput("rc_tokens", TensorInt32, []int{B, T})
 		prog.DeclareInput("rc_alignment_positions", TensorInt32, []int{B * T})
@@ -701,6 +704,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	if rcEquivariant && segmentAttentionMask {
 		prog.Concat("segment_ids", "segment_ids", 0, "segment_ids")
+	}
+	if rcEquivariant && programDeclaresInput(prog, sequenceValidMaskInput) {
+		prog.Concat(sequenceValidMaskInput, sequenceValidMaskInput, 0, sequenceValidMaskInput)
 	}
 	layerAgg := newLayerAggregationBuildState(prog, layerAggregation, layerAggregationWeightStart, "x")
 

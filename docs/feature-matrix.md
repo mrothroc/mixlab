@@ -60,6 +60,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Character, bigram, trigram features | Adds token-derived embedding channels | Character features require `char_features.bin` | [char_features_plain.json](../examples/char_features_plain.json) |
 | SWA/EMA checkpoints | Writes live and averaged weights | Configure start, decay, and interval | [swa_ema_tiny.json](../examples/swa_ema_tiny.json) |
 | BatchNorm running statistics | Native fixed-shape classification | Affine pre-norm only; padded records, recurrence, SWA, eval TTT, and HF export are gated | [continuous_s4d_batchnorm_reference_tiny.json](../examples/continuous_s4d_batchnorm_reference_tiny.json) |
+| Bidirectional recurrent mixing | Shared-weight forward/backward Mamba-3 canonical or Gated DeltaNet; established dual-C S4D path | Classification, MLM, or MNTP only; packed segments and causal objectives reject | [sequence_classification_bidirectional_mamba3_tiny.json](../examples/sequence_classification_bidirectional_mamba3_tiny.json) |
 
 Training-only features do not run during native generation or ordinary HF
 inference unless the exported model surface explicitly requires their weights.

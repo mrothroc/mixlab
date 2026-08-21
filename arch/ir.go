@@ -112,6 +112,8 @@ const OpBatchNorm = 106 // OP_BATCHNORM
 
 const OpCodebookOffset = 107 // OP_CODEBOOK_OFFSET
 
+const OpReverseValidPrefix = 108 // OP_REVERSE_VALID_PREFIX
+
 const (
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1
@@ -180,6 +182,13 @@ func (p *Program) Embed(table, indices, output string) {
 // integer arithmetic, producing collision-free indices into one shared table.
 func (p *Program) CodebookOffset(tokens string, numCodebooks, vocabSize int, output string) {
 	p.AddOp(OpCodebookOffset, []string{tokens}, []string{output}, nil, []int{numCodebooks, vocabSize})
+}
+
+// ReverseValidPrefix reverses the valid right-padded prefix of each [B,T,D]
+// sequence represented by a flattened [B*T,D] tensor. Invalid suffix rows are
+// zeroed in the output.
+func (p *Program) ReverseValidPrefix(input, validMask, output string, B, T int) {
+	p.AddOp(OpReverseValidPrefix, []string{input, validMask}, []string{output}, nil, []int{B, T})
 }
 
 // MatMul emits a matrix multiply: output = a @ b.

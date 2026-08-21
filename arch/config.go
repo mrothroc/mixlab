@@ -204,7 +204,7 @@ type BlockSpec struct {
 	Init                              string       `json:"init,omitempty"`                                // S4D initialization; v1 supports "s4d-lin".
 	FreqScale                         *float64     `json:"freq_scale,omitempty"`                          // S4D-Lin imaginary-pole initialization scale; defaults to 1.
 	SobolevFilter                     *S4DSobolev  `json:"sobolev_filter,omitempty"`                      // S4D trainable frequency-domain transfer-function filter.
-	Bidirectional                     bool         `json:"bidirectional,omitempty"`                       // S4D reserved direction flag; v1 supports unidirectional only.
+	Bidirectional                     bool         `json:"bidirectional,omitempty"`                       // Recurrent mixer: process both directions; supported by s4d, mamba3-canonical, and gated_deltanet.
 	NSSM                              int          `json:"n_ssm,omitempty"`                               // S4D independent A/B groups; defaults to model_dim.
 	Discretization                    string       `json:"discretization,omitempty"`                      // S4D: "zoh" (default) or "bilinear".
 	TrainableB                        bool         `json:"trainable_b,omitempty"`                         // S4D: learn complex B instead of using fixed ones.
@@ -723,6 +723,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 		return nil, err
 	}
 	if err := validateTrainingObjective(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateBidirectionalMixers(cfg, source); err != nil {
 		return nil, err
 	}
 	if err := validateMetricDrivenLRSchedule(cfg, source); err != nil {

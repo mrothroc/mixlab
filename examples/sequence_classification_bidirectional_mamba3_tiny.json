@@ -1,0 +1,29 @@
+{
+  "name": "sequence_classification_bidirectional_mamba3_tiny",
+  "model_dim": 32,
+  "vocab_size": 9,
+  "seq_len": 64,
+  "positional_embedding": "none",
+  "mlp_mult": 2.0,
+  "tie_embeddings": true,
+  "blocks": [
+    {"type": "mamba3-canonical", "inner_dim": 32, "state_size": 8, "n_groups": 4, "dt_rank": 2, "bidirectional": true},
+    {"type": "swiglu"},
+    {"type": "mamba3-canonical", "inner_dim": 32, "state_size": 8, "n_groups": 4, "dt_rank": 2, "bidirectional": true},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {
+      "num_labels": 2,
+      "classifier_dropout": 0.1
+    },
+    "optimizer": "adamw",
+    "steps": 100,
+    "lr": 0.0003,
+    "grad_clip": 1.0,
+    "weight_decay": 0.01,
+    "batch_tokens": 256,
+    "seed": 42
+  }
+}

@@ -42,7 +42,17 @@ func (s *ClassificationSpec) effectivePooling(blocks []BlockSpec) string {
 			}
 		case "ttt_mlp", "legacy_mamba", "mamba3", "gated_linear_ssm", "rwkv", "retnet",
 			"gated_deltanet", "hgrn2", "mlstm", "s4d":
-			seenCausal = true
+			if block.Bidirectional {
+				seenBidirectional = true
+			} else {
+				seenCausal = true
+			}
+		case "mamba3-canonical":
+			if block.Bidirectional {
+				seenBidirectional = true
+			} else {
+				seenCausal = true
+			}
 		}
 	}
 	if seenBidirectional && !seenCausal {

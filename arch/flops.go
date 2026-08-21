@@ -365,6 +365,12 @@ func estimateBlockFLOPs(block BlockSpec, B, T, D, V, ffn int, mlpMult float64, b
 		return estimateTTTMLPBlockFLOPs(block, B, T, D)
 	case "s4d":
 		return estimateS4DBlockFLOPs(block, B, T, D)
+	case "mamba3-canonical", "gated_deltanet":
+		flops := estimateWeightShapeFLOPs(block, B, T, D, V, mlpMult, blockScales, residMix)
+		if block.Bidirectional {
+			return 2 * flops
+		}
+		return flops
 	default:
 		return estimateWeightShapeFLOPs(block, B, T, D, V, mlpMult, blockScales, residMix)
 	}
@@ -397,6 +403,12 @@ func estimateS4DBlockFLOPs(block BlockSpec, B, T, D int) int64 {
 	if effectiveS4DOutputTransform(block) == S4DOutputTransformGLU {
 		pointwise += 4 * i64(B) * i64(T) * i64(D) * i64(D)
 		pointwise += 2 * i64(B) * i64(T) * i64(D)
+	}
+	if block.Bidirectional {
+		// The backward kernel shares the input transform and output projection,
+		// but adds another kernel materialization and convolution branch.
+		kernel *= 2
+		fft += 5 * i64(fftLen) * i64(logFFT) * i64(D) * i64(B+1)
 	}
 	return kernel + fft + pointwise
 }

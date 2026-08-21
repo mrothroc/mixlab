@@ -216,6 +216,7 @@ func emitS4DIR(
 	gluOut := prefix + "_glu_out"
 
 	input := stream
+	residualInput := stream
 	if placement == NormPlacementPre || placement == NormPlacementSandwich {
 		var err error
 		wi, err = emitNamedNormIR(prog, stream, wi, xNorm, norm)
@@ -223,6 +224,20 @@ func emitS4DIR(
 			return wi, err
 		}
 		input = xNorm
+	}
+	validMask := ""
+	if spec.Bidirectional {
+		validMask = bidirectionalValidMask(prog, B, T, prefix)
+		validResidual := prefix + "_valid_residual"
+		maskSequenceValidIR(prog, stream, validMask, validResidual, B, T)
+		residualInput = validResidual
+		if input == stream {
+			input = validResidual
+		} else {
+			validInput := prefix + "_valid_input"
+			maskSequenceValidIR(prog, input, validMask, validInput, B, T)
+			input = validInput
+		}
 	}
 	emitSobolevBeta := func() string {
 		raw := weightName(wi)
@@ -353,15 +368,27 @@ func emitS4DIR(
 		delta = dropped
 	}
 	if placement == NormPlacementPostResidual {
-		prog.Add(stream, delta, residual)
+		prog.Add(residualInput, delta, residual)
+		postResidualOutput := stream
+		if spec.Bidirectional {
+			postResidualOutput = prefix + "_post_residual_output"
+		}
 		var err error
-		wi, err = emitNamedNormIR(prog, residual, wi, stream, norm)
+		wi, err = emitNamedNormIR(prog, residual, wi, postResidualOutput, norm)
 		if err != nil {
 			return wi, err
 		}
+		if spec.Bidirectional {
+			maskSequenceValidIR(prog, postResidualOutput, validMask, stream, B, T)
+		}
 		return wi, nil
 	}
-	prog.Add(stream, delta, stream)
+	if spec.Bidirectional {
+		prog.Add(residualInput, delta, residual)
+		maskSequenceValidIR(prog, residual, validMask, stream, B, T)
+	} else {
+		prog.Add(stream, delta, stream)
+	}
 	return wi, nil
 }
 

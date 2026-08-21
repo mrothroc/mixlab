@@ -134,6 +134,9 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 				return err
 			}
 		case "mamba3-canonical":
+			if block.Bidirectional {
+				return unsupportedHFExport(field+".bidirectional", "bidirectional mamba3-canonical export is native-only until valid-prefix reversal has PyTorch parity coverage")
+			}
 			if err := validateHFMamba3CanonicalComposition(cfg, field); err != nil {
 				return err
 			}

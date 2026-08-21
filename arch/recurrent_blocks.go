@@ -289,7 +289,7 @@ func effectiveMamba3CanonicalScanChunkSize(spec BlockSpec) int {
 //	w[...]   = post_norm_scale      [inner]          pre-gate output RMSNorm
 //	w[...]   = W_Z                  [D, inner]       residual gate projection
 //	w[...]   = W_O                  [inner, D]       output projection
-func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, scanChunkSize, T, B int) (int, error) {
+func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, scanChunkSize, T, B, idx int, bidirectional bool) (int, error) {
 	if inner <= 0 {
 		return wi, fmt.Errorf("mamba3-canonical inner_dim must be > 0, got %d", inner)
 	}
@@ -325,7 +325,37 @@ func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroup
 	for ; wi < base+mamba3CanonicalWeightCount(useConv); wi++ {
 		blockInputs = append(blockInputs, weightName(wi))
 	}
-	prog.Mamba3CanonicalBlock(blockInputs, x, B, T, useConv, scanChunkSize)
+	if !bidirectional {
+		prog.Mamba3CanonicalBlock(blockInputs, x, B, T, useConv, scanChunkSize)
+		return wi, nil
+	}
+
+	prefix := tmpName(x+"_mamba3_bidirectional", idx)
+	validMask := bidirectionalValidMask(prog, B, T, prefix)
+	validX := prefix + "_valid_x"
+	maskSequenceValidIR(prog, x, validMask, validX, B, T)
+	weights := blockInputs[1:]
+	forwardState := prefix + "_forward_state"
+	forwardInputs := append([]string{validX}, weights...)
+	prog.Mamba3CanonicalBlock(forwardInputs, forwardState, B, T, useConv, scanChunkSize)
+	forwardDelta := prefix + "_forward_delta"
+	prog.Sub(forwardState, validX, forwardDelta)
+
+	reversedInput := prefix + "_reversed_input"
+	prog.ReverseValidPrefix(validX, validMask, reversedInput, B, T)
+	backwardState := prefix + "_backward_state"
+	backwardInputs := append([]string{reversedInput}, weights...)
+	prog.Mamba3CanonicalBlock(backwardInputs, backwardState, B, T, useConv, scanChunkSize)
+	backwardDeltaReversed := prefix + "_backward_delta_reversed"
+	prog.Sub(backwardState, reversedInput, backwardDeltaReversed)
+	backwardDelta := prefix + "_backward_delta"
+	prog.ReverseValidPrefix(backwardDeltaReversed, validMask, backwardDelta, B, T)
+
+	combinedDelta := prefix + "_combined_delta"
+	combinedState := prefix + "_combined_state"
+	prog.Add(forwardDelta, backwardDelta, combinedDelta)
+	prog.Add(validX, combinedDelta, combinedState)
+	maskSequenceValidIR(prog, combinedState, validMask, x, B, T)
 	return wi, nil
 }
 

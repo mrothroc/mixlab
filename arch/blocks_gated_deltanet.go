@@ -106,6 +106,42 @@ func emitGatedDeltaNetIRWithScales(prog *Program, spec BlockSpec, x string, wi, 
 	xNorm := prefix + "_x_norm"
 	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
 	wi++
+	if spec.Bidirectional {
+		validMask := bidirectionalValidMask(prog, B, T, prefix)
+		validX := prefix + "_valid_x"
+		validNorm := prefix + "_valid_norm"
+		maskSequenceValidIR(prog, x, validMask, validX, B, T)
+		maskSequenceValidIR(prog, xNorm, validMask, validNorm, B, T)
+		baseWI := wi
+		forward, nextWI, err := emitGatedDeltaNetDeltaIR(prog, spec, validNorm, baseWI, T, B, prefix+"_forward")
+		if err != nil {
+			return wi, err
+		}
+		reversedNorm := prefix + "_reversed_norm"
+		prog.ReverseValidPrefix(validNorm, validMask, reversedNorm, B, T)
+		backwardReversed, backwardWI, err := emitGatedDeltaNetDeltaIR(prog, spec, reversedNorm, baseWI, T, B, prefix+"_backward")
+		if err != nil {
+			return wi, err
+		}
+		if backwardWI != nextWI {
+			return wi, fmt.Errorf("gated_deltanet bidirectional branches consumed different weight layouts")
+		}
+		backward := prefix + "_backward_delta"
+		prog.ReverseValidPrefix(backwardReversed, validMask, backward, B, T)
+		out := prefix + "_combined_delta"
+		prog.Add(forward, backward, out)
+		wi = nextWI
+		if residualScaleRequested(spec, blockScales) {
+			scaled := prefix + "_scaled"
+			prog.Mul(out, weightName(wi), scaled)
+			wi++
+			out = scaled
+		}
+		state := prefix + "_state"
+		prog.Add(validX, out, state)
+		maskSequenceValidIR(prog, state, validMask, x, B, T)
+		return wi, nil
+	}
 
 	out, wi, err := emitGatedDeltaNetDeltaIR(prog, spec, xNorm, wi, T, B, prefix)
 	if err != nil {
@@ -122,6 +158,39 @@ func emitGatedDeltaNetIRWithScales(prog *Program, spec BlockSpec, x string, wi, 
 }
 
 func emitGatedDeltaNetParallelDeltaIR(prog *Program, spec BlockSpec, xNorm string, wi, T, B int, prefix string, blockScales bool) (string, int, error) {
+	if spec.Bidirectional {
+		validMask := bidirectionalValidMask(prog, B, T, prefix)
+		validNorm := prefix + "_valid_norm"
+		maskSequenceValidIR(prog, xNorm, validMask, validNorm, B, T)
+		baseWI := wi
+		forward, nextWI, err := emitGatedDeltaNetDeltaIR(prog, spec, validNorm, baseWI, T, B, prefix+"_forward")
+		if err != nil {
+			return "", wi, err
+		}
+		reversedNorm := prefix + "_reversed_norm"
+		prog.ReverseValidPrefix(validNorm, validMask, reversedNorm, B, T)
+		backwardReversed, backwardWI, err := emitGatedDeltaNetDeltaIR(prog, spec, reversedNorm, baseWI, T, B, prefix+"_backward")
+		if err != nil {
+			return "", wi, err
+		}
+		if backwardWI != nextWI {
+			return "", wi, fmt.Errorf("gated_deltanet bidirectional branches consumed different weight layouts")
+		}
+		backward := prefix + "_backward_delta"
+		prog.ReverseValidPrefix(backwardReversed, validMask, backward, B, T)
+		out := prefix + "_combined_delta"
+		prog.Add(forward, backward, out)
+		wi = nextWI
+		if residualScaleRequested(spec, blockScales) {
+			scaled := prefix + "_scaled"
+			prog.Mul(out, weightName(wi), scaled)
+			wi++
+			out = scaled
+		}
+		masked := prefix + "_masked_delta"
+		maskSequenceValidIR(prog, out, validMask, masked, B, T)
+		return masked, wi, nil
+	}
 	out, wi, err := emitGatedDeltaNetDeltaIR(prog, spec, xNorm, wi, T, B, prefix)
 	if err != nil {
 		return "", wi, err

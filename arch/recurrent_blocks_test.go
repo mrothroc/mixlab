@@ -703,7 +703,7 @@ func TestEmitMamba3IR_OpCounts(t *testing.T) {
 
 func TestEmitMamba3CanonicalIR(t *testing.T) {
 	p := NewProgram(20)
-	wi, err := emitMamba3CanonicalIR(p, "x", 0, 64, 8, 2, 4, 4, true, defaultMamba3CanonicalScanChunkSize, 16, 1)
+	wi, err := emitMamba3CanonicalIR(p, "x", 0, 64, 8, 2, 4, 4, true, defaultMamba3CanonicalScanChunkSize, 16, 1, 0, false)
 	if err != nil {
 		t.Fatalf("emitMamba3CanonicalIR: %v", err)
 	}

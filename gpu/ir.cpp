@@ -3845,6 +3845,35 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, tokens + offsets);
         break;
       }
+      case OP_REVERSE_VALID_PREFIX: {
+        if (op.n_int_params < 2 || op.int_params[0] <= 0 || op.int_params[1] <= 0) {
+          throw std::runtime_error("OP_REVERSE_VALID_PREFIX requires positive B and T");
+        }
+        const int B = op.int_params[0];
+        const int T = op.int_params[1];
+        auto x = get(op, 0);
+        auto valid = mx::greater(get(op, 1), mx::array(0.0f, mx::float32));
+        if (x.ndim() != 2 || x.shape(0) != B * T) {
+          throw std::runtime_error("OP_REVERSE_VALID_PREFIX input must have shape [B*T,D]");
+        }
+        if (valid.ndim() != 2 || valid.shape(0) != B || valid.shape(1) != T) {
+          throw std::runtime_error("OP_REVERSE_VALID_PREFIX mask must have shape [B,T]");
+        }
+        auto lengths = mx::sum(mx::astype(valid, mx::int32), 1, true);
+        auto positions = mx::reshape(mx::arange(0, T, 1, mx::int32), {1, T});
+        auto reverse_positions = lengths - positions - mx::array(1, mx::int32);
+        reverse_positions = mx::minimum(
+            mx::maximum(reverse_positions, mx::array(0, mx::int32)),
+            mx::array(T - 1, mx::int32));
+        auto row_offsets = mx::reshape(
+            mx::arange(0, B, 1, mx::int32) * mx::array(T, mx::int32),
+            {B, 1});
+        auto indices = mx::reshape(row_offsets + reverse_positions, {B * T});
+        auto reversed = mx::take(x, indices, 0);
+        auto flat_valid = mx::reshape(mx::astype(valid, x.dtype()), {B * T, 1});
+        set_out(op, 0, reversed * flat_valid);
+        break;
+      }
       case OP_MATMUL: {
         set_out(op, 0, mx::matmul(get(op, 0), get(op, 1)));
         break;

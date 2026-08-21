@@ -82,6 +82,20 @@ func TestEstimateFLOPsSlidingWindowIsCheaperThanFullAttention(t *testing.T) {
 	}
 }
 
+func TestEstimateBidirectionalRecurrentMixerFLOPsDouble(t *testing.T) {
+	for _, block := range []BlockSpec{
+		{Type: "mamba3-canonical", InnerDim: 8, StateSize: 4, NGroups: 2, DTRank: 2},
+		{Type: "gated_deltanet", Heads: 2, DK: 2, DV: 4},
+	} {
+		unidirectional := estimateBlockFLOPs(block, 2, 4, 8, 32, 16, 2, false, false)
+		block.Bidirectional = true
+		bidirectional := estimateBlockFLOPs(block, 2, 4, 8, 32, 16, 2, false, false)
+		if bidirectional != 2*unidirectional {
+			t.Fatalf("%s bidirectional FLOPs=%d want 2*%d", block.Type, bidirectional, unidirectional)
+		}
+	}
+}
+
 func flopsTestConfig(blocks []BlockSpec) *ArchConfig {
 	return &ArchConfig{
 		Name:      "flops-test",

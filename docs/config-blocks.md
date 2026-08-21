@@ -36,6 +36,31 @@ normally paired with FFN/channel mixers such as `swiglu`, `geglu`, `mlp`, or
 | `perceiver`, `bottleneck`, `cross_attention`, `token_blend` | Specialized mixing/adapter blocks. |
 | `custom` | JSON-declared block using the supported custom op surface. |
 
+## Bidirectional Recurrent Mixers
+
+Set `bidirectional: true` on `mamba3-canonical` or `gated_deltanet` when a
+classification, MLM, or MNTP backbone should use both left and right context.
+Mixlab runs the same recurrent weights over the sequence in both directions
+and combines their deltas with one residual add:
+
+```text
+output = input + forward_delta(input) + reverse(backward_delta(reverse(input)))
+```
+
+For padded classification rows, `reverse` operates only on the valid prefix;
+padding stays at the end and is zeroed between mixer blocks. This keeps the
+parameter count unchanged and approximately doubles mixer compute. `s4d` also
+supports `bidirectional: true`, but retains its established parameterization:
+it shares `A`, `B`, and `dt` while learning separate forward/backward `C`
+tensors.
+
+Bidirectional recurrent mixing is rejected for causal, hybrid, multihead, and
+block-diffusion objectives because it exposes future context. It is also
+rejected for packed segment attention because recurrent state does not reset at
+segment boundaries. Hugging Face export remains gated for bidirectional
+`mamba3-canonical` and `gated_deltanet`; use native Mixlab evaluation for those
+models.
+
 ## `plain` Attention Clusters
 
 `plain` has the largest field surface. Think of it in clusters:

@@ -59,6 +59,7 @@ type mlxGPUTrainer struct {
 	tttInnerLRScaleInput       bool
 	classificationLabelsInput  bool
 	classificationMaskInput    bool
+	sequenceValidMaskInput     bool
 	classificationRowMaskInput bool
 	classificationPosInput     bool
 	batchNorm                  bool
@@ -333,6 +334,7 @@ func initMLXGPUTrainerWithDistributedContext(
 	tttInnerLRScaleInput := false
 	classificationLabelsInput := false
 	classificationMaskInput := false
+	sequenceValidMaskInput := false
 	classificationRowMaskInput := false
 	classificationPosInput := false
 	rcTokensInput := false
@@ -434,6 +436,9 @@ func initMLXGPUTrainerWithDistributedContext(
 		}
 		if inp.Name == "classification_valid_mask" {
 			classificationMaskInput = true
+		}
+		if inp.Name == "sequence_valid_mask" {
+			sequenceValidMaskInput = true
 		}
 		if inp.Name == "classification_example_mask" {
 			classificationRowMaskInput = true
@@ -552,6 +557,7 @@ func initMLXGPUTrainerWithDistributedContext(
 		tttInnerLRScaleInput:        tttInnerLRScaleInput,
 		classificationLabelsInput:   classificationLabelsInput,
 		classificationMaskInput:     classificationMaskInput,
+		sequenceValidMaskInput:      sequenceValidMaskInput,
 		classificationRowMaskInput:  classificationRowMaskInput,
 		batchNorm:                   cfg.EffectiveNormSpec().Type == ir.NormTypeBatchNorm,
 		classificationPosInput:      classificationPosInput,
@@ -830,6 +836,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.codebookCount = 0
 	t.classificationLabelsInput = programDeclaresInput(irProg, "classification_labels")
 	t.classificationMaskInput = programDeclaresInput(irProg, "classification_valid_mask")
+	t.sequenceValidMaskInput = programDeclaresInput(irProg, "sequence_valid_mask")
 	t.classificationRowMaskInput = programDeclaresInput(irProg, "classification_example_mask")
 	t.classificationPosInput = programDeclaresInput(irProg, "classification_positions")
 	t.rcTokensInput = programDeclaresInput(irProg, "rc_tokens")

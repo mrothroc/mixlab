@@ -112,6 +112,7 @@ enum OpType {
   OP_S4D = 105,
   OP_BATCHNORM = 106,
   OP_CODEBOOK_OFFSET = 107,
+  OP_REVERSE_VALID_PREFIX = 108,
 };
 
 struct IRop {
