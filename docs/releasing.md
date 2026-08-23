@@ -107,6 +107,17 @@ printf '>a\nACGT\n>b\nTGCA\n>c\nAAAA\n>d\nCCCC\n' > "$tmpdir/input.fasta"
   `docs/mlx-0.32-upgrade.md` for the dependency and NCCL acceptance contract.
   If verification fails, patch the source for compatibility, force-update the
   tag, refresh the GitHub release notes, and re-verify.
+- **MLX 0.32.1 tightened gather VJP.** `take_along_axis` now raises
+  `[gather_axis] Cannot calculate VJP with respect to indices` instead of
+  silently ignoring the indices operand, which broke every MoE and bf16
+  training path (the router's `argsort` indices trace back to the
+  differentiable probabilities). Fixed by wrapping every `take_along_axis`
+  index argument in `mx::stop_gradient`; indices are discrete, so this is
+  numerically a no-op on 0.32.0 and restores 0.32.1. `Formula/mixlab.rb`
+  declares `depends_on "mlx"` unpinned, so a Homebrew MLX bump reaches users
+  before it reaches any test — and CI cannot see it, because CI builds with
+  `CGO_ENABLED=0` and never links MLX. After any Homebrew MLX upgrade, run the
+  `-tags mlx` suite locally before releasing.
 - **Cloud Build can fail Step 13 with `libcuda.so.1 not found`.** The CUDA driver lib is runtime-provided by NVIDIA Container Toolkit on the GPU host, not present at Cloud Build time. The Dockerfile's `ldd` check excludes it; if you add new ldd-sensitive logic, preserve the `grep -qv 'libcuda\.so\.1'` filter.
 - **GitHub CI doesn't have nvcc.** It builds the binary without CUDA kernels (empty registry) and skips MLX-tagged tests (`CGO_ENABLED=0`). CI green only confirms the Go/C++ wiring compiles. CUDA kernel correctness has to be verified by smoke-testing on RunPod after the new image lands. After Cloud Build, autonomously update the RunPod template image SHA (see `docker/README.md`) and cycle workersMax to force fresh worker pulls.
 

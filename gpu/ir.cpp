@@ -106,7 +106,7 @@ mx::array cross_entropy_mean(const mx::array& logits, const mx::array& targets) 
   auto log_norm = mx::log(mx::sum(mx::exp(shifted), 1, true));
   auto log_probs = shifted - log_norm;
   auto idx = mx::reshape(targets, {targets.shape(0), 1});
-  auto chosen = mx::take_along_axis(log_probs, idx, 1);
+  auto chosen = mx::take_along_axis(log_probs, mx::stop_gradient(idx), 1);
   return -mx::mean(chosen);
 }
 
@@ -117,7 +117,7 @@ mx::array cross_entropy_per_token(const mx::array& logits, const mx::array& targ
   auto log_norm = mx::log(mx::sum(mx::exp(shifted), 1, true));
   auto log_probs = shifted - log_norm;
   auto idx = mx::reshape(targets, {targets.shape(0), 1});
-  auto chosen = mx::take_along_axis(log_probs, idx, 1);
+  auto chosen = mx::take_along_axis(log_probs, mx::stop_gradient(idx), 1);
   return -mx::reshape(chosen, {targets.shape(0)});
 }
 
@@ -526,7 +526,7 @@ SpanPLLPoolResult span_pll_pool(
   auto log_norm = mx::log(mx::sum(mx::exp(shifted), 1, true));
   auto log_probs = shifted - log_norm;
   auto idx = mx::reshape(mx::astype(targets, mx::int32), {targets.shape(0), 1});
-  auto chosen = mx::reshape(mx::take_along_axis(log_probs, idx, 1), {n});
+  auto chosen = mx::reshape(mx::take_along_axis(log_probs, mx::stop_gradient(idx), 1), {n});
   auto mask_bt = mx::astype(
       mx::greater(mx::astype(span_mask, mx::float32), mx::array(0.0f, mx::float32)),
       mx::float32);
@@ -745,7 +745,7 @@ mx::array pll_margin_logits_vjp(
   auto probabilities = exp_shifted / mx::sum(exp_shifted, 1, true);
   auto target_col = mx::reshape(mx::astype(targets, mx::int32), {token_rows, 1});
   auto logprob_grad = -probabilities;
-  auto target_grad = mx::take_along_axis(logprob_grad, target_col, 1) +
+  auto target_grad = mx::take_along_axis(logprob_grad, mx::stop_gradient(target_col), 1) +
       mx::array(1.0f, mx::float32);
   logprob_grad = mx::put_along_axis(logprob_grad, target_col, target_grad, 1);
 
@@ -1004,11 +1004,11 @@ mx::array deberta_relative_bias(
   auto pos_query_t = mx::expand_dims(mx::transpose(pos_query, {0, 2, 1}), 0); // [1,H,D,R]
 
   auto c2p_all = mx::matmul(q, pos_key_t); // [B,H,T,R]
-  auto c2p = mx::take_along_axis(c2p_all, rel_idx, 3);
+  auto c2p = mx::take_along_axis(c2p_all, mx::stop_gradient(rel_idx), 3);
 
   auto p2c_all = mx::matmul(k, pos_query_t);                  // [B,H,T,R]
   auto p2c_by_rel = mx::transpose(p2c_all, {0, 1, 3, 2});      // [B,H,R,T]
-  auto p2c = mx::take_along_axis(p2c_by_rel, rel_idx, 2);      // [B,H,T,T]
+  auto p2c = mx::take_along_axis(p2c_by_rel, mx::stop_gradient(rel_idx), 2);      // [B,H,T,T]
 
   return as_float32(c2p + p2c);
 }
@@ -1108,7 +1108,7 @@ std::tuple<mx::array, mx::array, mx::array> moe_feed_forward(
   auto probs = mx::softmax(logits, -1);
   auto sorted = mx::argsort(-probs, -1);
   auto top_idx = mx::slice(sorted, {0, 0}, {N, top_k});
-  auto top_probs = mx::take_along_axis(probs, top_idx, 1);
+  auto top_probs = mx::take_along_axis(probs, mx::stop_gradient(top_idx), 1);
   auto top_norm = top_probs / mx::maximum(mx::sum(top_probs, 1, true), mx::array(1e-12f, mx::float32));
 
   auto out = mx::zeros({N, D}, mx::float32);
