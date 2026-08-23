@@ -4,6 +4,7 @@
 #include "gated_delta_metal_primitive.h"
 #include "mamba3_cuda_primitive.h"
 #include "mamba3_metal_primitive.h"
+#include "s4d_kernel_metal_primitive.h"
 #include "s4d_sobolev_cuda_primitive.h"
 #include "ttt_mlp_cuda_primitive.h"
 
@@ -2707,18 +2708,14 @@ S4DDiscreteParameters s4d_discretize_advanced(
   };
 }
 
-mx::array s4d_materialize_kernel(
-    const S4DDiscreteParameters& discrete,
-    const mx::array& c_real_raw,
-    const mx::array& c_imag_raw,
-    int D,
-    int T,
-    int state_pairs) {
-  auto c_real = mx::reshape(mx::astype(c_real_raw, mx::float32), {D, state_pairs});
-  auto c_imag = mx::reshape(mx::astype(c_imag_raw, mx::float32), {D, state_pairs});
-  auto gamma_real = c_real * discrete.b_real - c_imag * discrete.b_imag;
-  auto gamma_imag = c_real * discrete.b_imag + c_imag * discrete.b_real;
+struct S4DKernelPowers {
+  mx::array real;
+  mx::array imag;
+};
 
+S4DKernelPowers s4d_materialize_kernel_powers(
+    const S4DDiscreteParameters& discrete,
+    int T) {
   auto positions = mx::reshape(mx::astype(mx::arange(T), mx::float32), {1, 1, T});
   // exp(dt*A)^l = exp(l*Re(dt*A)) * (cos(l*Im(dt*A)) + i*sin(...)).
   // Retaining the pre-exponentiation terms avoids atan2 branch cuts and the
@@ -2726,12 +2723,47 @@ mx::array s4d_materialize_kernel(
   auto magnitude_powers =
       mx::exp(mx::expand_dims(discrete.log_magnitude, 2) * positions);
   auto phases = mx::expand_dims(discrete.phase, 2) * positions;
-  auto power_real = magnitude_powers * mx::cos(phases);
-  auto power_imag = magnitude_powers * mx::sin(phases);
+  return {
+      magnitude_powers * mx::cos(phases),
+      magnitude_powers * mx::sin(phases),
+  };
+}
+
+mx::array s4d_materialize_kernel_from_powers(
+    const S4DDiscreteParameters& discrete,
+    const S4DKernelPowers& powers,
+    const mx::array& c_real_raw,
+    const mx::array& c_imag_raw,
+    int D,
+    int state_pairs) {
+  auto c_real = mx::reshape(mx::astype(c_real_raw, mx::float32), {D, state_pairs});
+  auto c_imag = mx::reshape(mx::astype(c_imag_raw, mx::float32), {D, state_pairs});
+  auto gamma_real = c_real * discrete.b_real - c_imag * discrete.b_imag;
+  auto gamma_imag = c_real * discrete.b_imag + c_imag * discrete.b_real;
   auto terms =
-      mx::expand_dims(gamma_real, 2) * power_real -
-      mx::expand_dims(gamma_imag, 2) * power_imag;
+      mx::expand_dims(gamma_real, 2) * powers.real -
+      mx::expand_dims(gamma_imag, 2) * powers.imag;
   return mx::array(2.0f, mx::float32) * mx::sum(terms, 1);
+}
+
+mx::array s4d_materialize_kernel(
+    const S4DDiscreteParameters& discrete,
+    const mx::array& c_real_raw,
+    const mx::array& c_imag_raw,
+    int D,
+    int T,
+    int state_pairs) {
+  auto powers = s4d_materialize_kernel_powers(discrete, T);
+  return s4d_materialize_kernel_from_powers(
+      discrete, powers, c_real_raw, c_imag_raw, D, state_pairs);
+}
+
+int s4d_linear_convolution_fft_length(int T) {
+  int fft_len = 1;
+  while (fft_len < 2 * T) {
+    fft_len <<= 1;
+  }
+  return fft_len;
 }
 
 mx::array s4d_sobolev_frequency_filter(
@@ -2782,10 +2814,7 @@ mx::array s4d_fft_convolution(
     int T,
     int D) {
   auto x = mx::reshape(mx::astype(x_raw, mx::float32), {B, T, D});
-  int fft_len = 1;
-  while (fft_len < 2 * T) {
-    fft_len <<= 1;
-  }
+  int fft_len = s4d_linear_convolution_fft_length(T);
   auto x_freq = mx::fft::rfft(x, fft_len, 1);
   auto kernel_freq = mx::fft::rfft(kernel, fft_len, 1);
   auto kernel_broadcast = mx::reshape(
@@ -2804,36 +2833,47 @@ mx::array s4d_fft_convolution(
 
 mx::array s4d_fft_convolution_bidirectional(
     const mx::array& x_raw,
-    const mx::array& forward_kernel,
-    const mx::array& backward_kernel,
+    const mx::array& kernel,
     const mx::array& direct_raw,
     const mx::array* sobolev_beta_raw,
     int B,
     int T,
-    int D,
-    mx::array* combined_kernel) {
-  auto reverse_indices = mx::astype(mx::arange(T - 1, -1, -1), mx::int32);
-  auto reversed_backward = mx::take(backward_kernel, reverse_indices, 1);
-  auto zeros = mx::zeros({D, T}, mx::float32);
-  auto kernel =
-      mx::concatenate({forward_kernel, zeros}, 1) +
-      mx::concatenate({zeros, reversed_backward}, 1);
+    int D) {
+  auto forward_kernel = mx::slice(kernel, {0, 0}, {D, T});
+  auto reversed_backward = mx::slice(kernel, {0, T}, {D, 2 * T});
   auto x = mx::reshape(mx::astype(x_raw, mx::float32), {B, T, D});
-  auto x_freq = mx::fft::rfft(x, 2 * T, 1);
-  auto kernel_freq = mx::fft::rfft(kernel, 2 * T, 1);
+  // The unfiltered convolution is invariant to additional zero padding, and
+  // power-of-two FFTs are substantially faster on Metal. The Sobolev operator
+  // is defined in terms of its exact transform length, so retain its historical
+  // 2*T spectrum rather than silently changing trained/configured semantics.
+  int fft_len = sobolev_beta_raw == nullptr
+      ? s4d_linear_convolution_fft_length(T)
+      : 2 * T;
+  // Backward taps represent negative lags and must remain at the end of the
+  // circular FFT buffer. Padding the compact [forward, reverse(backward)]
+  // kernel at its tail would shift those taps to the wrong circular offsets.
+  auto fft_kernel = fft_len == 2 * T
+      ? kernel
+      : mx::concatenate(
+            {
+                forward_kernel,
+                mx::zeros({D, fft_len - 2 * T}, mx::float32),
+                reversed_backward,
+            },
+            1);
+  auto x_freq = mx::fft::rfft(x, fft_len, 1);
+  auto kernel_freq = mx::fft::rfft(fft_kernel, fft_len, 1);
   auto kernel_broadcast = mx::reshape(
       mx::transpose(kernel_freq, {1, 0}),
       {1, kernel_freq.shape(1), D});
   auto product = x_freq * kernel_broadcast;
   if (sobolev_beta_raw != nullptr) {
-    int fft_len = 2 * T;
     product = s4d_apply_sobolev_frequency_filter(
         product, *sobolev_beta_raw, fft_len, D);
   }
-  auto full = mx::fft::irfft(product, 2 * T, 1);
+  auto full = mx::fft::irfft(product, fft_len, 1);
   auto convolved = mx::slice(full, {0, 0, 0}, {B, T, D});
   auto direct = mx::reshape(mx::astype(direct_raw, mx::float32), {1, 1, D});
-  *combined_kernel = kernel;
   return mx::reshape(convolved + x * direct, {B * T, D});
 }
 
@@ -2949,27 +2989,48 @@ S4DResult s4d_forward_advanced(
       state_pairs,
       n_ssm,
       discretization);
-  auto forward_kernel = s4d_materialize_kernel(
-      discrete, c_forward_real, c_forward_imag, D, T, state_pairs);
   if (!bidirectional) {
+    auto forward_kernel = s4d_materialize_kernel(
+        discrete, c_forward_real, c_forward_imag, D, T, state_pairs);
     return {
         s4d_fft_convolution(x, forward_kernel, direct, sobolev_beta, B, T, D),
         forward_kernel,
     };
   }
-  auto backward_kernel = s4d_materialize_kernel(
-      discrete, *c_backward_real, *c_backward_imag, D, T, state_pairs);
-  auto combined_kernel = mx::zeros({D, 2 * T}, mx::float32);
+  mx::array combined_kernel = [&]() {
+    if (mlx_ir::s4d_bidirectional_kernel_metal_primitive_available()) {
+      return mlx_ir::s4d_bidirectional_kernel_metal_primitive(
+          discrete.b_real,
+          discrete.b_imag,
+          discrete.log_magnitude,
+          discrete.phase,
+          mx::astype(c_forward_real, mx::float32),
+          mx::astype(c_forward_imag, mx::float32),
+          mx::astype(*c_backward_real, mx::float32),
+          mx::astype(*c_backward_imag, mx::float32),
+          D,
+          T,
+          state_pairs);
+    }
+    // Both directions share A/B/dt and therefore the full time-power basis.
+    // Build it once; only each direction's learned C projection differs.
+    auto powers = s4d_materialize_kernel_powers(discrete, T);
+    auto forward_kernel = s4d_materialize_kernel_from_powers(
+        discrete, powers, c_forward_real, c_forward_imag, D, state_pairs);
+    auto backward_kernel = s4d_materialize_kernel_from_powers(
+        discrete, powers, *c_backward_real, *c_backward_imag, D, state_pairs);
+    auto reverse_indices = mx::astype(mx::arange(T - 1, -1, -1), mx::int32);
+    auto reversed_backward = mx::take(backward_kernel, reverse_indices, 1);
+    return mx::concatenate({forward_kernel, reversed_backward}, 1);
+  }();
   auto output = s4d_fft_convolution_bidirectional(
       x,
-      forward_kernel,
-      backward_kernel,
+      combined_kernel,
       direct,
       sobolev_beta,
       B,
       T,
-      D,
-      &combined_kernel);
+      D);
   return {output, combined_kernel};
 }
 

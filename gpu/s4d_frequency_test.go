@@ -203,6 +203,52 @@ func TestS4DAdvancedSobolevBidirectionalHasFiniteGradients(t *testing.T) {
 	}
 }
 
+func TestS4DAdvancedSobolevBidirectionalPreservesExactTransformSemantics(t *testing.T) {
+	lockMLXThread(t)
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	const B, T, D, N, nSSM = 1, 5, 4, 4, 2
+	x, weights := s4dReferenceFixture(B, T, D, N, nSSM)
+	beta := []float32{-0.75, -0.25, 0.5, 1.0}
+
+	progIR := ir.NewProgram(11)
+	progIR.DeclareInput("x", ir.TensorFloat32, []int{B * T, D})
+	progIR.DeclareOutput("output", ir.TensorFloat32, []int{B * T, D})
+	inputs := []string{"x", "w0", "w1", "w2", "w3", "w4", "w5", "w6", "w7", "w8", "w9", "w10"}
+	progIR.S4DAdvancedSobolev(
+		inputs, "output", "kernel", B, T, D, N, nSSM, true,
+		ir.S4DDiscretizationBilinear, true,
+	)
+	prog, err := LowerIRProgram(progIR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prog.Destroy()
+	handles := s4dReferenceWeightHandles(t, weights, D, N, nSSM)
+	betaHandle, err := FromDataShape(beta, []int{D})
+	if err != nil {
+		FreeHandles(handles)
+		t.Fatal(err)
+	}
+	handles = append(handles, betaHandle)
+	defer FreeHandles(handles)
+
+	got, err := EvalProgramOutput(prog, handles, []TensorInput{{
+		Name: "x", DType: TensorFloat32, Shape: []int{B * T, D}, Data: x,
+	}}, "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, kernel := cpuS4DReferenceForward(x, weights, B, T, D, N, nSSM, true)
+	want := cpuS4DApplyFrequencyFilter(
+		x, kernel, weights[len(weights)-1], beta, B, T, D, 2*T,
+	)
+	if diff := maxAbsDiffFloat32(got, want); diff > 4e-5 {
+		t.Fatalf("advanced bidirectional Sobolev exact-2T parity diff=%g want <=4e-5", diff)
+	}
+}
+
 func lowerS4DSobolevProgram(t *testing.T, B, T, D, N int) *Program {
 	t.Helper()
 	prog := ir.NewProgram(7)
@@ -244,6 +290,14 @@ func cpuS4DSobolevForward(x []float32, weights [][]float32, B, T, D, N int) []fl
 	for fftLen < 2*T {
 		fftLen <<= 1
 	}
+	return cpuS4DApplyFrequencyFilter(x, kernel, weights[5], weights[6], B, T, D, fftLen)
+}
+
+func cpuS4DApplyFrequencyFilter(
+	x, kernel, direct, beta []float32,
+	B, T, D, fftLen int,
+) []float32 {
+	kernelLen := len(kernel) / D
 	out := make([]float32, B*T*D)
 	for batch := 0; batch < B; batch++ {
 		for feature := 0; feature < D; feature++ {
@@ -254,7 +308,11 @@ func cpuS4DSobolevForward(x []float32, weights [][]float32, B, T, D, N int) []fl
 					angle := -2 * math.Pi * float64(frequency*position) / float64(fftLen)
 					phase := cmplx.Exp(complex(0, angle))
 					xFrequency[frequency] += complex(float64(x[(batch*T+position)*D+feature]), 0) * phase
-					kernelFrequency[frequency] += complex(float64(kernel[feature*T+position]), 0) * phase
+				}
+				for position := 0; position < kernelLen; position++ {
+					angle := -2 * math.Pi * float64(frequency*position) / float64(fftLen)
+					phase := cmplx.Exp(complex(0, angle))
+					kernelFrequency[frequency] += complex(float64(kernel[feature*kernelLen+position]), 0) * phase
 				}
 			}
 			for frequency := range xFrequency {
@@ -264,7 +322,7 @@ func cpuS4DSobolevForward(x []float32, weights [][]float32, B, T, D, N int) []fl
 				}
 				filter := math.Pow(
 					1+float64(absoluteFrequency)/float64(fftLen),
-					float64(weights[6][feature]),
+					float64(beta[feature]),
 				)
 				xFrequency[frequency] *= kernelFrequency[frequency] * complex(filter, 0)
 			}
@@ -275,7 +333,7 @@ func cpuS4DSobolevForward(x []float32, weights [][]float32, B, T, D, N int) []fl
 					value += xFrequency[frequency] * cmplx.Exp(complex(0, angle))
 				}
 				index := (batch*T+position)*D + feature
-				out[index] = float32(real(value)/float64(fftLen)) + x[index]*weights[5][feature]
+				out[index] = float32(real(value)/float64(fftLen)) + x[index]*direct[feature]
 			}
 		}
 	}

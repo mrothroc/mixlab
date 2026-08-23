@@ -49,6 +49,21 @@ it with an FFT. The recurrent form is retained internally for forward and
 gradient parity tests; it is not a public execution-mode switch or an
 incremental inference cache in v1.
 
+Ordinary FFT convolution zero-pads to the next power-of-two transform length.
+This is especially important for raw audio lengths such as 16,000 samples,
+whose exact `2*T` transform otherwise selects a much slower mixed-radix Metal
+path. The MLX fallback shares its state-power basis across the forward and
+backward projections. An enabled Sobolev filter intentionally
+retains its historical exact `2*T` bidirectional transform because its
+frequency multiplier is defined in terms of that transform length.
+
+On Metal, bidirectional S4D kernel synthesis uses a native forward/backward
+primitive that writes the compact two-direction kernel without materializing
+the `[D,state_size/2,T]` power tensors. MLX continues to execute the FFT and
+the rest of the block. Set
+`MIXLAB_S4D_DISABLE_METAL_KERNEL_PRIMITIVE=1` only for differential testing
+against the differentiable MLX-op fallback.
+
 Only `init: "s4d-lin"` is accepted. `output_transform: "glu"` adds the
 reference-style GELU, dropout, `D -> 2D` projection, and GLU output path.
 Omitting the field preserves the earlier compact GELU-only block exactly.

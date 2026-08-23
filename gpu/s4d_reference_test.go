@@ -4,6 +4,7 @@ package gpu
 
 import (
 	"math"
+	"runtime"
 	"testing"
 
 	ir "github.com/mrothroc/mixlab/arch"
@@ -79,6 +80,42 @@ func TestS4DReferenceBidirectionalGroupedBilinearBackward(t *testing.T) {
 			if diff := float32(math.Abs(float64(value - want[i]))); diff > tolerance {
 				t.Fatalf("gradient w%d[%d]=%g reference=%g diff=%g tolerance=%g", wi, i, value, want[i], diff, tolerance)
 			}
+		}
+	}
+}
+
+func TestS4DBidirectionalMetalKernelMatchesMLXFallbackForwardAndBackward(t *testing.T) {
+	lockMLXThread(t)
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	if runtime.GOOS != "darwin" {
+		t.Skip("native S4D kernel primitive is Metal-only")
+	}
+	const B, T, D, N, nSSM = 1, 7, 4, 4, 2
+	x, weights := s4dReferenceFixture(B, T, D, N, nSSM)
+	primitiveOutput, primitiveKernel := runS4DReferenceWeights(
+		t, x, weights, B, T, D, N, nSSM, true,
+	)
+	primitiveGradients := s4dReferenceGradients(t, x, weights, B, T, D, N, nSSM)
+
+	t.Setenv("MIXLAB_S4D_DISABLE_METAL_KERNEL_PRIMITIVE", "1")
+	fallbackOutput, fallbackKernel := runS4DReferenceWeights(
+		t, x, weights, B, T, D, N, nSSM, true,
+	)
+	fallbackGradients := s4dReferenceGradients(t, x, weights, B, T, D, N, nSSM)
+
+	if diff := maxAbsDiffFloat32(primitiveKernel, fallbackKernel); diff > 3e-5 {
+		t.Fatalf("Metal/fallback kernel L_inf=%g want <=3e-5", diff)
+	}
+	if diff := maxAbsDiffFloat32(primitiveOutput, fallbackOutput); diff > 4e-5 {
+		t.Fatalf("Metal/fallback output L_inf=%g want <=4e-5", diff)
+	}
+	for weightIndex := range primitiveGradients {
+		if diff := maxAbsDiffFloat32(
+			primitiveGradients[weightIndex], fallbackGradients[weightIndex],
+		); diff > 2e-5 {
+			t.Fatalf("Metal/fallback gradient w%d L_inf=%g want <=2e-5", weightIndex, diff)
 		}
 	}
 }
