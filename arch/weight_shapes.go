@@ -421,10 +421,8 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			return nil, fmt.Errorf("mamba3-canonical requires 0 < dt_min < dt_max, got dt_min=%g dt_max=%g", dtMin, dtMax)
 		}
 		groupState := nGroups * stateSize
-		metas := []WeightMeta{
-			{Name: "pre_norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
-			{Name: "w_x", Shape: []int{D, inner}},
-		}
+		metas := append([]WeightMeta{}, normWeights("pre_norm", D, norm)...)
+		metas = append(metas, WeightMeta{Name: "w_x", Shape: []int{D, inner}})
 		useConv := spec.UseConv == nil || *spec.UseConv
 		if useConv {
 			metas = append(metas, WeightMeta{Name: "conv_w", Shape: []int{inner, convKernel}})

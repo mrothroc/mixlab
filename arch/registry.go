@@ -161,12 +161,12 @@ func init() {
 	})
 	RegisterBlock("gated_deltanet", blockRegistration{
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
-			return emitGatedDeltaNetIRWithScales(prog, spec, stream, wi, T, B, idx, opts.BlockScales)
+			return emitGatedDeltaNetIRWithScalesNorm(prog, spec, stream, wi, T, B, idx, opts.BlockScales, opts.Norm)
 		},
 		WeightCount:  gatedDeltaNetWeightCount,
 		WeightShapes: gatedDeltaNetWeightShapes,
 		weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
-			return gatedDeltaNetWeightShapesWithOptions(spec, D, opts.BlockScales)
+			return gatedDeltaNetWeightShapesWithOptionsNorm(spec, D, opts.BlockScales, opts.Norm)
 		},
 	})
 	RegisterBlock("hgrn2", blockRegistration{
@@ -215,9 +215,7 @@ func init() {
 			WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
 				return builtinBlockWeightShapes(spec, D, T, B, V, DefaultFFNMultiplier, false, false)
 			},
-			weightShapesWithOptions: func(spec BlockSpec, D, T, B, V int, opts EmitOptions) ([]WeightMeta, error) {
-				return builtinBlockWeightShapes(spec, D, T, B, V, opts.MLPMult, opts.BlockScales, opts.ResidMix)
-			},
+			weightShapesWithOptions: builtinBlockWeightShapesWithOptions,
 		})
 	}
 }
@@ -359,7 +357,7 @@ func builtinBlockEmitter(prog *Program, spec BlockSpec, stream string, wi, D, T,
 		}
 		useConv := spec.UseConv == nil || *spec.UseConv
 		scanChunkSize := effectiveMamba3CanonicalScanChunkSize(spec)
-		return emitMamba3CanonicalIR(prog, stream, wi, inner, stateSize, nGroups, dtRank, convKernel, useConv, scanChunkSize, T, B, idx, spec.Bidirectional)
+		return emitMamba3CanonicalIRNorm(prog, stream, wi, inner, stateSize, nGroups, dtRank, convKernel, useConv, scanChunkSize, T, B, idx, spec.Bidirectional, opts.Norm, opts.NormPlacement)
 	case "rwkv":
 		return emitRWKVIR(prog, stream, wi, D, T, B, idx)
 	case "perceiver":

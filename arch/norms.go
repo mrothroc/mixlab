@@ -214,6 +214,12 @@ func emitNamedNormIR(prog *Program, x string, wi int, output string, spec NormSp
 	return emitNormIR(prog, x, wi, output, spec)
 }
 
+func usesLegacyOuterPreNorm(spec NormSpec, placement string) bool {
+	spec = normSpecOrDefault(spec)
+	return normPlacementOrDefault(placement) == NormPlacementPre &&
+		spec.Type == NormTypeRMSNorm && spec.Eps == 1e-5 && spec.Affine
+}
+
 func isDefaultNormConfig(cfg *ArchConfig) bool {
 	if cfg == nil {
 		return true

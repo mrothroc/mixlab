@@ -112,6 +112,12 @@ For reference-style normalization and output projection, use
 That mode requires fixed unpadded records; partial/padded classification
 batches fail rather than contaminating running statistics.
 
+For controlled mixer comparisons, the same affine pre-norm BatchNorm policy is
+supported by `mamba3-canonical` and `gated_deltanet`. It replaces each mixer's
+outer pre-norm while retaining the mixer's required internal RMSNorms. See
+[`continuous_mamba3_batchnorm_comparison_tiny.json`](../examples/continuous_mamba3_batchnorm_comparison_tiny.json),
+then change only the mixer block to construct a matched Gated DeltaNet arm.
+
 The adapter uses the top-level `positional_embedding` policy. Set `"none"` for
 raw signals whose sequence axis already carries order, or
 `"learned_absolute"` for a learned table. There is no adapter-specific

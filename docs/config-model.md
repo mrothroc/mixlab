@@ -98,7 +98,7 @@ fields to opt into other layouts:
 
 | Field | Purpose |
 |------|---------|
-| `norm_type` | `"rmsnorm"` or `"layernorm"`. |
+| `norm_type` | `"rmsnorm"`, `"layernorm"`, or fixed-shape classification `"batchnorm"`. |
 | `norm_affine` | Whether LayerNorm has learned scale/bias. |
 | `norm_placement` | `"pre"`, legacy delta-normalizing `"post"`, `"sandwich"`, or S4D standard `"post_residual"`. |
 | `final_norm` | Model-level final norm toggle; defaults to `true`. |
@@ -107,6 +107,16 @@ fields to opt into other layouts:
 | `block_scales` | Adds learned residual-branch scales. |
 | `resid_mix` | Mixes current state with original embeddings on `plain` blocks. |
 | `parallel_residual` | Runs supported attention/mixer plus FFN pairs in parallel. |
+
+Normalization support is block-specific because recurrent mixers contain
+algorithm-internal norms that are not interchangeable:
+
+| Block family | Configurable placement | Contract |
+|---|---|---|
+| `plain`, `swiglu`, `geglu`, `mlp` | `pre`, `post`, `sandwich` | Uses the selected global RMSNorm or LayerNorm throughout supported outer/FFN paths. BatchNorm is pre-only through the global classification boundary. |
+| `s4d` | `pre`, `post`, `sandwich`, `post_residual` | Full classification norm path, including BatchNorm pre-norm. |
+| `mamba3-canonical`, `gated_deltanet` | `pre` | Replaces only the outer block pre-norm. Mamba B/C/post-scan norms and Gated DeltaNet output-head norm remain canonical RMSNorm. BatchNorm supports fixed, unpadded native classification. |
+| `hgrn2`, `mlstm`, `ttt_mlp`, other recurrent blocks | Default only | Non-default global norm settings are rejected until their outer and internal norm boundaries have parity coverage. |
 
 ## Export Surface
 

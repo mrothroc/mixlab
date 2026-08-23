@@ -2038,13 +2038,14 @@ mx::array mamba3_canonical_block_impl(
     int T,
     bool use_conv,
     int scan_chunk_size,
+    bool external_pre_norm,
     float eps) {
   if (args.size() != static_cast<size_t>(mamba3_canonical_block_expected_inputs(use_conv))) {
     throw std::runtime_error("OP_MAMBA3_CANONICAL_BLOCK input count mismatch");
   }
   int i = 0;
   const auto& x = args[i++];
-  const auto& pre_norm = args[i++];
+  const auto& pre_norm_or_x_norm = args[i++];
   const auto& w_x = args[i++];
   const mx::array* conv_w = nullptr;
   if (use_conv) {
@@ -2074,7 +2075,9 @@ mx::array mamba3_canonical_block_impl(
   const int conv_kernel = use_conv ? static_cast<int>(conv_w->shape(1)) : 0;
   const int dt_rank = static_cast<int>(w_dt_low.shape(1));
   const int group_state = n_groups * state_size;
-  auto x_norm = rmsnorm_forward(x, pre_norm, eps);
+  auto x_norm = external_pre_norm
+      ? pre_norm_or_x_norm
+      : rmsnorm_forward(x, pre_norm_or_x_norm, eps);
   auto x_proj = mx::matmul(x_norm, w_x);
   auto x_branch = use_conv
       ? causal_depthwise_conv1d(x_proj, *conv_w, B, T, inner, conv_kernel)
@@ -2112,6 +2115,7 @@ std::vector<mx::array> mamba3_canonical_block_vjp(
     int T,
     bool use_conv,
     int scan_chunk_size,
+    bool external_pre_norm,
     float eps) {
   if (args.size() != static_cast<size_t>(mamba3_canonical_block_expected_inputs(use_conv)) ||
       cotangents.size() != 1) {
@@ -2119,7 +2123,7 @@ std::vector<mx::array> mamba3_canonical_block_vjp(
   }
   int i = 0;
   const auto& x = args[i++];
-  const auto& pre_norm = args[i++];
+  const auto& pre_norm_or_x_norm = args[i++];
   const auto& w_x = args[i++];
   const mx::array* conv_w = nullptr;
   if (use_conv) {
@@ -2149,7 +2153,9 @@ std::vector<mx::array> mamba3_canonical_block_vjp(
   const int conv_kernel = use_conv ? static_cast<int>(conv_w->shape(1)) : 0;
   const int dt_rank = static_cast<int>(w_dt_low.shape(1));
   const int group_state = n_groups * state_size;
-  auto x_norm = rmsnorm_forward(x, pre_norm, eps);
+  auto x_norm = external_pre_norm
+      ? pre_norm_or_x_norm
+      : rmsnorm_forward(x, pre_norm_or_x_norm, eps);
   auto x_proj = mx::matmul(x_norm, w_x);
   auto x_branch = use_conv
       ? causal_depthwise_conv1d(x_proj, *conv_w, B, T, inner, conv_kernel)
@@ -2257,13 +2263,16 @@ std::vector<mx::array> mamba3_canonical_block_vjp(
   auto grad_w_x = mx::matmul(mx::transpose(x_norm, {1, 0}), grad_x_proj);
   grad_x_norm = grad_x_norm + mx::matmul(grad_x_proj, mx::transpose(w_x, {1, 0}));
 
-  auto pre_norm_vjp = rmsnorm_vjp(x, pre_norm, grad_x_norm, eps);
-  auto grad_x = grad_out + pre_norm_vjp.input;
-
   std::vector<mx::array> out;
   out.reserve(args.size());
-  out.push_back(grad_x);
-  out.push_back(pre_norm_vjp.scale);
+  if (external_pre_norm) {
+    out.push_back(grad_out);
+    out.push_back(grad_x_norm);
+  } else {
+    auto pre_norm_vjp = rmsnorm_vjp(x, pre_norm_or_x_norm, grad_x_norm, eps);
+    out.push_back(grad_out + pre_norm_vjp.input);
+    out.push_back(pre_norm_vjp.scale);
+  }
   out.push_back(grad_w_x);
   if (use_conv) {
     out.push_back(grad_conv_w);
@@ -2294,20 +2303,21 @@ mx::array mamba3_canonical_block(
     int T,
     bool use_conv,
     int scan_chunk_size,
+    bool external_pre_norm,
     float eps) {
   log_mamba3_canonical_block_once();
   auto block = mx::custom_vjp(
-      [B, T, use_conv, scan_chunk_size, eps](const std::vector<mx::array>& fn_args) {
+      [B, T, use_conv, scan_chunk_size, external_pre_norm, eps](const std::vector<mx::array>& fn_args) {
         return std::vector<mx::array>{
-            mamba3_canonical_block_impl(fn_args, B, T, use_conv, scan_chunk_size, eps)};
+            mamba3_canonical_block_impl(fn_args, B, T, use_conv, scan_chunk_size, external_pre_norm, eps)};
       },
-      [B, T, use_conv, scan_chunk_size, eps](
+      [B, T, use_conv, scan_chunk_size, external_pre_norm, eps](
           const std::vector<mx::array>& fn_args,
           const std::vector<mx::array>& cotangents,
           const std::vector<mx::array>& outputs) {
         (void)outputs;
         return mamba3_canonical_block_vjp(
-            fn_args, cotangents, B, T, use_conv, scan_chunk_size, eps);
+            fn_args, cotangents, B, T, use_conv, scan_chunk_size, external_pre_norm, eps);
       });
   return block(args)[0];
 }
@@ -4920,6 +4930,7 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         const int T = op.int_params[1];
         const bool use_conv = op.int_params[2] != 0;
         const int scan_chunk_size = op.int_params[3];
+        const bool external_pre_norm = op.n_int_params >= 5 && op.int_params[4] != 0;
         const float eps = op.n_float_params > 0 ? op.float_params[0] : 1e-5f;
         const int expected_inputs = mamba3_canonical_block_expected_inputs(use_conv);
         if (op.n_inputs != expected_inputs) {
@@ -4935,7 +4946,7 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(
             op,
             0,
-            mamba3_canonical_block(block_inputs, B, T, use_conv, scan_chunk_size, eps));
+            mamba3_canonical_block(block_inputs, B, T, use_conv, scan_chunk_size, external_pre_norm, eps));
         break;
       }
       case OP_GATHER_POSITIONS: {

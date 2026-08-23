@@ -290,6 +290,13 @@ func effectiveMamba3CanonicalScanChunkSize(spec BlockSpec) int {
 //	w[...]   = W_Z                  [D, inner]       residual gate projection
 //	w[...]   = W_O                  [inner, D]       output projection
 func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, scanChunkSize, T, B, idx int, bidirectional bool) (int, error) {
+	return emitMamba3CanonicalIRNorm(
+		prog, x, wi, inner, stateSize, nGroups, dtRank, convKernel, useConv,
+		scanChunkSize, T, B, idx, bidirectional, defaultNormSpec(), NormPlacementPre,
+	)
+}
+
+func emitMamba3CanonicalIRNorm(prog *Program, x string, wi, inner, stateSize, nGroups, dtRank, convKernel int, useConv bool, scanChunkSize, T, B, idx int, bidirectional bool, norm NormSpec, normPlacement string) (int, error) {
 	if inner <= 0 {
 		return wi, fmt.Errorf("mamba3-canonical inner_dim must be > 0, got %d", inner)
 	}
@@ -315,18 +322,36 @@ func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroup
 		return wi, fmt.Errorf("mamba3-canonical scan_chunk_size must be >= 0, got %d", scanChunkSize)
 	}
 
-	base := wi
-	blockInputs := []string{x, weightName(wi), weightName(wi + 1)}
-	wi += 2
+	externalPreNorm := !usesLegacyOuterPreNorm(norm, normPlacement)
+	preNormInput := weightName(wi)
+	coreBase := wi + 1
+	if externalPreNorm {
+		preNormInput = tmpName(x+"_mamba3_pre_norm", idx)
+		var err error
+		coreBase, err = emitNamedNormIR(prog, x, wi, preNormInput, norm)
+		if err != nil {
+			return wi, err
+		}
+	}
+	blockInputs := []string{x, preNormInput, weightName(coreBase)}
+	wi = coreBase + 1
 	if useConv {
 		blockInputs = append(blockInputs, weightName(wi))
 		wi++
 	}
-	for ; wi < base+mamba3CanonicalWeightCount(useConv); wi++ {
+	coreEnd := coreBase + mamba3CanonicalWeightCount(useConv) - 1
+	for ; wi < coreEnd; wi++ {
 		blockInputs = append(blockInputs, weightName(wi))
 	}
+	emitBlock := func(inputs []string, output string) {
+		if externalPreNorm {
+			prog.Mamba3CanonicalBlockExternalPreNorm(inputs, output, B, T, useConv, scanChunkSize)
+			return
+		}
+		prog.Mamba3CanonicalBlock(inputs, output, B, T, useConv, scanChunkSize)
+	}
 	if !bidirectional {
-		prog.Mamba3CanonicalBlock(blockInputs, x, B, T, useConv, scanChunkSize)
+		emitBlock(blockInputs, x)
 		return wi, nil
 	}
 
@@ -334,18 +359,28 @@ func emitMamba3CanonicalIR(prog *Program, x string, wi, inner, stateSize, nGroup
 	validMask := bidirectionalValidMask(prog, B, T, prefix)
 	validX := prefix + "_valid_x"
 	maskSequenceValidIR(prog, x, validMask, validX, B, T)
-	weights := blockInputs[1:]
+	coreWeights := blockInputs[2:]
 	forwardState := prefix + "_forward_state"
-	forwardInputs := append([]string{validX}, weights...)
-	prog.Mamba3CanonicalBlock(forwardInputs, forwardState, B, T, useConv, scanChunkSize)
+	forwardPreNorm := blockInputs[1]
+	if externalPreNorm {
+		forwardPreNorm = prefix + "_valid_norm"
+		maskSequenceValidIR(prog, preNormInput, validMask, forwardPreNorm, B, T)
+	}
+	forwardInputs := append([]string{validX, forwardPreNorm}, coreWeights...)
+	emitBlock(forwardInputs, forwardState)
 	forwardDelta := prefix + "_forward_delta"
 	prog.Sub(forwardState, validX, forwardDelta)
 
 	reversedInput := prefix + "_reversed_input"
 	prog.ReverseValidPrefix(validX, validMask, reversedInput, B, T)
+	reversedPreNorm := blockInputs[1]
+	if externalPreNorm {
+		reversedPreNorm = prefix + "_reversed_norm"
+		prog.ReverseValidPrefix(forwardPreNorm, validMask, reversedPreNorm, B, T)
+	}
 	backwardState := prefix + "_backward_state"
-	backwardInputs := append([]string{reversedInput}, weights...)
-	prog.Mamba3CanonicalBlock(backwardInputs, backwardState, B, T, useConv, scanChunkSize)
+	backwardInputs := append([]string{reversedInput, reversedPreNorm}, coreWeights...)
+	emitBlock(backwardInputs, backwardState)
 	backwardDeltaReversed := prefix + "_backward_delta_reversed"
 	prog.Sub(backwardState, reversedInput, backwardDeltaReversed)
 	backwardDelta := prefix + "_backward_delta"

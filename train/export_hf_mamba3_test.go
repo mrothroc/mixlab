@@ -136,6 +136,22 @@ func TestExportHFMamba3ConfigAndWeightMap(t *testing.T) {
 	}
 }
 
+func TestExportHFMamba3RejectsConfigurableOuterNormUntilParityCoverage(t *testing.T) {
+	cfg, err := ParseArchConfig([]byte(`{
+		"model_dim":8,"vocab_size":13,"seq_len":6,
+		"norm_type":"layernorm","norm_placement":"pre",
+		"blocks":[{"type":"mamba3-canonical","inner_dim":8,"state_size":4,"n_groups":2,"dt_rank":2,"use_conv":false}],
+		"training":{"objective":"classification","classification":{"num_labels":2},"batch_tokens":6}
+	}`), "mamba3_layernorm_hf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = validateHFExportConfig(cfg)
+	if err == nil || !strings.Contains(err.Error(), "configurable outer norms are native-only") {
+		t.Fatalf("validateHFExportConfig error=%v", err)
+	}
+}
+
 func TestExportHFMamba3WithoutShortConv(t *testing.T) {
 	useConv := false
 	cfg := &ArchConfig{

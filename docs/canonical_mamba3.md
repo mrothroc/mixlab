@@ -34,6 +34,14 @@ Config knobs (all optional):
 - `use_conv` (default `true`)
 - `scan_chunk_size` (default 64; `0` = full-sequence scan)
 
+The top-level configurable norm policy can replace the first `RMSNorm` with
+pre-norm RMSNorm, LayerNorm, or fixed-shape classification BatchNorm. The raw
+input remains the residual branch. B/C normalization and the pre-gate
+post-scan RMSNorm are algorithm-internal and remain RMSNorm at `1e-5`.
+Non-pre placements are rejected for `mamba3-canonical`. Configurable outer
+norms are native-only until the maintained PyTorch template has dedicated
+parity coverage; the legacy pre-RMSNorm path retains its existing HF support.
+
 ## Hugging Face export
 
 `mixlab -mode export-hf` supports sequential stacks composed from

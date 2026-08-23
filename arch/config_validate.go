@@ -62,6 +62,16 @@ func validateNormPolicy(cfg *ArchConfig, source string) error {
 		switch blockTypeKey(block) {
 		case "plain", "swiglu", "geglu", "mlp", "s4d":
 			// supported by the configurable normalization path.
+		case "mamba3-canonical", "gated_deltanet":
+			if cfg.EffectiveNormPlacement() != NormPlacementPre {
+				return fmt.Errorf(
+					"config %q norm_placement=%q is not supported with blocks[%d].type=%q; modern recurrent mixers support configurable outer pre-norm only",
+					source, cfg.EffectiveNormPlacement(), i, block.Type,
+				)
+			}
+			if cfg.FFNInternalNorm {
+				return fmt.Errorf("config %q ffn_internal_norm is not supported with blocks[%d].type=%q", source, i, block.Type)
+			}
 		default:
 			return fmt.Errorf("config %q non-default norm settings are not supported with blocks[%d].type=%q in this release", source, i, block.Type)
 		}

@@ -153,6 +153,13 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 }
 
 func validateHFMamba3CanonicalComposition(cfg *ArchConfig, field string) error {
+	norm := cfg.EffectiveNormSpec()
+	if norm.Type != arch.NormTypeRMSNorm || norm.Eps != 1e-5 || !norm.Affine || cfg.EffectiveNormPlacement() != arch.NormPlacementPre {
+		return unsupportedHFExport(
+			"norm_type",
+			"mamba3-canonical configurable outer norms are native-only until the PyTorch template has dedicated norm parity coverage",
+		)
+	}
 	switch cfg.Training.EffectiveObjective() {
 	case arch.ObjectiveCausal, arch.ObjectiveClassification:
 	default:

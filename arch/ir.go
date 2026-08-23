@@ -562,13 +562,28 @@ func (p *Program) Mamba3SelectiveScanChunked(x, dt, lambda, theta, aLog, bProj, 
 //	W_lambda_high, W_theta_low, W_theta_high, W_B, W_C, B_norm_scale,
 //	C_norm_scale, B_bias, C_bias, A_log, dt_bias, post_norm_scale, W_Z, W_O.
 //
-// IntParams layout: [B, T, use_conv, scan_chunk_size].
+// IntParams layout: [B, T, use_conv, scan_chunk_size, external_pre_norm?].
 func (p *Program) Mamba3CanonicalBlock(inputs []string, output string, B, T int, useConv bool, scanChunkSize int) {
+	p.mamba3CanonicalBlock(inputs, output, B, T, useConv, scanChunkSize, false)
+}
+
+// Mamba3CanonicalBlockExternalPreNorm emits the canonical block with inputs
+// laid out as x, x_norm, W_X, ... . The raw x remains the residual while the
+// already-normalized x_norm feeds the recurrent and gate branches.
+func (p *Program) Mamba3CanonicalBlockExternalPreNorm(inputs []string, output string, B, T int, useConv bool, scanChunkSize int) {
+	p.mamba3CanonicalBlock(inputs, output, B, T, useConv, scanChunkSize, true)
+}
+
+func (p *Program) mamba3CanonicalBlock(inputs []string, output string, B, T int, useConv bool, scanChunkSize int, externalPreNorm bool) {
 	useConvInt := 0
 	if useConv {
 		useConvInt = 1
 	}
-	p.AddOp(OpMamba3CanonicalBlock, inputs, []string{output}, []float32{1e-5}, []int{B, T, useConvInt, scanChunkSize})
+	params := []int{B, T, useConvInt, scanChunkSize}
+	if externalPreNorm {
+		params = append(params, 1)
+	}
+	p.AddOp(OpMamba3CanonicalBlock, inputs, []string{output}, []float32{1e-5}, params)
 }
 
 // MatrixScan emits a matrix-state gated recurrence (OpMatrixScan) over a sequence.

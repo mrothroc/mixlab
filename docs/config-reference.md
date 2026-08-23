@@ -669,6 +669,13 @@ affine normalization, fixed unpadded records, and more than one batch-time
 sample. Recurrence, weight groups, SWA, and Hugging Face export are rejected
 until their running-stat semantics are defined.
 
+BatchNorm can replace the outer pre-norm of `plain`, `swiglu`, `geglu`, `mlp`,
+`s4d`, `mamba3-canonical`, and `gated_deltanet` blocks. For the two modern
+recurrent mixers, only that outer norm changes: canonical Mamba B/C and
+post-scan normalization and Gated DeltaNet's per-head output normalization
+remain RMSNorm. Other placements and `ffn_internal_norm` fail with a
+block-specific validation error.
+
 ### `retnet`
 
 Retention block with RMSNorm, multi-head retention mask construction, learned per-head decay weights, FFN tail, and residual connections.

@@ -47,10 +47,10 @@ func gatedDeltaNetWeightCountWithScales(spec BlockSpec, blockScales bool) int {
 }
 
 func gatedDeltaNetWeightShapes(spec BlockSpec, D, _, _, _ int) ([]WeightMeta, error) {
-	return gatedDeltaNetWeightShapesWithOptions(spec, D, false)
+	return gatedDeltaNetWeightShapesWithOptionsNorm(spec, D, false, defaultNormSpec())
 }
 
-func gatedDeltaNetWeightShapesWithOptions(spec BlockSpec, D int, blockScales bool) ([]WeightMeta, error) {
+func gatedDeltaNetWeightShapesWithOptionsNorm(spec BlockSpec, D int, blockScales bool, norm NormSpec) ([]WeightMeta, error) {
 	if spec.Heads <= 0 {
 		return nil, fmt.Errorf("gated_deltanet requires heads > 0")
 	}
@@ -67,11 +67,11 @@ func gatedDeltaNetWeightShapesWithOptions(spec BlockSpec, D int, blockScales boo
 
 	keyDim := spec.Heads * spec.DK
 	valDim := spec.Heads * dv
-	metas := []WeightMeta{
-		{Name: "norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
-		{Name: "wq", Shape: []int{D, keyDim}, InitMode: "torch_linear_uniform"},
-		{Name: "q_conv", Shape: []int{gatedDeltaNetConvSize, keyDim}, InitMode: "torch_depthwise_conv1d_uniform"},
-	}
+	metas := append([]WeightMeta{}, normWeights("norm", D, norm)...)
+	metas = append(metas,
+		WeightMeta{Name: "wq", Shape: []int{D, keyDim}, InitMode: "torch_linear_uniform"},
+		WeightMeta{Name: "q_conv", Shape: []int{gatedDeltaNetConvSize, keyDim}, InitMode: "torch_depthwise_conv1d_uniform"},
+	)
 	if effectiveKVShare(spec) {
 		metas = append(metas, WeightMeta{Name: "w_kv", Shape: []int{D, valDim}, InitMode: "torch_linear_uniform"})
 		metas = append(metas,
@@ -101,11 +101,14 @@ func gatedDeltaNetWeightShapesWithOptions(spec BlockSpec, D int, blockScales boo
 	return metas, nil
 }
 
-func emitGatedDeltaNetIRWithScales(prog *Program, spec BlockSpec, x string, wi, T, B, idx int, blockScales bool) (int, error) {
+func emitGatedDeltaNetIRWithScalesNorm(prog *Program, spec BlockSpec, x string, wi, T, B, idx int, blockScales bool, norm NormSpec) (int, error) {
 	prefix := tmpName(x+"_gated_deltanet", idx)
 	xNorm := prefix + "_x_norm"
-	prog.RMSNorm(x, weightName(wi), xNorm, 1e-5)
-	wi++
+	var err error
+	wi, err = emitNamedNormIR(prog, x, wi, xNorm, norm)
+	if err != nil {
+		return wi, err
+	}
 	if spec.Bidirectional {
 		validMask := bidirectionalValidMask(prog, B, T, prefix)
 		validX := prefix + "_valid_x"
