@@ -13,8 +13,19 @@ if [ -n "$UNFORMATTED" ]; then
 fi
 
 # Lint (includes vet, staticcheck, errcheck, unused, etc.)
+#
+# golangci-lint is pinned to the toolchain CI builds with (see go-version in
+# .github/workflows/ci.yml and the go directive in go.mod). golangci-lint
+# typechecks against the standard library of whichever Go it runs under, and a
+# newer local Go can emit export data the linter cannot decode -- golangci-lint
+# 2.13.1 under Go 1.27 fails every import with "export data version 4 is greater
+# than maximum supported version 2", which drowns real findings in phantom
+# typecheck errors. Only the lint step is pinned; gofmt and go test intentionally
+# run on the developer's own Go. Override with LINT_GOTOOLCHAIN, and drop this
+# once golangci-lint supports the local toolchain.
+LINT_GOTOOLCHAIN="${LINT_GOTOOLCHAIN:-go1.24.0}"
 if command -v golangci-lint &> /dev/null; then
-    if ! golangci-lint run ./... 2>&1; then
+    if ! GOTOOLCHAIN="$LINT_GOTOOLCHAIN" golangci-lint run ./... 2>&1; then
         echo "FAIL: golangci-lint"
         exit 1
     fi
