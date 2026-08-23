@@ -23,5 +23,12 @@ linters:
       - path: "arch/"
         linters: [unparam]
         text: "always receives"   # B, x, stream are fixed at IR build time by design
+      # The GPU trainer constructors return an error unconditionally in the
+      # no-MLX stub build, so staticcheck proves every `if err != nil` guarding
+      # them is always taken. The guards are required in the -tags mlx build,
+      # where the same constructors succeed.
+      - path: "train/"
+        linters: [staticcheck]
+        text: "SA4023"
     paths:
       - vendor
