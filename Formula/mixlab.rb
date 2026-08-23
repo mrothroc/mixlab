@@ -11,7 +11,30 @@ class Mixlab < Formula
   depends_on "mlx"
   depends_on :macos
 
+  # Homebrew has no versioned mlx formula and depends_on takes no version
+  # predicate, so the tested range is asserted here instead. MLX 0.32.1 changed
+  # gather VJP semantics under a patch bump and silently broke MoE and bf16
+  # training, so an untested MLX is treated as a hard error rather than allowed
+  # through. Widen this after running the -tags mlx suite against the new MLX.
+  MLX_TESTED_MINIMUM = "0.32.0"
+  MLX_TESTED_BELOW = "0.33.0"
+
   def install
+    mlx_version = Formula["mlx"].version
+    if mlx_version < Version.new(MLX_TESTED_MINIMUM) ||
+       mlx_version >= Version.new(MLX_TESTED_BELOW)
+      odie <<~EOS
+        mixlab #{version} is tested against MLX >=#{MLX_TESTED_MINIMUM} <#{MLX_TESTED_BELOW}, but Homebrew has mlx #{mlx_version}.
+
+        MLX changes numerical and autodiff behavior in patch releases, so an
+        untested version can break training in ways that only show up mid-run.
+
+        Either install a supported mlx, or if #{mlx_version} is known good, widen
+        MLX_TESTED_BELOW in Formula/mixlab.rb after running:
+          CGO_ENABLED=1 go test -tags mlx ./arch/... ./gpu ./train -count=1
+      EOS
+    end
+
     mlx_prefix = Formula["mlx"].opt_prefix
 
     ENV["CGO_ENABLED"] = "1"
