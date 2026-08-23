@@ -96,6 +96,10 @@ bool program_has_fused_canonical_mamba3_block(const IRProgram& program) {
   return program_has_op(program, OP_MAMBA3_CANONICAL_BLOCK);
 }
 
+bool program_has_gated_delta_scan(const IRProgram& program) {
+  return program_has_op(program, OP_GATED_DELTA_SCAN);
+}
+
 void log_compile_cache_event(
     const char* kind,
     const char* event,
@@ -2297,6 +2301,15 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     use_compiled_step = false;
   }
   const bool checkpoint_step = checkpoint_training_step(program);
+  if (program_has_gated_delta_scan(program) &&
+      !gated_delta_training_path_notice_logged_) {
+    std::cerr << "[mlx_ir] GatedDeltaNet training using "
+              << (use_compiled_step ? "compiled" : "eager")
+              << " MLX value-and-grad"
+              << " (set MIXLAB_DISABLE_COMPILED_STEP=1 to disable compiled training)"
+              << std::endl;
+    gated_delta_training_path_notice_logged_ = true;
+  }
   auto run_low_memory_mamba3_step = [&]() {
     const int grad_chunk_size = low_memory_mamba3_grad_chunk_size();
     const int requested_grad_chunk_elements = low_memory_mamba3_grad_chunk_elements();

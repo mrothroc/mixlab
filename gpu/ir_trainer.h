@@ -120,6 +120,7 @@ struct IRTrainer {
   std::unordered_map<std::string, mlx::core::array> ready_outputs_;
   int ready_step_index_ = 0;
   bool memory_safe_step_notice_logged_ = false;
+  bool gated_delta_training_path_notice_logged_ = false;
   bool low_memory_update_notice_logged_ = false;
   bool cached_named_step_metadata_valid = false;
   // Additional scalar outputs retained with each training step. This keeps

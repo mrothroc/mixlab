@@ -719,7 +719,7 @@ Example:
 
 ### `gated_deltanet`
 
-Linear-time gated DeltaNet block (Yang et al., 2025): pre-norm RMS, multi-head Q/K/V projections with optional shared K/V, short 1-D conv on Q/K/V, sigmoid output gate, and a chunked delta-rule recurrence with per-channel gating. The recurrent state is matrix-valued (`d_k × d_v` per head) and updated via a chunked associative scan; on CUDA the inner triangular solve uses a custom precompiled kernel (`gpu/cuda_kernels/gated_delta_chunk_solve.cu`).
+Linear-time gated DeltaNet block (Yang et al., 2025): pre-norm RMS, multi-head Q/K/V projections with optional shared K/V, short 1-D conv on Q/K/V, sigmoid output gate, and a delta-rule recurrence with per-channel gating. The recurrent state is matrix-valued (`d_k × d_v` per head). Supported Apple GPUs use a native Metal forward and window-checkpointed backward scan; CUDA uses a chunked associative scan with a custom precompiled triangular-solve kernel (`gpu/cuda_kernels/gated_delta_chunk_solve.cu`). Other shapes and backends use the checkpointed MLX-composed implementation.
 
 Required fields:
 
@@ -731,7 +731,7 @@ Optional fields:
 
 - `d_v` — value dim per head. Defaults to `2 * d_k`. Total value dim is `heads * d_v`.
 - `kv_share` — when `true` (default), the K and V projections share a single `[D, heads*d_v]` weight (V projection is reused for K, with `d_v >= d_k` required). When `false`, K and V get separate projections of width `heads*d_k` and `heads*d_v` respectively. The shared form is the recipe used by Yang et al. and saves one projection matrix per block.
-- `scan_chunk_size` — chunk size for the chunked delta scan. When omitted, defaults to `64`, the Metal-tested safe chunk width. `0` explicitly uses the naive per-step scan (slower but simpler; useful for debugging). Positive values enable the chunked scan with the custom CUDA kernel when available on CUDA; larger values such as `128` or `256` are explicit performance experiments until validated on the target backend. Must be `>= 0`.
+- `scan_chunk_size` — scan chunk/window bound. When omitted, defaults to `64`. `0` explicitly uses the naive per-step MLX scan (slower and intended for correctness debugging). On Metal, positive values select the native bounded-memory scan when `d_k <= 64` and `d_v <= 256`; the backward recomputation window is capped at `min(scan_chunk_size, 8)` and may be reduced to fit threadgroup memory. On CUDA, the value controls the associative-scan chunk and custom triangular solve. Unsupported shapes use the checkpointed MLX-composed fallback. Must be `>= 0`.
 - `bidirectional` — shared-weight two-direction mixing for classification, MLM, or MNTP. The valid prefix is reversed per row, both recurrent deltas are summed, and padding is zeroed before the next block. Parameter count is unchanged and mixer FLOPs are approximately doubled. Native-only in v1.
 - `parallel_residual` — when `true`, fuses this block with the immediately following `swiglu` block into a parallel residual pair. See [`parallel_residual`](#parallel_residual).
 

@@ -70,6 +70,72 @@ MIXLAB_MLX_MEMORY_LIMIT_MB=16000 MIXLAB_MLX_MEM_LOG_EVERY=100 ./mixlab -mode arc
 Treat this as an allocator bound, not a model-memory estimate. Tune it for the
 device while leaving room for runtime and display allocations.
 
+## Gated DeltaNet long sequences
+
+On Apple GPUs, a positive `gated_deltanet.scan_chunk_size` selects a native
+Metal recurrence for `d_k <= 64` and `d_v <= 256`. The forward kernel keeps one
+`d_k` state vector per value channel. Its analytical backward stores matrix
+state checkpoints every `W` tokens and recomputes each window, where
+`W <= min(scan_chunk_size, 8)` and may be reduced for threadgroup memory.
+
+The scan checkpoint allocation is:
+
+```text
+B * H * ceil(T / W) * d_k * d_v * sizeof(float32)
+```
+
+For `B=4`, `H=4`, `T=16000`, `d_k=16`, `d_v=32`, and `W=8`, this is 62.5 MiB
+per active scan. The previous MLX-composed path repeatedly updated a full
+`[B,H,num_chunks,chunk,d_v]` output while traversing chunks. Its retained
+backward graph could grow approximately as `O(B*H*T^2*d_v/chunk)` even though
+the recurrence itself is linear. The fallback now concatenates chunk outputs
+once and checkpoints the composed scan, while supported Metal shapes avoid
+that graph entirely.
+
+The opt-in six-layer bidirectional regression probe uses `D=128`, `H=4`,
+`d_k=16`, `d_v=32`, and `T=16000`:
+
+```bash
+MIXLAB_GATED_DELTA_LONG_PROBE=1 \
+MIXLAB_GATED_DELTA_PROBE_BATCH=4 \
+go test -tags mlx ./train -run TestGatedDeltaNetLongSequenceMemoryProbe -count=1 -v
+```
+
+On an M4 Max with 64 GiB unified memory, the bounded path measured about
+10.4 GiB peak for batch 4 and 20.0 GiB for batch 8; batch 8 completed instead
+of being terminated for memory exhaustion. These are complete training-graph
+peaks, not just the scan checkpoint allocation. Treat the values as regression
+baselines for that machine and shape, not portable memory guarantees.
+
+The opt-in comparison benchmark holds the six-layer, bidirectional,
+BatchNorm, continuous-classification fixture constant across S4D, canonical
+Mamba-3, and Gated DeltaNet. Run each arm in a separate process because MLX
+peak memory is a process-wide high-water mark:
+
+```bash
+go test -tags mlx ./train -run '^$' \
+  -bench 'BenchmarkBidirectionalRecurrentMixersLongSequenceTraining/gated_deltanet$' \
+  -benchtime=1x -count=1
+```
+
+Replace the final arm with `s4d` or `mamba3_canonical` for the sibling
+baselines. The benchmark performs an untimed compile/warmup step before the
+measured step and reports `tokens/s` plus `peak-MiB`.
+
+The first Gated DeltaNet step prints the selected training and scan paths,
+including solve, backward, and output-accumulation details when applicable.
+Debug fallbacks can be selected with:
+
+```bash
+MIXLAB_DISABLE_GATED_DELTA_METAL_SCAN=1       # checkpointed MLX scan
+MIXLAB_DISABLE_GATED_DELTA_SCAN_CHECKPOINT=1  # raw MLX autodiff fallback
+MIXLAB_DISABLE_GATED_DELTA_METAL_SOLVE=1      # MLX triangular solve on Metal
+MIXLAB_DISABLE_GATED_DELTA_CUDA_SOLVE=1       # MLX triangular solve on CUDA
+```
+
+The first two switches materially increase long-sequence memory and are for
+diagnosis and parity checks, not production training.
+
 ## Step timing
 
 Add `-timing` to see where each progress interval spends time:

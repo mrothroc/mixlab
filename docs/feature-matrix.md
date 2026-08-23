@@ -74,7 +74,7 @@ The config validator is authoritative for combinations.
 | DeBERTa and differential `plain` variants | Native causal/masked support | Supported combinations have parity coverage |
 | `ttt_mlp` | Native causal training and stateful generation | Supported only for cache-safe TTT stacks |
 | S4D | Native differentiable FFT convolution on Metal and CUDA; compact causal default plus grouped/trainable-B/bilinear/bidirectional reference path, frequency-scaled poles, learned Sobolev filters, tied dropout, output GLU, and classification norms | Fixed-shape `linear_frames` native classifiers export through the maintained PyTorch FFT path; token models, BatchNorm, padding, and incremental state remain gated |
-| HGRN2, mLSTM, RetNet, RWKV, Mamba, Gated DeltaNet | Native correctness-first paths | Generally gated or unsupported |
+| HGRN2, mLSTM, RetNet, RWKV, Mamba, Gated DeltaNet | Native correctness-first paths; Gated DeltaNet has a bounded-memory Metal forward/backward scan for `d_k <= 64`, `d_v <= 256` | Generally gated or unsupported |
 | Parallel groups, recurrence, U-Net, custom blocks | Native under documented restrictions | Generally unsupported |
 
 Use [config-blocks.md](config-blocks.md) to choose a block family and the

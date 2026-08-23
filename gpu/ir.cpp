@@ -41,8 +41,18 @@ constexpr float kGatedDeltaExpClampMax = 0.0f;
 // rather than allowing an invalid auxiliary row to poison the primary step.
 constexpr float kPLLMarginLogitClamp = 80.0f;
 constexpr float kPLLMarginTokenGradClamp = 1.0f;
-// Safety bound: even when fusing, evaluate every K chunks to cap lazy-graph depth on user-overridden small chunk_size with long T.
-constexpr int EVAL_EVERY_K_CHUNKS = 16;
+
+std::atomic<bool> g_gated_delta_scan_path_logged{false};
+
+bool gated_delta_env_truthy(const char* name) {
+  const char* raw = std::getenv(name);
+  if (raw == nullptr || raw[0] == '\0') {
+    return false;
+  }
+  return std::strcmp(raw, "0") != 0 &&
+      std::strcmp(raw, "false") != 0 &&
+      std::strcmp(raw, "FALSE") != 0;
+}
 
 using GatedDeltaTimingClock = std::chrono::steady_clock;
 
@@ -2380,6 +2390,35 @@ mx::array gated_delta_scan_chunked(
   const int T_pad = T + pad_len;
   const int n_chunks = T_pad / chunk_size;
 
+  const bool use_cuda_solve =
+      cuda_gpu_available() &&
+      !gated_delta_env_truthy("MIXLAB_DISABLE_GATED_DELTA_CUDA_SOLVE");
+  const bool use_metal_solve =
+      !use_cuda_solve &&
+      mlx_ir::gated_delta_metal_primitive_available() &&
+      !gated_delta_env_truthy("MIXLAB_DISABLE_GATED_DELTA_METAL_SOLVE");
+  if (!g_gated_delta_scan_path_logged.exchange(true)) {
+    const char* solve_path = use_cuda_solve
+        ? "native CUDA"
+        : (use_metal_solve ? "native Metal" : "MLX fallback");
+    std::cerr << "[mlx_ir] GatedDeltaNet chunked scan"
+              << " (chunk=" << chunk_size
+              << " chunks=" << n_chunks
+              << " solve=" << solve_path
+              << " recurrence=MLX-composed"
+              << " backward="
+              << (gated_delta_env_truthy("MIXLAB_DISABLE_GATED_DELTA_SCAN_CHECKPOINT")
+                      ? "MLX-autodiff"
+                      : "checkpointed-MLX-autodiff")
+              << " output_accumulation=concat";
+    if (use_cuda_solve) {
+      std::cerr << "; set MIXLAB_DISABLE_GATED_DELTA_CUDA_SOLVE=1 to disable the CUDA solve";
+    } else if (use_metal_solve) {
+      std::cerr << "; set MIXLAB_DISABLE_GATED_DELTA_METAL_SOLVE=1 to disable the Metal solve";
+    }
+    std::cerr << ")" << std::endl;
+  }
+
   auto q = as_float32(mx::transpose(q_in, {0, 2, 1, 3}));
   auto k = as_float32(mx::transpose(k_in, {0, 2, 1, 3}));
   auto v = as_float32(mx::transpose(v_in, {0, 2, 1, 3}));
@@ -2457,14 +2496,14 @@ mx::array gated_delta_scan_chunked(
   auto solve_attn = [&]() -> mx::array {
     const int matrix_count = B * H * n_chunks;
     auto raw_attn_mats = mx::contiguous(mx::reshape(raw_attn, {matrix_count, chunk_size, chunk_size}));
-    if (cuda_gpu_available()) {
+    if (use_cuda_solve) {
       auto solve = mlx_ir::solve_strictly_lower_cuda_primitive(
           raw_attn_mats,
           matrix_count,
           chunk_size);
       return mx::reshape(solve, {B, H, n_chunks, chunk_size, chunk_size});
     }
-    if (mlx_ir::gated_delta_metal_primitive_available()) {
+    if (use_metal_solve) {
       auto solve = mlx_ir::solve_strictly_lower_metal_primitive(
           raw_attn_mats,
           matrix_count,
@@ -2511,7 +2550,8 @@ mx::array gated_delta_scan_chunked(
 
   section_start = GatedDeltaTimingClock::now();
   auto state = mx::zeros({B, H, Dk, Dv}, mx::float32);
-  auto out = mx::zeros({B, H, n_chunks, chunk_size, Dv}, mx::float32);
+  std::vector<mx::array> out_chunks;
+  out_chunks.reserve(static_cast<size_t>(n_chunks));
   for (int chunk = 0; chunk < n_chunks; ++chunk) {
     // Each slice keeps a singleton chunk axis, and the reshapes below only
     // squeeze that axis away. This remains a view as long as the chunk packing
@@ -2528,8 +2568,7 @@ mx::array gated_delta_scan_chunked(
     auto decay_chunk_exp = stable_exp_nonpos(decay_i_chunk);
     auto o_inter = as_float32(mx::matmul(q_i * mx::expand_dims(decay_chunk_exp, -1), state));
     auto o_chunk = as_float32(o_inter + mx::matmul(attn_i, v_new));
-    out = mx::slice_update(out, mx::reshape(o_chunk, {B, H, 1, chunk_size, Dv}),
-                           mx::Shape{0, 0, chunk, 0, 0}, mx::Shape{B, H, chunk + 1, chunk_size, Dv});
+    out_chunks.push_back(mx::expand_dims(o_chunk, 2));
 
     auto decay_last = mx::reshape(mx::slice(decay_i_chunk, {0, 0, chunk_size - 1}, {B, H, chunk_size}), {B, H});
     auto carry = stable_exp_nonpos(mx::expand_dims(decay_last, -1) - decay_i_chunk);
@@ -2538,6 +2577,7 @@ mx::array gated_delta_scan_chunked(
         v_new));
     state = as_float32(state * mx::reshape(stable_exp_nonpos(decay_last), {B, H, 1, 1}) + state_update);
   }
+  auto out = mx::concatenate(out_chunks, 2);
   if (timing) {
     mx::eval(out);
     chunk_loop_ms = elapsed_ms(section_start, GatedDeltaTimingClock::now());
@@ -2558,6 +2598,46 @@ mx::array gated_delta_scan_chunked(
   }
   out_seq = mx::transpose(out_seq, {0, 2, 1, 3});
   return mx::reshape(out_seq, {B * T * H, Dv});
+}
+
+mx::array gated_delta_scan_chunked_checkpointed(
+    const mx::array& q,
+    const mx::array& k,
+    const mx::array& v,
+    const mx::array& beta,
+    const mx::array& gate,
+    int B,
+    int T,
+    int H,
+    int Dk,
+    int Dv,
+    int chunk_size) {
+  if (mlx_ir::gated_delta_scan_metal_primitive_available(Dk, Dv, chunk_size)) {
+    auto scan = mx::custom_vjp(
+        [B, T, H, Dk, Dv, chunk_size](const std::vector<mx::array>& args) {
+          return std::vector<mx::array>{mlx_ir::gated_delta_scan_metal_forward(
+              args[0], args[1], args[2], args[3], args[4],
+              B, T, H, Dk, Dv, chunk_size)};
+        },
+        [B, T, H, Dk, Dv, chunk_size](
+            const std::vector<mx::array>& args,
+            const std::vector<mx::array>& cotangents,
+            const std::vector<mx::array>&) {
+          return mlx_ir::gated_delta_scan_metal_vjp(
+              args, cotangents, B, T, H, Dk, Dv, chunk_size);
+        });
+    return scan({q, k, v, beta, gate})[0];
+  }
+  if (gated_delta_env_truthy("MIXLAB_DISABLE_GATED_DELTA_SCAN_CHECKPOINT")) {
+    return gated_delta_scan_chunked(q, k, v, beta, gate, B, T, H, Dk, Dv, chunk_size);
+  }
+  auto scan = mx::checkpoint(
+      [B, T, H, Dk, Dv, chunk_size](const std::vector<mx::array>& args) {
+        return std::vector<mx::array>{gated_delta_scan_chunked(
+            args[0], args[1], args[2], args[3], args[4],
+            B, T, H, Dk, Dv, chunk_size)};
+      });
+  return scan({q, k, v, beta, gate})[0];
 }
 
 mx::array hgrn2_scan_naive(
@@ -4719,7 +4799,8 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         if (chunk_size <= 0) {
           set_out(op, 0, gated_delta_scan_naive(q, k, v, beta, gate, B, T, H, Dk, Dv));
         } else {
-          set_out(op, 0, gated_delta_scan_chunked(q, k, v, beta, gate, B, T, H, Dk, Dv, chunk_size));
+          set_out(op, 0, gated_delta_scan_chunked_checkpointed(
+              q, k, v, beta, gate, B, T, H, Dk, Dv, chunk_size));
         }
         break;
       }

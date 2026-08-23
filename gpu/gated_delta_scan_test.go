@@ -177,12 +177,36 @@ func TestGatedDeltaScanChunkedMatchesNaiveForwardAndGrad(t *testing.T) {
 		t.Skip("MLX backend not available")
 	}
 
+	for _, tc := range []struct {
+		name string
+		dv   int
+	}{
+		{name: "single_value_tile", dv: 12},
+		{name: "multiple_value_tiles", dv: 48},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runGatedDeltaScanChunkedParity(t, tc.dv)
+		})
+	}
+}
+
+func TestGatedDeltaScanChunkedCheckpointedFallbackMatchesNaive(t *testing.T) {
+	lockMLXThread(t)
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_DISABLE_GATED_DELTA_METAL_SCAN", "1")
+	runGatedDeltaScanChunkedParity(t, 12)
+}
+
+func runGatedDeltaScanChunkedParity(t *testing.T, dv int) {
+	t.Helper()
+
 	const (
 		batchSize = 2
 		seqLen    = 97
 		heads     = 3
 		dk        = 8
-		dv        = 12
 		modelDim  = 16
 		classes   = 7
 		tolOut    = 1e-4

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"testing"
 	"time"
+
+	"github.com/mrothroc/mixlab/gpu"
 )
 
 func BenchmarkS4DVsMamba3CanonicalLongSequenceForward(b *testing.B) {
@@ -144,6 +146,105 @@ func BenchmarkS4DBidirectionalSpeechCommandsTrainingStep(b *testing.B) {
 	}
 	b.StopTimer()
 	b.ReportMetric(float64(b.N*batchSize*seqLen)/b.Elapsed().Seconds(), "tokens/s")
+}
+
+// BenchmarkBidirectionalRecurrentMixersLongSequenceTraining keeps the
+// production-shaped Speech Commands mixer comparison reproducible. Run each
+// sub-benchmark in a separate process so MLX peak memory is attributable to
+// that mixer rather than the process-wide high-water mark from an earlier arm.
+func BenchmarkBidirectionalRecurrentMixersLongSequenceTraining(b *testing.B) {
+	if !mlxAvailable() {
+		b.Skip("MLX backend not available")
+	}
+	const batchSize, seqLen, layers = 4, 16000, 6
+	for _, tc := range []struct {
+		name  string
+		block string
+	}{
+		{
+			name:  "s4d",
+			block: `{"type":"s4d","state_size":64,"n_ssm":2,"bidirectional":true,"discretization":"bilinear","measure":"diag-lin","output_transform":"glu"}`,
+		},
+		{
+			name:  "mamba3_canonical",
+			block: `{"type":"mamba3-canonical","inner_dim":128,"state_size":64,"n_groups":4,"dt_rank":4,"scan_chunk_size":64,"bidirectional":true}`,
+		},
+		{
+			name:  "gated_deltanet",
+			block: `{"type":"gated_deltanet","heads":4,"d_k":16,"d_v":32,"scan_chunk_size":64,"bidirectional":true}`,
+		},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			cfg := recurrentMixerLongSequenceBenchmarkConfig(
+				b, tc.name, tc.block, batchSize, seqLen, layers)
+			prog, err := BuildIRProgramFromConfig(cfg)
+			if err != nil {
+				b.Fatal(err)
+			}
+			trainerInterface, err := initGPUTrainer(prog, cfg, nil, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			trainer := trainerInterface.(*mlxGPUTrainer)
+			defer trainer.CloseTrainer()
+			batch := s4dSpeechCommandsBenchmarkBatch(batchSize, seqLen)
+			if _, err := trainer.TrainObjectiveStepGPU(
+				batch, batchSize, seqLen, float32(cfg.Training.LR),
+			); err != nil {
+				b.Fatal(err)
+			}
+			gpu.ClearMemoryCache()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := trainer.TrainObjectiveStepGPU(
+					batch, batchSize, seqLen, float32(cfg.Training.LR),
+				); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			memory := gpu.MemoryStatsSnapshot()
+			b.ReportMetric(float64(b.N*batchSize*seqLen)/b.Elapsed().Seconds(), "tokens/s")
+			b.ReportMetric(float64(memory.PeakBytes)/(1<<20), "peak-MiB")
+		})
+	}
+}
+
+func recurrentMixerLongSequenceBenchmarkConfig(
+	tb testing.TB,
+	name, block string,
+	batchSize, seqLen, layers int,
+) *ArchConfig {
+	tb.Helper()
+	blocks := ""
+	for layer := 0; layer < layers; layer++ {
+		if layer > 0 {
+			blocks += ","
+		}
+		blocks += block
+	}
+	const modelDim = 128
+	cfg, err := ParseArchConfig([]byte(fmt.Sprintf(`{
+		"name":"%s_long_sequence_training",
+		"model_dim":%d,
+		"seq_len":%d,
+		"positional_embedding":"none",
+		"norm_type":"batchnorm",
+		"norm_placement":"pre",
+		"final_norm":true,
+		"input_adapter":{"kind":"linear_frames","feature_dim":1,"bias":true,"norm":"none"},
+		"blocks":[%s],
+		"training":{
+			"objective":"classification",
+			"classification":{"num_labels":35,"pooling":"mean","classifier_dropout":0},
+			"optimizer":"adamw","batch_tokens":%d,"steps":1,
+			"lr":0.0001,"grad_clip":1,"weight_decay":0,"seed":37
+		}
+	}`, name, modelDim, seqLen, blocks, batchSize*seqLen)), name)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return cfg
 }
 
 func s4dSpeechCommandsBenchmarkConfig(tb testing.TB, batchSize, seqLen int) *ArchConfig {
