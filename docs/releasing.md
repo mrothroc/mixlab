@@ -119,6 +119,16 @@ printf '>a\nACGT\n>b\nTGCA\n>c\nAAAA\n>d\nCCCC\n' > "$tmpdir/input.fasta"
   `CGO_ENABLED=0` and never links MLX. After any Homebrew MLX upgrade, run the
   `-tags mlx` suite locally before releasing.
 - **Cloud Build can fail Step 13 with `libcuda.so.1 not found`.** The CUDA driver lib is runtime-provided by NVIDIA Container Toolkit on the GPU host, not present at Cloud Build time. The Dockerfile's `ldd` check excludes it; if you add new ldd-sensitive logic, preserve the `grep -qv 'libcuda\.so\.1'` filter.
+- **A failed Docker Hub push also strands Artifact Registry.** `docker/cloudbuild-ci.yaml`
+  builds both images, then pushes to Docker Hub as its last step; the `images:` block
+  that publishes to Artifact Registry only runs after *every* step succeeds. So an
+  expired `dockerhub-token` fails the build after the images are already built, and AR
+  silently keeps serving the previous digest. This went unnoticed for 14 builds across
+  four releases. If `gcloud builds list` shows repeated FAILUREs, check step 2 for
+  `denied: requested access to the resource is denied` before suspecting the code, and
+  rotate the secret with `gcloud secrets versions add dockerhub-token`. To publish to AR
+  alone while that is broken, submit the build manually with an empty `_DOCKERHUB_USER`,
+  which the config already treats as "skip the Docker Hub step".
 - **GitHub CI doesn't have nvcc.** It builds the binary without CUDA kernels (empty registry) and skips MLX-tagged tests (`CGO_ENABLED=0`). CI green only confirms the Go/C++ wiring compiles. CUDA kernel correctness has to be verified by smoke-testing on RunPod after the new image lands. After Cloud Build, autonomously update the RunPod template image SHA (see `docker/README.md`) and cycle workersMax to force fresh worker pulls.
 
 ## Verifying a CUDA kernel on RunPod

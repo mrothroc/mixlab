@@ -6,7 +6,7 @@ mixlab is a JSON-configurable training engine for transformer/SSM/hybrid models,
 ```bash
 CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab/   # MLX-tagged build (production)
 go build ./...                                              # stub build (no MLX)
-golangci-lint run ./arch/... ./cmd/mixlab ./data/... ./gpu/... ./train/...
+GOTOOLCHAIN=go1.24.0 golangci-lint run ./arch/... ./cmd/mixlab ./data/... ./gpu/... ./train/...   # pin: see CONTRIBUTING.md
 go test -tags mlx ./arch/... ./gpu ./train -count=1         # full MLX suite (needs Metal/CUDA)
 CGO_ENABLED=0 go test ./arch/... ./cmd/mixlab ./data/... ./train/... -count=1   # CI command (no MLX)
 ```
@@ -29,6 +29,7 @@ CGO_ENABLED=0 go test ./arch/... ./cmd/mixlab ./data/... ./train/... -count=1   
 - [`docs/canonical_mamba3.md`](docs/canonical_mamba3.md) — canonical Mamba-3 block: paper alignment, 7-layer production stack, env vars
 - [`docs/releasing.md`](docs/releasing.md) — release checklist (tag, formula, Homebrew, RunPod)
 - [`gpu/cuda_kernels/README.md`](gpu/cuda_kernels/README.md) — CUDA kernel build pipeline
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — PR flow, and the MLX / Go toolchain drift that silently breaks local checks
 - Deep dives: [`docs/data.md`](docs/data.md), [`docs/hf-export.md`](docs/hf-export.md), [`docs/grammar-constrained-generation.md`](docs/grammar-constrained-generation.md), [`docs/ttt-mlp-stateful-inference.md`](docs/ttt-mlp-stateful-inference.md)
 
 ## Conventions
@@ -37,4 +38,5 @@ CGO_ENABLED=0 go test ./arch/... ./cmd/mixlab ./data/... ./train/... -count=1   
 - Tests with optional resources (data shards, GPU) must `t.Skip` not `t.Fatal` when the resource is missing.
 - Keep each `.go` file ≤ 1000 lines (pre-commit hook enforces it). Split by extracting cohesive siblings.
 - Don't push CUDA-kernel changes without smoke-testing on a CUDA host — GitHub CI has no nvcc, so kernels aren't compiled there.
+- A custom GPU primitive needs a differential test against its fallback covering gradients, and proof the primitive was actually live in the fast run — see [`gpu/CLAUDE.md`](gpu/CLAUDE.md).
 - Roll a release only when asked; follow `docs/releasing.md` and verify each remote step (tag, release, formula) actually landed.

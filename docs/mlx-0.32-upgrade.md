@@ -1,6 +1,10 @@
 # MLX 0.32 Upgrade
 
-Mixlab requires MLX 0.32.0 or newer. The CUDA images pin the exact upstream
+Mixlab is tested against MLX `>=0.32.0 <0.33.0`, the range `Formula/mixlab.rb`
+asserts at install time. Treat "or newer" as unverified rather than safe: MLX has
+changed autodiff behavior in a patch release (0.32.1 made `take_along_axis` reject a
+VJP with respect to its indices, breaking MoE and bf16 training until those indices
+were wrapped in `stop_gradient`). Run the `-tags mlx` suite before widening the range. The CUDA images pin the exact upstream
 release:
 
 ```text
