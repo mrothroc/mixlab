@@ -82,7 +82,7 @@ func makeGatedDeltaScanTestInputs(batchSize, seqLen, heads, modelDim, classes in
 	}
 }
 
-func makeWeightHandles(t *testing.T, weights [][]float32, modelDim, heads, dk, dv, classes int) []int64 {
+func makeWeightHandles(t testing.TB, weights [][]float32, modelDim, heads, dk, dv, classes int) []int64 {
 	t.Helper()
 
 	shapes := [][2]int{
@@ -127,7 +127,7 @@ func makeWeightHandlesForBenchmark(weights [][]float32, modelDim, heads, dk, dv,
 }
 
 func createGatedDeltaScanTrainer(
-	t *testing.T,
+	t testing.TB,
 	chunkSize, batchSize, seqLen, heads, dk, dv, modelDim, classes int,
 	weights [][]float32,
 ) TrainerHandle {
@@ -178,14 +178,18 @@ func TestGatedDeltaScanChunkedMatchesNaiveForwardAndGrad(t *testing.T) {
 	}
 
 	for _, tc := range []struct {
-		name string
-		dv   int
+		name      string
+		dk        int
+		dv        int
+		chunkSize int
 	}{
-		{name: "single_value_tile", dv: 12},
-		{name: "multiple_value_tiles", dv: 48},
+		{name: "chunk_parallel_target", dk: 16, dv: 32, chunkSize: 64},
+		{name: "chunk_parallel_max_state", dk: 32, dv: 32, chunkSize: 16},
+		{name: "recurrent_multiple_value_tiles", dk: 8, dv: 48, chunkSize: 64},
+		{name: "recurrent_large_chunk", dk: 16, dv: 32, chunkSize: 128},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			runGatedDeltaScanChunkedParity(t, tc.dv)
+			runGatedDeltaScanChunkedParity(t, tc.dk, tc.dv, tc.chunkSize)
 		})
 	}
 }
@@ -196,17 +200,25 @@ func TestGatedDeltaScanChunkedCheckpointedFallbackMatchesNaive(t *testing.T) {
 		t.Skip("MLX backend not available")
 	}
 	t.Setenv("MIXLAB_DISABLE_GATED_DELTA_METAL_SCAN", "1")
-	runGatedDeltaScanChunkedParity(t, 12)
+	runGatedDeltaScanChunkedParity(t, 8, 12, 64)
 }
 
-func runGatedDeltaScanChunkedParity(t *testing.T, dv int) {
+func TestGatedDeltaScanChunkParallelRecurrentFallbackMatchesNaive(t *testing.T) {
+	lockMLXThread(t)
+	if !Available() {
+		t.Skip("MLX backend not available")
+	}
+	t.Setenv("MIXLAB_DISABLE_GATED_DELTA_CHUNK_METAL", "1")
+	runGatedDeltaScanChunkedParity(t, 16, 32, 64)
+}
+
+func runGatedDeltaScanChunkedParity(t *testing.T, dk, dv, chunkSize int) {
 	t.Helper()
 
 	const (
 		batchSize = 2
 		seqLen    = 97
 		heads     = 3
-		dk        = 8
 		modelDim  = 16
 		classes   = 7
 		tolOut    = 1e-4
@@ -221,7 +233,7 @@ func runGatedDeltaScanChunkedParity(t *testing.T, dv int) {
 		t.Fatalf("LowerIRProgram(naive): %v", err)
 	}
 	defer naiveProg.Destroy()
-	chunkedProg, err := LowerIRProgram(buildGatedDeltaScanParityProgram(64, batchSize, seqLen, heads, dk, dv, modelDim, classes))
+	chunkedProg, err := LowerIRProgram(buildGatedDeltaScanParityProgram(chunkSize, batchSize, seqLen, heads, dk, dv, modelDim, classes))
 	if err != nil {
 		t.Fatalf("LowerIRProgram(chunked): %v", err)
 	}
@@ -247,7 +259,7 @@ func runGatedDeltaScanChunkedParity(t *testing.T, dv int) {
 	}
 
 	naiveTrainer := createGatedDeltaScanTrainer(t, 0, batchSize, seqLen, heads, dk, dv, modelDim, classes, weights)
-	chunkedTrainer := createGatedDeltaScanTrainer(t, 64, batchSize, seqLen, heads, dk, dv, modelDim, classes, weights)
+	chunkedTrainer := createGatedDeltaScanTrainer(t, chunkSize, batchSize, seqLen, heads, dk, dv, modelDim, classes, weights)
 
 	naiveLoss, err := TrainerComputeMeanSquareGrads(naiveTrainer, inputs, "scan")
 	if err != nil {
@@ -331,6 +343,78 @@ func BenchmarkGatedDeltaScanForward(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				if _, err := evalProgramOutput(gpuProg, handles, inputs, "scan"); err != nil {
 					b.Fatalf("evalProgramOutput(chunk=%d): %v", tc.chunkSize, err)
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(batchSize*seqLen*b.N)/b.Elapsed().Seconds(), "tok/s")
+		})
+	}
+}
+
+func BenchmarkGatedDeltaScanLongSequence(b *testing.B) {
+	if !Available() {
+		b.Skip("MLX backend not available")
+	}
+
+	const (
+		batchSize = 4
+		seqLen    = 16000
+		heads     = 4
+		dk        = 16
+		dv        = 32
+		modelDim  = 128
+		classes   = 11
+		chunkSize = 64
+	)
+
+	weights := makeGatedDeltaScanTestWeights(modelDim, heads, dk, dv, classes)
+	inputs := makeGatedDeltaScanTestInputs(batchSize, seqLen, heads, modelDim, classes)
+	for _, tc := range []struct {
+		name         string
+		disableChunk string
+	}{
+		{name: "chunk_parallel", disableChunk: "0"},
+		{name: "recurrent", disableChunk: "1"},
+	} {
+		b.Run(tc.name+"/forward", func(b *testing.B) {
+			b.Setenv("MIXLAB_DISABLE_GATED_DELTA_CHUNK_METAL", tc.disableChunk)
+			gpuProg, err := LowerIRProgram(buildGatedDeltaScanParityProgram(
+				chunkSize, batchSize, seqLen, heads, dk, dv, modelDim, classes))
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer gpuProg.Destroy()
+			handles, err := makeWeightHandlesForBenchmark(weights, modelDim, heads, dk, dv, classes)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer FreeHandles(handles)
+			if _, err := evalProgramOutput(gpuProg, handles, inputs, "scan"); err != nil {
+				b.Fatal(err)
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := evalProgramOutput(gpuProg, handles, inputs, "scan"); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(batchSize*seqLen*b.N)/b.Elapsed().Seconds(), "tok/s")
+		})
+
+		b.Run(tc.name+"/backward", func(b *testing.B) {
+			b.Setenv("MIXLAB_DISABLE_GATED_DELTA_CHUNK_METAL", tc.disableChunk)
+			trainer := createGatedDeltaScanTrainer(
+				b, chunkSize, batchSize, seqLen, heads, dk, dv, modelDim, classes, weights)
+			if _, err := TrainerComputeMeanSquareGrads(trainer, inputs, "scan"); err != nil {
+				b.Fatal(err)
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := TrainerComputeMeanSquareGrads(trainer, inputs, "scan"); err != nil {
+					b.Fatal(err)
 				}
 			}
 			b.StopTimer()

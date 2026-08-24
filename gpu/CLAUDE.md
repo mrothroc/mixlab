@@ -10,8 +10,8 @@ This package executes the IR via MLX (Metal on macOS, CUDA on Linux). Forward + 
 - `mamba3_cuda_primitive.{cpp,h}` — CUDA primitives for OP_MAMBA3_SELECTIVE_SCAN forward + backward
 - `mamba3_metal_primitive.{cpp,h}` — Metal forward + CUDA-style parallel-window VJP for OP_MAMBA3_SELECTIVE_SCAN; short sequences retain sequential reverse replay
 - `s4d_sobolev_cuda_primitive.{cpp,h}` — CUDA forward/backward primitive for the learned real Sobolev filter applied to S4D's complex FFT spectrum
-- `gated_delta_chunk_metal_primitive.{cpp,h}` — exact chunk-parallel Metal forward and bounded analytical VJP for small Gated DeltaNet per-head states
-- `gated_delta_metal_primitive.{cpp,h}` — Metal triangular solve, plus the native Gated DeltaNet forward/backward scan used for `d_k <= 64`, `d_v <= 256`. The backward checkpoints matrix state every `W <= min(scan_chunk_size, 8)` tokens and recomputes each window; see [`../docs/performance.md`](../docs/performance.md#gated-deltanet-long-sequences)
+- `gated_delta_chunk_metal_primitive.{cpp,h}` — exact chunk-parallel Metal forward and analytical VJP; the preferred Gated DeltaNet path for `d_k <= 32`, `d_v <= 32`, `scan_chunk_size <= 64`
+- `gated_delta_metal_primitive.{cpp,h}` — Metal triangular solve, plus the recurrent Gated DeltaNet scan covering the rest of `d_k <= 64`, `d_v <= 256`. The backward checkpoints matrix state every `W <= min(scan_chunk_size, 8)` tokens and recomputes each window; see [`../docs/performance.md`](../docs/performance.md#gated-deltanet-long-sequences)
 - `s4d_kernel_metal_primitive.{cpp,h}` — Metal forward/backward for bidirectional S4D kernel synthesis; writes the compact two-direction kernel without materializing the `[D,state_size/2,T]` power tensors
 - `cuda_graph_limits.go` — CUDA graph batching policy (per-op-type caps); see `train/cuda_graph_limits.go` for the wiring
 - [`cuda_kernels/`](cuda_kernels/README.md) — `.cu` source + build pipeline for embedded fatbins

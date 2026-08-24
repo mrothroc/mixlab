@@ -1,5 +1,6 @@
 #include "ir.h"
 #include "backward_trace.h"
+#include "gated_delta_chunk_metal_primitive.h"
 #include "gated_delta_cuda_primitive.h"
 #include "gated_delta_metal_primitive.h"
 #include "mamba3_cuda_primitive.h"
@@ -2615,6 +2616,13 @@ mx::array gated_delta_scan_chunked_checkpointed(
   if (mlx_ir::gated_delta_scan_metal_primitive_available(Dk, Dv, chunk_size)) {
     auto scan = mx::custom_vjp(
         [B, T, H, Dk, Dv, chunk_size](const std::vector<mx::array>& args) {
+          if (mlx_ir::gated_delta_chunk_metal_primitive_available(
+                  Dk, Dv, chunk_size)) {
+            return std::vector<mx::array>{
+                mlx_ir::gated_delta_chunk_metal_forward(
+                    args[0], args[1], args[2], args[3], args[4],
+                    B, T, H, Dk, Dv, chunk_size)};
+          }
           return std::vector<mx::array>{mlx_ir::gated_delta_scan_metal_forward(
               args[0], args[1], args[2], args[3], args[4],
               B, T, H, Dk, Dv, chunk_size)};
@@ -2623,6 +2631,11 @@ mx::array gated_delta_scan_chunked_checkpointed(
             const std::vector<mx::array>& args,
             const std::vector<mx::array>& cotangents,
             const std::vector<mx::array>&) {
+          if (mlx_ir::gated_delta_chunk_metal_primitive_available(
+                  Dk, Dv, chunk_size)) {
+            return mlx_ir::gated_delta_chunk_metal_vjp(
+                args, cotangents, B, T, H, Dk, Dv, chunk_size);
+          }
           return mlx_ir::gated_delta_scan_metal_vjp(
               args, cotangents, B, T, H, Dk, Dv, chunk_size);
         });

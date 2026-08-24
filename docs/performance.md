@@ -73,10 +73,12 @@ device while leaving room for runtime and display allocations.
 ## Gated DeltaNet long sequences
 
 On Apple GPUs, a positive `gated_deltanet.scan_chunk_size` selects a native
-Metal recurrence for `d_k <= 64` and `d_v <= 256`. The forward kernel keeps one
-`d_k` state vector per value channel. Its analytical backward stores matrix
-state checkpoints every `W` tokens and recomputes each window, where
-`W <= min(scan_chunk_size, 8)` and may be reduced for threadgroup memory.
+Metal scan for `d_k <= 64` and `d_v <= 256`. Shapes with `d_k <= 32`,
+`d_v <= 32`, and `scan_chunk_size <= 64` use the exact chunk-parallel path:
+independent chunk summaries, short forward/reverse chunk-prefix passes, and
+parallel chunk replay. Its analytical backward propagates state cotangents
+between chunks and recomputes bounded local windows. Larger supported shapes
+retain the native recurrent Metal implementation.
 
 The scan checkpoint allocation is:
 
@@ -107,6 +109,18 @@ of being terminated for memory exhaustion. These are complete training-graph
 peaks, not just the scan checkpoint allocation. Treat the values as regression
 baselines for that machine and shape, not portable memory guarantees.
 
+On an M1 Max, the batch-4 probe above measured `22,078 tok/s` with the
+chunk-parallel path versus `7,862 tok/s` with the recurrent Metal fallback, a
+`2.81x` whole-model speedup. Peak memory was 10.55 GiB versus 10.40 GiB. The
+scan-only benchmark measured `2.69M tok/s` forward and `535k tok/s` through
+forward plus backward, versus `670k` and `94k` respectively for the recurrent
+path. Run that benchmark with:
+
+```bash
+go test -tags mlx ./gpu -run '^$' \
+  -bench BenchmarkGatedDeltaScanLongSequence -benchtime=3x -count=1
+```
+
 The opt-in comparison benchmark holds the six-layer, bidirectional,
 BatchNorm, continuous-classification fixture constant across S4D, canonical
 Mamba-3, and Gated DeltaNet. Run each arm in a separate process because MLX
@@ -128,13 +142,15 @@ Debug fallbacks can be selected with:
 
 ```bash
 MIXLAB_DISABLE_GATED_DELTA_METAL_SCAN=1       # checkpointed MLX scan
+MIXLAB_DISABLE_GATED_DELTA_CHUNK_METAL=1      # recurrent Metal scan
 MIXLAB_DISABLE_GATED_DELTA_SCAN_CHECKPOINT=1  # raw MLX autodiff fallback
 MIXLAB_DISABLE_GATED_DELTA_METAL_SOLVE=1      # MLX triangular solve on Metal
 MIXLAB_DISABLE_GATED_DELTA_CUDA_SOLVE=1       # MLX triangular solve on CUDA
 ```
 
-The first two switches materially increase long-sequence memory and are for
-diagnosis and parity checks, not production training.
+The full Metal-disable and raw-autodiff switches materially increase
+long-sequence memory. The chunk-disable switch keeps bounded memory and is for
+performance comparisons or diagnosing the chunk-parallel path.
 
 ## Step timing
 
