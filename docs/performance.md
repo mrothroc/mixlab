@@ -103,18 +103,24 @@ MIXLAB_GATED_DELTA_PROBE_BATCH=4 \
 go test -tags mlx ./train -run TestGatedDeltaNetLongSequenceMemoryProbe -count=1 -v
 ```
 
-On an M4 Max with 64 GiB unified memory, the bounded path measured about
-10.4 GiB peak for batch 4 and 20.0 GiB for batch 8; batch 8 completed instead
-of being terminated for memory exhaustion. These are complete training-graph
-peaks, not just the scan checkpoint allocation. Treat the values as regression
-baselines for that machine and shape, not portable memory guarantees.
+All figures below come from one machine, an Apple M1 Max with 64 GiB unified
+memory, and are quoted in the `peak_mib` units the probe itself prints so they
+can be compared directly against a local run.
 
-On an M1 Max, the batch-4 probe above measured `22,078 tok/s` with the
-chunk-parallel path versus `7,862 tok/s` with the recurrent Metal fallback, a
-`2.81x` whole-model speedup. Peak memory was 10.55 GiB versus 10.40 GiB. The
-scan-only benchmark measured `2.69M tok/s` forward and `535k tok/s` through
-forward plus backward, versus `670k` and `94k` respectively for the recurrent
-path. Run that benchmark with:
+The recurrent Metal path peaks near `10,400 MiB` at batch 4 and `19,980 MiB` at
+batch 8, and batch 8 completes rather than being terminated for memory
+exhaustion. These are complete training-graph peaks, not just the scan
+checkpoint allocation.
+
+Memory and throughput do not travel equally. Peak memory is driven by
+allocation sizes and reproduces closely on other Apple GPUs at the same shape;
+throughput is device-specific and should be re-measured rather than assumed.
+
+At batch 4 the chunk-parallel path measured `22,078 tok/s` against `7,862 tok/s`
+for the recurrent fallback, a `2.81x` whole-model speedup, with peaks of
+`10,550 MiB` versus `10,400 MiB`. The scan-only benchmark measured `2.69M tok/s`
+forward and `535k tok/s` through forward plus backward, versus `670k` and `94k`
+for the recurrent path. Run that benchmark with:
 
 ```bash
 go test -tags mlx ./gpu -run '^$' \
