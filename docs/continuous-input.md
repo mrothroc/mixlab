@@ -40,11 +40,17 @@ mixlab -mode prepare \
 ```
 
 `prepare` converts numeric inputs to little-endian float32, rejects non-finite
-values, validates lengths in `[1,T]`, stratifies labeled records
-deterministically, and writes `mixlab_continuous_sequence_shard_v2` shards.
+values, validates lengths in `[1,T]`, selects train/validation members for each
+label deterministically, and writes `mixlab_continuous_sequence_shard_v2`
+shards. It preserves the input record order within each split; it does not
+globally shuffle records before sharding. Shuffle class-ordered arrays together
+with their labels and lengths before `prepare`, or the resulting shards and
+training batches may contain only one class. Runtime shard-order and
+within-shard shuffling cannot add label diversity to a class-pure shard.
+
 Each shard stores labels, valid lengths, and frames atomically. Legacy binary
-v1 shards and manifests remain readable and are treated as fully valid. The adjacent
-`mixlab.dataset.json` records:
+v1 shards and manifests remain readable and are treated as fully valid. The
+adjacent `mixlab.dataset.json` records:
 
 - `representation: "continuous_frames"`
 - `feature_dtype: "float32"`

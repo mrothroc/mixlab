@@ -88,6 +88,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	steps := resumeSetup.Steps
 	startStep := resumeSetup.StartStep
 	resumed := resumeSetup.Loaded
+	labelDiversityMonitor := newClassificationLabelDiversityMonitor(
+		cfg.Training.DatasetNumLabels, steps-startStep,
+	)
 	if resumed != nil {
 		fmt.Printf("  [%s] resuming complete checkpoint %s at step %d/%d\n", name, resumed.Manifest.ManifestPath, startStep, steps)
 	}
@@ -460,6 +463,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		lastTrainBatch := batch
 		initialSubmitStart := time.Now()
 		stopInitialSubmit := startSlowTrainingPhaseLogger(name, startStep, "submit_step")
+		if warning := labelDiversityMonitor.observe(batch); warning != "" {
+			fmt.Printf("  [%s] warning: %s\n", name, warning)
+		}
 		prepared, err := prepareTrainingBatch(
 			cfg, trainer, batch, startStep, currentObjective, currentBatchSize, currentSeqLen,
 			pairSampler, invarianceSampler, pllMarginSampler, distiller, data2vec,
@@ -565,6 +571,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 			submitStart := time.Now()
 			stopSubmit := startSlowTrainingPhaseLogger(name, nextStep, "submit_step")
+			if warning := labelDiversityMonitor.observe(batch); warning != "" {
+				fmt.Printf("  [%s] warning: %s\n", name, warning)
+			}
 			prepared, err := prepareTrainingBatch(
 				cfg, trainer, batch, nextStep, nextObjective, nextBatchSize, nextSeqLen,
 				pairSampler, invarianceSampler, pllMarginSampler, distiller, data2vec,

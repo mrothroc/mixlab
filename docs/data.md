@@ -136,7 +136,10 @@ Preparation writes labels, valid lengths, and little-endian float32 frames
 atomically in `mixlab_continuous_sequence_shard_v2`. Lengths may also come from
 an integer `lengths: [N]` member in `.npz` input; without either source every
 record has length `T`. It rejects non-finite values, invalid lengths, missing or
-duplicate label rows, and non-contiguous label IDs. See
+duplicate label rows, and non-contiguous label IDs. Labeled preparation chooses
+train/validation members per class but preserves source order within each
+split; shuffle class-ordered arrays, labels, and lengths together before
+preparation to avoid class-pure shards. See
 [Continuous sequence input](continuous-input.md) for model configuration and
 the current native-only compatibility boundary.
 
@@ -301,7 +304,10 @@ in sorted order and evaluates all records by default. If the final GPU batch is
 partial, Mixlab pads only the fixed-shape runtime batch and excludes those
 padding rows from loss, metrics, and `-classification-out`. Training-time
 validation remains a capped monitoring sample; use standalone eval for
-full-split reporting.
+full-split reporting. During the first up to ten eligible multi-row
+classification training batches, Mixlab also checks label diversity. If every
+sampled batch is single-label, it warns once that records may be class-ordered
+within shards.
 
 DNA datasets also carry the complement table used by top-level
 `rc_equivariant: true`. For packed MLM, biological positions reverse only

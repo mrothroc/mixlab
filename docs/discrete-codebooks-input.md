@@ -36,7 +36,10 @@ codebook, and offending value.
 The output uses `mixlab_codebook_sequence_shard_v1`. Each record stores its
 label, valid length, and contiguous int32 `[T,Q]` codes atomically. The adjacent
 manifest records `T`, `Q`, codebook vocabulary size, modality, label count, and
-split class counts. Model/manifest mismatches fail before trainer creation.
+split class counts. Preparation selects train/validation members per label but
+preserves input order within each split. Shuffle class-ordered code arrays,
+labels, and lengths together before preparation to avoid class-pure shards and
+batches. Model/manifest mismatches fail before trainer creation.
 
 ## Configure the adapter
 

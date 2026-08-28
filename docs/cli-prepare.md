@@ -210,7 +210,10 @@ For JSONL, set `-label-field` alongside the text and framing fields:
 Each record must contain an integer label. Labels must form a contiguous set
 `0..num_labels-1` with at least two classes. The validation split is
 deterministic and class-aware, preserving at least one training example for
-each class.
+each class. Preparation preserves source record order within the train and
+validation splits; class-aware splitting does not globally shuffle records.
+Shuffle class-ordered inputs and their labels together before preparation so
+individual shards and batches are not class-pure.
 
 For FASTA, provide a sibling label TSV:
 
