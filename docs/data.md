@@ -305,9 +305,14 @@ partial, Mixlab pads only the fixed-shape runtime batch and excludes those
 padding rows from loss, metrics, and `-classification-out`. Training-time
 validation remains a capped monitoring sample; use standalone eval for
 full-split reporting. During the first up to ten eligible multi-row
-classification training batches, Mixlab also checks label diversity. If every
-sampled batch is single-label, it warns once that records may be class-ordered
-within shards.
+classification training batches, Mixlab also checks label diversity. Every batch
+holds at least one label, so the check scores the diversity *above* that floor:
+it warns once if the sampled batches average less than a quarter of the
+achievable excess, `1 + 0.25*(achievable - 1)`. The warning reports the observed
+mean and range so shard-boundary batches with two or three labels do not hide
+otherwise near-degenerate ordering. Low diversity has two causes and the count
+alone cannot separate them, so the warning names both: class-ordered records, or
+a single class dominating the corpus.
 
 DNA datasets also carry the complement table used by top-level
 `rc_equivariant: true`. For packed MLM, biological positions reverse only

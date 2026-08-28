@@ -37,12 +37,14 @@ record per row, used by record framing + classification).
 Preparation picks train/validation members per label but preserves source order
 within each split — it does not shuffle. Class-ordered input therefore yields
 class-ordered shards, and when a shard holds one class neither shard-order nor
-within-shard shuffling can recover diversity: every batch drawn from it is
-class-pure. Global `class_counts` stay perfectly balanced either way, so the
+within-shard shuffling can make that shard diverse. Most batches remain
+class-pure, while batches that straddle shard boundaries can contain a few
+labels. Global `class_counts` stay perfectly balanced either way, so the
 manifest cannot reveal it. `train/classification_data_diagnostics.go` samples
-the batches the trainer actually consumes and warns once if they are all
-single-label. Reproducing this needs a fixture spanning **more than one shard**;
-the same records in a single shard train with mixed batches.
+the batches the trainer actually consumes and warns on low mean diversity;
+boundary batches do not suppress the warning. Reproducing this needs a fixture
+spanning **more than one shard**; the same records in a single shard train with
+mixed batches.
 
 ## Conventions
 - The Python writer (`scripts/prepare*.py`) and the Go reader are a **byte-exact contract** — change both together and keep the magic/version, header size, field order, and endianness in lockstep.

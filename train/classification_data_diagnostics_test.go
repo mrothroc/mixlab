@@ -20,7 +20,8 @@ func TestClassificationLabelDiversityWarnsForClassPureBatches(t *testing.T) {
 		}
 	}
 	warning := monitor.observe(trainBatch{labels: []int32{9, 9, 9, 9}})
-	if !strings.Contains(warning, "sampled 10 training batches each contained 1 distinct label (of 35)") ||
+	if !strings.Contains(warning, "sampled 10 training batches averaged 1.0 distinct labels") ||
+		!strings.Contains(warning, "of 4 possible per batch, 35 classes; min=1 max=1") ||
 		!strings.Contains(warning, "shuffle records and labels together before prepare") {
 		t.Fatalf("warning=%q", warning)
 	}
@@ -39,6 +40,67 @@ func TestClassificationLabelDiversityDoesNotWarnForMixedBatches(t *testing.T) {
 	}
 }
 
+func TestClassificationLabelDiversityWarnsAcrossShardBoundaryBatches(t *testing.T) {
+	monitor := newClassificationLabelDiversityMonitor(35, 10)
+	distinctPerBatch := []int{1, 1, 1, 2, 1, 1, 1, 3, 1, 1}
+	var warning string
+	for _, distinct := range distinctPerBatch {
+		labels := make([]int32, 16)
+		for row := range labels {
+			labels[row] = int32(row % distinct)
+		}
+		warning = monitor.observe(trainBatch{labels: labels})
+	}
+	if !strings.Contains(warning, "averaged 1.3 distinct labels") ||
+		!strings.Contains(warning, "of 16 possible per batch, 35 classes; min=1 max=3") {
+		t.Fatalf("boundary-batch warning=%q", warning)
+	}
+}
+
+// The threshold is a quarter of the diversity *above one*, since every batch
+// necessarily contains at least one label. With 16 achievable it sits at 4.75.
+func TestClassificationLabelDiversityQuarterThresholdBoundary(t *testing.T) {
+	observeUniform := func(distinctPerBatch int) string {
+		monitor := newClassificationLabelDiversityMonitor(35, 10)
+		var warning string
+		for batch := 0; batch < 10; batch++ {
+			labels := make([]int32, 16)
+			for row := range labels {
+				labels[row] = int32(row % distinctPerBatch)
+			}
+			warning = monitor.observe(trainBatch{labels: labels})
+		}
+		return warning
+	}
+	if warning := observeUniform(4); !strings.Contains(warning, "averaged 4.0 distinct labels") {
+		t.Fatalf("below threshold should warn: %q", warning)
+	}
+	if warning := observeUniform(5); warning != "" {
+		t.Fatalf("at threshold should stay quiet: %q", warning)
+	}
+}
+
+// A correctly shuffled but imbalanced corpus produces some class-pure batches
+// purely by chance. Demanding every binary batch hold both labels made the
+// diagnostic fire on 86% of well-prepared 5%-minority runs, so the threshold
+// must tolerate the occasional pure batch.
+func TestClassificationLabelDiversityDoesNotWarnForImbalancedShuffledData(t *testing.T) {
+	monitor := newClassificationLabelDiversityMonitor(2, 10)
+	// 5% minority over 32 rows leaves roughly a fifth of batches class-pure.
+	pureBatches := map[int]bool{2: true, 6: true}
+	var warning string
+	for batch := 0; batch < 10; batch++ {
+		labels := make([]int32, 32)
+		if !pureBatches[batch] {
+			labels[batch] = 1
+		}
+		warning = monitor.observe(trainBatch{labels: labels})
+	}
+	if warning != "" {
+		t.Fatalf("shuffled imbalanced data warned: %q", warning)
+	}
+}
+
 func TestClassificationLabelDiversityUsesRealRows(t *testing.T) {
 	monitor := newClassificationLabelDiversityMonitor(3, 1)
 	warning := monitor.observe(trainBatch{
@@ -47,7 +109,8 @@ func TestClassificationLabelDiversityUsesRealRows(t *testing.T) {
 		exampleCount: 2,
 		exampleMask:  []float32{1, 0, 1, 0},
 	})
-	if !strings.Contains(warning, "1 distinct label (of 3)") {
+	if !strings.Contains(warning, "averaged 1.0 distinct labels") ||
+		!strings.Contains(warning, "of 2 possible per batch, 3 classes") {
 		t.Fatalf("warning=%q", warning)
 	}
 }
@@ -73,17 +136,22 @@ func TestClassificationLabelDiversityDetectsPreparedRecordOrder(t *testing.T) {
 
 	dir := t.TempDir()
 	input := filepath.Join(dir, "features.npy")
-	frames := make([]float32, 32*4)
+	const (
+		numLabels       = 35
+		recordsPerLabel = 62
+		recordCount     = numLabels * recordsPerLabel
+	)
+	frames := make([]float32, recordCount*4)
 	for i := range frames {
 		frames[i] = float32(i)
 	}
-	writeNPYFloat32(t, input, []int{32, 4, 1}, frames)
+	writeNPYFloat32(t, input, []int{recordCount, 4, 1}, frames)
 
 	prepare := func(name string, labelForRow func(int) int) string {
 		t.Helper()
 		labelsPath := filepath.Join(dir, name+".tsv")
 		var labels strings.Builder
-		for row := 0; row < 32; row++ {
+		for row := 0; row < recordCount; row++ {
 			fmt.Fprintf(&labels, "%d\t%d\n", row, labelForRow(row))
 		}
 		if err := os.WriteFile(labelsPath, []byte(labels.String()), 0o600); err != nil {
@@ -97,7 +165,7 @@ func TestClassificationLabelDiversityDetectsPreparedRecordOrder(t *testing.T) {
 			"--input-format", "continuous",
 			"--label-file", labelsPath,
 			"--val-split", "0",
-			"--tokens-per-shard", "32",
+			"--tokens-per-shard", "248",
 		)
 		if combined, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("prepare %s labels: %v\n%s", name, err, combined)
@@ -105,16 +173,16 @@ func TestClassificationLabelDiversityDetectsPreparedRecordOrder(t *testing.T) {
 		return filepath.Join(output, "train_*.bin")
 	}
 
-	warningFor := func(pattern string) string {
+	warningFor := func(pattern string, numLabels int) string {
 		t.Helper()
 		loader, err := data.NewLoader(pattern, 7)
 		if err != nil {
 			t.Fatal(err)
 		}
-		monitor := newClassificationLabelDiversityMonitor(2, 10)
+		monitor := newClassificationLabelDiversityMonitor(numLabels, 10)
 		var warning string
 		for i := 0; i < 10; i++ {
-			batch, err := loader.NextBatchDetailed(16, 4)
+			batch, err := loader.NextBatchDetailed(64, 4)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,18 +191,13 @@ func TestClassificationLabelDiversityDetectsPreparedRecordOrder(t *testing.T) {
 		return warning
 	}
 
-	ordered := prepare("class-ordered", func(row int) int {
-		if row < 16 {
-			return 0
-		}
-		return 1
-	})
-	if warning := warningFor(ordered); !strings.Contains(warning, "records may be class-ordered within shards") {
+	ordered := prepare("class-ordered", func(row int) int { return row / recordsPerLabel })
+	if warning := warningFor(ordered, numLabels); !strings.Contains(warning, "records may be class-ordered within shards") {
 		t.Fatalf("class-ordered warning=%q", warning)
 	}
 
-	mixed := prepare("mixed", func(row int) int { return row % 2 })
-	if warning := warningFor(mixed); warning != "" {
+	mixed := prepare("mixed", func(row int) int { return row % numLabels })
+	if warning := warningFor(mixed, numLabels); warning != "" {
 		t.Fatalf("mixed prepared data warning=%q", warning)
 	}
 }

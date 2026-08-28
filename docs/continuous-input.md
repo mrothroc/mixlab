@@ -45,8 +45,9 @@ label deterministically, and writes `mixlab_continuous_sequence_shard_v2`
 shards. It preserves the input record order within each split; it does not
 globally shuffle records before sharding. Shuffle class-ordered arrays together
 with their labels and lengths before `prepare`, or the resulting shards and
-training batches may contain only one class. Runtime shard-order and
-within-shard shuffling cannot add label diversity to a class-pure shard.
+many resulting training batches may contain only one class. Shard-boundary
+batches can mix a few classes, but runtime shard-order and within-shard
+shuffling cannot make a class-pure shard diverse.
 
 Each shard stores labels, valid lengths, and frames atomically. Legacy binary
 v1 shards and manifests remain readable and are treated as fully valid. The
