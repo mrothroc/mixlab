@@ -78,13 +78,20 @@ Build *and* load the same version: the dylib's install name resolves through
 **Go and golangci-lint.** golangci-lint typechecks against the standard library of
 whichever Go it runs under, and a newer Go can emit export data it cannot decode —
 producing phantom `typecheck` errors on every import that drown out real findings.
-The pre-commit hook pins lint to CI's Go version for this reason (override with
-`LINT_GOTOOLCHAIN`); `make lint` does not, so prefer the hook, or pin explicitly:
+`make lint` and the pre-commit hook both pin lint to CI's Go version for this
+reason. Override either with `LINT_GOTOOLCHAIN`, and drop the pin once
+golangci-lint supports your local toolchain:
 
 ```bash
-GOTOOLCHAIN=go1.24.0 golangci-lint run ./...
+LINT_GOTOOLCHAIN=local make lint
 ```
 
 A findings count that changes without a code change is the tell. Baseline against
 `main` before assuming a finding is yours, and note that `max-same-issues` caps the
 report — use `--max-same-issues=0 --max-issues-per-linter=0` to see the true count.
+
+Check which binary you are actually running. A `go install`ed golangci-lint in
+`~/go/bin` shadows a newer Homebrew one, and Homebrew can leave its keg unlinked,
+so `which golangci-lint` and `golangci-lint --version` are worth confirming before
+trusting a clean or a noisy result. If the tool is missing entirely the hook falls
+back to `go vet` and says so — that is a much weaker gate, not a passing lint.

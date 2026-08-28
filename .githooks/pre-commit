@@ -30,7 +30,12 @@ if command -v golangci-lint &> /dev/null; then
         exit 1
     fi
 else
-    # Fallback to basic vet if golangci-lint not installed
+    # Fallback to basic vet if golangci-lint not installed. Say so loudly: this
+    # drops staticcheck, unused, errcheck, gocritic, unparam, and misspell, so a
+    # silent fallback would make a missing tool indistinguishable from a clean
+    # lint. Install it with: brew install golangci-lint
+    echo "WARNING: golangci-lint not found on PATH — falling back to 'go vet' only."
+    echo "         staticcheck/unused/errcheck/gocritic/unparam/misspell are NOT running."
     if ! go vet ./... 2>&1; then
         echo "FAIL: go vet"
         exit 1

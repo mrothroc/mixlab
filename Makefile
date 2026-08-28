@@ -48,8 +48,15 @@ test: ## Run all tests
 vet: ## Run go vet
 	go vet ./...
 
+# golangci-lint typechecks against the stdlib of whichever Go it runs under, and
+# a newer local Go can emit export data it cannot decode -- which surfaces as
+# phantom typecheck errors on every import rather than a clear failure. Pin to
+# the toolchain CI builds with, matching .githooks/pre-commit. Override with
+# LINT_GOTOOLCHAIN=local once golangci-lint supports the local toolchain.
+LINT_GOTOOLCHAIN ?= go1.24.0
+
 lint: ## Run all lint checks (golangci-lint + file size)
-	golangci-lint run ./...
+	GOTOOLCHAIN=$(LINT_GOTOOLCHAIN) golangci-lint run ./...
 	@find . -name "*.go" -not -path "./vendor/*" -exec wc -l {} + | sort -rn | \
 		awk '$$1 > 1000 && $$2 != "total" {printf "OVER 1000 LINES: %s (%d)\n", $$2, $$1; err=1} END {exit err}'
 
