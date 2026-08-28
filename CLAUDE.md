@@ -6,7 +6,7 @@ mixlab is a JSON-configurable training engine for transformer/SSM/hybrid models,
 ```bash
 CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab/   # MLX-tagged build (production)
 go build ./...                                              # stub build (no MLX)
-GOTOOLCHAIN=go1.24.0 golangci-lint run ./arch/... ./cmd/mixlab ./data/... ./gpu/... ./train/...   # pin: see CONTRIBUTING.md
+make lint                                                   # golangci-lint (pinned to CI's Go) + 1000-line file cap
 go test -tags mlx ./arch/... ./gpu ./train -count=1         # full MLX suite (needs Metal/CUDA)
 CGO_ENABLED=0 go test ./arch/... ./cmd/mixlab ./data/... ./train/... -count=1   # CI command (no MLX)
 ```

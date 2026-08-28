@@ -8,12 +8,15 @@ lives in `gpu/`; this package is the orchestrator. The largest package —
 under the 1000-line cap.
 
 ## Subsystems (entry files)
-Each objective's batch prep dispatches from `objective.go::prepareObjectiveBatchWithSeqLen`.
+Each objective's batch prep dispatches from `objective.go::prepareObjectiveBatchWithShape`; the older `…WithSeqLen` is a wrapper that derives the row count from `batch_tokens`.
 
 - **Objectives / batching** — `objective.go` (causal/mlm/mntp/hybrid/block-diffusion/multihead/classification masking + label/valid-mask/position construction); `train_batch.go` (`trainBatch` ↔ loader `Batch`).
 - **Classification** — `classification.go` (metrics, warm-start), `train_final_eval.go`; head IR is `arch/classification_ir.go`. Uses a `dropoutInactive` program-cache-key variant for dropout-free eval. Guide: [`../docs/config-training.md`](../docs/config-training.md).
 - **Resume / checkpoints** — `resume_setup.go`, `resume_checkpoint.go`, `resume_manifest.go`, `gpu_trainer_resume_mlx.go`. Versioned `mixlab_resume_v1` bundle; manifest written last as the commit marker. Keyed dropout (`dropout_rng.go`) makes resumed dropout bit-reproducible.
 - **Generation** — `generate.go`, `generate_sampling.go` (replay / batched / TTT-stateful paths + retry-on-incomplete). Grammar constraints: `generate_constraints.go`, `generate_gbnf*.go`, `generate_token_dfa.go` — see [`../docs/grammar-constrained-generation.md`](../docs/grammar-constrained-generation.md). GBNF parses **untrusted** input: keep the recursion-depth and incremental-production bounds.
+- **Optimizer grouping** — `gpu_trainer_optimizer.go` maps each `WeightMeta` to a group; `gpu/optimizer_config.go` decides decay. Precedence is `ForceNoDecay` → `ForceDecay` → `weight_decay_policy: "all"` → shape/class default. The class default matters more than it looks: `isScalarOptimizerName` lists parameters (all S4D state tensors among them) that are scalar-class and therefore never decay, so a config can look like it decays them while the policy quietly exempts them. Only `"all"` short-circuits that, which is why S4D dt/A/B carry an explicit `ForceNoDecay`.
+- **LR schedules / configured validation** — `schedule.go` builds the step-driven cosine or phase schedule; `schedule_newbob.go` implements the validation-driven NewBob scheduler behind a `metricTrainingScheduler` interface, and `train_validation.go` owns the configured full-split validation cadence that feeds it. Resume persists live NewBob state via `resume_manifest.go`.
+- **Data diagnostics** — `classification_data_diagnostics.go` samples early classification batches and warns once if all are single-label. It reports on batches actually consumed, not on how shards were written, so it stays quiet when within-shard shuffling already mixes classes. See [`../data/CLAUDE.md`](../data/CLAUDE.md) for why balanced `class_counts` cannot detect this.
 - **Dataset wiring** — `dataset_manifest.go` (`configureDatasetForTraining`: validate manifest, attach runtime sequence-packing/framing/classification state). Formats live in [`../data/CLAUDE.md`](../data/CLAUDE.md).
 
 ## Key files
