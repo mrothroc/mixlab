@@ -422,7 +422,7 @@ func TestS4DReferenceConfigWeightsIRAndTiedDropout(t *testing.T) {
 			t.Fatalf("weight %q=%+v want shape %v", name, meta, shape)
 		}
 	}
-	for _, name := range []string{"s4d_log_A_real", "s4d_A_imag", "s4d_B_real", "s4d_B_imag"} {
+	for _, name := range []string{"s4d_log_dt", "s4d_log_A_real", "s4d_A_imag", "s4d_B_real", "s4d_B_imag"} {
 		meta := byName[name]
 		if meta.OptimizerRole != "s4d_state" || meta.OptimizerLR != 0.001 || !meta.ForceNoDecay {
 			t.Fatalf("%s optimizer metadata=%+v", name, meta)
@@ -433,9 +433,6 @@ func TestS4DReferenceConfigWeightsIRAndTiedDropout(t *testing.T) {
 	}
 	if meta := byName["s4d_B_imag"]; !meta.InitZero {
 		t.Fatalf("B imaginary initialization metadata=%+v", meta)
-	}
-	if meta := byName["s4d_log_dt"]; meta.OptimizerRole != "s4d_main" || !meta.ForceNoDecay {
-		t.Fatalf("dt optimizer metadata=%+v", meta)
 	}
 	for _, name := range []string{"s4d_C_real", "s4d_C_imag", "s4d_D"} {
 		meta := byName[name]
@@ -470,6 +467,34 @@ func TestS4DReferenceConfigWeightsIRAndTiedDropout(t *testing.T) {
 	}
 	if tiedDropouts != 2 {
 		t.Fatalf("tied dropout ops=%d want 2", tiedDropouts)
+	}
+}
+
+func TestS4DStateParametersAlwaysDisableWeightDecay(t *testing.T) {
+	metas, err := s4dWeightShapesWithOptions(BlockSpec{
+		Type:       "s4d",
+		StateSize:  8,
+		NSSM:       2,
+		TrainableB: true,
+	}, 8, EmitOptions{Norm: defaultNormSpec(), NormPlacement: NormPlacementPre})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]WeightMeta, len(metas))
+	for _, meta := range metas {
+		byName[meta.Name] = meta
+	}
+	for _, name := range []string{"s4d_log_dt", "s4d_log_A_real", "s4d_A_imag", "s4d_B_real", "s4d_B_imag"} {
+		meta, ok := byName[name]
+		if !ok {
+			t.Fatalf("missing weight %q", name)
+		}
+		if !meta.ForceNoDecay {
+			t.Fatalf("%s ForceNoDecay=false: %+v", name, meta)
+		}
+		if meta.OptimizerRole != "" || meta.OptimizerLR != 0 {
+			t.Fatalf("%s unexpectedly overrides optimizer group without state_lr: %+v", name, meta)
+		}
 	}
 }
 

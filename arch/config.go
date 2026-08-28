@@ -208,7 +208,7 @@ type BlockSpec struct {
 	NSSM                              int          `json:"n_ssm,omitempty"`                               // S4D independent A/B groups; defaults to model_dim.
 	Discretization                    string       `json:"discretization,omitempty"`                      // S4D: "zoh" (default) or "bilinear".
 	TrainableB                        bool         `json:"trainable_b,omitempty"`                         // S4D: learn complex B instead of using fixed ones.
-	StateLR                           *float64     `json:"state_lr,omitempty"`                            // S4D: optional A/B optimizer learning rate.
+	StateLR                           *float64     `json:"state_lr,omitempty"`                            // S4D: optional dt/A/B optimizer learning rate.
 	TieDropout                        bool         `json:"tie_dropout,omitempty"`                         // S4D: share dropout masks across sequence positions.
 	OutputTransform                   string       `json:"output_transform,omitempty"`                    // S4D output transform; omitted/"none" preserves the compact path, "glu" adds the reference projection.
 	NumLatents                        int          `json:"num_latents,omitempty"`                         // Perceiver/bottleneck latent count.

@@ -229,9 +229,10 @@ rejected in this first release.
 
 ## Optimization
 
-With `state_lr` omitted, S4D keeps the legacy scalar/vector optimizer grouping.
-With `state_lr` set, A/B receive the specified LR with no decay, dt uses the
-global LR with no decay, and C/D use the global LR. Set
+S4D dt/A parameters, plus B when it is trainable, always disable weight decay.
+With `state_lr` omitted, they keep the legacy scalar/vector optimizer learning
+rate. With `state_lr` set, dt/A/B receive the specified LR while C/D use the
+global LR. Set
 `weight_decay_policy: "all"` when matching an optimizer that decays ordinary
 vectors, biases, and norm parameters:
 

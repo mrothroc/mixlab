@@ -632,8 +632,10 @@ Optional fields:
 - `discretization` - `"zoh"` by default or `"bilinear"` for the pinned
   reference S4 implementation.
 - `trainable_b` - learns complex `B` tensors. Omitted keeps fixed `B=1`.
-- `state_lr` - optional A/B-only learning rate. When present, A/B use an
-  adaptive optimizer at this rate with no decay; dt/C/D use the global LR.
+- `state_lr` - optional dt/A/B learning rate. When present, S4D dt/A and
+  trainable B use an adaptive optimizer at this rate with no decay. These
+  structural parameters never receive weight decay, even when `state_lr` is
+  omitted or `weight_decay_policy` is `"all"`; C/D use the global LR.
 - `tie_dropout` - shares this block's internal and residual dropout masks over
   sequence positions.
 - `output_transform` - omit or set `"none"` for the compact Mixlab path.
@@ -646,8 +648,8 @@ Omitting the reference fields keeps fixed `B=1`, per-channel A, ZOH
 discretization, and the legacy scalar optimizer grouping exactly. The normal
 training path uses FFT convolution; the equivalent recurrent scan is an
 internal parity-test path, not a public execution mode or generation cache.
-When `state_lr` is set, A/B use that rate without decay, dt uses global LR
-without decay, and C/D use global LR and the selected decay policy. Sobolev
+When `state_lr` is set, dt/A/B use that rate without decay, and C/D use global
+LR and the selected decay policy. Sobolev
 beta uses its configured learning rate and decay. Because the filter needs
 the complete FFT, it is not supported by the internal recurrent parity mode.
 
@@ -1534,8 +1536,8 @@ The trainer classifies weights into four optimizer groups. Muon-family optimizer
 | Scalar | AdamW or LAMB | Norm scales, decay vectors, learned scalar scales | `scalar_lr` | `scalar_weight_decay` |
 | Matrix | Muon variant, AdamW, or LAMB | Projection and FFN matrices | `matrix_lr` | `matrix_weight_decay` |
 
-S4D blocks with `state_lr` add metadata-driven adaptive groups: A/B use
-`state_lr` with no decay; dt uses global `lr` with no decay; C/D use global
+S4D blocks with `state_lr` add metadata-driven adaptive groups: dt/A/B use
+`state_lr` with no decay; C/D use global
 `lr`. Under `weight_decay_policy: "all"`, C/D and other ordinary scalar/vector
 parameters receive their configured decay, matching optimizers that do not
 exclude biases and norm parameters.

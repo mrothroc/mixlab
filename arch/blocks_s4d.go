@@ -76,30 +76,26 @@ func s4dWeightShapesWithOptions(spec BlockSpec, D int, opts EmitOptions) ([]Weig
 	if placement == NormPlacementPre || placement == NormPlacementSandwich {
 		metas = append(metas, normWeights("s4d_norm", D, norm)...)
 	}
-	dtMeta := WeightMeta{Name: "s4d_log_dt", Shape: []int{D}, InitMode: "s4d_log_dt", DtMin: dtMin, DtMax: dtMax}
-	aRealMeta := WeightMeta{Name: "s4d_log_A_real", Shape: []int{nSSM, statePairs}, InitValue: float32(math.Log(0.5))}
-	aImagMeta := WeightMeta{Name: "s4d_A_imag", Shape: []int{nSSM, statePairs}, InitMode: "s4d_A_imag_lin"}
+	dtMeta := WeightMeta{Name: "s4d_log_dt", Shape: []int{D}, InitMode: "s4d_log_dt", DtMin: dtMin, DtMax: dtMax, ForceNoDecay: true}
+	aRealMeta := WeightMeta{Name: "s4d_log_A_real", Shape: []int{nSSM, statePairs}, InitValue: float32(math.Log(0.5)), ForceNoDecay: true}
+	aImagMeta := WeightMeta{Name: "s4d_A_imag", Shape: []int{nSSM, statePairs}, InitMode: "s4d_A_imag_lin", ForceNoDecay: true}
 	if spec.FreqScale != nil {
 		aImagMeta.InitScale = *spec.FreqScale
 	}
 	if spec.StateLR != nil {
-		dtMeta.OptimizerRole = "s4d_main"
-		dtMeta.ForceNoDecay = true
-		for _, meta := range []*WeightMeta{&aRealMeta, &aImagMeta} {
+		for _, meta := range []*WeightMeta{&dtMeta, &aRealMeta, &aImagMeta} {
 			meta.OptimizerRole = "s4d_state"
 			meta.OptimizerLR = float32(*spec.StateLR)
-			meta.ForceNoDecay = true
 		}
 	}
 	metas = append(metas, dtMeta, aRealMeta, aImagMeta)
 	if spec.TrainableB {
-		bReal := WeightMeta{Name: "s4d_B_real", Shape: []int{nSSM, statePairs}, InitMode: "s4d_B_one"}
-		bImag := WeightMeta{Name: "s4d_B_imag", Shape: []int{nSSM, statePairs}, InitZero: true}
+		bReal := WeightMeta{Name: "s4d_B_real", Shape: []int{nSSM, statePairs}, InitMode: "s4d_B_one", ForceNoDecay: true}
+		bImag := WeightMeta{Name: "s4d_B_imag", Shape: []int{nSSM, statePairs}, InitZero: true, ForceNoDecay: true}
 		if spec.StateLR != nil {
 			for _, meta := range []*WeightMeta{&bReal, &bImag} {
 				meta.OptimizerRole = "s4d_state"
 				meta.OptimizerLR = float32(*spec.StateLR)
-				meta.ForceNoDecay = true
 			}
 		}
 		metas = append(metas, bReal, bImag)
