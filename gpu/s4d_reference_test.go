@@ -288,7 +288,7 @@ func s4dReferenceFixture(B, T, D, N, nSSM int) ([]float32, [][]float32) {
 	}
 	weights := [][]float32{
 		make([]float32, D),
-		repeatFloat32(nSSM*pairs, float32(math.Log(0.5))),
+		make([]float32, nSSM*pairs),
 		make([]float32, nSSM*pairs),
 		make([]float32, nSSM*pairs),
 		make([]float32, nSSM*pairs),
@@ -312,12 +312,68 @@ func s4dReferenceFixture(B, T, D, N, nSSM int) ([]float32, [][]float32) {
 	for g := 0; g < nSSM; g++ {
 		for n := 0; n < pairs; n++ {
 			i := g*pairs + n
+			weights[1][i] = float32(math.Log(0.5 + 0.25*float64(g)))
 			weights[2][i] = math.Pi * float32(n+g)
 			weights[3][i] = 1 + 0.05*float32(i)
 			weights[4][i] = -0.03 * float32(i+1)
 		}
 	}
 	return x, weights
+}
+
+// The two halves guard different properties. The per-group row checks keep every
+// grouped weight -- log_A_real included -- distinguishable across n_ssm, so a
+// mis-indexed group lookup cannot read a neighbour's value and still agree. The
+// mapping comparison keeps the fixture's channel->group assignment observable at
+// all; it already held before log_A_real varied by group (kernel L_inf 4.8e-4),
+// so it is a floor to defend, not a property the row checks established.
+func TestS4DReferenceFixtureBreaksGroupedSymmetry(t *testing.T) {
+	const B, T, D, N, nSSM = 1, 5, 4, 4, 2
+	x, weights := s4dReferenceFixture(B, T, D, N, nSSM)
+	pairs := N / 2
+
+	if equalFloat32Slices(weights[0][:D/2], weights[0][D/2:]) {
+		t.Fatal("log_dt fixture must vary across channel groups")
+	}
+	for _, tc := range []struct {
+		name  string
+		index int
+	}{
+		{name: "log_A_real", index: 1},
+		{name: "A_imag", index: 2},
+		{name: "B_real", index: 3},
+		{name: "B_imag", index: 4},
+	} {
+		if equalFloat32Slices(weights[tc.index][:pairs], weights[tc.index][pairs:2*pairs]) {
+			t.Fatalf("%s fixture rows must differ across n_ssm groups", tc.name)
+		}
+	}
+
+	interleavedOutput, interleavedKernel := cpuS4DReferenceForward(
+		x, weights, B, T, D, N, nSSM, true,
+	)
+	blockOutput, blockKernel := cpuS4DReferenceForwardWithGroupMapping(
+		x, weights, B, T, D, N, nSSM, true,
+		func(channel int) int { return channel / (D / nSSM) },
+	)
+	if diff := maxAbsDiffFloat32(interleavedKernel, blockKernel); diff <= 3e-5 {
+		t.Fatalf("fixture does not distinguish grouped kernel mappings: L_inf=%g", diff)
+	}
+	if diff := maxAbsDiffFloat32(interleavedOutput, blockOutput); diff <= 4e-5 {
+		t.Fatalf("fixture does not distinguish grouped output mappings: L_inf=%g", diff)
+	}
+}
+
+func equalFloat32Slices(left, right []float32) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func s4dReferenceWeightHandles(
@@ -359,6 +415,26 @@ func cpuS4DReferenceForward(
 	B, T, D, N, nSSM int,
 	bidirectional bool,
 ) ([]float32, []float32) {
+	return cpuS4DReferenceForwardWithGroupMapping(
+		x,
+		weights,
+		B,
+		T,
+		D,
+		N,
+		nSSM,
+		bidirectional,
+		func(channel int) int { return channel % nSSM },
+	)
+}
+
+func cpuS4DReferenceForwardWithGroupMapping(
+	x []float32,
+	weights [][]float32,
+	B, T, D, N, nSSM int,
+	bidirectional bool,
+	groupForChannel func(int) int,
+) ([]float32, []float32) {
 	pairs := N / 2
 	kernelT := T
 	if bidirectional {
@@ -366,7 +442,7 @@ func cpuS4DReferenceForward(
 	}
 	kernel := make([]float32, D*kernelT)
 	for d := 0; d < D; d++ {
-		group := d % nSSM
+		group := groupForChannel(d)
 		dt := math.Exp(float64(weights[0][d]))
 		for n := 0; n < pairs; n++ {
 			stateIdx := group*pairs + n

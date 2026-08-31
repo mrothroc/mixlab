@@ -167,7 +167,14 @@ def advanced_inputs_and_weights():
         [math.log(0.004 + 0.002 * channel) for channel in range(d_model)],
         dtype=torch.float32,
     )
-    log_a_real = torch.full((n_ssm, pairs), math.log(0.5), dtype=torch.float32)
+    log_a_real = torch.tensor(
+        [
+            math.log(0.5 + 0.25 * group)
+            for group in range(n_ssm)
+            for _ in range(pairs)
+        ],
+        dtype=torch.float32,
+    ).reshape(n_ssm, pairs)
     a_imag = torch.tensor(
         [math.pi * (pair + group) for group in range(n_ssm) for pair in range(pairs)],
         dtype=torch.float32,
