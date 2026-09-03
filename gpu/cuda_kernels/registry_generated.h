@@ -13,6 +13,7 @@ struct EmbeddedKernelImage {
 
 static constexpr EmbeddedKernelImage kEmbeddedCudaKernelImages[] = {};
 static constexpr unsigned int kEmbeddedCudaKernelImageCount = 0;
+static constexpr const char* kEmbeddedCudaKernelArchitectures = "";
 
 } // namespace mlx_ir::cuda_kernels
 

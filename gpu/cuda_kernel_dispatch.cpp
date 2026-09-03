@@ -2,6 +2,7 @@
 
 #include "cuda_kernels/registry_generated.h"
 
+#include <mlx/device.h>
 #include <mlx/stream.h>
 
 #ifdef __linux__
@@ -33,6 +34,64 @@ bool log_cuda_kernel_debug() {
 
 std::mutex g_cuda_kernel_load_mu;
 std::unordered_set<std::string> g_precompiled_cuda_load_failures;
+bool g_precompiled_cuda_warning_emitted = false;
+
+// Describes the running GPU as "<name> (sm_XY)", degrading to whatever parts
+// the backend actually publishes. Only used to explain a failure, so it must
+// never throw on the way to reporting one.
+std::string describe_cuda_device() {
+  try {
+    const auto& info = mx::device_info(mx::Device(mx::Device::gpu));
+    std::string name;
+    if (auto it = info.find("device_name"); it != info.end()) {
+      if (auto value = std::get_if<std::string>(&it->second)) {
+        name = *value;
+      }
+    }
+    size_t major = 0;
+    size_t minor = 0;
+    if (auto it = info.find("compute_capability_major"); it != info.end()) {
+      if (auto value = std::get_if<size_t>(&it->second)) {
+        major = *value;
+      }
+    }
+    if (auto it = info.find("compute_capability_minor"); it != info.end()) {
+      if (auto value = std::get_if<size_t>(&it->second)) {
+        minor = *value;
+      }
+    }
+    if (major > 0) {
+      const auto arch = "sm_" + std::to_string(major) + std::to_string(minor);
+      return name.empty() ? arch : name + " (" + arch + ")";
+    }
+    return name.empty() ? "unknown GPU" : name;
+  } catch (...) {
+    return "unknown GPU";
+  }
+}
+
+// Falling back to NVRTC keeps results correct, so it is easy to miss -- it
+// shows up only as slower startup. Say it once, loudly, with the two facts
+// that identify the cause: what this GPU is, and what the image was built for.
+void warn_precompiled_cuda_kernels_unusable() {
+  const std::string built_for =
+      std::string(cuda_kernels::kEmbeddedCudaKernelArchitectures).empty()
+          ? std::string("(none embedded)")
+          : std::string(cuda_kernels::kEmbeddedCudaKernelArchitectures);
+  std::cerr
+      << "\n"
+      << "================================================================================\n"
+      << "[cuda_kernel_dispatch] WARNING: PRECOMPILED CUDA KERNELS UNUSABLE ON THIS GPU\n"
+      << "  this GPU:      " << describe_cuda_device() << "\n"
+      << "  kernels built: " << built_for << "\n"
+      << "\n"
+      << "  Every mixlab CUDA kernel will be recompiled from source (NVRTC) on first\n"
+      << "  use. Results stay correct; process startup is slower on every run.\n"
+      << "  Fix: add this GPU architecture to ARCHES in\n"
+      << "  gpu/cuda_kernels/generate_registry.sh, then rebuild the image.\n"
+      << "================================================================================\n"
+      << std::endl;
+}
 
 std::string cuda_array_shape_string(const mx::array& array) {
   std::ostringstream oss;
@@ -118,9 +177,15 @@ mx::cu::JitModule& load_precompiled_or_source_cuda_module(
         },
         false);
   } catch (const std::exception& e) {
+    bool first_failure = false;
     {
       std::lock_guard<std::mutex> lock(g_cuda_kernel_load_mu);
       g_precompiled_cuda_load_failures.insert(kernel_name);
+      first_failure = !g_precompiled_cuda_warning_emitted;
+      g_precompiled_cuda_warning_emitted = true;
+    }
+    if (first_failure) {
+      warn_precompiled_cuda_kernels_unusable();
     }
     const auto source = lookup_cuda_kernel_source(kernel_name);
     std::cerr << "[cuda_kernel_dispatch] precompiled CUDA kernel load failed for "

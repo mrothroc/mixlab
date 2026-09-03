@@ -25,6 +25,7 @@ struct EmbeddedKernelImage {
 
 static constexpr EmbeddedKernelImage kEmbeddedCudaKernelImages[] = {};
 static constexpr unsigned int kEmbeddedCudaKernelImageCount = 0;
+static constexpr const char* kEmbeddedCudaKernelArchitectures = "";
 
 } // namespace mlx_ir::cuda_kernels
 
@@ -118,7 +119,9 @@ json_path.write_text(json.dumps(data))
 PY
 done
 
-python3 - "${JSON_FILE}" "${HEADER_FILE}" <<'PY'
+ARCH_LIST="$(printf 'sm_%s, ' "${ARCHES[@]}")"
+ARCH_LIST="${ARCH_LIST%, }"
+python3 - "${JSON_FILE}" "${HEADER_FILE}" "${ARCH_LIST}" <<'PY'
 import json
 import pathlib
 import re
@@ -126,6 +129,7 @@ import sys
 
 json_path = pathlib.Path(sys.argv[1])
 header_path = pathlib.Path(sys.argv[2])
+arch_list = sys.argv[3]
 entries = json.loads(json_path.read_text())
 
 def ident(name: str) -> str:
@@ -174,6 +178,7 @@ for arr_name, src_name, entry in registry_names:
         f'{src_name}, {len(entry["source"])}}},')
 lines.append("};")
 lines.append(f"static constexpr unsigned int kEmbeddedCudaKernelImageCount = {len(registry_names)};")
+lines.append(f'static constexpr const char* kEmbeddedCudaKernelArchitectures = "{arch_list}";')
 lines.append("")
 lines.append("} // namespace mlx_ir::cuda_kernels")
 lines.append("")
