@@ -31,10 +31,13 @@ the cost of more GPU memory.
 ## MLX memory bounds
 
 mixlab sets conservative MLX memory limits at training and causal-generation
-startup so the MLX buffer cache cannot silently grow into OS swap on
-unified-memory systems. The
-default uses total RAM, reserves at least 25%, applies an 8 GiB floor capped
-for small machines, and sets a smaller cache cap.
+startup. On Metal's unified-memory systems, the default uses total RAM,
+reserves at least 25%, applies an 8 GiB floor capped for small machines, and
+sets a smaller cache cap. On CUDA, the default is derived from the selected
+GPU's VRAM and current free VRAM, never from host RAM. Mixlab retains MLX's
+existing device limit when that limit is valid for the available VRAM;
+otherwise it falls back to 75% of available VRAM. The automatic CUDA cache
+limit starts at one eighth of available VRAM.
 
 Override with:
 
@@ -56,6 +59,18 @@ MIXLAB_MLX_MEM_LOG_EVERY=100 MIXLAB_MLX_CLEAR_CACHE_EVERY=500 ./mixlab -mode arc
 
 `MIXLAB_MLX_MEM_LOG_EVERY` prints the compact telemetry line at the requested
 cadence, including MLX memory and best-effort GPU utilization when available.
+The startup memory-limit line reports the selected device, total VRAM, free
+VRAM when available, configured limits, and host RAM. Explicit
+`MIXLAB_MLX_MEMORY_LIMIT_MB` and `MIXLAB_MLX_CACHE_LIMIT_MB` values are passed
+to MLX on both Metal and CUDA and are labeled `env` in that line. If a CUDA
+host cannot report device memory, mixlab keeps MLX's own limits rather than
+sizing one from host RAM, and says so on that line.
+
+CUDA allocation failures include the native allocator error, configured
+memory and cache limits, and the submitted batch shape. A memory limit is an
+allocator guideline, not a guarantee that an oversized workload will fit;
+reduce `batch_tokens` or sequence length if a correctly bounded run still
+exhausts VRAM.
 
 FFT-heavy training paths can need additional temporary headroom. In particular,
 S4D `sobolev_filter` may retain frequency-domain intermediates for backward and

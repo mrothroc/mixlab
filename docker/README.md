@@ -8,7 +8,7 @@ the dependency layers.
 ## Quick start (pre-built images)
 
 ```bash
-# Pull the pre-built image with MLX + CUDA (sm_80, sm_86, sm_89)
+# Pull the pre-built image with MLX + CUDA (sm_80, sm_86, sm_89, sm_90)
 docker pull michaelrothrock/mixlab:latest
 
 # Smoke test
@@ -33,7 +33,7 @@ docker build -f docker/app.Dockerfile \
 | Image | Contents | Size |
 |-------|----------|------|
 | `michaelrothrock/mixlab-cuda-base` | Go + MLX + CUDA (sm_80 only) | ~6 GB |
-| `michaelrothrock/mixlab-cuda` | + sm_86, sm_89 architectures | ~8 GB |
+| `michaelrothrock/mixlab-cuda` | + sm_86, sm_89, sm_90 architectures | ~8 GB |
 | `michaelrothrock/mixlab` | + mixlab binary, Python, example configs | ~9 GB |
 
 ## RunPod Serverless
@@ -168,10 +168,10 @@ docker build -f docker/addarch.Dockerfile \
     --build-arg ARCHS="80;86" \
     -t mixlab-cuda:mlx-0.32.0 .
 
-# Add sm_89 (RTX 4090, L40)
+# Add sm_89 and sm_90 (RTX 4090/L40 and H100)
 docker build -f docker/addarch.Dockerfile \
     --build-arg BASE_IMAGE=mixlab-cuda:mlx-0.32.0 \
-    --build-arg ARCHS="80;86;89" \
+    --build-arg ARCHS="80;86;89;90" \
     -t mixlab-cuda:mlx-0.32.0 .
 ```
 
@@ -202,19 +202,12 @@ docker build -f docker/runpod.Dockerfile \
 | sm_80 | A100, A30 | Layer 1 (base) |
 | sm_86 | RTX 3090, A40, A6000 | Layer 2 |
 | sm_89 | RTX 4090, L40, L40S | Layer 2 |
-| sm_90 | H100 | Add with addarch |
-
-To add sm_90 (H100):
-```bash
-docker build -f docker/addarch.Dockerfile \
-    --build-arg ARCHS="80;86;89;90" \
-    -t mixlab-cuda .
-```
+| sm_90 | H100 | Layer 2 |
 
 ## Memory requirements
 
 Compiling CUDA kernels is memory-intensive. Each GPU architecture adds ~2GB
-peak RAM during compilation at `-j4`. For 3 architectures, use a machine with
+peak RAM during compilation at `-j4`. For 4 architectures, use a machine with
 at least 16GB RAM, or reduce parallelism by editing the Dockerfile (`ninja -j2`).
 
 ## Preparing data inside Docker

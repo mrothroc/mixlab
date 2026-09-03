@@ -79,7 +79,7 @@ func runGenerateWithOptions(opts GenerateOptions) error {
 	if countTTTMLPBlocks(cfg.Blocks) > 0 && plan.batchSize > 1 {
 		return fmt.Errorf("-gen-batch=%d is not supported for TTT-MLP generation; use -gen-batch=1 until batched persistent inference state is available", plan.batchSize)
 	}
-	if err := configureMLXMemoryLimitsTo("generate", os.Stderr); err != nil {
+	if _, err := configureMLXMemoryLimitsTo("generate", os.Stderr); err != nil {
 		return err
 	}
 	output, err := openGenerationOutput(opts.OutputPath)

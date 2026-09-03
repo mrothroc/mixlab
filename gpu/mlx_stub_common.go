@@ -28,9 +28,13 @@ func WaitMamba3MetalPrewarm() error {
 
 func mlxMemoryStats() MemoryStats { return MemoryStats{} }
 
+func mlxDeviceMemoryInfo() (uint64, uint64, bool) { return 0, 0, false }
+
 func mlxClearMemoryCache() {}
 
 func mlxSetMemoryLimit(bytes uint64) uint64 { return 0 }
+
+func mlxGetMemoryLimit() uint64 { return 0 }
 
 func mlxSetMemoryCacheLimit(bytes uint64) uint64 { return 0 }
 

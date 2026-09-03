@@ -38,6 +38,7 @@ std::atomic<bool> g_initialized{false};
 std::mutex g_init_mutex;
 std::recursive_mutex g_bridge_pool_mutex;
 thread_local std::optional<mx::Stream> g_bridge_thread_stream;
+thread_local std::string g_last_bridge_error;
 std::vector<std::optional<mx::array>> g_handle_pool;
 std::vector<std::shared_ptr<mlx_ir::IRProgram>> g_ir_program_pool;
 std::vector<std::shared_ptr<mlx_ir::IRTrainer>> g_ir_trainer_pool;
@@ -78,7 +79,17 @@ std::string bridge_exception_message(const std::exception& e) {
 }  // namespace
 
 void log_bridge_exception(const char* fn, const std::exception& e) {
-  std::cout << "[mlx_bridge] " << fn << " exception: " << bridge_exception_message(e) << std::endl;
+  const auto message = bridge_exception_message(e);
+  set_bridge_error_message(message);
+  std::cout << "[mlx_bridge] " << fn << " exception: " << message << std::endl;
+}
+
+void clear_bridge_error() {
+  g_last_bridge_error.clear();
+}
+
+void set_bridge_error_message(const std::string& message) {
+  g_last_bridge_error = message;
 }
 
 extern "C" int mlx_mamba3_metal_prewarm_start(void) {
@@ -358,6 +369,42 @@ const char* mlx_device_name(void) {
   return g_device_name.c_str();
 }
 
+int mlx_device_memory_info(uint64_t* total_memory, uint64_t* free_memory) {
+  if (!total_memory || !free_memory) {
+    return -1;
+  }
+  *total_memory = 0;
+  *free_memory = 0;
+  try {
+    if (mlx_init() != 0) {
+      return -1;
+    }
+    const auto& info = mx::device_info(mx::Device(mx::Device::gpu));
+    auto read_size = [&info](const char* key) -> uint64_t {
+      auto it = info.find(key);
+      if (it == info.end()) {
+        return 0;
+      }
+      if (auto value = std::get_if<size_t>(&it->second)) {
+        return static_cast<uint64_t>(*value);
+      }
+      return 0;
+    };
+    *total_memory = read_size("total_memory");
+    if (*total_memory == 0) {
+      *total_memory = read_size("memory_size");
+    }
+    *free_memory = read_size("free_memory");
+    return *total_memory > 0 ? 0 : -1;
+  } catch (const std::exception& e) {
+    log_bridge_exception("mlx_device_memory_info", e);
+    return -1;
+  } catch (...) {
+    set_bridge_error_message("unknown exception while reading MLX device memory");
+    return -1;
+  }
+}
+
 uint64_t mlx_memory_active(void) {
   try {
     return static_cast<uint64_t>(mx::get_active_memory());
@@ -389,6 +436,14 @@ void mlx_memory_clear_cache(void) {
   }
 }
 
+uint64_t mlx_memory_get_memory_limit(void) {
+  try {
+    return static_cast<uint64_t>(mx::get_memory_limit());
+  } catch (...) {
+    return 0;
+  }
+}
+
 uint64_t mlx_memory_set_memory_limit(uint64_t limit) {
   try {
     return static_cast<uint64_t>(mx::set_memory_limit(static_cast<size_t>(limit)));
@@ -403,6 +458,21 @@ uint64_t mlx_memory_set_cache_limit(uint64_t limit) {
   } catch (...) {
     return 0;
   }
+}
+
+int mlx_last_error_message(char* out, int out_size) {
+  if (g_last_bridge_error.empty()) {
+    return 0;
+  }
+  const int required = static_cast<int>(g_last_bridge_error.size()) + 1;
+  if (!out || out_size <= 0) {
+    return required;
+  }
+  if (out_size < required) {
+    return -required;
+  }
+  std::memcpy(out, g_last_bridge_error.c_str(), static_cast<size_t>(required));
+  return required;
 }
 
 int mlx_sgemm(const float* A, const float* B, float* C, int m, int k, int n) {

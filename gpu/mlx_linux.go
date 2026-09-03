@@ -34,6 +34,15 @@ func mlxDeviceName() string {
 	return C.GoString(C.mlx_device_name())
 }
 
+func mlxDeviceMemoryInfo() (uint64, uint64, bool) {
+	var total C.uint64_t
+	var free C.uint64_t
+	if C.mlx_device_memory_info(&total, &free) != 0 {
+		return 0, 0, false
+	}
+	return uint64(total), uint64(free), true
+}
+
 func mlxRuntimeVersion() string {
 	return C.GoString(C.mlx_runtime_version())
 }
@@ -66,6 +75,10 @@ func mlxClearMemoryCache() {
 
 func mlxSetMemoryLimit(bytes uint64) uint64 {
 	return uint64(C.mlx_memory_set_memory_limit(C.uint64_t(bytes)))
+}
+
+func mlxGetMemoryLimit() uint64 {
+	return uint64(C.mlx_memory_get_memory_limit())
 }
 
 func mlxSetMemoryCacheLimit(bytes uint64) uint64 {
@@ -431,6 +444,9 @@ func mlxTrainerStep(t TrainerHandle, inputs []TensorInput) (float32, error) {
 		C.int(len(cInputs)),
 	))
 	if math.IsNaN(float64(loss)) {
+		if detail := mlxLastErrorMessage(); detail != "" {
+			return 0, fmt.Errorf("mlx_ir_trainer_step_named failed: %s", detail)
+		}
 		return 0, fmt.Errorf("mlx_ir_trainer_step_named failed")
 	}
 	return loss, nil
@@ -448,14 +464,33 @@ func mlxTrainerSubmitStep(t TrainerHandle, inputs []TensorInput) error {
 		C.int(len(cInputs)),
 	)
 	if status != 0 {
+		if detail := mlxLastErrorMessage(); detail != "" {
+			return fmt.Errorf("mlx_ir_trainer_submit_step failed: %s", detail)
+		}
 		return fmt.Errorf("mlx_ir_trainer_submit_step failed")
 	}
 	return nil
 }
 
+func mlxLastErrorMessage() string {
+	required := int(C.mlx_last_error_message(nil, 0))
+	if required <= 1 {
+		return ""
+	}
+	buf := make([]byte, required)
+	written := int(C.mlx_last_error_message((*C.char)(unsafe.Pointer(&buf[0])), C.int(len(buf))))
+	if written <= 1 {
+		return ""
+	}
+	return C.GoString((*C.char)(unsafe.Pointer(&buf[0])))
+}
+
 func mlxTrainerCollectLoss(t TrainerHandle) (float32, error) {
 	loss := float32(C.mlx_ir_trainer_collect_loss(C.int64_t(t)))
 	if math.IsNaN(float64(loss)) {
+		if detail := mlxLastErrorMessage(); detail != "" {
+			return 0, fmt.Errorf("mlx_ir_trainer_collect_loss failed: %s", detail)
+		}
 		return 0, fmt.Errorf("mlx_ir_trainer_collect_loss failed")
 	}
 	return loss, nil

@@ -261,7 +261,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		}
 	}
 
-	if err := configureMLXMemoryLimits(name); err != nil {
+	memoryLimitPlan, err := configureMLXMemoryLimits(name)
+	if err != nil {
 		return TrainResult{}, err
 	}
 
@@ -479,7 +480,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		currentDiagnosticSeqLen := currentSeqLen
 		if err := submitPreparedStepGPU(trainer, prepared, currentBatchSize, currentSeqLen, sched.At(startStep)); err != nil {
 			stopInitialSubmit()
-			return TrainResult{}, fmt.Errorf("submit step %d: %w", startStep, err)
+			return TrainResult{}, fmt.Errorf("submit step %d: %w", startStep,
+				annotateMLXTrainingStepError(err, memoryLimitPlan, currentBatchSize, currentSeqLen))
 		}
 		stopInitialSubmit()
 		currentSubmitDuration := time.Since(initialSubmitStart)
@@ -584,7 +586,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 			if err := submitPreparedStepGPU(trainer, prepared, nextBatchSize, nextSeqLen, sched.At(nextStep)); err != nil {
 				stopSubmit()
-				return 0, fmt.Errorf("submit step %d: %w", nextStep, err)
+				return 0, fmt.Errorf("submit step %d: %w", nextStep,
+					annotateMLXTrainingStepError(err, memoryLimitPlan, nextBatchSize, nextSeqLen))
 			}
 			// Logging steps cannot have a later step pending, so this single slot
 			// always identifies the batch whose loss is collected and sampled.
@@ -679,7 +682,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			stopCollect()
 			gpuDuration := currentSubmitDuration + time.Since(collectStart)
 			if err != nil {
-				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step, err)
+				return TrainResult{}, fmt.Errorf("collect loss at step %d: %w", step,
+					annotateMLXTrainingStepError(err, memoryLimitPlan, currentDiagnosticBatchSize, currentDiagnosticSeqLen))
 			}
 			v := float64(lossV)
 			stepTokens := currentDiagnosticBatchSize * currentDiagnosticSeqLen

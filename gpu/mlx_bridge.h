@@ -52,13 +52,22 @@ int mlx_mamba3_metal_prewarm_wait(void);
 // Get device name (e.g. "Apple M1 Max" or "NVIDIA RTX 4090")
 const char* mlx_device_name(void);
 
+// Read memory properties for the active MLX GPU. Values are bytes. Free
+// memory is reported when the backend exposes it (currently CUDA).
+int mlx_device_memory_info(uint64_t* total_memory, uint64_t* free_memory);
+
 // MLX memory counters and cache controls. Values are bytes.
 uint64_t mlx_memory_active(void);
 uint64_t mlx_memory_cache(void);
 uint64_t mlx_memory_peak(void);
 void mlx_memory_clear_cache(void);
+uint64_t mlx_memory_get_memory_limit(void);
 uint64_t mlx_memory_set_memory_limit(uint64_t limit);
 uint64_t mlx_memory_set_cache_limit(uint64_t limit);
+
+// Copy the most recent bridge exception for the calling thread. Returns the
+// required buffer size including the trailing NUL, or 0 when no error exists.
+int mlx_last_error_message(char* out, int out_size);
 
 // Matrix multiply: C = A(m,k) * B(k,n), row-major float32
 // Returns 0 on success, -1 on failure

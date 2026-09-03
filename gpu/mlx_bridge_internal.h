@@ -22,6 +22,8 @@ extern std::vector<std::shared_ptr<mlx_ir::IRProgram>> g_ir_program_pool;
 extern std::vector<std::shared_ptr<mlx_ir::IRTrainer>> g_ir_trainer_pool;
 
 void log_bridge_exception(const char* fn, const std::exception& e);
+void clear_bridge_error();
+void set_bridge_error_message(const std::string& message);
 std::optional<mx::array> get_handle(int64_t handle);
 int64_t alloc_handle(mx::array&& arr);
 std::shared_ptr<mlx_ir::IRProgram> get_ir_program(int64_t handle);

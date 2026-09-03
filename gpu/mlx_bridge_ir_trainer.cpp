@@ -223,15 +223,19 @@ int64_t mlx_ir_create_trainer_v2(
 }
 
 float mlx_ir_trainer_step_named(int64_t trainer, const mlx_tensor_input* inputs, int n_inputs) {
+  clear_bridge_error();
   if (!inputs || n_inputs <= 0) {
+    set_bridge_error_message("invalid trainer inputs");
     return std::nanf("");
   }
   try {
     if (mlx_init() != 0) {
+      set_bridge_error_message("MLX initialization failed");
       return std::nanf("");
     }
     auto t = get_ir_trainer(trainer);
     if (!t) {
+      set_bridge_error_message("invalid trainer handle");
       return std::nanf("");
     }
     auto input_map = to_tensor_map(inputs, n_inputs);
@@ -240,6 +244,7 @@ float mlx_ir_trainer_step_named(int64_t trainer, const mlx_tensor_input* inputs,
     log_bridge_exception("mlx_ir_trainer_step_named", e);
     return std::nanf("");
   } catch (...) {
+    set_bridge_error_message("unknown exception");
     std::cerr << "[mlx_bridge] mlx_ir_trainer_step_named unknown exception" << std::endl;
     return std::nanf("");
   }
@@ -452,15 +457,19 @@ int mlx_ir_trainer_set_step_output_names(
 }
 
 int mlx_ir_trainer_submit_step(int64_t trainer, const mlx_tensor_input* inputs, int n_inputs) {
+  clear_bridge_error();
   if (!inputs || n_inputs <= 0) {
+    set_bridge_error_message("invalid trainer inputs");
     return -1;
   }
   try {
     if (mlx_init() != 0) {
+      set_bridge_error_message("MLX initialization failed");
       return -1;
     }
     auto t = get_ir_trainer(trainer);
     if (!t) {
+      set_bridge_error_message("invalid trainer handle");
       return -1;
     }
     auto input_map = to_tensor_map(inputs, n_inputs);
@@ -470,18 +479,22 @@ int mlx_ir_trainer_submit_step(int64_t trainer, const mlx_tensor_input* inputs, 
     log_bridge_exception("mlx_ir_trainer_submit_step", e);
     return -1;
   } catch (...) {
+    set_bridge_error_message("unknown exception");
     std::cout << "[mlx_bridge] mlx_ir_trainer_submit_step unknown exception" << std::endl;
     return -1;
   }
 }
 
 float mlx_ir_trainer_collect_loss(int64_t trainer) {
+  clear_bridge_error();
   try {
     if (mlx_init() != 0) {
+      set_bridge_error_message("MLX initialization failed");
       return std::nanf("");
     }
     auto t = get_ir_trainer(trainer);
     if (!t) {
+      set_bridge_error_message("invalid trainer handle");
       return std::nanf("");
     }
     return t->collect_loss();
@@ -489,6 +502,7 @@ float mlx_ir_trainer_collect_loss(int64_t trainer) {
     log_bridge_exception("mlx_ir_trainer_collect_loss", e);
     return std::nanf("");
   } catch (...) {
+    set_bridge_error_message("unknown exception");
     std::cerr << "[mlx_bridge] mlx_ir_trainer_collect_loss unknown exception" << std::endl;
     return std::nanf("");
   }
