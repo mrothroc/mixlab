@@ -269,7 +269,24 @@ overhead, rather than asynchronous GPU collect-call duration.
 
 Telemetry includes current step, loss, learning rate, objective, sequence
 length, steady-state tokens/sec, MLX active/cache/peak memory, host RSS, and
-best-effort GPU utilization on macOS from `ioreg`. When a training graph
+best-effort GPU utilization on macOS from `ioreg` and on Linux from
+`nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits`.
+Both samplers run at the existing telemetry cadence and on live snapshot
+requests, with a 750 ms command timeout. Missing tools, driver errors, unsupported
+utilization readings (such as `[N/A]`), and timeouts leave `gpu_util=n/a` and omit
+`gpu_util_percent` from JSON; they do not fail training. A measured idle device
+reports `0%`, which is distinct from an unavailable sample.
+
+The utilization gauge is device-wide. When the sampler exposes multiple GPUs,
+it reports the maximum valid reading, matching the macOS behavior. On Linux
+this covers the devices exposed by `nvidia-smi`, not a process-specific or
+`CUDA_VISIBLE_DEVICES`-filtered measurement. Other processes can contribute to
+the reading, and sampling between training steps can miss bursts of work.
+Utilization complements kernel-dispatch diagnostics; it alone cannot establish
+that a particular Mixlab operation executed on the GPU. See the
+[NVIDIA query reference](https://docs.nvidia.com/deploy/nvidia-smi/index.html).
+
+When a training graph
 declares active scalar auxiliary losses, it also includes a
 `component_losses` object, for example `invariance_loss`, `pll_margin_loss`,
 `word_struct_loss`, or `moe_aux_loss`; absent/no-op objectives do not add keys.
