@@ -75,7 +75,7 @@ Canonical Mamba-3 at competition scale (D=448, T=4096, 8 layers on H100) needed 
 | 2 | Channel-axis chunking | `gpu/ir.cpp::*_channel_chunked` | Even after time chunking, `[B,T,D,N]` intermediates are huge at D=448; chunk D too |
 | 3 | Hand-written closed-form VJP | `gpu/ir.cpp::mamba3_selective_scan_canonical_phase6_vjp` | MLX autodiff through the parallel scan creates oversized compiled CUDA graphs |
 | 4 | Mamba-3-aware CUDA graph caps | `gpu/cuda_graph_limits.go` | `MLX_MAX_OPS_PER_BUFFER=64`, `MLX_MAX_MB_PER_BUFFER=128`, `MLX_CUDA_GRAPH_CACHE_SIZE=1024` for any program with the scan or fused block op |
-| 5 | Uncompiled trainer fallback | `gpu/ir_trainer.cpp::use_compiled_training_step` | Even with custom VJP, `mx::compile` over the full step graph fuses everything into one CUDA graph instance — too big at H100 scale |
+| 5 | Compiled training with low-memory fallback | `gpu/ir_trainer.cpp::use_compiled_training_step` | Fused canonical blocks prefer a compiled step. `MIXLAB_DISABLE_MAMBA3_COMPILED_STEP=1` selects the uncompiled low-memory step when graph size is a problem; it retains the scan primitive. Standalone canonical scan programs use the uncompiled path unless explicitly forced. |
 | 6 | Native CUDA and Metal kernels | `gpu/mamba3_cuda_primitive.{cpp,h}`, `gpu/cuda_kernels/mamba3_selective_scan_*.cu`, and `gpu/mamba3_metal_primitive.{cpp,h}` | Backend-specific `mx::Primitive` subclasses run the recurrence and its closed-form VJP without materializing Hillis-Steele intermediates. Metal uses the same window-summary/carry/emit backward decomposition as CUDA for sequences with at least four replay windows. Unsupported shapes and explicitly disabled primitives retain the MLX-composed fallback. |
 | 7 | Fused `OP_MAMBA3_CANONICAL_BLOCK` op | `arch/ir.go` + `gpu/ir.cpp` | Block emitted as a single IR op, not 25 separate ones. The IR-side handler does the entire forward + backward in one C++ function. **Do not wrap it in `mx::custom_vjp`** — that recreates the graph-fusion problem (see "Anti-pattern" below). |
 
@@ -99,6 +99,7 @@ Past incident: commit `e1899bf` wrapped 20+ MLX ops in `mx::custom_vjp` for the 
 | `MIXLAB_MAMBA3_CHANNEL_CHUNK` | auto (~16ch at production) | Channels per chunk in the MLX-composed fallback; native CUDA and Metal primitives do not use it. |
 | `MIXLAB_FORCE_COMPILED_STEP` | unset | Force `mx::compile` even for Mamba-3 programs |
 | `MIXLAB_DISABLE_COMPILED_STEP` | unset | Force eager `value_and_grad` for any program |
+| `MIXLAB_DISABLE_MAMBA3_COMPILED_STEP` | unset | Use the uncompiled low-memory training step for fused canonical blocks. Does not disable the scan primitive or authorize the MLX scan fallback; `MIXLAB_FORCE_COMPILED_STEP` takes precedence. |
 | `MIXLAB_DISABLE_TRAINING_CHECKPOINT` | unset | Skip `mx::checkpoint` on the eager path |
 | `MIXLAB_DISABLE_MAMBA3_LOW_MEMORY_UPDATES` | unset | Disable per-chunk gradient/optimizer fusion |
 | `MIXLAB_FORCE_MAMBA3_COMPILED_UPDATE_STEP` | unset | Force compiled update path even if it OOMs |
@@ -110,7 +111,35 @@ Past incident: commit `e1899bf` wrapped 20+ MLX ops in `mx::custom_vjp` for the 
 | `MLX_MAX_MB_PER_BUFFER` | auto | Same, by total bytes |
 | `MLX_CUDA_GRAPH_CACHE_SIZE` | auto (`1024`) | CUDA graph variant cache size for canonical Mamba3; explicit user values are preserved |
 
+## Debug fallback controls
+
+Training-step compilation and scan primitive selection are independent. Setting
+`MIXLAB_DISABLE_MAMBA3_COMPILED_STEP=1` changes how training is executed but
+retains the selected scan primitive.
+
+To explicitly opt into the MLX-composed scan for a **small CUDA canonical-block
+training comparison**, both flags are required:
+
+```bash
+MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE=1 \
+MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK=1 \
+mixlab -mode arch -config tiny.json -train 'data/train_*.bin'
+```
+
+This is a debug escape hatch, not a production-scale fallback guarantee. Large
+sequences can produce invalid or oversized CUDA graphs. Start with reduced
+batch, sequence, and model dimensions; the guard's opt-in does not make a
+six-layer, 16k-token comparison memory-safe. Neither of these flags expands the
+fused block's IR lowering; they replace the scan inside it.
+
+Standalone scan and evaluation programs do not use the canonical training
+guard. On Metal, use `MIXLAB_MAMBA3_DISABLE_METAL_PRIMITIVE=1` to compare against
+the MLX-composed scan; no CUDA flag is needed. The runtime notice and rejection
+message share the same two-flag CUDA guidance.
+
 ## Verification tests
+- `TestMamba3DebugGuidanceMatchesTrainingGuard` checks that the CUDA notice and trainer use the same fallback flag contract.
+- `TestMamba3DebugScanFallbackTrainingFlags` checks rejection without opt-in and two finite training steps with opt-in, with compiled training enabled and disabled. On Metal it also disables the Metal scan to exercise the composed fallback; run the same test on CUDA for CUDA execution acceptance.
 - `train/gpu_trainer_mamba3_test.go::TestMamba3SelectiveScanGrad` — analytical CPU oracle vs MLX gradients (~1e-6 relative error) at G ∈ {1,2}, chunk ∈ {0,3}
 - `TestMamba3SelectiveScanGradChannelChunked` — exercises channel-chunking path with `MIXLAB_MAMBA3_CHANNEL_CHUNK=2`
 - `TestMamba3SelectiveScanGradSmallCudaChunks` — exercises small native CUDA forward chunks and backward windows

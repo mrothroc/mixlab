@@ -2,6 +2,7 @@
 #include "distributed_step.h"
 #include "backward_trace.h"
 #include "optimizer_step_guard.h"
+#include "mamba3_debug_policy.h"
 
 #include <mlx/compile.h>
 #include <mlx/transforms.h>
@@ -175,19 +176,20 @@ void validate_fused_mamba3_cuda_primitive_config(const IRProgram& program) {
   if (!program_has_fused_canonical_mamba3_block(program)) {
     return;
   }
-  if (!env_truthy("MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE")) {
+  if (!env_truthy(kMamba3DisableCUDAScan)) {
     return;
   }
-  if (env_truthy("MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK")) {
+  if (env_truthy(kMamba3AllowMLXScanFallback)) {
     return;
   }
   throw std::runtime_error(
-      "MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE=1 is unsupported for fused canonical "
-      "Mamba3 training: it disables only the selective-scan CUDA primitive inside "
-      "OP_MAMBA3_CANONICAL_BLOCK, not the fused block lowering, and the MLX-composed "
-      "scan fallback can produce invalid or oversized CUDA graphs at this scale. "
-      "Unset MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE for production, or set "
-      "MIXLAB_ALLOW_MAMBA3_MLX_SCAN_FALLBACK=1 for small debug-only fallback runs.");
+      "Selective-scan fallback was requested without the canonical-training opt-in: " +
+      mamba3_cuda_scan_fallback_guidance() +
+      ". The MLX-composed fallback can produce invalid or oversized CUDA graphs. "
+      "MIXLAB_DISABLE_MAMBA3_COMPILED_STEP=1 changes training-step compilation "
+      "only; it does not authorize scan fallback. Standalone scan/eval programs "
+      "do not require this training opt-in. For Metal scan comparisons use "
+      "MIXLAB_MAMBA3_DISABLE_METAL_PRIMITIVE=1 instead.");
 }
 
 using HostClock = std::chrono::steady_clock;
@@ -897,7 +899,8 @@ void log_fused_mamba3_compiled_step_fallback_once(IRTrainer& trainer, const std:
   std::cerr << "[mlx_ir] fused canonical Mamba3 compiled training step failed ("
             << e.what()
             << "); falling back to uncompiled low-memory training step"
-            << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_STEP=1 to skip compiled retry)"
+            << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_STEP=1 to skip compiled retry;"
+            << " scan primitive selection is unchanged)"
             << std::endl;
   trainer.fused_mamba3_compiled_step_fallback_logged = true;
 }
@@ -2776,7 +2779,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     if (program_has_fused_canonical_mamba3_block(program) &&
         !fused_mamba3_compiled_step_notice_logged) {
       std::cerr << "[mlx_ir] fused canonical Mamba3 using compiled training step"
-                << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_STEP=1 to use low-memory fallback)"
+                << " (set MIXLAB_DISABLE_MAMBA3_COMPILED_STEP=1 for an uncompiled low-memory"
+                << " training step; scan primitive selection is unchanged)"
                 << std::endl;
       fused_mamba3_compiled_step_notice_logged = true;
     }

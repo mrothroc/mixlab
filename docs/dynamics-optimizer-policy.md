@@ -70,7 +70,8 @@ state-only LR group needs an explicit tensor selection and scheduler/resume
 contract, rather than an inferred default copied from S4D.
 
 The optimizer circuit breaker's `state_nonfinite` count includes candidate
-weights **and optimizer moments**. Finite incoming gradients can still overflow
+weights **and optimizer moments**, not transient SSM recurrent state. Finite
+incoming gradients can still overflow
 when squared for second moments. Consequently, `gradient_nonfinite=0` with
 `state_nonfinite>0` is not a unique signature of incorrect decay.
 

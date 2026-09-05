@@ -1,4 +1,5 @@
 #include "mamba3_cuda_primitive.h"
+#include "mamba3_debug_policy.h"
 #include "cuda_kernel_dispatch.h"
 
 #include <mlx/device.h>
@@ -112,7 +113,7 @@ void log_mamba3_cuda_once() {
   static std::atomic<bool> logged{false};
   if (!logged.exchange(true)) {
     std::cerr << "[mlx_ir] canonical Mamba3 scan using fused CUDA primitive"
-              << " (set MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE=1 only for small debug fallback runs)"
+              << " (" << mamba3_cuda_scan_fallback_guidance() << ")"
               << std::endl;
   }
 }
@@ -460,7 +461,7 @@ class Mamba3SelectiveScanCUDABackwardPrimitive : public mx::Primitive {
 } // namespace
 
 bool mamba3_selective_scan_cuda_primitive_available(int state_size) {
-  if (env_is_one("MIXLAB_MAMBA3_DISABLE_CUDA_PRIMITIVE")) {
+  if (env_is_one(kMamba3DisableCUDAScan)) {
     return false;
   }
   if (state_size <= 0 || (state_size % 2) != 0 || (state_size / 2) > kMamba3CUDAThreads) {
