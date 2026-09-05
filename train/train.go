@@ -392,9 +392,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 	stepLookaheadEnabled := !envTruthy("MIXLAB_DISABLE_GPU_STEP_LOOKAHEAD")
 	start := time.Now()
-	// steadyStart is set after the first step in this process completes, which
-	// excludes one-time compile/warmup costs from fresh and resumed runs.
-	var steadyStart time.Time
+	var progress trainingProgress
 	telemetry.state.update(telemetryUpdate{
 		Model:       name,
 		Step:        startStep,
@@ -486,8 +484,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		stopInitialSubmit()
 		currentSubmitDuration := time.Since(initialSubmitStart)
 		currentPhaseIdx := -1
-		var processedTokens int64
-		var steadyTokens int64
 		currentMLMMaskUnit := cfg.Training.EffectiveMLMMaskUnitForStep(startStep)
 		submitStepWithScheduledState := func(nextStep int, batch trainBatch) (time.Duration, error) {
 			if nextMode := qatModeForStep(cfg.Training, nextStep); nextMode != qatModeForStep(cfg.Training, nextStep-1) {
@@ -600,6 +596,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		}
 		canSubmitNextBeforeCollect := func(step int, batch trainBatch) bool {
 			if !trainerAllowsStepLookahead(trainer, stepLookaheadEnabled) ||
+				step == startStep ||
 				data2vec != nil ||
 				distiller != nil ||
 				rtdActive(cfg) ||
@@ -687,10 +684,6 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			}
 			v := float64(lossV)
 			stepTokens := currentDiagnosticBatchSize * currentDiagnosticSeqLen
-			processedTokens += int64(stepTokens)
-			if step > startStep {
-				steadyTokens += int64(stepTokens)
-			}
 			componentLosses, err := readTrainingStepComponentLosses(trainer, componentTelemetryEnabled)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("read component losses at step %d: %w", step, err)
@@ -732,26 +725,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 			if step == startStep {
 				firstLoss = v
-				// Anchor steady-state timing after the first step so the
-				// one-time compile/warmup cost doesn't poison tok/s and ETA.
-				steadyStart = time.Now()
 			}
 			lastLoss = v
 			elapsed := time.Since(start)
-			steadyElapsed := elapsed
-			stepsForRate := step - startStep + 1
-			if !steadyStart.IsZero() && step > startStep {
-				steadyElapsed = time.Since(steadyStart)
-				stepsForRate = step - startStep
-			}
-			var tokensPerSec float64
-			if steadyElapsed > 0 {
-				tokens := processedTokens
-				if !steadyStart.IsZero() && step > startStep {
-					tokens = steadyTokens
-				}
-				tokensPerSec = float64(tokens) / steadyElapsed.Seconds()
-			}
+			steadyElapsed, stepsForRate, tokensPerSec := progress.collected(time.Now(), stepTokens)
 			telemetry.state.update(telemetryUpdate{
 				Model:         name,
 				Step:          step,
@@ -833,8 +810,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 				// Use wall-clock average for tok/s and MFU — per-step EMA is
 				// unreliable with pipelined training because collect returns
 				// near-instantly when the GPU has already finished.
-				// Anchor the rate calculation at steadyStart (set after step 0)
-				// so the one-time compile/warmup cost doesn't skew estimates.
+				// The progress clock excludes the complete startup iteration.
 				mfuStr := ""
 				if flops.TrainingFLOPsReliable && cfg.Training.HardwareTFLOPs > 0 && flops.TrainingFLOPs > 0 && steadyElapsed > 0 {
 					mfu := (float64(flops.TrainingFLOPs) * float64(stepsForRate) / steadyElapsed.Seconds()) / (cfg.Training.HardwareTFLOPs * 1e12)
@@ -845,8 +821,8 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 					phase := phaseSched.PhaseAt(step)
 					phaseStr = fmt.Sprintf(" phase=%s", phaseDisplayLabel(phase, currentPhaseIdx))
 				}
-				fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f%s tok/s=%.0f%s %s\n",
-					name, step, steps, v, valStr, appliedLR, phaseStr, tokensPerSec, mfuStr, formatProgressTiming(time.Since(start), steadyElapsed, stepsForRate, step, steps))
+				fmt.Printf("  [%s] step %d/%d loss=%.4f%s lr=%.6f%s tok/s=%s%s %s\n",
+					name, step, steps, v, valStr, appliedLR, phaseStr, formatTrainingThroughput(tokensPerSec), mfuStr, formatProgressTiming(time.Since(start), steadyElapsed, stepsForRate, step, steps))
 				if masking := formatMLMMaskStatsForLog(currentDiagnosticBatch.mlmMaskStats); masking != "" {
 					fmt.Printf("  [%s] [masking] %s\n", name, masking)
 				}
@@ -938,6 +914,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			// Plain steps may submit the next batch before collecting the
 			// current loss. Boundary steps still submit here, after any
 			// validation/checkpoint/logging that can flush trainer state.
+			progress.afterStep(time.Now())
 			if step < steps-1 {
 				if submittedNextEarly {
 					currentSubmitDuration = earlySubmitDuration

@@ -258,6 +258,15 @@ curl http://127.0.0.1:6060/debug/mixlab/telemetry | jq .
 curl http://127.0.0.1:6060/debug/vars | jq .
 ```
 
+Throughput and ETA exclude the first complete iteration in each process,
+including initial compilation, validation, diagnostics, logging, and checkpoint
+work. That iteration displays `tok/s=n/a` and no ETA; JSON telemetry reports
+`tokens_per_sec: 0` and `steady_elapsed_seconds: 0` until a subsequent step
+completes. This also applies to the first iteration after resuming a checkpoint.
+Elapsed wall time still includes startup. Later estimates use cumulative wall
+time and actual processed tokens, including periodic validation/checkpoint
+overhead, rather than asynchronous GPU collect-call duration.
+
 Telemetry includes current step, loss, learning rate, objective, sequence
 length, steady-state tokens/sec, MLX active/cache/peak memory, host RSS, and
 best-effort GPU utilization on macOS from `ioreg`. When a training graph
