@@ -41,6 +41,7 @@ mixlab -mode MODE -h
 
 - [Canonical Mamba-3](canonical_mamba3.md)
 - [S4D diagonal state-space block](s4d.md)
+- [Recurrent dynamics optimizer policy](dynamics-optimizer-policy.md)
 - [Continuous sequence input](continuous-input.md)
 - [Discrete multi-codebook input](discrete-codebooks-input.md)
 - [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md)

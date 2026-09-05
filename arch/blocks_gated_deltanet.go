@@ -88,8 +88,8 @@ func gatedDeltaNetWeightShapesWithOptionsNorm(spec BlockSpec, D int, blockScales
 	}
 	metas = append(metas,
 		WeightMeta{Name: "w_a", Shape: []int{D, spec.Heads}, InitMode: "torch_linear_uniform"},
-		WeightMeta{Name: "A_log", Shape: []int{spec.Heads}, InitMode: "gated_deltanet_A_log"},
-		WeightMeta{Name: "dt_bias", Shape: []int{spec.Heads}, InitMode: "gated_deltanet_dt_bias"},
+		WeightMeta{Name: "A_log", Shape: []int{spec.Heads}, InitMode: "gated_deltanet_A_log", ForceNoDecay: true},
+		WeightMeta{Name: "dt_bias", Shape: []int{spec.Heads}, InitMode: "gated_deltanet_dt_bias", ForceNoDecay: true},
 		WeightMeta{Name: "w_beta", Shape: []int{D, spec.Heads}, InitMode: "torch_linear_uniform"},
 		WeightMeta{Name: "o_norm_scale", Shape: []int{dv}, IsNormScale: true, InitOne: true},
 		WeightMeta{Name: "w_out_gate", Shape: []int{D, valDim}, InitMode: "torch_linear_uniform"},

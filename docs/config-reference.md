@@ -1198,7 +1198,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` and `"gpt2"` initialization. Ignored by `"xavier_uniform"`, `"gptbert"`, and `"pytorch_linear"`. |
 | `grad_clip` | number | No | `0` | Max grad norm. `0` means no clipping. Must be `>= 0`. |
 | `weight_decay` | number | No | `0.01` | Global fallback weight decay. Must be `>= 0`; explicit `0` disables decay for groups that inherit it. |
-| `weight_decay_policy` | string | No | `"matrix_only"` | `"matrix_only"` preserves the existing no-decay treatment for scalar/vector parameters. `"all"` enables decay for every ordinary trainable parameter; explicit optimizer metadata such as S4D A/B/dt no-decay still wins. |
+| `weight_decay_policy` | string | No | `"matrix_only"` | `"matrix_only"` preserves the existing no-decay treatment for scalar/vector parameters. `"all"` enables decay for every ordinary trainable parameter; explicit exemptions for S4D A/B/dt and Mamba3/Gated DeltaNet `A_log`/`dt_bias` still win. See [dynamics optimizer policy](dynamics-optimizer-policy.md). |
 | `cautious_weight_decay` | boolean | No | `false` | When true, applies weight decay only to elements where parameter and gradient signs agree. This is an optimizer modifier for AdamW, LAMB, Muon, MuonEq-R, NorMuon, and SGD paths, not a separate optimizer kind. |
 | `cautious_weight_decay_activation_frac` | number | No | `0` | Fraction of training before cautious weight decay activates. Before activation, standard weight decay is used. `0` means active from step 0 when `cautious_weight_decay=true`; must be in `[0,1]`. |
 | `beta1` | number | No | `0.9` | AdamW beta1. Also seeds Muon momentum when `muon_momentum` is omitted. |

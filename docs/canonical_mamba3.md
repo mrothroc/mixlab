@@ -42,6 +42,14 @@ Non-pre placements are rejected for `mamba3-canonical`. Configurable outer
 norms are native-only until the maintained PyTorch template has dedicated
 parity coverage; the legacy pre-RMSNorm path retains its existing HF support.
 
+## Optimizer policy
+
+`A_log` and `dt_bias` are explicitly exempt from weight decay, including under
+`training.weight_decay_policy: "all"`. The dt/lambda/theta projection matrices
+retain ordinary decay. Learning rates and weight layouts are unchanged. See
+[recurrent dynamics optimizer policy](dynamics-optimizer-policy.md) for the
+reference mapping, sibling-block audit, and limits of non-finite diagnostics.
+
 ## Hugging Face export
 
 `mixlab -mode export-hf` supports sequential stacks composed from
