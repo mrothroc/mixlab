@@ -14,6 +14,7 @@ _FLAGS = {
     "train": "-train",
     "safetensors": "-safetensors",
     "safetensors_load": "-safetensors-load",
+    "resume": "-resume",
     "quantize": "-quantize",
     "output": "-output",
     "checkpoint_dir": "-checkpoint-dir",
@@ -39,6 +40,9 @@ def expand_command_argv(command, env=None):
 
 def build_mixlab_command(job_input, config_path):
     """Build the mixlab argv for a job."""
+    if job_input.get("resume") and job_input.get("safetensors_load"):
+        raise ValueError("resume and safetensors_load are mutually exclusive: "
+                         "choose checkpoint resume or weights-only loading")
     cmd = ["mixlab", "-mode", job_input.get("mode", "smoke")]
     if config_path:
         cmd.extend(["-config", config_path])
@@ -126,6 +130,14 @@ def handler(job):
 
     env = build_job_env(job_input, config_path)
 
+    # Validate before setup commands can have side effects.
+    try:
+        cmd = build_mixlab_command(job_input, config_path)
+    except ValueError as e:
+        if tmp_config:
+            os.unlink(tmp_config.name)
+        return {"error": str(e)}
+
     # --- Setup commands (before mixlab) ---
     setup_cmds = job_input.get("setup", [])
     if setup_cmds:
@@ -135,8 +147,6 @@ def handler(job):
         output["setup_stdout"] = setup_out
 
     # --- Main mixlab command ---
-    cmd = build_mixlab_command(job_input, config_path)
-
     try:
         stdout_lines = []
         stderr_lines = []

@@ -116,6 +116,7 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT/status/JOB_ID \
 | `post` | Array of shell commands to run after mixlab exits. `$MIXLAB_CONFIG` is set to the config file path. |
 | `safetensors` | Path to export weights after training |
 | `safetensors_load` | Path to load weights before training |
+| `resume` | Resume from a complete checkpoint directory, manifest, or companion file. Mutually exclusive with `safetensors_load` |
 | `quantize` | `none`, `int8`, or `int6` |
 | `output` | Output path for modes that write a file, such as `hiddenstats` |
 | `checkpoint_dir` | Directory for periodic safetensors checkpoints |
@@ -126,6 +127,14 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT/status/JOB_ID \
 | `timeout` | Max seconds (default 3600) |
 
 Logs stream to the RunPod dashboard in real time.
+
+To continue an interrupted job, submit the same training config and data with
+`"resume": "/runpod-volume/checkpoints"`. Resume restores training state, not
+just weights; a missing or incomplete checkpoint produces an error rather than
+silently starting fresh. The handler does not implement automatic resume.
+The trainer validates checkpoint/config compatibility and restores the saved
+learning-rate schedule. Extending `training.steps` does not restart the cosine
+schedule; changing `lr_schedule_steps` is not a compatible resume.
 
 ## Build everything from scratch
 

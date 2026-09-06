@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -53,6 +54,47 @@ class RunShellCommandsTest(unittest.TestCase):
 
 
 class BuildMixlabCommandTest(unittest.TestCase):
+    def test_resume_paths_are_forwarded_verbatim(self):
+        for path in ("/volume/checkpoints", "/volume/checkpoints/step_100/manifest.json",
+                     "/volume/checkpoints with spaces/weights.safetensors"):
+            with self.subTest(path=path):
+                self.assertEqual(handler.build_mixlab_command(
+                    {"mode": "arch", "resume": path}, "/config.json"),
+                    ["mixlab", "-mode", "arch", "-config", "/config.json", "-resume", path])
+
+    def test_resume_conflicts_with_weights_only_load(self):
+        with self.assertRaisesRegex(ValueError, "resume and safetensors_load are mutually exclusive"):
+            handler.build_mixlab_command(
+                {"resume": "/checkpoint", "safetensors_load": "/weights.st"}, None)
+
+    def test_existing_checkpoint_write_command_unchanged(self):
+        self.assertEqual(handler.build_mixlab_command({
+            "mode": "arch", "train": "/data/*.bin", "checkpoint_dir": "/checkpoints",
+            "checkpoint_every": 100,
+        }, None), ["mixlab", "-mode", "arch", "-train", "/data/*.bin",
+                   "-checkpoint-dir", "/checkpoints", "-checkpoint-every", "100"])
+
+    def test_empty_resume_does_not_conflict_with_weights_load(self):
+        self.assertEqual(handler.build_mixlab_command({
+            "resume": "", "safetensors_load": "/weights.st",
+        }, None), ["mixlab", "-mode", "smoke", "-safetensors-load", "/weights.st"])
+
+    def test_handler_rejects_conflict_before_setup_and_cleans_config(self):
+        with patch.object(handler, "run_shell_commands") as setup, \
+                patch.object(handler.subprocess, "Popen") as popen, \
+                patch.object(handler.os, "unlink", wraps=os.unlink) as unlink:
+            result = handler.handler({"input": {
+                "resume": "/checkpoint", "safetensors_load": "/weights.st",
+                "config_json": {"model_dim": 16}, "setup": ["echo setup"],
+            }})
+            self.assertIn("mutually exclusive", result["error"])
+            setup.assert_not_called()
+            popen.assert_not_called()
+            config_paths = [Path(call.args[0]) for call in unlink.call_args_list
+                            if str(call.args[0]).endswith(".json")]
+            self.assertEqual(len(config_paths), 1)
+            self.assertFalse(config_paths[0].exists())
+
     def test_temperature_zero_is_forwarded(self):
         """temperature=0 selects greedy decoding and must not be dropped as falsy."""
         cmd = handler.build_mixlab_command({"mode": "generate", "temperature": 0}, None)
