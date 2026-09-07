@@ -98,6 +98,7 @@ func gatedDeltaNetWeightShapesWithOptionsNorm(spec BlockSpec, D int, blockScales
 	if residualScaleRequested(spec, blockScales) {
 		metas = append(metas, residualScaleWeightMeta(spec, "gated_deltanet_scale", D))
 	}
+	applyDynamicsStateLR(metas, spec)
 	return metas, nil
 }
 

@@ -573,6 +573,7 @@ Optional fields:
 - `scan_chunk_size` — exact affine scan chunk size; defaults to `64`. `0` uses the original full-sequence parallel scan, mainly for debugging.
 - `dt_min` — lower initialization bound for the learned time step; defaults to `0.001`.
 - `dt_max` — upper initialization bound for the learned time step; defaults to `0.1` and must be greater than `dt_min`.
+- `state_lr` — optional positive, finite learning rate for `A_log` and `dt_bias` only. These tensors remain exempt from weight decay. Omitted preserves existing matrix/scalar LR settings; the configured rate follows the normal LR schedule.
 - `bidirectional` — shared-weight two-direction mixing for classification, MLM, or MNTP. Mixlab reverses only each row's valid prefix, sums forward and backward deltas, and adds the residual once. Parameter count is unchanged and mixer FLOPs are approximately doubled. Native-only in v1.
 
 Example:
@@ -632,7 +633,7 @@ Optional fields:
 - `discretization` - `"zoh"` by default or `"bilinear"` for the pinned
   reference S4 implementation.
 - `trainable_b` - learns complex `B` tensors. Omitted keeps fixed `B=1`.
-- `state_lr` - optional dt/A/B learning rate. When present, S4D dt/A and
+- `state_lr` — optional dt/A/B learning rate. When present, S4D dt/A and
   trainable B use an adaptive optimizer at this rate with no decay. These
   structural parameters never receive weight decay, even when `state_lr` is
   omitted or `weight_decay_policy` is `"all"`; C/D use the global LR.
@@ -732,6 +733,7 @@ Required fields:
 Optional fields:
 
 - `d_v` — value dim per head. Defaults to `2 * d_k`. Total value dim is `heads * d_v`.
+- `state_lr` — optional positive, finite learning rate for `A_log` and `dt_bias` only, without weight decay. Omitted preserves existing scalar LR settings; the configured rate follows the normal LR schedule.
 - `kv_share` — when `true` (default), the K and V projections share a single `[D, heads*d_v]` weight (V projection is reused for K, with `d_v >= d_k` required). When `false`, K and V get separate projections of width `heads*d_k` and `heads*d_v` respectively. The shared form is the recipe used by Yang et al. and saves one projection matrix per block.
 - `scan_chunk_size` — scan chunk/window bound. When omitted, defaults to `64`. `0` explicitly uses the naive per-step MLX scan (slower and intended for correctness debugging). On Metal, positive values select a native bounded-memory scan when `d_k <= 64` and `d_v <= 256`. The exact chunk-parallel implementation is used when `d_k <= 32`, `d_v <= 32`, and the chunk size is at most `64`; larger supported states use the recurrent Metal fallback. Backward recomputation windows are capped at `8` and may be reduced to fit threadgroup memory. On CUDA, the value controls the associative-scan chunk and custom triangular solve. Unsupported shapes use the checkpointed MLX-composed fallback. Must be `>= 0`.
 - `bidirectional` — shared-weight two-direction mixing for classification, MLM, or MNTP. The valid prefix is reversed per row, both recurrent deltas are summed, and padding is zeroed before the next block. Parameter count is unchanged and mixer FLOPs are approximately doubled. Native-only in v1.
@@ -1541,6 +1543,14 @@ S4D blocks with `state_lr` add metadata-driven adaptive groups: dt/A/B use
 `lr`. Under `weight_decay_policy: "all"`, C/D and other ordinary scalar/vector
 parameters receive their configured decay, matching optimizers that do not
 exclude biases and norm parameters.
+
+Canonical Mamba3 and Gated DeltaNet also accept `state_lr`, overriding only
+`A_log` and `dt_bias` in an `ssm_state` group. The group uses AdamW (including
+under Muon variants), or LAMB when the whole-model optimizer is LAMB, and
+receives the same schedule multiplier as other groups. Rates must remain
+positive and finite when represented as float32. Shared-weight blocks must
+agree on `state_lr`, including whether it is omitted. S4D retains its existing
+group names and dt/A/B selection. There is no automatic reduced state LR.
 
 ### Training phases
 

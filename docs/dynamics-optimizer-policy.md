@@ -62,12 +62,19 @@ every upstream training recipe's bias/norm optimizer grouping.
 
 ## Learning rates and failure diagnosis
 
-Mamba3 and Gated DeltaNet keep existing class-based LR settings. In particular,
-Mamba3's rank-two `A_log` uses the matrix group and `dt_bias` uses the scalar
-group. A separate Mamba3 `state_lr` is not added by this fix: the checked upstream
-parameter declarations do not prescribe a universal reduced LR. Any new
-state-only LR group needs an explicit tensor selection and scheduler/resume
-contract, rather than an inferred default copied from S4D.
+Without `state_lr`, Mamba3 and Gated DeltaNet keep existing class-based LR
+settings. Mamba3's rank-two `A_log` uses the matrix group and `dt_bias` uses the
+scalar group. Both blocks now accept an optional positive, finite `state_lr`
+that assigns only `A_log` and `dt_bias` to a no-decay adaptive group: AdamW,
+or LAMB when selected globally. Projection weights are not included.
+
+For example, `{"type":"mamba3-canonical","state_lr":0.001}` lets a recipe
+reduce the dynamics LR independently of its main LR. This is an experimental
+control, not a universally prescribed default or a guaranteed divergence fix.
+The rate follows the same schedule multiplier as all other groups. Changing
+it changes the optimizer/config contract and requires a fresh run or
+weights-only load, not a full-state resume. Shared-weight blocks must agree
+on the override. Existing S4D group names and dt/A/B selection are unchanged.
 
 The optimizer circuit breaker's `state_nonfinite` count includes candidate
 weights **and optimizer moments**, not transient SSM recurrent state. Finite

@@ -446,6 +446,7 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			WeightMeta{Name: "w_gate", Shape: []int{D, inner}},
 			WeightMeta{Name: "w_out", Shape: []int{inner, D}},
 		)
+		applyDynamicsStateLR(metas, spec)
 		return metas, nil
 
 	case "gated_deltanet":

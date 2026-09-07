@@ -200,6 +200,9 @@ func weightGroupHeadCount(spec BlockSpec) (int, bool) {
 }
 
 func validateWeightGroupLayout(cfg *ArchConfig, firstIdx int, first BlockSpec, curIdx int, cur BlockSpec) error {
+	if (first.StateLR == nil) != (cur.StateLR == nil) || (first.StateLR != nil && *first.StateLR != *cur.StateLR) {
+		return fmt.Errorf("blocks[%d] weight_group=%q must match blocks[%d] state_lr", curIdx, cur.WeightGroup, firstIdx)
+	}
 	if blockTypeKey(first) == "s4d" && !s4dSobolevSharedControlsEqual(first, cur) {
 		return fmt.Errorf("blocks[%d] weight_group=%q must match blocks[%d] Sobolev filter controls", curIdx, cur.WeightGroup, firstIdx)
 	}
@@ -249,6 +252,17 @@ func s4dSobolevSharedControlsEqual(a, b BlockSpec) bool {
 
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
+	if b.StateLR != nil {
+		switch blockTypeKey(b) {
+		case "s4d", "mamba3-canonical", "gated_deltanet":
+		default:
+			return fmt.Errorf("config %q %s[%d] state_lr is supported only for type=s4d, type=mamba3-canonical, or type=gated_deltanet", source, groupName, idx)
+		}
+		lr := float32(*b.StateLR)
+		if !(lr > 0) || math.IsInf(float64(lr), 0) {
+			return fmt.Errorf("config %q %s[%d] type=%s has invalid state_lr=%g (must be finite and > 0 in float32)", source, groupName, idx, b.Type, *b.StateLR)
+		}
+	}
 	if blockTypeKey(b) != "s4d" {
 		if strings.TrimSpace(b.Init) != "" {
 			return fmt.Errorf("config %q %s[%d] init is valid only for type=s4d", source, groupName, idx)
@@ -256,8 +270,8 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		if strings.TrimSpace(b.OutputTransform) != "" {
 			return fmt.Errorf("config %q %s[%d] output_transform is valid only for type=s4d", source, groupName, idx)
 		}
-		if b.NSSM != 0 || strings.TrimSpace(b.Discretization) != "" || b.TrainableB || b.StateLR != nil || b.TieDropout {
-			return fmt.Errorf("config %q %s[%d] n_ssm, discretization, trainable_b, state_lr, and tie_dropout are valid only for type=s4d", source, groupName, idx)
+		if b.NSSM != 0 || strings.TrimSpace(b.Discretization) != "" || b.TrainableB || b.TieDropout {
+			return fmt.Errorf("config %q %s[%d] n_ssm, discretization, trainable_b, and tie_dropout are valid only for type=s4d", source, groupName, idx)
 		}
 	}
 	if b.Bidirectional && !supportsBidirectionalMixer(b) {
@@ -459,9 +473,6 @@ func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
 		case S4DDiscretizationZOH, S4DDiscretizationBilinear:
 		default:
 			return fmt.Errorf("config %q %s[%d] type=s4d has invalid discretization=%q (must be \"zoh\" or \"bilinear\")", source, groupName, idx, b.Discretization)
-		}
-		if b.StateLR != nil && (*b.StateLR <= 0 || math.IsNaN(*b.StateLR) || math.IsInf(*b.StateLR, 0)) {
-			return fmt.Errorf("config %q %s[%d] type=s4d has invalid state_lr=%g (must be finite and > 0)", source, groupName, idx, *b.StateLR)
 		}
 		freqScale := effectiveS4DFreqScale(b)
 		if !(freqScale > 0) || math.IsNaN(freqScale) || math.IsInf(freqScale, 0) {

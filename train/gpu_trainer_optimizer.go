@@ -69,7 +69,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 		adaptiveBeta2 = cfg.Training.LAMBBeta2
 		adaptiveEps = cfg.Training.LAMBEps
 	}
-	s4dSettings := func(lr float32) gpu.OptimizerSettings {
+	groupSettings := func(lr float32) gpu.OptimizerSettings {
 		return gpu.OptimizerSettings{
 			Name:                              adaptiveOptimizerName,
 			LR:                                lr,
@@ -87,13 +87,13 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 		switch s.OptimizerRole {
 		case "s4d_main":
 			group = "s4d_main"
-			extraGroups[group] = s4dSettings(float32(cfg.Training.LR))
-		case "s4d_state":
-			group = fmt.Sprintf("s4d_state_%08x", math.Float32bits(s.OptimizerLR))
-			extraGroups[group] = s4dSettings(s.OptimizerLR)
+			extraGroups[group] = groupSettings(float32(cfg.Training.LR))
+		case "s4d_state", "ssm_state":
+			group = fmt.Sprintf("%s_%08x", s.OptimizerRole, math.Float32bits(s.OptimizerLR))
+			extraGroups[group] = groupSettings(s.OptimizerLR)
 		case "s4d_sobolev":
 			group = fmt.Sprintf("s4d_sobolev_%08x_%08x", math.Float32bits(s.OptimizerLR), math.Float32bits(s.OptimizerWeightDecay))
-			settings := s4dSettings(s.OptimizerLR)
+			settings := groupSettings(s.OptimizerLR)
 			settings.WeightDecay = s.OptimizerWeightDecay
 			extraGroups[group] = settings
 		case "":
