@@ -125,6 +125,10 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT/status/JOB_ID \
 | `temperature` | Sampling temperature for `generate` mode. `0` selects deterministic greedy decoding |
 | `env` | Environment variables for the mixlab process and all `setup`/`post` commands, e.g. `{"MIXLAB_TTT_MLP_DISABLE_CUDA_PRIMITIVE": "1"}`. Scoped to the job — it does not leak to later jobs on a warm worker |
 | `timeout` | Positive finite wall-clock seconds per command (default 3600): applies independently to each setup command, the main process, and each post command. Not an idle-output timeout or a total-job budget |
+| `timing` | Boolean; `true` forwards `-timing` (not a separate `true` argument) |
+| `telemetry_out` | Optional path for periodic telemetry JSONL; use persistent storage for long runs |
+| `stall_timeout` | Opt-in positive finite seconds without an increase in committed optimizer steps; single-process `arch` training only. Includes startup, validation, checkpointing and final export, so choose a threshold longer than their normal durations |
+| `stall_dump_dir` | Required absolute persistent directory with `stall_timeout`; each run gets a unique subdirectory for native stacks and process diagnostics |
 
 Both stdout and stderr stream to the RunPod dashboard while the command runs.
 Stderr lines are labeled separately and remain separate in returned output.
@@ -136,7 +140,20 @@ The returned capture retains the last 8 MiB of each stream per command,
 prefixed with `[earlier output truncated by handler]` if older output was
 dropped. Streaming continues after that limit; oversized console lines are
 split into bounded chunks. RunPod can independently throttle dashboard logs.
+Dashboard writes use one bounded background queue; a blocked or broken sink
+cannot stop pipe draining, deadlines, or the watchdog. Dashboard lines can be
+dropped under backpressure; returned stdout/stderr tails remain independent.
 Use persistent files when complete long-run logs are required.
+
+With `stall_timeout`, the handler watches a small atomic progress file on local
+temporary storage, not stdout activity or GPU queries. Skipped optimizer updates
+do not reset the deadline. On a stall it attempts a 30-second GDB all-thread dump,
+captures `/proc` state and a bounded `nvidia-smi` snapshot, then kills/reaps the
+trainer group and returns `error`, `exit_code`, output tails, and `diagnostics`
+(the dump directory). Missing tools/ptrace permission are recorded, not treated
+as successful stack capture. Diagnostic collection can add about 35 seconds to
+the stall deadline. No automatic restart or checkpoint of a stuck GPU is attempted.
+The hard `timeout` still applies independently; it does not promise a stack dump.
 
 See [native stack capture on serverless workers](../docs/performance.md#native-stacks-on-runpod-serverless)
 for investigating CPU-busy/GPU-idle hangs. Updating the binary alone does not

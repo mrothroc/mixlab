@@ -9,6 +9,8 @@ import tempfile
 from string import Template
 
 from handler_process import run_process
+from handler_watchdog import TrainingStall, TrainingWatchdog, validate_watchdog_input
+import handler_log
 
 # Flags whose value is meaningful when zero, so they cannot be guarded on truthiness.
 _ZERO_VALUED_FLAGS = {"temperature": "-temperature"}
@@ -23,6 +25,7 @@ _FLAGS = {
     "checkpoint_dir": "-checkpoint-dir",
     "checkpoint_every": "-checkpoint-every",
     "max_tokens": "-max-tokens",
+    "telemetry_out": "-telemetry-out",
 }
 
 
@@ -55,6 +58,11 @@ def build_mixlab_command(job_input, config_path):
     for key, flag in _ZERO_VALUED_FLAGS.items():
         if job_input.get(key) is not None:
             cmd.extend([flag, str(job_input[key])])
+    if "timing" in job_input:
+        if type(job_input["timing"]) is not bool:
+            raise ValueError("timing must be a boolean")
+        if job_input["timing"]:
+            cmd.append("-timing")
     return cmd
 
 
@@ -77,7 +85,7 @@ def run_shell_commands(commands, label, timeout, env=None):
     all_stdout = []
     all_stderr = []
     for i, command in enumerate(commands):
-        print(f"[{label}[{i}]] {format_command(command)}", flush=True)
+        handler_log.emit(f"[{label}[{i}]] {format_command(command)}")
         if isinstance(command, str):
             popen_args = command
             use_shell = True
@@ -145,6 +153,7 @@ def run_job(job_input, config_path, timeout):
     env = build_job_env(job_input, config_path)
     # Validate before setup commands can have side effects.
     cmd = build_mixlab_command(job_input, config_path)
+    validate_watchdog_input(job_input)
 
     # --- Setup commands (before mixlab) ---
     setup_cmds = job_input.get("setup", [])
@@ -156,8 +165,21 @@ def run_job(job_input, config_path, timeout):
 
     # --- Main mixlab command ---
     try:
-        result = run_process(cmd, timeout, env=env)
+        with tempfile.TemporaryDirectory(prefix="mixlab-progress-") as progress_dir:
+            watchdog = None
+            main_env = dict(env)
+            if job_input.get("stall_timeout") is not None:
+                dump_dir = tempfile.mkdtemp(prefix="stall-", dir=_ensure_dump_dir(job_input["stall_dump_dir"]))
+                progress_path = os.path.join(progress_dir, "progress.json")
+                main_env["MIXLAB_PROGRESS_FILE"] = progress_path
+                main_env["MIXLAB_DEBUG_PTRACER_PID"] = str(os.getpid())
+                watchdog = TrainingWatchdog(job_input["stall_timeout"], progress_path, dump_dir)
+            result = run_process(cmd, timeout, env=main_env, watchdog=watchdog)
         output.update(stdout=result.stdout, stderr=result.stderr, exit_code=result.returncode)
+    except TrainingStall as exc:
+        output.update(error=str(exc), stdout=exc.output, stderr=exc.stderr,
+                      exit_code=getattr(exc, "returncode", None), diagnostics=exc.diagnostics)
+        return output
     except subprocess.TimeoutExpired as exc:
         output.update(error="timeout", stdout=exc.output or "", stderr=exc.stderr or "", exit_code=None)
         return output
@@ -173,6 +195,11 @@ def run_job(job_input, config_path, timeout):
             output["post_stdout"] = post_out
 
     return output
+
+
+def _ensure_dump_dir(path):
+    os.makedirs(path, mode=0o700, exist_ok=True)
+    return path
 
 
 if __name__ == "__main__":

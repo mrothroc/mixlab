@@ -4,20 +4,36 @@ package train
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
 type slowStartupTelemetryWriter struct {
-	records []telemetrySnapshot
-	delay   time.Duration
+	records      []telemetrySnapshot
+	delay        time.Duration
+	progressPath string
 }
 
 func (w *slowStartupTelemetryWriter) Write(data []byte) (int, error) {
 	var record telemetrySnapshot
 	if err := json.Unmarshal(data, &record); err != nil {
 		return 0, err
+	}
+	if w.progressPath != "" {
+		b, err := os.ReadFile(w.progressPath)
+		if err != nil {
+			return 0, err
+		}
+		var progress trainingProgressRecord
+		if err := json.Unmarshal(b, &progress); err != nil {
+			return 0, err
+		}
+		if progress.PID != os.Getpid() || progress.OptimizerSteps != record.OptimizerSteps || progress.Step != record.Step {
+			return 0, fmt.Errorf("progress does not match collected optimizer step: %+v", progress)
+		}
 	}
 	if len(w.records) == 0 {
 		time.Sleep(w.delay)
@@ -45,7 +61,9 @@ func TestTrainingProgressExcludesStartupLogOverheadMLX(t *testing.T) {
 	}
 	writeInferenceShard(t, filepath.Join(dir, "train_000.bin"), tokens)
 	writeInferenceShard(t, filepath.Join(dir, "val_000.bin"), tokens)
-	writer := &slowStartupTelemetryWriter{delay: 100 * time.Millisecond}
+	progressPath := filepath.Join(dir, "progress.json")
+	t.Setenv("MIXLAB_PROGRESS_FILE", progressPath)
+	writer := &slowStartupTelemetryWriter{delay: 100 * time.Millisecond, progressPath: progressPath}
 	rt := &telemetryRuntime{state: newTelemetryState(), enc: json.NewEncoder(writer)}
 	if _, err := runTrain(cfg, filepath.Join(dir, "train_*.bin"), TrainOptions{LogEvery: 1, telemetry: rt}); err != nil {
 		t.Fatal(err)

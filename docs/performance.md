@@ -448,15 +448,74 @@ than disabling security settings blindly. A second serverless job may land
 on another worker and cannot be assumed to inspect the hung one.
 
 For environments where SSH is unavailable, capture must instead be pre-armed
-inside that worker with a watchdog/debug supervisor. A `post` command cannot
-capture a still-hung training process because post-processing starts only after
-the main process finishes. No automatic watchdog is enabled by the handler.
+inside that worker. The RunPod handler supports an opt-in committed-step watchdog:
+
+```json
+{
+  "mode": "arch",
+  "timing": true,
+  "stall_timeout": 900,
+  "stall_dump_dir": "/runpod-volume/diagnostics",
+  "telemetry_out": "/runpod-volume/run.telemetry.jsonl"
+}
+```
+
+Merge these fields into the existing job input. The current RunPod image includes
+GDB and procps. The watchdog reads `MIXLAB_PROGRESS_FILE`, a small local JSON file
+atomically published after loss collection and optimizer-stat readback. It tracks
+increasing `optimizer_steps`, not attempted steps, file mtime, or console traffic.
+No GPU calls are needed to detect a stall. The threshold includes first-step
+compilation, loader replay, validation, checkpointing and final export; give those
+operations enough time. Omitted fields leave watchdog behavior disabled.
+
+The handler sets `MIXLAB_DEBUG_PTRACER_PID` to its own PID. On Linux the trainer
+opts into debugging by that parent and its debugger children only, using
+`PR_SET_PTRACER`; it does not permit arbitrary attach or change host security
+settings. Stricter host policies can still deny GDB. See the kernel's
+[Yama ptrace policy](https://www.kernel.org/doc/html/latest/admin-guide/LSM/Yama.html).
+
+On a stall, a unique directory under `stall_dump_dir` contains `stall.json`,
+`proc.json`, `native-stacks.txt`, and `nvidia-smi.txt`. GDB is limited to 30 seconds,
+64 frames per thread, and bounded captured output; no core dump or tensor readback
+is requested. The trainer is then killed and the handler returns an explicit error
+with the diagnostic path. Permission errors and timeouts are preserved in the
+files. Verify attachment with a short diagnostic run before trusting a long one.
+A `post` command cannot capture a still-hung process because it runs only after
+the main process finishes; it is not run after a watchdog abort.
 
 Store diagnostics on a mounted persistent volume or retrieve them before the
 worker disappears. See [RunPod log retention](https://docs.runpod.io/serverless/development/logs);
 dashboard silence alone is not proof the trainer stopped. When reporting a
 stall, include the job JSON, exact image digest, native stacks, per-thread CPU,
 GPU utilization, and host/container memory readings from the same interval.
+
+### CUDA long-run isolation
+
+The CUDA build carries a narrowly scoped patch to pinned MLX v0.32.0's completion
+worker: retain the last processed batch across waits, and read the stop flag under
+its mutex. Without the patch, an idle worker spins after its first completion.
+`docker/test_mlx_worker.py` compiles the actual upstream worker body with stubbed
+CUDA event delivery. CI and the base-image build check both the original spin and
+patched sleep/wakeup behavior. This proves the idle-spin defect, **not** that it
+causes or fixes the reported long-run Mamba3 stall.
+
+Rebuild the MLX base, architecture tier, CLI, and RunPod images in that order.
+`MIXLAB_MLX_CUDA_WORKER_FIX=1` identifies the patched dependency build; downstream
+Dockerfiles reject an older base. Rebuilding only the Go binary/handler cannot
+patch an already installed `libmlx.so`. Use staging image tags until a real CUDA
+run passes. Build definitions are in [docker/](../docker/README.md).
+
+To isolate graph execution, compare two jobs on the **same patched image and GPU
+type**, from the same explicit checkpoint manifest and data. Use separate output
+directories and set only `env.MLX_USE_CUDA_GRAPHS` differently: `"1"` versus `"0"`.
+Zero bypasses the MLX command encoder's CUDA-graph path; it does not force CPU
+execution or disable the Mamba3 CUDA scan. Keep seed, model, batch, LR, graph limits
+and memory controls identical. First check short-run loss/throughput and debugger
+access, then run beyond 40,000 **new process-local steps**. Preserve the checkpoint's
+schedule horizon rather than lowering `training.steps` to a smaller absolute value.
+If both arms pass, a previous failure on the old image is supporting evidence, not
+a controlled demonstration that the worker patch fixed the hang. If either stalls,
+the native stacks and last committed count are the primary evidence.
 
 ### Profile files
 

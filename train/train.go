@@ -17,6 +17,10 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	// subsequent trainer calls must stay on the same OS thread.
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
+	progressFile, err := newTrainingProgressFile()
+	if err != nil {
+		return TrainResult{}, err
+	}
 
 	if trainPattern == "" {
 		return TrainResult{}, fmt.Errorf("training data pattern is required; pass -train 'data/train_*.bin'")
@@ -721,6 +725,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 			optimizerStats, err := readOptimizerStats(trainer)
 			if err != nil {
 				return TrainResult{}, fmt.Errorf("read optimizer stats at step %d: %w", step, err)
+			}
+			if err := progressFile.update(step, optimizerStats.CommittedSteps); err != nil {
+				return TrainResult{}, err
 			}
 
 			if step == startStep {

@@ -2,6 +2,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from unittest.mock import patch
@@ -84,7 +85,7 @@ class ProcessStreamingTest(unittest.TestCase):
             time.sleep(1.1)
             self.assertFalse(marker.exists(), "descendant survived the timeout")
 
-    def test_logging_error_kills_and_reaps_child(self):
+    def test_logging_error_does_not_disable_timeout_or_reaping(self):
         real_popen = subprocess.Popen
         children = []
         def spawn(*args, **kwargs):
@@ -93,11 +94,34 @@ class ProcessStreamingTest(unittest.TestCase):
             return child
         with patch("handler_process.subprocess.Popen", side_effect=spawn), \
                 patch("builtins.print", side_effect=BrokenPipeError("log sink closed")):
-            with self.assertRaises(BrokenPipeError):
-                run_process([sys.executable, "-c", "import time; print('hi',flush=True); time.sleep(30)"], 5)
+            with self.assertRaises(subprocess.TimeoutExpired):
+                run_process([sys.executable, "-c", "import time; print('hi',flush=True); time.sleep(30)"], .3)
         self.assertIsNotNone(children[0].returncode)
         self.assertTrue(children[0].stdout.closed)
         self.assertTrue(children[0].stderr.closed)
+
+    def test_blocked_dashboard_does_not_block_pipe_draining_or_timeout(self):
+        import handler_log
+        blocked = threading.Event()
+        release = threading.Event()
+        def sink(*_, **__):
+            blocked.set()
+            release.wait(5)
+        try:
+            start = time.monotonic()
+            with patch("builtins.print", side_effect=sink):
+                with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                    run_process([sys.executable, "-c",
+                                 "import os,time; os.write(1,b'o'*2000000); "
+                                 "os.write(2,b'e'*2000000); time.sleep(30)"], .5)
+            self.assertTrue(blocked.is_set())
+            self.assertLess(time.monotonic() - start, 2)
+            self.assertEqual(caught.exception.output, "o" * 2000000)
+            self.assertEqual(caught.exception.stderr, "e" * 2000000)
+            self.assertLessEqual(handler_log._sink.queue.qsize(), 64)
+        finally:
+            release.set()
+            handler_log._sink.flush(1)
 
 
 class HandlerProcessIntegrationTest(unittest.TestCase):

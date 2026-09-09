@@ -59,6 +59,7 @@ primary user contract:
 - [Block-diffusion design](block-diffusion-design.md)
 - [Block-diffusion release verification](block-diffusion-release-verification.md)
 - [Reference parity audit](reference-parity-audit-2026-06.md)
+- [CUDA long-run hang investigation](mamba3-cuda-hang-investigation.md)
 - [Release process](releasing.md)
 
 Public config fields and CLI flags are checked against the documentation by the

@@ -7,6 +7,8 @@ import signal
 import subprocess
 import time
 
+import handler_log
+
 
 _CAPTURE_LIMIT = 8 * 1024 * 1024
 _READ_SIZE = 64 * 1024
@@ -14,13 +16,14 @@ _TRUNCATED = "[earlier output truncated by handler]\n"
 
 
 class _Output:
-    def __init__(self, prefix, limit):
+    def __init__(self, prefix, limit, stream=True):
         self.prefix = prefix
         self.limit = limit
         self.chunks = deque()
         self.size = 0
         self.truncated = False
         self.pending = b""
+        self.stream = stream
 
     def feed(self, data):
         self.chunks.append(data)
@@ -34,6 +37,8 @@ class _Output:
                 self.chunks.appendleft(first[removed:])
             self.truncated = True
 
+        if not self.stream:
+            return
         self.pending += data
         while self.pending:
             newline = self.pending.find(b"\n", 0, _READ_SIZE)
@@ -43,11 +48,11 @@ class _Output:
                 line, self.pending = self.pending[:_READ_SIZE], self.pending[_READ_SIZE:]
             else:
                 break
-            print(self.prefix + line.decode("utf-8", errors="replace").rstrip("\r"), flush=True)
+            handler_log.emit(self.prefix + line.decode("utf-8", errors="replace").rstrip("\r"))
 
     def finish(self):
         if self.pending:
-            print(self.prefix + self.pending.decode("utf-8", errors="replace"), flush=True)
+            handler_log.emit(self.prefix + self.pending.decode("utf-8", errors="replace"))
             self.pending = b""
 
     def text(self):
@@ -64,7 +69,8 @@ def _kill_group(proc):
 
 
 def run_process(command, timeout, *, env=None, shell=False,
-                stderr_prefix="[stderr] ", capture_limit=_CAPTURE_LIMIT):
+                stderr_prefix="[stderr] ", capture_limit=_CAPTURE_LIMIT, watchdog=None,
+                stream_output=True):
     """Drain both streams without readline blocking; enforce a wall-clock deadline.
 
     Return CompletedProcess with separate text tails. TimeoutExpired includes
@@ -74,17 +80,21 @@ def run_process(command, timeout, *, env=None, shell=False,
     if capture_limit <= 0:
         raise ValueError("capture_limit must be positive")
     deadline = time.monotonic() + timeout
-    out = _Output("", capture_limit)
-    err = _Output(stderr_prefix, capture_limit)
+    out = _Output("", capture_limit, stream_output)
+    err = _Output(stderr_prefix, capture_limit, stream_output)
     proc = subprocess.Popen(command, shell=shell, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
                             bufsize=0, env=env, start_new_session=True)
     try:
+        if watchdog:
+            watchdog.start(proc.pid)
         with selectors.DefaultSelector() as selector:
             for stream, capture in ((proc.stdout, out), (proc.stderr, err)):
                 os.set_blocking(stream.fileno(), False)
                 selector.register(stream, selectors.EVENT_READ, capture)
             while selector.get_map():
+                if watchdog and proc.poll() is None:
+                    watchdog.check()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise subprocess.TimeoutExpired(command, timeout)
@@ -98,13 +108,20 @@ def run_process(command, timeout, *, env=None, shell=False,
                     else:
                         selector.unregister(key.fileobj)
                         key.data.finish()
-            proc.wait(timeout=max(0, deadline - time.monotonic()))
+            while proc.poll() is None:
+                if watchdog:
+                    watchdog.check()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                time.sleep(min(remaining, 0.1))
         return subprocess.CompletedProcess(command, proc.returncode, out.text(), err.text())
     except BaseException as exc:
         _kill_group(proc)
         # Never enter an unbounded communicate/read after a failed process.
         proc.wait(timeout=5)
-        if isinstance(exc, subprocess.TimeoutExpired):
+        if isinstance(exc, subprocess.TimeoutExpired) or getattr(exc, "is_training_stall", False):
+            exc.returncode = proc.returncode
             out.finish()
             err.finish()
             exc.output = out.text()
@@ -113,3 +130,4 @@ def run_process(command, timeout, *, env=None, shell=False,
     finally:
         proc.stdout.close()
         proc.stderr.close()
+        handler_log.flush()
