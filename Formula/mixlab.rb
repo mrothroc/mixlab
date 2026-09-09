@@ -2,8 +2,8 @@ class Mixlab < Formula
   desc "ML architecture exploration tool — JSON configs, Go IR, Metal/CUDA"
   homepage "https://github.com/mrothroc/mixlab"
   url "https://github.com/mrothroc/mixlab.git",
-      tag:      "v0.110.1",
-      revision: "431f2ec4b491321bfb62e0e593a8cdd40e60a7c5"
+      tag:      "v0.111.0",
+      revision: "09f0112c98779d75532c3bb1f6051c69c51ac2bf"
   license "MIT"
   head "https://github.com/mrothroc/mixlab.git", branch: "main"
 
