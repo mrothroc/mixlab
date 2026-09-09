@@ -1,11 +1,14 @@
 """RunPod serverless handler for mixlab."""
 
 import json
+import math
 import os
 import shlex
 import subprocess
 import tempfile
 from string import Template
+
+from handler_process import run_process
 
 # Flags whose value is meaningful when zero, so they cannot be guarded on truthiness.
 _ZERO_VALUED_FLAGS = {"temperature": "-temperature"}
@@ -70,7 +73,7 @@ def build_job_env(job_input, config_path):
 
 
 def run_shell_commands(commands, label, timeout, env=None):
-    """Run a list of shell commands, streaming output. Returns (stdout, stderr) or raises."""
+    """Run setup/post commands. Return (stdout, error_details)."""
     all_stdout = []
     all_stderr = []
     for i, command in enumerate(commands):
@@ -90,25 +93,25 @@ def run_shell_commands(commands, label, timeout, env=None):
                 "exit_code": None,
             }
 
-        proc = subprocess.Popen(popen_args, shell=use_shell, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True, bufsize=1, env=env)
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            print(line, flush=True)
-            all_stdout.append(line)
-        proc.wait(timeout=timeout)
-        stderr = proc.stderr.read()
-        if stderr:
-            for line in stderr.splitlines():
-                print(f"[{label}[{i}] stderr] {line}", flush=True)
-            all_stderr.append(stderr)
-        proc.stdout.close()
-        proc.stderr.close()
-        if proc.returncode != 0:
+        failure = None
+        try:
+            result = run_process(popen_args, timeout, shell=use_shell, env=env,
+                                 stderr_prefix=f"[{label}[{i}] stderr] ")
+        except subprocess.TimeoutExpired as exc:
+            result = subprocess.CompletedProcess(popen_args, None, exc.output or "", exc.stderr or "")
+            failure = f"{label}[{i}] timeout"
+        except OSError as exc:
+            result = subprocess.CompletedProcess(popen_args, None, "", str(exc))
+            failure = f"{label}[{i}] failed: {exc}"
+        if result.stdout:
+            all_stdout.append(result.stdout)
+        if result.stderr:
+            all_stderr.append(result.stderr)
+        if failure or result.returncode != 0:
             return None, {
-                "error": f"{label}[{i}] failed", "cmd": command,
+                "error": failure or f"{label}[{i}] failed", "cmd": command,
                 "stdout": "\n".join(all_stdout), "stderr": "\n".join(all_stderr),
-                "exit_code": proc.returncode,
+                "exit_code": result.returncode,
             }
     return "\n".join(all_stdout), None
 
@@ -116,27 +119,32 @@ def run_shell_commands(commands, label, timeout, env=None):
 def handler(job):
     job_input = job["input"]
     timeout = job_input.get("timeout", 3600)
-    output = {}
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not math.isfinite(timeout) or timeout <= 0:
+        return {"error": "timeout must be a positive finite number of seconds"}
 
     config_json = job_input.get("config_json")
     config_path = job_input.get("config")
     tmp_config = None
 
-    if config_json and not config_path:
-        tmp_config = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-        json.dump(config_json, tmp_config)
-        tmp_config.close()
-        config_path = tmp_config.name
-
-    env = build_job_env(job_input, config_path)
-
-    # Validate before setup commands can have side effects.
     try:
-        cmd = build_mixlab_command(job_input, config_path)
-    except ValueError as e:
+        if config_json and not config_path:
+            tmp_config = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+            with tmp_config:
+                json.dump(config_json, tmp_config)
+            config_path = tmp_config.name
+        return run_job(job_input, config_path, timeout)
+    except Exception as exc:
+        return {"error": str(exc)}
+    finally:
         if tmp_config:
             os.unlink(tmp_config.name)
-        return {"error": str(e)}
+
+
+def run_job(job_input, config_path, timeout):
+    output = {}
+    env = build_job_env(job_input, config_path)
+    # Validate before setup commands can have side effects.
+    cmd = build_mixlab_command(job_input, config_path)
 
     # --- Setup commands (before mixlab) ---
     setup_cmds = job_input.get("setup", [])
@@ -148,29 +156,11 @@ def handler(job):
 
     # --- Main mixlab command ---
     try:
-        stdout_lines = []
-        stderr_lines = []
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                text=True, bufsize=1, env=env)
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            print(line, flush=True)
-            stdout_lines.append(line)
-        proc.wait(timeout=timeout)
-        stderr_lines = proc.stderr.read().splitlines()
-        proc.stdout.close()
-        proc.stderr.close()
-        if stderr_lines:
-            for line in stderr_lines:
-                print(f"[stderr] {line}", flush=True)
-        output["stdout"] = "\n".join(stdout_lines)
-        output["stderr"] = "\n".join(stderr_lines)
-        output["exit_code"] = proc.returncode
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        return {"error": "timeout"}
-    except Exception as e:
-        return {"error": str(e)}
+        result = run_process(cmd, timeout, env=env)
+        output.update(stdout=result.stdout, stderr=result.stderr, exit_code=result.returncode)
+    except subprocess.TimeoutExpired as exc:
+        output.update(error="timeout", stdout=exc.output or "", stderr=exc.stderr or "", exit_code=None)
+        return output
 
     # --- Post-processing commands (after mixlab) ---
     # Run before config cleanup so post commands can reference the config file.
@@ -181,9 +171,6 @@ def handler(job):
             output["post_error"] = err
         else:
             output["post_stdout"] = post_out
-
-    if tmp_config:
-        os.unlink(tmp_config.name)
 
     return output
 

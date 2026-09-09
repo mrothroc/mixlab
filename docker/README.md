@@ -124,9 +124,24 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT/status/JOB_ID \
 | `max_tokens` | Maximum generated tokens for `generate` mode |
 | `temperature` | Sampling temperature for `generate` mode. `0` selects deterministic greedy decoding |
 | `env` | Environment variables for the mixlab process and all `setup`/`post` commands, e.g. `{"MIXLAB_TTT_MLP_DISABLE_CUDA_PRIMITIVE": "1"}`. Scoped to the job — it does not leak to later jobs on a warm worker |
-| `timeout` | Max seconds (default 3600) |
+| `timeout` | Positive finite wall-clock seconds per command (default 3600): applies independently to each setup command, the main process, and each post command. Not an idle-output timeout or a total-job budget |
 
-Logs stream to the RunPod dashboard in real time.
+Both stdout and stderr stream to the RunPod dashboard while the command runs.
+Stderr lines are labeled separately and remain separate in returned output.
+The handler drains both pipes concurrently, including partial lines; silent
+commands still time out. Timeout/error cleanup kills the command's process
+group, including shell children, and reaps the direct child. Commands that
+deliberately detach into a new session are outside that process group.
+The returned capture retains the last 8 MiB of each stream per command,
+prefixed with `[earlier output truncated by handler]` if older output was
+dropped. Streaming continues after that limit; oversized console lines are
+split into bounded chunks. RunPod can independently throttle dashboard logs.
+Use persistent files when complete long-run logs are required.
+
+See [native stack capture on serverless workers](../docs/performance.md#native-stacks-on-runpod-serverless)
+for investigating CPU-busy/GPU-idle hangs. Updating the binary alone does not
+fix the wrapper: rebuild the RunPod image and update the endpoint's pinned
+image digest so new workers run the updated scripts.
 
 To continue an interrupted job, submit the same training config and data with
 `"resume": "/runpod-volume/checkpoints"`. Resume restores training state, not

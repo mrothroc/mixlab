@@ -394,6 +394,72 @@ debug endpoints expose process internals.
 
 ## Remote GPU profiling
 
+### Native stacks on RunPod Serverless
+
+A Go profile may stop at the cgo boundary rather than identify the C++/MLX/CUDA
+operation holding up a run. Capture host-side native thread stacks with GDB
+while the process is stalled. This does not capture device-side CUDA stacks.
+
+RunPod supports SSH into running **Serverless** workers: add your public SSH
+key to your account, then select the endpoint's **Workers** tab, the affected
+running worker, and **Connect** to obtain its SSH command. Follow the
+[RunPod worker SSH instructions](https://docs.runpod.io/serverless/development/ssh-into-workers).
+Do this before the worker becomes unresponsive; a killed process cannot be
+inspected retrospectively. Keeping an active worker available incurs charges.
+
+Prepare debugging tools in a diagnostic image or add this command to the job's
+existing `setup` list before training (the shipped image runs as root):
+
+```json
+"apt-get update && apt-get install -y --no-install-recommends gdb procps"
+```
+
+From that worker's SSH session, identify the affected trainer, then replace
+`1234` below with its PID. Choose the process explicitly if several are running.
+
+```bash
+pgrep -a -x mixlab
+PID=1234
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+OUT=/tmp/mixlab-stacks-$STAMP.txt
+ps -L -p "$PID" -o pid,tid,pcpu,stat,wchan:32,comm
+timeout --signal=INT --kill-after=5s 30s \
+  gdb -nx -batch -p "$PID" \
+  -ex 'set pagination off' \
+  -ex 'thread apply all bt 64' \
+  -ex 'detach' > "$OUT" 2>&1
+mkdir -p /runpod-volume/diagnostics
+cp "$OUT" /runpod-volume/diagnostics/
+```
+
+GDB attachment briefly pauses the process; `detach` releases it. Avoid core
+dumps or `bt full` on a memory-constrained worker: plain backtraces are the
+first diagnostic, not a copy of tensor contents. These are
+[GDB's all-thread backtraces](https://www.sourceware.org/gdb/current/onlinedocs/gdb.html/Backtrace.html).
+The normal CLI build retains Go debug information; C++ library symbols depend
+on how the dependency image was built.
+
+If GDB reports `ptrace: Operation not permitted`, preserve that error. Root
+inside a container does not guarantee attach permission: the worker must
+permit ptrace through its security policy/capabilities. Verify attachment on
+a short diagnostic run before relying on it for a long run; if unavailable,
+use a debugging-capable Pod or coordinate supported access with RunPod rather
+than disabling security settings blindly. A second serverless job may land
+on another worker and cannot be assumed to inspect the hung one.
+
+For environments where SSH is unavailable, capture must instead be pre-armed
+inside that worker with a watchdog/debug supervisor. A `post` command cannot
+capture a still-hung training process because post-processing starts only after
+the main process finishes. No automatic watchdog is enabled by the handler.
+
+Store diagnostics on a mounted persistent volume or retrieve them before the
+worker disappears. See [RunPod log retention](https://docs.runpod.io/serverless/development/logs);
+dashboard silence alone is not proof the trainer stopped. When reporting a
+stall, include the job JSON, exact image digest, native stacks, per-thread CPU,
+GPU utilization, and host/container memory readings from the same interval.
+
+### Profile files
+
 For RunPod or cloud jobs, generate a signed upload URL, pass the training
 command in setup, and upload the profile after the run.
 
