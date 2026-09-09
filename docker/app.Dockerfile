@@ -10,6 +10,10 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE} AS builder
 
+# Refuse an old cached MLX base: rebuilding only the app cannot fix libmlx.
+RUN test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1" \
+    || { echo "Rebuild the MLX CUDA base and architecture tiers with the worker fix" >&2; exit 1; }
+
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libfmt-dev \

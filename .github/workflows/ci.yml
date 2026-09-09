@@ -37,6 +37,20 @@ jobs:
       - name: Test Python scripts
         run: python -m unittest discover -s scripts -p '*_test.py'
 
+      # Exercise the pinned dependency's real completion loop without a GPU.
+      - name: Test MLX CUDA worker patch
+        run: |
+          ROOT="$RUNNER_TEMP/mlx-worker"
+          SOURCE="$ROOT/mlx/backend/cuda/worker.cpp"
+          mkdir -p "$(dirname "$SOURCE")"
+          curl --fail --location --max-time 30 \
+            https://raw.githubusercontent.com/ml-explore/mlx/7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247/mlx/backend/cuda/worker.cpp \
+            -o "$SOURCE"
+          python3 docker/test_mlx_worker.py --source "$SOURCE" --expect-spin
+          git -C "$ROOT" apply --check "$GITHUB_WORKSPACE/docker/patches/mlx-cuda-worker-wait.patch"
+          git -C "$ROOT" apply "$GITHUB_WORKSPACE/docker/patches/mlx-cuda-worker-wait.patch"
+          python3 docker/test_mlx_worker.py --source "$SOURCE"
+
   lint:
     runs-on: ubuntu-latest
     steps:

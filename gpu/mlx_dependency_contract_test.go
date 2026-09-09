@@ -16,6 +16,10 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		"test -f /usr/include/nccl.h",
 		"libnccl\\.so",
 		"NCCL_LIBRARIES:FILEPATH",
+		"MIXLAB_MLX_CUDA_WORKER_FIX=1",
+		"--expect-spin",
+		"git -C /opt/mlx apply --check /tmp/mlx-cuda-worker-wait.patch",
+		"python3 /tmp/test_mlx_worker.py --source /opt/mlx/mlx/backend/cuda/worker.cpp",
 	} {
 		if !strings.Contains(base, required) {
 			t.Errorf("docker/base.Dockerfile is missing %q", required)
@@ -27,6 +31,7 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		"ARG MLX_VERSION=v0.32.0",
 		"ARG MLX_COMMIT=" + pinnedMLXCommit,
 		"MIXLAB_MLX_BUILD_VERSION",
+		"MIXLAB_MLX_CUDA_WORKER_FIX",
 		"NCCL_LIBRARIES:FILEPATH",
 	} {
 		if !strings.Contains(addarch, required) {
@@ -65,6 +70,10 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		if !strings.Contains(appBuild, required) {
 			t.Errorf("docker/cloudbuild-ci.yaml is missing %q", required)
 		}
+	}
+	app := readRepositoryFile(t, "../docker/app.Dockerfile")
+	if !strings.Contains(app, `test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1"`) {
+		t.Fatal("app image must reject an unpatched MLX CUDA base")
 	}
 }
 

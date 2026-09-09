@@ -23,6 +23,7 @@ ARG MLX_VERSION=v0.32.0
 ARG MLX_COMMIT=7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247
 
 RUN test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}" \
+    && test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1" \
     && test "${MIXLAB_MLX_BUILD_COMMIT}" = "${MLX_COMMIT}" \
     && test "$(git -C /opt/mlx rev-parse HEAD)" = "${MLX_COMMIT}" \
     && cd /opt/mlx/build \

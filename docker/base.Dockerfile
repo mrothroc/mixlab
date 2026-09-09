@@ -42,6 +42,16 @@ RUN git clone --branch ${MLX_VERSION} --depth 1 https://github.com/ml-explore/ml
 ENV MIXLAB_MLX_BUILD_VERSION=${MLX_VERSION}
 ENV MIXLAB_MLX_BUILD_COMMIT=${MLX_COMMIT}
 
+# Local dependency fix, not a version upgrade. Test the pinned worker body with
+# stubbed CUDA event delivery before/after patching, without requiring a GPU.
+COPY docker/patches/mlx-cuda-worker-wait.patch /tmp/mlx-cuda-worker-wait.patch
+COPY docker/test_mlx_worker.py /tmp/test_mlx_worker.py
+RUN python3 /tmp/test_mlx_worker.py --source /opt/mlx/mlx/backend/cuda/worker.cpp --expect-spin \
+    && git -C /opt/mlx apply --check /tmp/mlx-cuda-worker-wait.patch \
+    && git -C /opt/mlx apply /tmp/mlx-cuda-worker-wait.patch \
+    && python3 /tmp/test_mlx_worker.py --source /opt/mlx/mlx/backend/cuda/worker.cpp
+ENV MIXLAB_MLX_CUDA_WORKER_FIX=1
+
 # Build MLX with sm_80 ONLY — minimal first tier.
 # KEEP the build directory for incremental arch additions.
 RUN cd /opt/mlx \
