@@ -18,8 +18,8 @@ CGO_ENABLED=0 go test ./arch/... ./cmd/mixlab ./data/... ./train/... -count=1   
 - [`train/`](train/CLAUDE.md) — trainer, optimizer, objective batching, resume, generation
 - [`data/`](data/CLAUDE.md) — shard loaders + binary formats, dataset manifest, tokenizer/nucleotide artifacts (a core subsystem since the sequence-modality work — no longer "rarely touched")
 - `cmd/mixlab/` — CLI entrypoint; one `-mode` per task (see the mode list in `main.go` and `docs/cli.md`)
-- `scripts/` — Python data prep (`prepare.py`, `prepare_records.py`): text/JSONL/FASTA → shards + manifest
-- `docker/` — Dockerfiles for RunPod images; see also `docs/releasing.md`
+- [`scripts/`](scripts/CLAUDE.md) — Python data prep (`prepare*.py`) **and** the RunPod serverless handler, process supervision, and stall watchdog
+- `docker/` — Dockerfiles for RunPod images, plus a patch to pinned MLX that the base image proves before and after applying; downstream tiers refuse an unpatched base. See [`docker/README.md`](docker/README.md) and `docs/releasing.md`
 - `examples/` — runnable JSON configs by feature; `experiments/` — committed test configs (some need gitignored `data/example/` shards)
 
 ## Reference docs

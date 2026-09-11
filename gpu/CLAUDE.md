@@ -14,6 +14,8 @@ This package executes the IR via MLX (Metal on macOS, CUDA on Linux). Forward + 
 - `gated_delta_metal_primitive.{cpp,h}` — Metal triangular solve, plus the recurrent Gated DeltaNet scan covering the rest of `d_k <= 64`, `d_v <= 256`. The backward checkpoints matrix state every `W <= min(scan_chunk_size, 8)` tokens and recomputes each window; see [`../docs/performance.md`](../docs/performance.md#gated-deltanet-long-sequences)
 - `s4d_kernel_metal_primitive.{cpp,h}` — Metal forward/backward for bidirectional S4D kernel synthesis; writes the compact two-direction kernel without materializing the `[D,state_size/2,T]` power tensors
 - `cuda_graph_limits.go` — CUDA graph batching policy (per-op-type caps); see `train/cuda_graph_limits.go` for the wiring
+- `cuda_kernel_dispatch.{cpp,h}` — loads a precompiled fatbin, falling back to NVRTC source compilation when the running GPU is outside the build's architectures; warns once with the GPU and built-for list. See [`cuda_kernels/CLAUDE.md`](cuda_kernels/CLAUDE.md)
+- `mamba3_debug_policy.h` — the two Mamba-3 scan-fallback env var names, shared so the runtime notice advertises exactly what the trainer guard accepts. They disagreed once: the notice named one flag, the guard demanded two
 - [`cuda_kernels/`](cuda_kernels/README.md) — `.cu` source + build pipeline for embedded fatbins
 
 ## MLX primitive pattern
