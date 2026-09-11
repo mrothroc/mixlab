@@ -81,3 +81,26 @@ func TestPublishedDocumentationIndexesHaveValidLocalLinks(t *testing.T) {
 }
 
 var markdownLinkPattern = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
+
+// The formula is published from this repository, so the tap must be installed
+// by URL. The shorter mrothroc/tap/mixlab form resolves to a separate
+// homebrew-tap repository that is archived and therefore frozen at an old
+// release; it stayed publicly tappable, so pointing users at it served a stale
+// binary silently rather than failing.
+func TestHomebrewInstructionsUseThePublishedTap(t *testing.T) {
+	root := filepath.Join("..", "..")
+	for _, relative := range []string{"README.md", filepath.Join("docs", "releasing.md")} {
+		path := filepath.Join(root, relative)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", relative, err)
+		}
+		text := string(data)
+		if strings.Contains(text, "mrothroc/tap/mixlab") {
+			t.Errorf("%s installs from the archived homebrew-tap repository", relative)
+		}
+		if !strings.Contains(text, "brew tap mrothroc/mixlab https://github.com/mrothroc/mixlab") {
+			t.Errorf("%s does not tap the repository that carries Formula/mixlab.rb", relative)
+		}
+	}
+}
