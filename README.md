@@ -65,13 +65,8 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
 ### Homebrew
 
 ```bash
-brew tap mrothroc/mixlab https://github.com/mrothroc/mixlab
-brew install mixlab
+brew install mrothroc/tap/mixlab
 ```
-
-The formula lives in this repository, so the tap needs its URL: the repo is
-`mixlab`, not `homebrew-mixlab`, which is what the shorter `user/tap/formula`
-form requires.
 
 This installs MLX automatically as a dependency. The binary embeds the scripts
 used by `mixlab -mode prepare`, so no source checkout is needed. For the Python

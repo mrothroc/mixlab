@@ -45,8 +45,7 @@ Description.
 ### Install
 
 \`\`\`bash
-brew tap mrothroc/mixlab https://github.com/mrothroc/mixlab
-brew install mixlab
+brew install mrothroc/tap/mixlab
 \`\`\`
 
 Or build from source:
@@ -74,10 +73,30 @@ git commit -m "chore: update formula to vX.Y.Z"
 git push
 ```
 
+Then mirror it into the tap users actually install from. `Formula/mixlab.rb`
+here is the source of truth; `mrothroc/homebrew-tap` is a copy, because
+Homebrew's `user/tap/formula` form requires a repository named
+`homebrew-tap` and has no way to reference a formula in another repo:
+
+```bash
+SHA=$(gh api repos/mrothroc/homebrew-tap/contents/Formula/mixlab.rb --jq .sha)
+gh api -X PUT repos/mrothroc/homebrew-tap/contents/Formula/mixlab.rb \
+  -f message="chore: sync formula to vX.Y.Z from mrothroc/mixlab" \
+  -f content="$(base64 -i Formula/mixlab.rb | tr -d '\n')" \
+  -f sha="$SHA"
+```
+
+This copy drifted unnoticed for five months once, because an archived
+repository stays publicly tappable and kept serving a stale formula instead
+of failing. The verify step below therefore installs by the **documented**
+path rather than the local checkout's tap, so skipping the sync breaks the
+release instead of shipping silently.
+
 ### 5. Verify
 
 ```bash
-brew upgrade mixlab  # or brew install mrothroc/mixlab/mixlab
+brew update && brew upgrade mrothroc/tap/mixlab   # the path README documents
+brew info mrothroc/tap/mixlab                     # must report vX.Y.Z
 mixlab -mode smoke
 ```
 
