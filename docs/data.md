@@ -79,20 +79,24 @@ mixlab -mode prepare -input corpus.txt -prepare-output-dir data/my_data \
 ```
 
 The installed binary embeds Mixlab's preparation scripts, so `prepare` does not
-require a source checkout. Text preparation requires Python 3 with `numpy` and
-`tokenizers`; FASTA, continuous-array, and codebook-array preparation require Python 3 with
-`numpy`.
+require a source checkout. All formats require Python **3.10 or newer** as
+`python3` on `PATH`. Text preparation needs `numpy` and `tokenizers`; FASTA,
+continuous-array, and codebook-array preparation need `numpy`. The CLI and
+RunPod Docker images include these dependencies.
 
 ```bash
-pip install numpy tokenizers
+python3 -m pip install numpy tokenizers
 ```
 
 From a source checkout, `requirements-prepare.txt` pins the versions CI installs
 for the preparation tests:
 
 ```bash
-pip install -r requirements-prepare.txt
+python3 -m pip install -r requirements-prepare.txt
 ```
+
+`-val-split` defaults to `0.1`, reserving 10% for validation. Use `-val-split 0`
+for an already-separated split when all input data should be retained.
 
 Text and nucleotide tokens are stored as uint16, so `vocab-size` must be
 65,535 or less. Multi-codebook arrays use their dedicated int32 shard format.

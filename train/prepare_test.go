@@ -747,7 +747,7 @@ func TestPreparePythonReportsFormatSpecificDependencies(t *testing.T) {
 func TestPreparePythonReportsMissingInterpreter(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	_, err := preparePython("text")
-	if err == nil || !strings.Contains(err.Error(), "requires Python 3 on PATH") {
+	if err == nil || !strings.Contains(err.Error(), "requires Python 3.10 or newer on PATH") {
 		t.Fatalf("missing interpreter error=%v", err)
 	}
 }

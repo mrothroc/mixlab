@@ -1,5 +1,5 @@
 # mixlab CLI image for NVIDIA GPUs.
-# No Python, no RunPod handler — just the Go binary + example configs.
+# Includes the embedded prepare runtime, but no RunPod handler.
 #
 # Build: docker build -f docker/app.Dockerfile -t mixlab .
 # Run:   docker run --gpus all mixlab -mode smoke
@@ -35,6 +35,7 @@ RUN MIXLAB_REQUIRE_CUDA_KERNELS=1 bash gpu/cuda_kernels/generate_registry.sh \
        done < gpu/cuda_kernels/cuda_kernels.list
 
 RUN CGO_ENABLED=1 go build -tags mlx -o /mixlab ./cmd/mixlab \
+    && CGO_ENABLED=0 go build -o /mixlab-prepare-check ./cmd/mixlab \
     && echo "Build OK: $(file /mixlab)"
 
 # --- Runtime image ---
@@ -43,10 +44,23 @@ RUN CGO_ENABLED=1 go build -tags mlx -o /mixlab ./cmd/mixlab \
 # report the MLX GPU backend as unavailable at runtime.
 FROM ${BASE_IMAGE} AS runtime
 
+ARG MIXLAB_VERSION=dev
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.version="${MIXLAB_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.source="https://github.com/mrothroc/mixlab"
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libopenblas0 liblapack3 \
-    libcudnn9-cuda-12 \
+    libcudnn9-cuda-12 python3-venv \
     && rm -rf /var/lib/apt/lists/*
+
+# One dependency contract for local/CI prepare and both runtime images. A venv
+# avoids changing distro packages and remains readable by arbitrary --user UIDs.
+COPY requirements-prepare.txt /opt/mixlab/requirements-prepare.txt
+RUN python3 -m venv /opt/mixlab/venv
+ENV PATH="/opt/mixlab/venv/bin:${PATH}"
+RUN python3 -m pip install --no-cache-dir -r /opt/mixlab/requirements-prepare.txt
 
 # Binary
 COPY --from=builder /mixlab /usr/local/bin/mixlab
@@ -68,3 +82,16 @@ RUN mixlab -mode smoke 2>&1 || echo "Smoke test skipped (no GPU in build)"
 WORKDIR /data
 ENTRYPOINT ["mixlab"]
 CMD ["-help"]
+
+# Build hosts have no NVIDIA driver. Exercise the same embedded prepare path in
+# a non-MLX binary, against the actual runtime Python environment, without a
+# source checkout or a writable home directory. Fail the build on any error.
+FROM runtime AS prepare-check
+COPY --from=builder /mixlab-prepare-check /tmp/mixlab-prepare-check
+COPY docker/prepare_smoke.py /tmp/prepare_smoke.py
+USER 10001:10001
+WORKDIR /tmp
+RUN python3 /tmp/prepare_smoke.py /tmp/mixlab-prepare-check --stamp /tmp/prepare-check.passed
+
+FROM runtime AS final
+COPY --from=prepare-check /tmp/prepare-check.passed /opt/mixlab/prepare-check.passed

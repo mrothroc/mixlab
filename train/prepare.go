@@ -427,7 +427,7 @@ func resolvePrepareScriptAt(envDir, executable, workingDir string) (prepareScrip
 func preparePython(inputFormat string) (string, error) {
 	python, err := exec.LookPath("python3")
 	if err != nil {
-		return "", fmt.Errorf("prepare requires Python 3 on PATH; install python3 and retry")
+		return "", fmt.Errorf("prepare requires Python 3.10 or newer on PATH; install a supported python3 and retry")
 	}
 
 	modules := []string{"numpy"}
@@ -436,10 +436,18 @@ func preparePython(inputFormat string) (string, error) {
 		modules = append(modules, "tokenizers")
 		install += " tokenizers"
 	}
-	check := "import " + strings.Join(modules, ", ")
+	const oldPythonExitCode = 42
+	check := "import sys\n" +
+		"if sys.version_info < (3, 10):\n" +
+		" print('prepare requires Python 3.10 or newer on PATH; found ' + sys.version.split()[0], file=sys.stderr)\n" +
+		" sys.exit(42)\n" +
+		"import " + strings.Join(modules, ", ")
 	cmd := exec.Command(python, "-c", check)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		detail := strings.TrimSpace(string(output))
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == oldPythonExitCode {
+			return "", fmt.Errorf("%s; select a supported interpreter via PATH", detail)
+		}
 		if detail != "" {
 			detail = ": " + detail
 		}

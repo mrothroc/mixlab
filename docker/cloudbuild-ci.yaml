@@ -8,6 +8,8 @@
 # Optional substitutions:
 #   _IMAGE_TAG        — CLI image tag, defaults to latest
 #   _RUNPOD_TAG       — RunPod image tag, defaults to runpod
+#   _RELEASE_VERSION  — OCI version label, defaults to trigger tag or dev
+#   _SOURCE_REVISION  — OCI revision label, defaults to trigger commit or unknown
 # Docker Hub push requires a secret named "dockerhub-token" and a non-empty
 # _DOCKERHUB_USER substitution.
 
@@ -17,6 +19,8 @@ substitutions:
   _DOCKERHUB_USER: ''
   _IMAGE_TAG: 'latest'
   _RUNPOD_TAG: 'runpod'
+  _RELEASE_VERSION: '${TAG_NAME:-dev}'
+  _SOURCE_REVISION: '${COMMIT_SHA:-unknown}'
 
 steps:
   # Build CLI image
@@ -27,6 +31,10 @@ steps:
       - 'docker/app.Dockerfile'
       - '--build-arg'
       - 'BASE_IMAGE=${_MLX_BASE_IMAGE}'
+      - '--build-arg'
+      - 'MIXLAB_VERSION=${_RELEASE_VERSION}'
+      - '--build-arg'
+      - 'VCS_REF=${_SOURCE_REVISION}'
       - '-t'
       - '${_REGISTRY_PREFIX}/mixlab:${_IMAGE_TAG}'
       - '.'
@@ -70,6 +78,7 @@ availableSecrets:
       env: 'DOCKER_TOKEN'
 
 options:
+  dynamicSubstitutions: true
   machineType: 'E2_HIGHCPU_8'
   logging: CLOUD_LOGGING_ONLY
 timeout: '1200s'

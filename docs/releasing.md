@@ -115,6 +115,14 @@ printf '>a\nACGT\n>b\nTGCA\n>c\nAAAA\n>d\nCCCC\n' > "$tmpdir/input.fasta"
 - Update `go.mod` in mixlab-jazz: `go get github.com/mrothroc/mixlab@vX.Y.Z`
 - Rebuild and push RunPod Docker image if GPU-side changes
 
+For CLI/container packaging changes, rebuild both app and RunPod images. The
+app build must pass its non-root embedded preparation check, not just the
+optional GPU smoke. Supply `_RELEASE_VERSION=vX.Y.Z` and
+`_SOURCE_REVISION=<release commit>` for manual Cloud Build submissions; tag
+triggers populate these automatically. Inspect the published image's OCI
+version/revision labels and digest before updating the RunPod endpoint. See
+[image provenance](../docker/README.md#image-provenance).
+
 ## Known gotchas
 
 - **MLX API drift between Homebrew and the local MLX install.** Mixlab requires

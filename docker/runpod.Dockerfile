@@ -1,4 +1,4 @@
-# RunPod serverless image — adds Python + handler on top of the CLI image.
+# RunPod serverless image: adds handler dependencies to the CLI prepare runtime.
 #
 # Build: docker build -f docker/runpod.Dockerfile -t mixlab:runpod .
 # Deploy: set as container image in RunPod serverless endpoint config.
@@ -15,7 +15,7 @@ ENTRYPOINT []
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip curl wget gdb procps \
-    && pip3 install --no-cache-dir tiktoken tokenizers numpy huggingface_hub runpod \
+    && python3 -m pip install --no-cache-dir -c /opt/mixlab/requirements-prepare.txt tiktoken huggingface_hub runpod \
     && rm -rf /var/lib/apt/lists/*
 
 # RunPod handler + data scripts

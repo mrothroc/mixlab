@@ -7,7 +7,9 @@ and representation compatibility notes.
 
 The installed `mixlab` binary contains the preparation scripts; a Mixlab source
 checkout and `MIXLAB_SCRIPTS` are not required. The scripts run through
-`python3` from `PATH`. Text preparation requires `numpy` and `tokenizers`;
+Python **3.10 or newer** via `python3` from `PATH`. An older system interpreter
+(such as Python 3.9 on some Macs) must be replaced on `PATH` with a supported one.
+Text preparation requires `numpy` and `tokenizers`;
 FASTA, continuous-array, and codebook-array preparation require `numpy`.
 
 ```bash
@@ -23,6 +25,13 @@ python3 -m pip install -r requirements-prepare.txt
 
 Set `MIXLAB_SCRIPTS=/path/to/scripts` only when intentionally testing modified
 development copies of `prepare.py` and `prepare_records.py`.
+
+The CLI and RunPod Docker images include these preparation dependencies. See
+[Docker preparation](../docker/README.md#preparing-data-inside-docker).
+
+By default, `prepare` reserves **10%** for validation (`-val-split 0.1`). Pass
+`-val-split 0` when preparing an already-separated training or evaluation split
+and you need to retain all its data.
 
 ```bash
 ./mixlab -mode prepare \

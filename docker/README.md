@@ -25,8 +25,27 @@ If you want to rebuild the app layer yourself (e.g. with custom code changes):
 docker pull michaelrothrock/mixlab-cuda:latest
 docker build -f docker/app.Dockerfile \
     --build-arg BASE_IMAGE=michaelrothrock/mixlab-cuda:latest \
+    --build-arg MIXLAB_VERSION=dev \
+    --build-arg VCS_REF="$(git rev-parse HEAD)" \
     -t mixlab .
 ```
+
+### Image provenance
+
+CLI and RunPod images carry OCI `version`, `revision`, and `source` labels:
+
+```bash
+docker image inspect michaelrothrock/mixlab:latest \
+    --format '{{json .Config.Labels}}'
+```
+
+Cloud Build uses the trigger's release tag and commit for these labels. Main
+branch builds use version `dev` plus the commit; `latest` is a mutable tag, not a
+release identifier. For manual release builds, supply `_RELEASE_VERSION=vX.Y.Z`
+and `_SOURCE_REVISION=<commit>` substitutions, or the corresponding Docker
+build arguments `MIXLAB_VERSION` and `VCS_REF`. Direct builds default to `dev`
+and `unknown` if the arguments are omitted. Record the image digest as well
+when exact reproducibility matters.
 
 ## Pre-built images on Docker Hub
 
@@ -34,12 +53,12 @@ docker build -f docker/app.Dockerfile \
 |-------|----------|------|
 | `michaelrothrock/mixlab-cuda-base` | Go + MLX + CUDA (sm_80 only) | ~6 GB |
 | `michaelrothrock/mixlab-cuda` | + sm_86, sm_89, sm_90 architectures | ~8 GB |
-| `michaelrothrock/mixlab` | + mixlab binary, Python, example configs | ~9 GB |
+| `michaelrothrock/mixlab` | + mixlab binary, Python with NumPy/tokenizers, example configs | ~9 GB |
 
 ## RunPod Serverless
 
-mixlab ships with a separate RunPod serverless image that adds Python and
-`scripts/handler.py` on top of the CLI image. Cloud Build publishes it to two
+mixlab ships with a separate RunPod serverless image that adds handler dependencies
+and `scripts/handler.py` on top of the CLI image. Cloud Build publishes it to two
 registries on every push to main:
 
 - Artifact Registry: `us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf/mixlab:runpod`
@@ -184,8 +203,8 @@ often:
   upgrading Go or MLX versions. ~30 min.
 - **Layer 2 (addarch):** Adds GPU architectures incrementally. Ninja reuses
   existing object files — only new kernels compile. ~10 min per architecture.
-- **Layer 3 (app):** Compiles only the mixlab Go binary. **~2 min.** Rebuild
-  on every code change.
+- **Layer 3 (app):** Builds mixlab, installs preparation dependencies, and runs
+  an embedded preparation smoke test. Rebuild on every code change; no MLX rebuild.
 
 For day-to-day development, you rebuild only layer 3.
 
@@ -218,7 +237,7 @@ docker build -f docker/addarch.Dockerfile \
 
 ### Layer 3: App image
 
-Builds the mixlab Go binary (~2 min).
+Builds the mixlab Go binary and its preparation runtime.
 
 ```bash
 docker build -f docker/app.Dockerfile \
@@ -228,7 +247,7 @@ docker build -f docker/app.Dockerfile \
 
 ### RunPod image (optional)
 
-Adds Python + RunPod handler on top of the app image.
+Adds RunPod handler dependencies on top of the app image's Python environment.
 
 ```bash
 docker build -f docker/runpod.Dockerfile \
@@ -252,6 +271,18 @@ peak RAM during compilation at `-j4`. For 4 architectures, use a machine with
 at least 16GB RAM, or reduce parallelism by editing the Dockerfile (`ninja -j2`).
 
 ## Preparing data inside Docker
+
+The CLI image includes Python 3.10+ and the NumPy/tokenizers dependencies from
+`requirements-prepare.txt` in `/opt/mixlab/venv`, already on `PATH`. No source
+checkout or RunPod handler is needed. Preparation runs on CPU, though the CUDA
+binary still needs its driver libraries available in the container.
+
+The image build checks embedded text and continuous-array preparation as a
+non-root user, using a CPU-only build of the same CLI so the check needs no
+NVIDIA driver. Failures stop the build. The check binary is not shipped.
+
+Preparation reserves 10% for validation by default. Pass `-val-split 0` when
+processing data that is already split and should be kept in full.
 
 ```bash
 # Tokenize a text corpus
