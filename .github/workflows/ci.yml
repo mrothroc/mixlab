@@ -43,8 +43,12 @@ jobs:
       - name: Test Docker Hub description sync
         run: python3 docker/test_sync_dockerhub_description.py
 
-      - name: Validate Docker Hub description
-        run: python3 docker/sync_dockerhub_description.py --dry-run
+      - name: Validate Docker Hub descriptions
+        run: |
+          python3 docker/sync_dockerhub_description.py --dry-run \
+            --target=mixlab=docker/DOCKERHUB.md \
+            --target=mixlab-cuda=docker/DOCKERHUB-cuda.md \
+            --target=mixlab-cuda-base=docker/DOCKERHUB-cuda-base.md
 
       # Exercise the pinned dependency's real completion loop without a GPU.
       - name: Test MLX CUDA worker patch

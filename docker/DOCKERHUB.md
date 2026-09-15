@@ -45,9 +45,18 @@ Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/lates
 are required. MLX JIT-compiles CUDA kernels at runtime and needs the driver
 bind-mounted into the container; without it the GPU backend reports unavailable.
 
-Pre-built images target **sm_80 / 86 / 89** — A100, A40, RTX 3090, RTX 4090,
-L40, L40S. For other architectures, build with your own compute capability:
-see [docker/README.md](https://github.com/mrothroc/mixlab/blob/main/docker/README.md).
+Pre-built images target **`sm_80`, `sm_86`, `sm_89`, and `sm_90`** — A100, A30,
+A40, A6000, RTX 3090, RTX 4090, L4, L40, L40S, H100. Architectures are compiled into
+`libmlx.so` at build time, so a tag supports exactly what it was built with.
+Check any tag directly:
+
+```bash
+docker history --no-trunc michaelrothrock/mixlab:latest \
+    | grep -o 'MLX_CUDA_ARCHITECTURES="[^"]*"'
+```
+
+For anything not listed, build with your own compute capability: see
+[docker/README.md](https://github.com/mrothroc/mixlab/blob/main/docker/README.md).
 
 ## Tags
 

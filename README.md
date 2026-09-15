@@ -91,8 +91,9 @@ This produces a `mixlab` binary in the project root.
 
 ### Docker
 
-For Linux with an NVIDIA GPU. The pre-built images support A100, A40,
-RTX 3090, RTX 4090, L40, and L40S (sm_80/86/89). For other GPUs, see
+For Linux with an NVIDIA GPU. The pre-built images support A100, A30, A40,
+A6000, RTX 3090, RTX 4090, L4, L40, L40S, and H100 (`sm_80`, `sm_86`, `sm_89`,
+`sm_90`). For other GPUs, see
 [docker/README.md](docker/README.md) to build with your architecture.
 
 ## Features

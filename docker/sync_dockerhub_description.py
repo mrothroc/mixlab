@@ -70,6 +70,19 @@ def build_payload(description: str) -> dict:
     return {"full_description": description}
 
 
+def parse_target(spec: str) -> tuple:
+    """Parse a "repo=path" target.
+
+    One flag per repository keeps the published set visible as a single list in
+    the build config, rather than three near-identical steps that can drift.
+    """
+    repo, separator, path = spec.partition("=")
+    if not separator or not repo.strip() or not path.strip():
+        raise DescriptionError(
+            f'--target must look like "repo=path/to/file.md", got: {spec!r}')
+    return repo.strip(), path.strip()
+
+
 def read_token(env_name: str) -> str:
     """Read the access token from the named environment variable.
 
@@ -141,6 +154,9 @@ def main() -> int:
     parser.add_argument("--user", default=os.environ.get("DOCKERHUB_USER", ""))
     parser.add_argument("--repo", default="mixlab")
     parser.add_argument("--file", default="docker/DOCKERHUB.md")
+    parser.add_argument("--target", action="append", default=[], metavar="REPO=FILE",
+                        help="publish FILE as REPO's overview; repeatable. "
+                             "Supersedes --repo/--file when given.")
     parser.add_argument("--token-env", default="DOCKERHUB_TOKEN",
                         help="name of the env var holding the access token "
                              "(default: DOCKERHUB_TOKEN)")
@@ -151,16 +167,20 @@ def main() -> int:
     token = read_token(args.token_env)
 
     try:
-        # Validate BEFORE the credential check so a broken file fails the build
-        # even on a run that would not have published anything.
-        description = load_description(args.file)
+        targets = ([parse_target(spec) for spec in args.target]
+                   if args.target else [(args.repo, args.file)])
+        # Validate EVERY file before publishing ANY of them, and before the
+        # credential check: one broken overview should fail the build without
+        # leaving the other repositories half-updated.
+        loaded = [(repo, path, load_description(path)) for repo, path in targets]
     except DescriptionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
     if args.dry_run:
-        print(f"dry-run OK: {args.file} is {len(description)} chars "
-              f"(limit {MAX_DESCRIPTION_CHARS})")
+        for repo, path, text in loaded:
+            print(f"dry-run OK: {path} -> {repo} is {len(text)} chars "
+                  f"(limit {MAX_DESCRIPTION_CHARS})")
         return 0
 
     if should_skip(args.user, token):
@@ -169,17 +189,24 @@ def main() -> int:
         return 0
 
     try:
-        publish(args.user, args.repo, description, login(args.user, token))
-    except DescriptionError as exc:
+        jwt = login(args.user, token)
+    except (DescriptionError, urllib.error.URLError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    except urllib.error.URLError as exc:
-        print(f"ERROR: could not reach Docker Hub: {exc.reason}", file=sys.stderr)
-        return 1
 
-    print(f"Updated {args.user}/{args.repo} overview "
-          f"({len(description)} chars) from {args.file}")
-    return 0
+    # Attempt every repository even if one fails, so a single bad repo name does
+    # not silently leave the rest of the set unpublished.
+    failed = False
+    for repo, path, text in loaded:
+        try:
+            publish(args.user, repo, text, jwt)
+        except (DescriptionError, urllib.error.URLError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            failed = True
+            continue
+        print(f"Updated {args.user}/{repo} overview "
+              f"({len(text)} chars) from {path}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

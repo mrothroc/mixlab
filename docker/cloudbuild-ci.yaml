@@ -69,17 +69,29 @@ steps:
         docker push ${_DOCKERHUB_USER}/mixlab:${_RUNPOD_TAG}
     secretEnv: ['DOCKER_TOKEN']
 
-  # Sync the Docker Hub overview from docker/DOCKERHUB.md.
-  # Runs after the push so the landing page can never describe a version of the
-  # software older than the image sitting next to it. Aborts the build on a
-  # missing or empty file rather than blanking a working overview.
+  # Publish the Docker Hub overviews for all three repositories.
+  #
+  # mixlab is pushed by the step above, so its overview ships with the image it
+  # describes. The two dependency layers are NOT built or pushed by this
+  # pipeline — they are rebuilt rarely and by hand via
+  # cloudbuild-mlx-cuda-base.yaml / cloudbuild-golf-mlx-cuda.yaml, which publish
+  # to Artifact Registry only. Their overviews are documentation about images
+  # that change on a scale of months, so publishing them at repository cadence
+  # keeps a doc fix from waiting on the next base rebuild. The GPU architecture
+  # claims in those files are pinned to _ARCHS by
+  # test_sync_dockerhub_description.py, so they cannot drift from what the build
+  # actually compiles.
+  #
+  # Every file is validated before any repository is updated, so one broken
+  # overview fails the build instead of leaving the set half-published.
   - name: 'gcr.io/cloud-builders/gcloud'
     entrypoint: 'python3'
     args:
       - 'docker/sync_dockerhub_description.py'
       - '--user=${_DOCKERHUB_USER}'
-      - '--repo=mixlab'
-      - '--file=docker/DOCKERHUB.md'
+      - '--target=mixlab=docker/DOCKERHUB.md'
+      - '--target=mixlab-cuda=docker/DOCKERHUB-cuda.md'
+      - '--target=mixlab-cuda-base=docker/DOCKERHUB-cuda-base.md'
       # Cloud Build rejects binding one secret version to two env names, so
       # reuse the DOCKER_TOKEN binding the push step above already declares.
       - '--token-env=DOCKER_TOKEN'

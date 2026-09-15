@@ -129,5 +129,77 @@ class TestCredentialHandling(unittest.TestCase):
         self.assertFalse(sync.should_skip(user="michaelrothrock", token="tok"))
 
 
+class TestTargetParsing(unittest.TestCase):
+    def test_parses_repo_and_path(self):
+        self.assertEqual(sync.parse_target("mixlab-cuda=docker/DOCKERHUB-cuda.md"),
+                         ("mixlab-cuda", "docker/DOCKERHUB-cuda.md"))
+
+    def test_strips_surrounding_whitespace(self):
+        self.assertEqual(sync.parse_target(" mixlab = docker/DOCKERHUB.md "),
+                         ("mixlab", "docker/DOCKERHUB.md"))
+
+    def test_missing_separator_raises(self):
+        with self.assertRaises(sync.DescriptionError):
+            sync.parse_target("mixlab")
+
+    def test_empty_side_raises(self):
+        for spec in ("=docker/DOCKERHUB.md", "mixlab=", "=", " = "):
+            with self.assertRaises(sync.DescriptionError):
+                sync.parse_target(spec)
+
+
+class TestPublishedArchClaims(unittest.TestCase):
+    """The GPU architecture list must match what the build actually compiles.
+
+    On 2026-09-15 four files disagreed: README.md and docker/DOCKERHUB.md claimed
+    sm_80/86/89 while the build config and docker/README.md said 80;86;89;90. The
+    published image's own layer history settled it — ARCHS=80;86;89;90 — meaning
+    the overview live on Docker Hub understated GPU support and turned away H100
+    users. The list is derivable from the build config, so it is checked here
+    instead of being hand-maintained in five places.
+    """
+
+    REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    BUILD_CONFIG = os.path.join(REPO_ROOT, "docker", "cloudbuild-golf-mlx-cuda.yaml")
+    CLAIM_FILES = ("README.md", "docker/DOCKERHUB.md",
+                   "docker/DOCKERHUB-cuda.md", "docker/DOCKERHUB-cuda-base.md")
+
+    def built_archs(self):
+        """The _ARCHS substitution, the authoritative list. Missing = abort."""
+        import re
+        with open(self.BUILD_CONFIG, encoding="utf-8") as handle:
+            match = re.search(r'^\s*_ARCHS:\s*"([0-9;]+)"', handle.read(), re.M)
+        self.assertIsNotNone(
+            match, f"_ARCHS not found in {self.BUILD_CONFIG} — cannot verify claims")
+        archs = [a for a in match.group(1).split(";") if a]
+        self.assertGreaterEqual(len(archs), 1, "_ARCHS parsed to an empty list")
+        return archs
+
+    def claims_in(self, relative_path):
+        import re
+        with open(os.path.join(self.REPO_ROOT, relative_path), encoding="utf-8") as h:
+            return set(re.findall(r"sm_(\d+)", h.read()))
+
+    def test_no_file_claims_an_architecture_the_build_does_not_compile(self):
+        built = set(self.built_archs())
+        for relative_path in self.CLAIM_FILES:
+            extra = self.claims_in(relative_path) - built
+            self.assertFalse(
+                extra,
+                f"{relative_path} claims sm_{sorted(extra)} but _ARCHS is "
+                f"{sorted(built)} — the image does not support it")
+
+    def test_the_user_facing_overviews_list_every_built_architecture(self):
+        # Understating support is the failure that actually happened: an H100
+        # user reads sm_80/86/89 and goes elsewhere.
+        built = set(self.built_archs())
+        for relative_path in ("docker/DOCKERHUB.md", "docker/DOCKERHUB-cuda.md"):
+            missing = built - self.claims_in(relative_path)
+            self.assertFalse(
+                missing,
+                f"{relative_path} omits sm_{sorted(missing)}, which the build "
+                f"compiles — it understates GPU support")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
