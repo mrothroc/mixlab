@@ -84,6 +84,40 @@ class TestPayload(unittest.TestCase):
         self.assertEqual(json.loads(raw)["full_description"], "a\"b`c\nd")
 
 
+class TestTokenSource(unittest.TestCase):
+    """The token is read from a named env var, never from argv.
+
+    Cloud Build refuses to bind one secret version to two env names, so the
+    caller has to be able to say which variable already holds the secret. A
+    build that got this wrong failed validation before running any step.
+    """
+
+    def test_reads_the_named_variable(self):
+        os.environ["TEST_TOKEN_VAR"] = "s3cret"
+        try:
+            self.assertEqual(sync.read_token("TEST_TOKEN_VAR"), "s3cret")
+        finally:
+            del os.environ["TEST_TOKEN_VAR"]
+
+    def test_reads_the_cloud_build_variable_name(self):
+        # The pipeline passes --token-env=DOCKER_TOKEN, reusing the push step's
+        # binding rather than declaring a second one.
+        os.environ["DOCKER_TOKEN"] = "from-push-step"
+        try:
+            self.assertEqual(sync.read_token("DOCKER_TOKEN"), "from-push-step")
+        finally:
+            del os.environ["DOCKER_TOKEN"]
+
+    def test_unset_variable_yields_empty_not_an_error(self):
+        # An unset token is a skip, not a failure — same as the push step.
+        os.environ.pop("DEFINITELY_UNSET_VAR", None)
+        self.assertEqual(sync.read_token("DEFINITELY_UNSET_VAR"), "")
+
+    def test_empty_env_name_raises(self):
+        with self.assertRaises(sync.DescriptionError):
+            sync.read_token("")
+
+
 class TestCredentialHandling(unittest.TestCase):
     def test_missing_credentials_is_a_skip_not_a_failure(self):
         # Mirrors the existing Docker Hub push step: a build without the secret

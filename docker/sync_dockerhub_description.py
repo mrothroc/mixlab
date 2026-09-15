@@ -15,6 +15,11 @@ FAILS LOUDLY on a degenerate description. Docker Hub accepts an empty
 full_description without complaint, so a missing or blank file would blank a
 working overview and exit 0. Every such case raises here instead.
 
+The access token is read from an environment variable rather than an argument so
+it never appears in a process listing or a build log. --token-env names that
+variable: Cloud Build refuses to bind one secret version to two env names, so
+the step reuses the DOCKER_TOKEN binding the image push already declares.
+
 Usage:
   DOCKERHUB_TOKEN=... python3 docker/sync_dockerhub_description.py \
       --user michaelrothrock --repo mixlab --file docker/DOCKERHUB.md
@@ -63,6 +68,17 @@ def load_description(path: str) -> str:
 def build_payload(description: str) -> dict:
     """The PATCH body. Only full_description — never touch other repo fields."""
     return {"full_description": description}
+
+
+def read_token(env_name: str) -> str:
+    """Read the access token from the named environment variable.
+
+    Kept out of argv deliberately: an argument would be visible in `ps` output
+    and in Cloud Build's step logs.
+    """
+    if not env_name:
+        raise DescriptionError("--token-env must name an environment variable")
+    return os.environ.get(env_name, "")
 
 
 def should_skip(user: str, token: str) -> bool:
@@ -125,11 +141,14 @@ def main() -> int:
     parser.add_argument("--user", default=os.environ.get("DOCKERHUB_USER", ""))
     parser.add_argument("--repo", default="mixlab")
     parser.add_argument("--file", default="docker/DOCKERHUB.md")
+    parser.add_argument("--token-env", default="DOCKERHUB_TOKEN",
+                        help="name of the env var holding the access token "
+                             "(default: DOCKERHUB_TOKEN)")
     parser.add_argument("--dry-run", action="store_true",
                         help="validate the file and exit without contacting Docker Hub")
     args = parser.parse_args()
 
-    token = os.environ.get("DOCKERHUB_TOKEN", "")
+    token = read_token(args.token_env)
 
     try:
         # Validate BEFORE the credential check so a broken file fails the build
@@ -145,8 +164,8 @@ def main() -> int:
         return 0
 
     if should_skip(args.user, token):
-        print("Skipping Docker Hub description sync "
-              "(DOCKERHUB_USER or DOCKERHUB_TOKEN not set)")
+        print(f"Skipping Docker Hub description sync "
+              f"(--user or ${args.token_env} not set)")
         return 0
 
     try:

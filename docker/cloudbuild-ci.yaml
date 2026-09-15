@@ -80,8 +80,10 @@ steps:
       - '--user=${_DOCKERHUB_USER}'
       - '--repo=mixlab'
       - '--file=docker/DOCKERHUB.md'
-    env: ['DOCKERHUB_USER=${_DOCKERHUB_USER}']
-    secretEnv: ['DOCKERHUB_TOKEN']
+      # Cloud Build rejects binding one secret version to two env names, so
+      # reuse the DOCKER_TOKEN binding the push step above already declares.
+      - '--token-env=DOCKER_TOKEN'
+    secretEnv: ['DOCKER_TOKEN']
 
 images:
   - '${_REGISTRY_PREFIX}/mixlab:${_IMAGE_TAG}'
@@ -91,8 +93,6 @@ availableSecrets:
   secretManager:
     - versionName: projects/$PROJECT_ID/secrets/dockerhub-token/versions/latest
       env: 'DOCKER_TOKEN'
-    - versionName: projects/$PROJECT_ID/secrets/dockerhub-token/versions/latest
-      env: 'DOCKERHUB_TOKEN'
 
 options:
   dynamicSubstitutions: true
