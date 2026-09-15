@@ -37,6 +37,15 @@ jobs:
       - name: Test Python scripts
         run: python -m unittest discover -s scripts -p '*_test.py'
 
+      # The Docker Hub overview is published from docker/DOCKERHUB.md by Cloud
+      # Build. Validate it here so a blank or oversized file fails on the PR
+      # rather than silently blanking the image's landing page on merge.
+      - name: Test Docker Hub description sync
+        run: python3 docker/test_sync_dockerhub_description.py
+
+      - name: Validate Docker Hub description
+        run: python3 docker/sync_dockerhub_description.py --dry-run
+
       # Exercise the pinned dependency's real completion loop without a GPU.
       - name: Test MLX CUDA worker patch
         run: |

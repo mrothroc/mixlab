@@ -11,7 +11,8 @@
 #   _RELEASE_VERSION  — OCI version label, defaults to trigger tag or dev
 #   _SOURCE_REVISION  — OCI revision label, defaults to trigger commit or unknown
 # Docker Hub push requires a secret named "dockerhub-token" and a non-empty
-# _DOCKERHUB_USER substitution.
+# _DOCKERHUB_USER substitution. The same credentials publish
+# docker/DOCKERHUB.md as the repository overview.
 
 substitutions:
   _REGISTRY_PREFIX: ''
@@ -68,6 +69,20 @@ steps:
         docker push ${_DOCKERHUB_USER}/mixlab:${_RUNPOD_TAG}
     secretEnv: ['DOCKER_TOKEN']
 
+  # Sync the Docker Hub overview from docker/DOCKERHUB.md.
+  # Runs after the push so the landing page can never describe a version of the
+  # software older than the image sitting next to it. Aborts the build on a
+  # missing or empty file rather than blanking a working overview.
+  - name: 'gcr.io/cloud-builders/gcloud'
+    entrypoint: 'python3'
+    args:
+      - 'docker/sync_dockerhub_description.py'
+      - '--user=${_DOCKERHUB_USER}'
+      - '--repo=mixlab'
+      - '--file=docker/DOCKERHUB.md'
+    env: ['DOCKERHUB_USER=${_DOCKERHUB_USER}']
+    secretEnv: ['DOCKERHUB_TOKEN']
+
 images:
   - '${_REGISTRY_PREFIX}/mixlab:${_IMAGE_TAG}'
   - '${_REGISTRY_PREFIX}/mixlab:${_RUNPOD_TAG}'
@@ -76,6 +91,8 @@ availableSecrets:
   secretManager:
     - versionName: projects/$PROJECT_ID/secrets/dockerhub-token/versions/latest
       env: 'DOCKER_TOKEN'
+    - versionName: projects/$PROJECT_ID/secrets/dockerhub-token/versions/latest
+      env: 'DOCKERHUB_TOKEN'
 
 options:
   dynamicSubstitutions: true
