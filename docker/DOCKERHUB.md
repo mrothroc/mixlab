@@ -1,3 +1,4 @@
+<!-- short: GPU ML architecture exploration. Define models in JSON, train on Metal or CUDA. -->
 # mixlab
 
 Explore ML architectures fast. Define a model in JSON, train it on your Mac in

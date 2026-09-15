@@ -69,12 +69,83 @@ class TestLoadDescription(unittest.TestCase):
         self.assertIn("→ trained →", sync.load_description(path))
 
 
+class TestShortDescription(unittest.TestCase):
+    """The one-line description is a separate Docker Hub field, and it drifts.
+
+    On 2026-09-15 mixlab-cuda's short description still read "sm_80/86/89" after
+    the long one was corrected to include sm_90 — the same understatement, in the
+    field that shows in search results. It lives in the same file as the overview
+    so the two are edited together, and it is REQUIRED: a file without one would
+    otherwise leave a stale line published while reporting success.
+    """
+
+    def test_extracts_the_marker_and_strips_it_from_the_body(self):
+        short, body = sync.split_description(
+            "<!-- short: A one-line pitch. -->\n# Title\n\nBody text.\n")
+        self.assertEqual(short, "A one-line pitch.")
+        self.assertNotIn("<!-- short:", body)
+        self.assertTrue(body.lstrip().startswith("# Title"))
+
+    def test_marker_is_tolerated_anywhere_in_the_file(self):
+        short, body = sync.split_description(
+            "# Title\n\n<!-- short: Later marker. -->\nBody.\n")
+        self.assertEqual(short, "Later marker.")
+        self.assertNotIn("<!-- short:", body)
+
+    def test_whitespace_around_the_marker_is_ignored(self):
+        short, _ = sync.split_description("<!--   short:   Padded.   -->\n# T\n")
+        self.assertEqual(short, "Padded.")
+
+    def test_missing_marker_raises(self):
+        with self.assertRaises(sync.DescriptionError):
+            sync.split_description("# Title\n\nNo marker here.\n")
+
+    def test_empty_marker_raises(self):
+        with self.assertRaises(sync.DescriptionError):
+            sync.split_description("<!-- short:    -->\n# Title\n")
+
+    def test_over_the_hub_limit_raises(self):
+        over = "x" * (sync.MAX_SHORT_DESCRIPTION_CHARS + 1)
+        with self.assertRaises(sync.DescriptionError):
+            sync.split_description(f"<!-- short: {over} -->\n# T\n")
+
+    def test_exactly_at_the_limit_is_accepted(self):
+        exact = "x" * sync.MAX_SHORT_DESCRIPTION_CHARS
+        short, _ = sync.split_description(f"<!-- short: {exact} -->\n# T\n")
+        self.assertEqual(len(short), sync.MAX_SHORT_DESCRIPTION_CHARS)
+
+    def test_stripping_leaves_a_non_empty_body(self):
+        # A file that is nothing but a marker would publish a blank overview.
+        with self.assertRaises(sync.DescriptionError):
+            sync.split_description("<!-- short: Only a marker. -->\n")
+
+    def test_every_shipped_overview_carries_one(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for name in ("DOCKERHUB.md", "DOCKERHUB-cuda.md", "DOCKERHUB-cuda-base.md"):
+            path = os.path.join(root, "docker", name)
+            with open(path, encoding="utf-8") as handle:
+                short, body = sync.split_description(handle.read())
+            self.assertTrue(short, f"{name} has an empty short description")
+            self.assertLessEqual(len(short), sync.MAX_SHORT_DESCRIPTION_CHARS)
+            self.assertIn("mixlab", body)
+
+
 class TestPayload(unittest.TestCase):
     def test_payload_is_json_with_full_description(self):
         body = sync.build_payload("# mixlab\n\n\"quoted\" & <tagged>\n")
         self.assertEqual(body["full_description"],
                          "# mixlab\n\n\"quoted\" & <tagged>\n")
         self.assertEqual(list(body), ["full_description"])
+
+    def test_payload_carries_the_short_description_when_given(self):
+        body = sync.build_payload("# mixlab\n", short="One line.")
+        self.assertEqual(body["description"], "One line.")
+        self.assertEqual(sorted(body), ["description", "full_description"])
+
+    def test_payload_touches_no_other_repository_fields(self):
+        # A PATCH that included is_private or similar could change repo settings.
+        body = sync.build_payload("# mixlab\n", short="One line.")
+        self.assertEqual(sorted(body), ["description", "full_description"])
 
     def test_payload_encodes_without_shell_escaping_hazards(self):
         # Built with json.dumps rather than string interpolation: markdown is

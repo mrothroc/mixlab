@@ -49,6 +49,20 @@ when exact reproducibility matters.
 
 ## Pre-built images on Docker Hub
 
+Each repository's Docker Hub page is generated from a file here, not edited in
+the web form: `DOCKERHUB.md`, `DOCKERHUB-cuda.md`, and `DOCKERHUB-cuda-base.md`.
+Cloud Build publishes them on every push to main. The first line of each file
+carries the one-line description Docker Hub shows in search results:
+
+```markdown
+<!-- short: One line, 100 characters max. -->
+```
+
+It is required and stripped before the body is published. GPU architecture
+claims in these files are pinned to `_ARCHS` by
+`test_sync_dockerhub_description.py`, so they cannot drift from what the build
+compiles.
+
 | Image | Contents | Size |
 |-------|----------|------|
 | `michaelrothrock/mixlab-cuda-base` | Go + MLX + CUDA (sm_80 only) | ~6 GB |

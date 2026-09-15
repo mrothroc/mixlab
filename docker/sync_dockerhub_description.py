@@ -27,6 +27,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -37,6 +38,15 @@ REPO_URL = "https://hub.docker.com/v2/repositories/{user}/{repo}/"
 # Docker Hub silently truncates past this rather than returning an error, which
 # would publish a page ending mid-sentence with no signal that it happened.
 MAX_DESCRIPTION_CHARS = 25000
+
+# Docker Hub's one-line description, shown in search results and on the
+# repository card. Longer values are rejected by the API.
+MAX_SHORT_DESCRIPTION_CHARS = 100
+
+# The one-liner lives in the same file as the overview so the two are edited
+# together. An HTML comment renders as nothing, and it is stripped before the
+# body is published.
+SHORT_MARKER = re.compile(r"^[ \t]*<!--[ \t]*short:(.*?)-->[ \t]*\r?\n?", re.M | re.S)
 
 TIMEOUT_SECONDS = 30
 
@@ -65,9 +75,39 @@ def load_description(path: str) -> str:
     return text
 
 
-def build_payload(description: str) -> dict:
-    """The PATCH body. Only full_description — never touch other repo fields."""
-    return {"full_description": description}
+def split_description(text: str) -> tuple:
+    """Split an overview file into (short description, body).
+
+    The short description is REQUIRED. Docker Hub keeps it in a separate field
+    that is easy to forget, and a forgotten one stays published and stale — which
+    is exactly what happened to mixlab-cuda's sm_80/86/89 line after the overview
+    was corrected.
+    """
+    match = SHORT_MARKER.search(text)
+    if not match:
+        raise DescriptionError(
+            "no short description found: add a line like "
+            "'<!-- short: One line shown in Docker Hub search results. -->'")
+    short = match.group(1).strip()
+    if not short:
+        raise DescriptionError("short description marker is empty")
+    if len(short) > MAX_SHORT_DESCRIPTION_CHARS:
+        raise DescriptionError(
+            f"short description is {len(short)} chars, over Docker Hub's "
+            f"{MAX_SHORT_DESCRIPTION_CHARS} limit: {short[:60]}...")
+
+    body = SHORT_MARKER.sub("", text, count=1)
+    if not body.strip():
+        raise DescriptionError("nothing left after removing the short-description marker")
+    return short, body
+
+
+def build_payload(description: str, short: str = None) -> dict:
+    """The PATCH body. Only the two description fields — nothing else is touched."""
+    payload = {"full_description": description}
+    if short is not None:
+        payload["description"] = short
+    return payload
 
 
 def parse_target(spec: str) -> tuple:
@@ -135,10 +175,11 @@ def login(user: str, token: str) -> str:
     return jwt
 
 
-def publish(user: str, repo: str, description: str, jwt: str) -> None:
+def publish(user: str, repo: str, description: str, jwt: str,
+            short: str = None) -> None:
     url = REPO_URL.format(user=user, repo=repo)
     try:
-        status = _patch_json(url, build_payload(description),
+        status = _patch_json(url, build_payload(description, short),
                              {"Authorization": f"JWT {jwt}"})
     except urllib.error.HTTPError as exc:
         raise DescriptionError(
@@ -172,15 +213,19 @@ def main() -> int:
         # Validate EVERY file before publishing ANY of them, and before the
         # credential check: one broken overview should fail the build without
         # leaving the other repositories half-updated.
-        loaded = [(repo, path, load_description(path)) for repo, path in targets]
+        loaded = []
+        for repo, path in targets:
+            short, body = split_description(load_description(path))
+            loaded.append((repo, path, body, short))
     except DescriptionError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
     if args.dry_run:
-        for repo, path, text in loaded:
-            print(f"dry-run OK: {path} -> {repo} is {len(text)} chars "
+        for repo, path, body, short in loaded:
+            print(f"dry-run OK: {path} -> {repo} is {len(body)} chars "
                   f"(limit {MAX_DESCRIPTION_CHARS})")
+            print(f"            short ({len(short)}/{MAX_SHORT_DESCRIPTION_CHARS}): {short}")
         return 0
 
     if should_skip(args.user, token):
@@ -197,15 +242,15 @@ def main() -> int:
     # Attempt every repository even if one fails, so a single bad repo name does
     # not silently leave the rest of the set unpublished.
     failed = False
-    for repo, path, text in loaded:
+    for repo, path, body, short in loaded:
         try:
-            publish(args.user, repo, text, jwt)
+            publish(args.user, repo, body, jwt, short)
         except (DescriptionError, urllib.error.URLError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             failed = True
             continue
         print(f"Updated {args.user}/{repo} overview "
-              f"({len(text)} chars) from {path}")
+              f"({len(body)} chars) + short description, from {path}")
     return 1 if failed else 0
 
 

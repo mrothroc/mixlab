@@ -1,3 +1,4 @@
+<!-- short: Build layer: Go + MLX + CUDA for sm_80/86/89/90. Most users want michaelrothrock/mixlab. -->
 # mixlab-cuda
 
 **Most people want [`michaelrothrock/mixlab`](https://hub.docker.com/r/michaelrothrock/mixlab)

@@ -1,3 +1,4 @@
+<!-- short: Build layer: Go + MLX + CUDA, sm_80 only. Add GPU architectures incrementally. -->
 # mixlab-cuda-base
 
 **Most people want [`michaelrothrock/mixlab`](https://hub.docker.com/r/michaelrothrock/mixlab)
