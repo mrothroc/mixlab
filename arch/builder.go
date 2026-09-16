@@ -371,6 +371,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		nil,
 		false,
 		nil,
+		false,
 	)
 }
 
@@ -417,6 +418,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	pllMargin *PLLMarginSpec,
 	rcEquivariant bool,
 	inputAdapter *InputAdapterSpec,
+	clsPooling bool,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -565,6 +567,11 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	nWeights += len(layerAggregationWeights)
 	layerAggregationWeightStart := nWeights - len(layerAggregationWeights)
+	clsWeight := ""
+	if clsPooling {
+		clsWeight = weightName(nWeights)
+		nWeights++
+	}
 
 	prog := NewProgram(nWeights)
 	maskedObjective := isMaskedTrainingObjective(objective)
@@ -631,6 +638,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	switch {
 	case linearFrames:
 		wi, err = emitLinearFramesInputIR(prog, linearFramesInputOptions{
+			CLSWeight:           clsWeight,
 			BatchSize:           B,
 			SeqLen:              T,
 			ModelDim:            D,
@@ -646,6 +654,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		})
 	case discreteCodebooks:
 		wi, err = emitDiscreteCodebookInputIR(prog, discreteCodebookInputOptions{
+			CLSWeight:           clsWeight,
 			BatchSize:           B,
 			SeqLen:              T,
 			ModelDim:            D,
@@ -665,6 +674,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		wi, err = emitRCEquivariantInputIR(prog, B, T, D, fixedWeightCountWithHeadAndNorm(reserveHead, norm, finalNorm))
 	default:
 		wi, err = emitDiscreteTokenInputIR(prog, discreteTokenInputOptions{
+			CLSWeight:           clsWeight,
 			BatchSize:           B,
 			SeqLen:              T,
 			ModelDim:            D,
@@ -685,6 +695,13 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	if err != nil {
 		return nil, err
+	}
+	if clsWeight != "" {
+		T++
+		if segmentAttentionMask {
+			prog.Full([]int{B, 1}, 0, "cls_segment")
+			prog.Concat("cls_segment", "segment_ids", 1, "segment_ids")
+		}
 	}
 	sharedRel, err := newSharedRelativeAttentionPlan(blocks)
 	if err != nil {
@@ -934,6 +951,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 
 	// Verify weight count consistency
+	if clsWeight != "" {
+		wi++
+	}
 	if wi != nWeights {
 		return nil, fmt.Errorf("IR weight count mismatch: emitted=%d expected=%d", wi, nWeights)
 	}

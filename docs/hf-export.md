@@ -1,6 +1,6 @@
 # Hugging Face Export
 
-`export-hf` writes a Hugging Face custom-code directory from a Mixlab JSON config and a Mixlab safetensors checkpoint. Token-model checkpoints export `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForSequenceClassification`; masked and hybrid checkpoints also export `AutoModelForMaskedLM`. Native continuous S4D classifiers export only `AutoModel` and `AutoModelForSequenceClassification`. For masked-capable token exports, `AutoModel` and sequence classification use the bidirectional encoder backbone while `AutoModelForCausalLM` stays causal.
+`export-hf` writes a Hugging Face custom-code directory from a Mixlab JSON config and a Mixlab safetensors checkpoint. Token-model checkpoints export `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForSequenceClassification`; masked and hybrid checkpoints also export `AutoModelForMaskedLM`. Native continuous S4D classifiers and CLS classifiers export only `AutoModel` and `AutoModelForSequenceClassification`. For masked-capable token exports, `AutoModel` and sequence classification use the bidirectional encoder backbone while `AutoModelForCausalLM` stays causal.
 
 ```bash
 mixlab -mode export-hf \
@@ -113,6 +113,12 @@ backbone:
 
 Native classification exports use the explicit/defaulted
 `training.classification.pooling` from the training config.
+
+Native `pooling: "cls"` classifiers export their learned `cls_token` and read
+position zero after final normalization. Supported token and `linear_frames`
+attention stacks preserve raw input lengths and prepend the valid CLS mask
+internally, including padded batches. Learned positions include the extra CLS
+row. Codebook adapters remain native-only; other export restrictions still apply.
 
 ### Continuous S4D classifiers
 

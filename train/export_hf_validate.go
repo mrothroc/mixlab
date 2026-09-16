@@ -18,7 +18,7 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 		return unsupportedHFExport("training.classification.bias", "bias-free native classification heads are not supported by HF export in v1")
 	}
 	if cfg.LinearFramesEnabled() {
-		if err := validateHFContinuousS4DComposition(cfg); err != nil {
+		if err := validateHFContinuousClassificationComposition(cfg); err != nil {
 			return err
 		}
 	}

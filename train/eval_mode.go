@@ -143,6 +143,9 @@ func runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, op
 					target := programs[shape]
 					if target == nil {
 						clone := *cfg
+						if cfg.CLSPoolingEnabled() {
+							clone.MaxPositions = cfg.EffectiveMaxPositions()
+						}
 						clone.SeqLen = evalSeqLen
 						clone.Training = cfg.Training
 						clone.Training.BatchTokens = evalBatchSize * evalSeqLen

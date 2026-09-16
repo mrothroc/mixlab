@@ -5,6 +5,7 @@ import "fmt"
 // discreteTokenInputOptions describes the existing token-id input adapter.
 // It stays internal until Mixlab has a second useful adapter implementation.
 type discreteTokenInputOptions struct {
+	CLSWeight           string
 	BatchSize           int
 	SeqLen              int
 	ModelDim            int
@@ -38,6 +39,7 @@ func emitDiscreteTokenInputIR(prog *Program, opts discreteTokenInputOptions) (in
 	wi := opts.NextWeightIndex
 	prog.Embed(weightName(opts.TokenWeightIndex), "tokens", "x_embed")
 	embedState := "x_embed"
+	embedState, T = prependCLSInputIR(prog, embedState, opts.CLSWeight, B, T, D)
 	var err error
 	if normalizePositionalEmbedding(opts.PositionalEmbedding) == PositionalEmbeddingLearnedAbsolute {
 		embedState, wi, err = emitLearnedPositionEmbeddingIR(prog, embedState, B, T, D, wi, opts.MaxPositions)

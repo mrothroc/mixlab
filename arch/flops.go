@@ -92,7 +92,7 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 	trainingFLOPsReliable := true
 	if order == nil {
 		for _, block := range cfg.Blocks {
-			forward += estimateBlockFLOPs(block, B, T, D, V, ffn, cfg.MLPMult, cfg.BlockScales, cfg.ResidMix)
+			forward += estimateBlockFLOPs(block, B, cfg.EffectiveBackboneSeqLen(), D, V, ffn, cfg.MLPMult, cfg.BlockScales, cfg.ResidMix)
 			if blockTypeKey(block) == "ttt_mlp" {
 				trainingFLOPsReliable = false
 			}
@@ -102,7 +102,7 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 			if idx < 0 || idx >= len(cfg.Blocks) {
 				return FLOPsEstimate{}
 			}
-			forward += estimateBlockFLOPs(cfg.Blocks[idx], B, T, D, V, ffn, cfg.MLPMult, cfg.BlockScales, cfg.ResidMix)
+			forward += estimateBlockFLOPs(cfg.Blocks[idx], B, cfg.EffectiveBackboneSeqLen(), D, V, ffn, cfg.MLPMult, cfg.BlockScales, cfg.ResidMix)
 			if blockTypeKey(cfg.Blocks[idx]) == "ttt_mlp" {
 				trainingFLOPsReliable = false
 			}

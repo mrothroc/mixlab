@@ -397,6 +397,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 		pllMargin,
 		cfg.RCEquivarianceEnabled(),
 		cfg.InputAdapter,
+		cfg.CLSPoolingEnabled(),
 	)
 }
 

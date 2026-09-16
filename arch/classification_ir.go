@@ -44,6 +44,9 @@ func convertToClassificationIR(cfg *ArchConfig, state TrainingProgramState, prog
 
 	baseWeights := prog.NumWeights
 	prog.NumWeights += len(classificationWeightShapes(D, cfg.Training.Classification))
+	if cfg.CLSPoolingEnabled() {
+		prog.NumWeights--
+	}
 	prog.DeclareInput("classification_labels", TensorInt32, []int{B})
 	if cfg.Training.LengthBucketsChangeShape(cfg.SeqLen) {
 		prog.DeclareInput("classification_example_mask", TensorFloat32, []int{B})
@@ -51,6 +54,9 @@ func convertToClassificationIR(cfg *ArchConfig, state TrainingProgramState, prog
 
 	pooled := "classification_pooled"
 	switch cfg.EffectiveClassificationPooling() {
+	case ClassificationPoolingCLS:
+		prog.Slice("x_hidden", 0, 1, 1, 1, "classification_cls_hidden")
+		prog.Reshape("classification_cls_hidden", []int{B, D}, pooled)
 	case ClassificationPoolingLast:
 		prog.DeclareInput("classification_positions", TensorInt32, []int{B})
 		prog.Embed("x_final_norm", "classification_positions", pooled)
@@ -92,7 +98,7 @@ func convertToClassificationIR(cfg *ArchConfig, state TrainingProgramState, prog
 	prog.DeclareOutput("loss", TensorFloat32, []int{1})
 	prog.DeclareOutput("eval_loss", TensorFloat32, []int{1})
 	prog.DeclareOutput("classification_logits", TensorFloat32, []int{B, N})
-	prog.DeclareOutput("x_hidden", TensorFloat32, []int{B, cfg.SeqLen, D})
+	prog.DeclareOutput("x_hidden", TensorFloat32, []int{B, cfg.EffectiveBackboneSeqLen(), D})
 	if cfg.RCEquivarianceEnabled() {
 		prog.DeclareOutput("rc_equivariant_hidden", TensorFloat32, []int{B, cfg.SeqLen, 2 * D})
 	}

@@ -1,0 +1,22 @@
+{
+  "name": "cls_frames_classifier",
+  "model_dim": 64,
+  "seq_len": 64,
+  "input_adapter": {"kind": "linear_frames", "feature_dim": 48, "norm": "none"},
+  "positional_embedding": "learned_absolute",
+  "norm_type": "layernorm",
+  "norm_affine": true,
+  "embedding_dropout": 0.1,
+  "blocks": [
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional", "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional", "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {"num_labels": 10, "pooling": "cls"},
+    "optimizer": "adamw",
+    "lr": 0.001,
+    "steps": 1000,
+    "batch_tokens": 512
+  }
+}

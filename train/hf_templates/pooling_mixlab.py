@@ -65,6 +65,8 @@ def pool_mean(hidden, attention_mask=None):
 
 def pool_sequence(hidden, attention_mask, mode):
     mode = str(mode or "").strip().lower()
+    if mode == "cls":
+        return hidden[:, 0]
     if mode == "last":
         return pool_last(hidden, attention_mask)
     if mode == "mean":

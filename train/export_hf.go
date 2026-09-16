@@ -717,6 +717,12 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 		}
 	}
 	if cfg.ClassificationEnabled() {
+		if cfg.CLSPoolingEnabled() {
+			if err := addExpected(wi, "cls_token", "cls_token"); err != nil {
+				return nil, err
+			}
+			wi = firstUnmappedWeight(used, wi+1)
+		}
 		for _, name := range []hfBlockWeightName{
 			{mixlab: "head_classifier_proj", hf: "classifier.weight"},
 			{mixlab: "head_classifier_bias", hf: "classifier.bias"},

@@ -35,6 +35,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "plain.ffn_bias", Status: hfExportSupported, Reason: "Plain-block FFN projection biases are mirrored in the generated PyTorch template."},
 		{Feature: "positional_embedding=learned_absolute", Status: hfExportSupported, Reason: "Learned absolute position embeddings export as a model-level WPE table and disable RoPE."},
 		{Feature: "positional_embedding=none", Status: hfExportSupported, Reason: "No-position configs export raw QK attention without RoPE or WPE."},
+		{Feature: "classification.pooling=cls", Status: hfExportSupported, Reason: "Learned CLS pooling exports for supported token and linear_frames bidirectional attention classifiers, including padding-aware masks."},
 		{Feature: "hf_export_format=gpt2", Status: hfExportSupported, Reason: "Strict GPT-2-compatible configs can export as native GPT2LMHeadModel directories with packed QKV tensors."},
 		{Feature: "plain.relative_attention=deberta_p2c_c2p", Status: hfExportSupported, Reason: "DeBERTa/GPT-BERT C2P/P2C relative bias uses log-bucketed q-k positions in the generated PyTorch template."},
 		{Feature: "plain.relative_attention_parameterization=shared_qk_reuse", Status: hfExportSupported, Reason: "GPT-BERT-style shared relative embedding export reuses each block's Q/K projections in the generated PyTorch template."},

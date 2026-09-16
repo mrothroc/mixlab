@@ -3,6 +3,7 @@ package arch
 import "fmt"
 
 type discreteCodebookInputOptions struct {
+	CLSWeight           string
 	BatchSize           int
 	SeqLen              int
 	ModelDim            int
@@ -73,6 +74,7 @@ func emitDiscreteCodebookInputIR(prog *Program, opts discreteCodebookInputOption
 	}
 
 	var err error
+	state, T = prependCLSInputIR(prog, state, opts.CLSWeight, B, T, D)
 	if normalizePositionalEmbedding(opts.PositionalEmbedding) == PositionalEmbeddingLearnedAbsolute {
 		state, wi, err = emitLearnedPositionEmbeddingIR(prog, state, B, T, D, wi, opts.MaxPositions)
 		if err != nil {

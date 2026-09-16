@@ -1145,7 +1145,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `newbob` | object | Required for `lr_schedule: "newbob"` | Disabled | NewBob controls: `annealing_factor`, `improvement_threshold`, `patient`, and `metric` (`"val_loss"` or `"val_error_rate"`). |
 | `val_every_steps` | integer | Required for NewBob | omitted | Positive completed-optimizer-step cadence for configured full-split classification validation. |
 | `val_examples` | integer | No | `0` | Maximum classification validation examples for configured validation; `0` evaluates the full finite split. |
-| `classification` | object | Required for `objective: "classification"` | Disabled | Native sequence-level single-label classification. Requires `num_labels >= 2`; optional `pooling` is `"last"` or `"mean"`, optional `classifier_dropout` is in `[0,1]`, and optional `bias` defaults to `true`. |
+| `classification` | object | Required for `objective: "classification"` | Disabled | Native sequence-level single-label classification. Requires `num_labels >= 2`; optional `pooling` is `"last"`, `"mean"`, or `"cls"`, optional `classifier_dropout` is in `[0,1]`, and optional `bias` defaults to `true`. |
 | `diffusion` | object | No | Defaults | Block-diffusion corruption and sampler knobs. Only valid with `objective: "block_diffusion"` or `objective: "hybrid"` plus `hybrid_secondary_objective: "block_diffusion"`. Multihead configs put diffusion settings on the block-diffusion head instead. Omit it to use conservative defaults. |
 | `heads` | array | Required for `objective: "multihead"` | None | Per-head objective specs for shared-trunk multihead training. V1 supports head objectives `"causal"`, `"mlm"`, `"mntp"`, `"block_diffusion"`, `"rtd"`, and `"energy"`. |
 | `export_head` | string | No | First non-native-only scorer head | Multihead scorer head exported by `export-hf`. Must not name a `block_diffusion`, `rtd`, or `energy` head. |
@@ -1262,6 +1262,23 @@ and `gated_deltanet` blocks. It defaults to `"last"` for causal or mixed stacks.
 Mean pooling uses the validity-mask-weighted mean. Last pooling selects the
 final non-padding token. Both reject empty rows.
 `classifier_dropout` defaults to top-level `hidden_dropout`.
+
+Explicit `pooling: "cls"` prepends a trainable `cls_token: [1, model_dim]`
+after the input adapter, before positional embeddings and embedding dropout.
+The classifier reads position zero after final normalization. `seq_len` and
+`batch_tokens` still count input tokens/frames; backbone length is `seq_len + 1`.
+Learned positional capacity defaults to that longer length; explicit
+`max_positions` must cover it. Padding masks include CLS as always valid.
+CLS defaults to Normal(0, 0.02); `training.weight_init: "normal"` uses
+`training.weight_init_std` instead (e.g. 1 for a unit-normal class token).
+CLS is stored after backbone weights, before the classifier. Existing mean/last
+layouts are unchanged; switching pooling modes is not checkpoint-compatible.
+
+V1 supports token embeddings, `linear_frames`, and `discrete_codebooks` with
+bidirectional/none `plain` attention, optionally composed with `mlp`, `swiglu`,
+`geglu`, or `moe`. At least one attention block is required. Causal/recurrent
+mixers, BatchNorm, RC equivariance, smear/char/ngram channels are rejected.
+Codebook classification remains native-only under the existing HF export policy.
 
 The classifier projection follows the model-wide `training.weight_init`
 policy. The default remains Xavier uniform for backward compatibility. Use

@@ -35,7 +35,7 @@ func (c *ArchConfig) EffectiveMaxPositions() int {
 	if c.MaxPositions > 0 {
 		return c.MaxPositions
 	}
-	return c.SeqLen
+	return c.EffectiveBackboneSeqLen()
 }
 
 // EffectivePositionalEmbedding returns the model-level positional embedding

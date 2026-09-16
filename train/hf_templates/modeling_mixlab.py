@@ -829,6 +829,10 @@ class MixlabModel(PreTrainedModel):
             self.embed_tokens = nn.Embedding(config.vocab_size, config.model_dim)
         else:
             raise ValueError(f"unsupported input_adapter kind {self.input_adapter_kind!r}")
+        self.cls_token = None
+        if getattr(config, "sequence_classification_pooling", "") == "cls":
+            self.cls_token = nn.Parameter(torch.empty(1, config.model_dim))
+            nn.init.normal_(self.cls_token, std=0.02)
         self.position_embeddings = None
         self.positional_embedding = str(getattr(config, "positional_embedding", "rope") or "rope").lower()
         if self.positional_embedding == "learned_absolute":
@@ -1015,7 +1019,7 @@ class MixlabModel(PreTrainedModel):
                 raise ValueError(
                     f"input_values feature dimension {input_values.shape[-1]} does not match {feature_dim}"
                 )
-            if input_values.shape[1] != int(self.config.seq_len):
+            if self.cls_token is None and input_values.shape[1] != int(self.config.seq_len):
                 raise ValueError(
                     f"input_values sequence length {input_values.shape[1]} does not match fixed seq_len={self.config.seq_len}"
                 )
@@ -1030,6 +1034,8 @@ class MixlabModel(PreTrainedModel):
             if input_ids is None:
                 raise ValueError("input_ids is required")
             x = self.embed_tokens(input_ids)
+        if self.cls_token is not None:
+            x = torch.cat((self.cls_token.unsqueeze(0).expand(x.shape[0], -1, -1), x), dim=1)
         if self.position_embeddings is not None:
             seq_len = x.shape[1]
             if seq_len > int(self.config.max_position_embeddings):
@@ -1079,6 +1085,13 @@ class MixlabModel(PreTrainedModel):
         use_cache=False,
     ):
         x = self._embed_features(input_ids=input_ids, input_values=input_values)
+        if self.cls_token is not None:
+            expected = (x.shape[0], x.shape[1] - 1)
+            if attention_mask is None:
+                attention_mask = torch.ones(expected, dtype=torch.long, device=x.device)
+            elif attention_mask.ndim != 2 or tuple(attention_mask.shape) != expected:
+                raise ValueError(f"CLS attention_mask must have input shape {expected}")
+            attention_mask = torch.cat((torch.ones_like(attention_mask[:, :1]), attention_mask), dim=1)
         if self.input_adapter_kind == "linear_frames":
             expected = tuple(x.shape[:2])
             if attention_mask is None:
@@ -1089,7 +1102,7 @@ class MixlabModel(PreTrainedModel):
                 raise ValueError(
                     f"continuous attention_mask must have shape {expected}"
                 )
-            elif not bool(torch.all(attention_mask.ne(0))):
+            elif self.cls_token is None and not bool(torch.all(attention_mask.ne(0))):
                 raise ValueError(
                     "continuous S4D HF export requires fixed unpadded records"
                 )
@@ -1282,9 +1295,9 @@ class MixlabForSequenceClassification(MixlabModel):
         self.sequence_classification_pooling = str(
             getattr(config, "sequence_classification_pooling", "") or ""
         ).lower()
-        if self.sequence_classification_pooling not in ("last", "mean"):
+        if self.sequence_classification_pooling not in ("last", "mean", "cls"):
             raise ValueError(
-                "sequence_classification_pooling must be 'last' or 'mean'; "
+                "sequence_classification_pooling must be 'last', 'mean', or 'cls'; "
                 "pass an explicit value when loading an ambiguous exported backbone"
             )
         classifier_dropout = getattr(config, "classifier_dropout", None)

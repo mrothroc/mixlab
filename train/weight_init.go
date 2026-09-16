@@ -9,6 +9,10 @@ import (
 	ir "github.com/mrothroc/mixlab/arch"
 )
 
+// defaultClassTokenInitStd matches the ViT/BERT convention for the learned
+// class token, independent of the model-wide default weight-init policy.
+const defaultClassTokenInitStd = 0.02
+
 type WeightShape struct {
 	Name                 string
 	Shape                []int
@@ -86,6 +90,17 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 			n *= d
 		}
 		data := make([]float32, n)
+		if ws.InitMode == ir.ClassTokenInitMode {
+			std := defaultClassTokenInitStd
+			if weightInit == "normal" && weightInitStd > 0 {
+				std = float64(weightInitStd)
+			}
+			for j := range data {
+				data[j] = float32(rng.NormFloat64() * std)
+			}
+			weights[i] = data
+			continue
+		}
 		if applySpecialWeightInit(data, ws, rng) {
 			weights[i] = data
 			continue

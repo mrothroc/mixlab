@@ -7,7 +7,7 @@ import (
 	"github.com/mrothroc/mixlab/arch"
 )
 
-func validateHFContinuousS4DComposition(cfg *ArchConfig) error {
+func validateHFContinuousClassificationComposition(cfg *ArchConfig) error {
 	if cfg == nil || !cfg.LinearFramesEnabled() {
 		return unsupportedHFExport("input_adapter.kind", "continuous S4D export requires linear_frames")
 	}
@@ -34,7 +34,12 @@ func validateHFContinuousS4DComposition(cfg *ArchConfig) error {
 		return unsupportedHFExport("norm_placement", fmt.Sprintf("unsupported S4D norm placement %q", cfg.EffectiveNormPlacement()))
 	}
 	if len(cfg.Blocks) == 0 {
-		return unsupportedHFExport("blocks", "continuous S4D export requires at least one s4d block")
+		return unsupportedHFExport("blocks", "linear_frames classification export requires at least one block")
+	}
+	if cfg.CLSPoolingEnabled() {
+		// Validated CLS stacks are bidirectional attention with padding-aware
+		// masks, so the s4d-only restriction below does not apply to them.
+		return nil
 	}
 	for i, block := range cfg.Blocks {
 		if !strings.EqualFold(strings.TrimSpace(block.Type), "s4d") {

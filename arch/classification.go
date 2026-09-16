@@ -11,6 +11,7 @@ const (
 
 	ClassificationPoolingLast = "last"
 	ClassificationPoolingMean = "mean"
+	ClassificationPoolingCLS  = "cls"
 )
 
 // ClassificationSpec configures native sequence-level single-label
@@ -98,6 +99,9 @@ func classificationWeightShapes(modelDim int, spec *ClassificationSpec) []Weight
 		return nil
 	}
 	out := []WeightMeta{linearWeightMeta("head_classifier_proj", modelDim, spec.NumLabels)}
+	if spec.Pooling == ClassificationPoolingCLS {
+		out = append([]WeightMeta{{Name: "cls_token", Shape: []int{1, modelDim}, InitMode: ClassTokenInitMode}}, out...)
+	}
 	if spec.Bias == nil || *spec.Bias {
 		out = append(out, linearBiasWeightMeta("head_classifier_bias", modelDim, spec.NumLabels))
 	}
@@ -124,9 +128,12 @@ func validateTrainingClassification(cfg *ArchConfig, source string) error {
 	}
 	s.Pooling = s.effectivePooling(cfg.Blocks)
 	switch s.Pooling {
-	case ClassificationPoolingLast, ClassificationPoolingMean:
+	case ClassificationPoolingLast, ClassificationPoolingMean, ClassificationPoolingCLS:
 	default:
-		return fmt.Errorf("config %q training.classification.pooling=%q must be %q or %q", source, s.Pooling, ClassificationPoolingLast, ClassificationPoolingMean)
+		return fmt.Errorf("config %q training.classification.pooling=%q must be last, mean, or cls", source, s.Pooling)
+	}
+	if err := validateCLSPooling(cfg); err != nil {
+		return err
 	}
 	dropout := s.effectiveDropout(cfg.EffectiveHiddenDropout())
 	if math.IsNaN(float64(dropout)) || math.IsInf(float64(dropout), 0) || dropout < 0 || dropout > 1 {

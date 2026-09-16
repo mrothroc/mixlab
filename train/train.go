@@ -138,6 +138,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		effectiveBatchTokens := effectiveBatchSize * effectiveSeqLen
 		if effectiveSeqLen != cfg.SeqLen || effectiveBatchTokens != cfg.Training.BatchTokens {
 			clone := *cfg
+			if cfg.CLSPoolingEnabled() {
+				clone.MaxPositions = cfg.EffectiveMaxPositions()
+			}
 			clone.SeqLen = effectiveSeqLen
 			clone.Training = cfg.Training
 			clone.Training.BatchTokens = effectiveBatchTokens

@@ -27,7 +27,7 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 		"AutoModelForCausalLM":               "modeling_mixlab.MixlabForCausalLM",
 		"AutoModelForSequenceClassification": "modeling_mixlab.MixlabForSequenceClassification",
 	}
-	if cfg.LinearFramesEnabled() {
+	if cfg.LinearFramesEnabled() || cfg.CLSPoolingEnabled() {
 		autoMap = map[string]string{
 			"AutoConfig":                         "configuration_mixlab.MixlabConfig",
 			"AutoModel":                          "modeling_mixlab.MixlabModel",
