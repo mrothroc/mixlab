@@ -8,8 +8,9 @@ float32 [N,T,F] -> linear_frames -> hidden [B,T,D] -> ordinary backbone
 ```
 
 Audio decoding, resampling, image patch extraction, and numeric-track
-construction remain outside Mixlab. This release consumes prepared arrays; it
-does not add modality-specific preprocessing.
+construction remain outside Mixlab. The geometry-aware
+[`linear_patches` adapter](image-patches.md) additionally supports crop/flip
+on already-prepared image patches in the training loader.
 
 ## Prepare data
 
@@ -139,8 +140,9 @@ still available for inputs where per-timestep scale invariance is deliberate.
 
 ## Current boundary
 
-Continuous v1 supports native `training.objective: "classification"` with
-existing `mean` or `last` pooling. It deliberately rejects:
+Continuous input supports native `training.objective: "classification"` with
+`mean` or `last` pooling, plus `cls` for supported bidirectional attention
+stacks. It deliberately rejects:
 
 - language-model, masked, diffusion, and multihead objectives
 - token-derived char, n-gram, smear, framing, and reverse-complement features
@@ -150,9 +152,10 @@ existing `mean` or `last` pooling. It deliberately rejects:
 Omitting `input_adapter` preserves the existing token graph and weight layout
 exactly.
 
-Fixed-shape native classifiers with S4D-only backbones are the exception to the
-earlier HF boundary: `export-hf` writes a tokenizer-free custom-code
+Fixed-shape native classifiers with S4D-only backbones and supported CLS
+attention classifiers can use `export-hf`, which writes a tokenizer-free custom-code
 `AutoModelForSequenceClassification` directory accepting float
 `input_values: [B,T,F]`. It preserves `linear_frames`, S4D, pooling, and trained
-classifier weights. BatchNorm, padded records, mixed backbones, and stateful
-generation remain native-only. See [Hugging Face export](hf-export.md#continuous-s4d-classifiers).
+classifier weights. CLS attention additionally supports padded frames.
+BatchNorm and stateful generation remain native-only. See
+[Hugging Face export](hf-export.md#continuous-s4d-classifiers).

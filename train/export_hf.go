@@ -142,7 +142,7 @@ func runExportHF(opts ExportHFOptions) error {
 		return fmt.Errorf("HF weight map count mismatch: mapping=%d weights=%d", len(mapping), len(exportWeights))
 	}
 
-	continuous := exportCfg.LinearFramesEnabled()
+	continuous := exportCfg.ContinuousInputEnabled()
 	if continuous && (strings.TrimSpace(opts.TokenizerSource) != "" || opts.BOSTokenID != nil || opts.EOSTokenID != nil || opts.PADTokenID != nil) {
 		return fmt.Errorf("continuous linear_frames HF export does not use tokenizer or special-token options")
 	}
@@ -261,7 +261,14 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 		}
 		return fmt.Errorf("HF export requires base weight %q", name)
 	}
-	if cfg.LinearFramesEnabled() {
+	if cfg.ContinuousInputEnabled() {
+		if cfg.LinearPatchesEnabled() && cfg.InputAdapter.Coords == "learned_xy" {
+			for _, axis := range []string{"x", "y"} {
+				if err := addByName("input_adapter_coord_"+axis, "input_adapter_coord_"+axis); err != nil {
+					return nil, err
+				}
+			}
+		}
 		if err := addByName("input_adapter_proj", "input_adapter.weight"); err != nil {
 			return nil, err
 		}

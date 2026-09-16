@@ -31,9 +31,9 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 |------|------|----------|---------|-------|
 | `name` | string | No | Source filename/path | Human-readable run name. |
 | `model_dim` | integer | Yes | None | Hidden size `D`. Must be `> 0`. |
-| `vocab_size` | integer | Token inputs only | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` for `token_embedding`. Omit it for `input_adapter.kind: "linear_frames"` or `"discrete_codebooks"`. |
+| `vocab_size` | integer | Token inputs only | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` for `token_embedding`. Omit it for `linear_frames`, `linear_patches`, or `discrete_codebooks`. |
 | `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
-| `input_adapter` | object | No | `{"kind":"token_embedding"}` | Selects the model input representation. `linear_frames` accepts float32 `[B,T,F]`. `discrete_codebooks` accepts int32 `[B,T,Q]`, requires `num_codebooks >= 1` and `codebook_vocab_size >= 2`, and supports `fusion: "attention_mlp"` (default) or `"mean"`; `fusion_hidden_dim` defaults to `model_dim`. Both non-token adapters support `norm: "none"|"layernorm"` and native classification only in v1. |
+| `input_adapter` | object | No | `{"kind":"token_embedding"}` | Selects model input representation. `linear_frames` accepts float32 `[B,T,F]`; `linear_patches` adds image geometry and optional XY/crop/flip. `discrete_codebooks` accepts int32 `[B,T,Q]`, requires `num_codebooks >= 1` and `codebook_vocab_size >= 2`, and supports `fusion: "attention_mlp"` (default) or `"mean"`; `fusion_hidden_dim` defaults to `model_dim`. Non-token adapters support `norm: "none"|"layernorm"` and classification only. |
 | `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `geglu`, `mlp`, `moe` experts, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
 | `smear_embeddings` | boolean | No | `false` | Enables 1-token-lookback smearing on token embeddings before the first block. |
@@ -143,6 +143,32 @@ and the zero-initialized projection bias it cancels input magnitude exactly and
 passes only the sign at initialization. Mixlab warns when post-projection
 LayerNorm is selected with `feature_dim <= 4`; higher-dimensional use remains
 available when scale invariance is intentional.
+
+### Image patch input
+
+`input_adapter.kind: "linear_patches"` extends continuous projection with fixed
+image geometry. Required `image.height`, `image.width`, `image.channels`, and
+square `patch` are positive integers; height/width must be divisible by patch.
+Require `seq_len=(height/patch)*(width/patch)`; `feature_dim` is derived as
+`patch*patch*channels` (an explicit value must match). Patches are raster ordered,
+with row-major channel-last pixels inside each patch. Only full-image records
+are accepted; no shape-changing length buckets or sequence schedules. `bias`
+and `norm` retain `linear_frames` semantics.
+
+`coords: "none"` (default) preserves continuous weight layout and IR.
+`coords: "learned_xy"` adds column/row tables `[width/patch,D]` and
+`[height/patch,D]` after adapter norm, before CLS and top-level positions. CLS
+has no XY coordinates. Top-level `positional_embedding: "none"` is the natural
+XY-only choice; other positional channels remain explicit.
+
+Optional `augment.hflip` (default false) and `augment.random_crop_pad` (default
+0, non-negative integer) run crop-then-flip in the training loader only.
+`augment.pad_value` is an optional finite per-channel array, default all zeros
+in stored feature space. For normalized black padding use numeric `-mean/std`
+values. Randomness uses training seed and record occurrence, separate from
+shuffle RNG and reproducible under loader replay. Eval/export never augment.
+`prepare -config` validates patch shape before writing continuous shards.
+See [Image patches](image-patches.md).
 
 ### Discrete codebook input
 

@@ -20,7 +20,7 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		if cfg.DiscreteCodebooksEnabled() {
 			return fmt.Errorf("config %q input_adapter.kind=%q requires a discrete-codebook mixlab.dataset.json", cfg.Name, arch.InputAdapterDiscreteCodebooks)
 		}
-		if cfg.LinearFramesEnabled() {
+		if cfg.ContinuousInputEnabled() {
 			return fmt.Errorf("config %q input_adapter.kind=%q requires a continuous mixlab.dataset.json", cfg.Name, arch.InputAdapterLinearFrames)
 		}
 		if cfg.ClassificationEnabled() {
@@ -49,7 +49,7 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		)
 		return nil
 	}
-	if cfg.LinearFramesEnabled() {
+	if cfg.ContinuousInputEnabled() {
 		fmt.Printf(
 			"  [%s] dataset manifest: modality=%s representation=%s shape=[T=%d,F=%d] dtype=%s (%s)\n",
 			name, manifest.Modality, manifest.Representation, manifest.RecordSeqLen, manifest.FeatureDim, manifest.FeatureDType, manifestPath,
@@ -58,7 +58,7 @@ func configureDatasetForTraining(cfg *ArchConfig, shardPattern, name string) err
 		cfg.Training.DatasetNumLabels = manifest.Task.NumLabels
 		fmt.Printf(
 			"  [%s] continuous input: adapter=%s feature_dim=%d bias=%t norm=%s classification_labels=%d pooling=%s\n",
-			name, arch.InputAdapterLinearFrames, cfg.InputAdapter.FeatureDim, cfg.EffectiveInputAdapterBias(),
+			name, cfg.EffectiveInputAdapterKind(), cfg.InputAdapter.FeatureDim, cfg.EffectiveInputAdapterBias(),
 			cfg.EffectiveInputAdapterNorm(), manifest.Task.NumLabels, cfg.EffectiveClassificationPooling(),
 		)
 		return nil
@@ -274,7 +274,7 @@ func validateDatasetManifestForConfig(cfg *ArchConfig, shardPattern string) (*da
 	if !found {
 		return nil, "", nil
 	}
-	if cfg.LinearFramesEnabled() {
+	if cfg.ContinuousInputEnabled() {
 		validationSeqLen := cfg.SeqLen
 		if cfg.Training.LengthBucketsChangeShape(cfg.SeqLen) {
 			if cfg.SeqLen < manifest.RecordSeqLen {

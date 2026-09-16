@@ -43,6 +43,7 @@ mixlab -mode MODE -h
 - [S4D diagonal state-space block](s4d.md)
 - [Recurrent dynamics optimizer policy](dynamics-optimizer-policy.md)
 - [Continuous sequence input](continuous-input.md)
+- [Image patch input and training augmentation](image-patches.md)
 - [Discrete multi-codebook input](discrete-codebooks-input.md)
 - [TTT-MLP stateful inference](ttt-mlp-stateful-inference.md)
 - [Block-diffusion experiments](diffusion-experiments.md)

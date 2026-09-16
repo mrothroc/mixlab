@@ -17,7 +17,7 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 	if cfg.ClassificationEnabled() && !cfg.EffectiveClassifierBias() {
 		return unsupportedHFExport("training.classification.bias", "bias-free native classification heads are not supported by HF export in v1")
 	}
-	if cfg.LinearFramesEnabled() {
+	if cfg.ContinuousInputEnabled() {
 		if err := validateHFContinuousClassificationComposition(cfg); err != nil {
 			return err
 		}
@@ -141,7 +141,7 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 				return err
 			}
 		case "s4d":
-			if !cfg.LinearFramesEnabled() {
+			if !cfg.ContinuousInputEnabled() {
 				return unsupportedHFExport(field+".type", "s4d HF export currently requires a linear_frames native classification checkpoint")
 			}
 		default:

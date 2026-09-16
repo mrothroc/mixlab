@@ -204,6 +204,7 @@ func main() {
 		prepareOutput, err := aliasedStringFlagValue(*prepOutput, "prepare-output-dir", *prepareOutputDir, providedFlags)
 		must(err)
 		must(train.RunPrepare(train.PrepareOptions{
+			ConfigPath:                *configPath,
 			Input:                     *prepInput,
 			Output:                    prepareOutput,
 			InputFormat:               *prepInputFormat,
@@ -455,7 +456,7 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Input and split", []string{"input-format", "val-split"}},
 		{"Text tokenizer/data", []string{"vocab-size", "tokenizer-path", "wwm-compatible-tokenizer", "text-field"}},
 		{"Sequence classification labels", []string{"label-field", "label-file"}},
-		{"Continuous feature arrays", []string{"continuous-modality"}},
+		{"Continuous feature arrays", []string{"continuous-modality", "config"}},
 		{"Discrete codebook arrays", []string{"codebook-vocab-size", "codebook-modality", "length-file"}},
 		{"Per-record framing", []string{"frame-per-record", "record-seq-len", "record-pad-id", "record-bos-id", "record-eos-id", "record-overflow"}},
 		{"FASTA nucleotide data", []string{"nucleotide-alphabet", "nucleotide-ambiguous-symbols", "nucleotide-invalid-symbol-policy", "nucleotide-framing", "nucleotide-stream-separator"}},

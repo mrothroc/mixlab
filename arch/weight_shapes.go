@@ -701,7 +701,7 @@ func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if cfg.Training.MultiheadEnabled() {
 		return collectMultiheadWeightShapesFromConfig(cfg)
 	}
-	if cfg.LinearFramesEnabled() {
+	if cfg.ContinuousInputEnabled() {
 		return collectLinearFramesWeightShapesFromConfig(cfg)
 	}
 	if cfg.DiscreteCodebooksEnabled() {

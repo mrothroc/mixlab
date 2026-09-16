@@ -8,7 +8,7 @@ import (
 )
 
 func validateHFContinuousClassificationComposition(cfg *ArchConfig) error {
-	if cfg == nil || !cfg.LinearFramesEnabled() {
+	if cfg == nil || !cfg.ContinuousInputEnabled() {
 		return unsupportedHFExport("input_adapter.kind", "continuous S4D export requires linear_frames")
 	}
 	if !cfg.ClassificationEnabled() || cfg.Training.Classification == nil {
@@ -39,6 +39,10 @@ func validateHFContinuousClassificationComposition(cfg *ArchConfig) error {
 	if cfg.CLSPoolingEnabled() {
 		// Validated CLS stacks are bidirectional attention with padding-aware
 		// masks, so the s4d-only restriction below does not apply to them.
+		return nil
+	}
+	if cfg.LinearPatchesEnabled() {
+		// Ordinary HF block validation below still owns supported mixer features.
 		return nil
 	}
 	for i, block := range cfg.Blocks {

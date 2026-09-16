@@ -9,6 +9,7 @@ import (
 const (
 	InputAdapterTokenEmbedding    = "token_embedding"
 	InputAdapterLinearFrames      = "linear_frames"
+	InputAdapterLinearPatches     = "linear_patches"
 	InputAdapterDiscreteCodebooks = "discrete_codebooks"
 
 	InputAdapterFusionAttentionMLP = "attention_mlp"
@@ -23,14 +24,18 @@ const (
 // InputAdapterSpec selects how model inputs become [B,T,model_dim] hidden
 // states. Omission preserves the historical token embedding path.
 type InputAdapterSpec struct {
-	Kind              string `json:"kind,omitempty"`
-	FeatureDim        int    `json:"feature_dim,omitempty"`
-	Bias              *bool  `json:"bias,omitempty"`
-	Norm              string `json:"norm,omitempty"`
-	NumCodebooks      int    `json:"num_codebooks,omitempty"`
-	CodebookVocabSize int    `json:"codebook_vocab_size,omitempty"`
-	Fusion            string `json:"fusion,omitempty"`
-	FusionHiddenDim   int    `json:"fusion_hidden_dim,omitempty"`
+	Kind              string            `json:"kind,omitempty"`
+	FeatureDim        int               `json:"feature_dim,omitempty"`
+	Bias              *bool             `json:"bias,omitempty"`
+	Norm              string            `json:"norm,omitempty"`
+	NumCodebooks      int               `json:"num_codebooks,omitempty"`
+	CodebookVocabSize int               `json:"codebook_vocab_size,omitempty"`
+	Fusion            string            `json:"fusion,omitempty"`
+	FusionHiddenDim   int               `json:"fusion_hidden_dim,omitempty"`
+	Image             *PatchImageSpec   `json:"image,omitempty"`
+	Patch             int               `json:"patch,omitempty"`
+	Coords            string            `json:"coords,omitempty"`
+	Augment           *PatchAugmentSpec `json:"augment,omitempty"`
 }
 
 func normalizeInputAdapterKind(value string) string {
@@ -39,6 +44,8 @@ func normalizeInputAdapterKind(value string) string {
 		return InputAdapterTokenEmbedding
 	case InputAdapterLinearFrames:
 		return InputAdapterLinearFrames
+	case InputAdapterLinearPatches:
+		return InputAdapterLinearPatches
 	case InputAdapterDiscreteCodebooks:
 		return InputAdapterDiscreteCodebooks
 	default:
@@ -110,7 +117,7 @@ func (cfg *ArchConfig) CodebookEmbeddingRows() int {
 // InputFeatureDim returns the per-timestep feature width for continuous
 // adapters. Token inputs do not have a public continuous feature dimension.
 func (cfg *ArchConfig) InputFeatureDim() int {
-	if cfg == nil || !cfg.LinearFramesEnabled() || cfg.InputAdapter == nil {
+	if cfg == nil || !cfg.ContinuousInputEnabled() || cfg.InputAdapter == nil {
 		return 0
 	}
 	return cfg.InputAdapter.FeatureDim
@@ -131,7 +138,7 @@ func (cfg *ArchConfig) EffectiveInputAdapterNorm() string {
 }
 
 func inputAdapterWarnings(cfg *ArchConfig, source string) []string {
-	if cfg == nil || !cfg.LinearFramesEnabled() || cfg.InputAdapter == nil {
+	if cfg == nil || !cfg.ContinuousInputEnabled() || cfg.InputAdapter == nil {
 		return nil
 	}
 	if cfg.EffectiveInputAdapterNorm() != InputAdapterNormLayerNorm ||
@@ -140,12 +147,12 @@ func inputAdapterWarnings(cfg *ArchConfig, source string) []string {
 	}
 	return []string{fmt.Sprintf(
 		"WARN: config %q uses input_adapter.kind=%q with feature_dim=%d and norm=%q; post-projection LayerNorm can discard input magnitude at initialization (feature_dim=1 is exactly sign-only while the projection bias is zero). Prefer norm=%q for magnitude-bearing raw signals.",
-		source, InputAdapterLinearFrames, cfg.InputAdapter.FeatureDim, InputAdapterNormLayerNorm, InputAdapterNormNone,
+		source, cfg.EffectiveInputAdapterKind(), cfg.InputAdapter.FeatureDim, InputAdapterNormLayerNorm, InputAdapterNormNone,
 	)}
 }
 
 func linearFramesExtraWeightShapes(cfg *ArchConfig) []WeightMeta {
-	if cfg == nil || !cfg.LinearFramesEnabled() {
+	if cfg == nil || !cfg.ContinuousInputEnabled() {
 		return nil
 	}
 	var out []WeightMeta
@@ -160,7 +167,7 @@ func linearFramesExtraWeightShapes(cfg *ArchConfig) []WeightMeta {
 			WeightMeta{Name: "input_adapter_norm_bias", Shape: []int{cfg.ModelDim}, InitZero: true},
 		)
 	}
-	return out
+	return append(out, patchCoordinateWeightShapes(cfg)...)
 }
 
 func discreteCodebookExtraWeightShapes(cfg *ArchConfig) []WeightMeta {
@@ -215,6 +222,9 @@ func validateInputAdapter(cfg *ArchConfig, source string) error {
 		return fmt.Errorf("config %q is nil", source)
 	}
 	kind := cfg.EffectiveInputAdapterKind()
+	if err := validatePatchAdapter(cfg, source); err != nil {
+		return err
+	}
 	switch kind {
 	case InputAdapterTokenEmbedding:
 		if cfg.InputAdapter != nil {
@@ -234,7 +244,7 @@ func validateInputAdapter(cfg *ArchConfig, source string) error {
 			}
 		}
 		return nil
-	case InputAdapterLinearFrames:
+	case InputAdapterLinearFrames, InputAdapterLinearPatches:
 		if cfg.InputAdapter.NumCodebooks != 0 || cfg.InputAdapter.CodebookVocabSize != 0 ||
 			strings.TrimSpace(cfg.InputAdapter.Fusion) != "" || cfg.InputAdapter.FusionHiddenDim != 0 {
 			return fmt.Errorf("config %q codebook input_adapter fields require kind=%q", source, InputAdapterDiscreteCodebooks)
@@ -242,8 +252,8 @@ func validateInputAdapter(cfg *ArchConfig, source string) error {
 	case InputAdapterDiscreteCodebooks:
 	default:
 		return fmt.Errorf(
-			"config %q has invalid input_adapter.kind=%q (must be %q, %q, or %q)",
-			source, kind, InputAdapterTokenEmbedding, InputAdapterLinearFrames, InputAdapterDiscreteCodebooks,
+			"config %q has invalid input_adapter.kind=%q (must be %q, %q, %q, or %q)",
+			source, kind, InputAdapterTokenEmbedding, InputAdapterLinearFrames, InputAdapterLinearPatches, InputAdapterDiscreteCodebooks,
 		)
 	}
 
@@ -284,7 +294,7 @@ func validateInputAdapter(cfg *ArchConfig, source string) error {
 		return validateInputAdapterFeatureExclusions(cfg, source, kind)
 	}
 
-	spec.Kind = InputAdapterLinearFrames
+	spec.Kind = kind
 	if spec.FeatureDim <= 0 {
 		return fmt.Errorf("config %q input_adapter.feature_dim=%d must be > 0 for kind=%q", source, spec.FeatureDim, InputAdapterLinearFrames)
 	}

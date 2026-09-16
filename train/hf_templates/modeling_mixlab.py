@@ -807,7 +807,10 @@ class MixlabModel(PreTrainedModel):
         ).lower()
         self.input_adapter = None
         self.input_adapter_norm = None
-        if self.input_adapter_kind == "linear_frames":
+
+        self.input_adapter_coord_x = None
+        self.input_adapter_coord_y = None
+        if self.input_adapter_kind in ("linear_frames", "linear_patches"):
             feature_dim = int(input_adapter.get("feature_dim", 0) or 0)
             if feature_dim <= 0:
                 raise ValueError("linear_frames input_adapter requires feature_dim > 0")
@@ -825,6 +828,16 @@ class MixlabModel(PreTrainedModel):
                 raise ValueError(f"unsupported linear_frames norm {adapter_norm!r}")
             self.embed_tokens = None
             self.main_input_name = "input_values"
+            if self.input_adapter_kind == "linear_patches":
+                image = input_adapter["image"]
+                patch = int(input_adapter["patch"])
+                self.patch_rows = int(image["height"]) // patch
+                self.patch_cols = int(image["width"]) // patch
+                if input_adapter.get("coords", "none") == "learned_xy":
+                    self.input_adapter_coord_x = nn.Parameter(torch.empty(self.patch_cols, config.model_dim))
+                    self.input_adapter_coord_y = nn.Parameter(torch.empty(self.patch_rows, config.model_dim))
+                    nn.init.normal_(self.input_adapter_coord_x, std=0.02)
+                    nn.init.normal_(self.input_adapter_coord_y, std=0.02)
         elif self.input_adapter_kind == "token_embedding":
             self.embed_tokens = nn.Embedding(config.vocab_size, config.model_dim)
         else:
@@ -975,7 +988,7 @@ class MixlabModel(PreTrainedModel):
         return self.embed_tokens
 
     def set_input_embeddings(self, value):
-        if self.input_adapter_kind == "linear_frames":
+        if self.input_adapter_kind in ("linear_frames", "linear_patches"):
             raise ValueError("linear_frames models do not use token embeddings")
         self.embed_tokens = value
 
@@ -1007,7 +1020,7 @@ class MixlabModel(PreTrainedModel):
         return out
 
     def _embed_features(self, input_ids=None, input_values=None):
-        if self.input_adapter_kind == "linear_frames":
+        if self.input_adapter_kind in ("linear_frames", "linear_patches"):
             if input_ids is not None:
                 raise ValueError("linear_frames models accept input_values, not input_ids")
             if input_values is None:
@@ -1019,7 +1032,7 @@ class MixlabModel(PreTrainedModel):
                 raise ValueError(
                     f"input_values feature dimension {input_values.shape[-1]} does not match {feature_dim}"
                 )
-            if self.cls_token is None and input_values.shape[1] != int(self.config.seq_len):
+            if (self.cls_token is None or self.input_adapter_kind == "linear_patches") and input_values.shape[1] != int(self.config.seq_len):
                 raise ValueError(
                     f"input_values sequence length {input_values.shape[1]} does not match fixed seq_len={self.config.seq_len}"
                 )
@@ -1028,6 +1041,9 @@ class MixlabModel(PreTrainedModel):
             )
             if self.input_adapter_norm is not None:
                 x = self.input_adapter_norm(x)
+            if self.input_adapter_coord_x is not None:
+                coords = self.input_adapter_coord_y[:, None, :] + self.input_adapter_coord_x[None, :, :]
+                x = x + coords.reshape(1, self.patch_rows * self.patch_cols, -1)
         else:
             if input_values is not None:
                 raise ValueError("token_embedding models accept input_ids, not input_values")
@@ -1044,7 +1060,7 @@ class MixlabModel(PreTrainedModel):
                 )
             position_ids = torch.arange(seq_len, device=x.device, dtype=torch.long)
             x = x + self.position_embeddings(position_ids).unsqueeze(0)
-        if self.input_adapter_kind == "linear_frames":
+        if self.input_adapter_kind in ("linear_frames", "linear_patches"):
             return self.embed_dropout(x)
         if self.char_table is not None:
             if self.char_lookup is None:
@@ -1092,7 +1108,7 @@ class MixlabModel(PreTrainedModel):
             elif attention_mask.ndim != 2 or tuple(attention_mask.shape) != expected:
                 raise ValueError(f"CLS attention_mask must have input shape {expected}")
             attention_mask = torch.cat((torch.ones_like(attention_mask[:, :1]), attention_mask), dim=1)
-        if self.input_adapter_kind == "linear_frames":
+        if self.input_adapter_kind in ("linear_frames", "linear_patches"):
             expected = tuple(x.shape[:2])
             if attention_mask is None:
                 attention_mask = torch.ones(
@@ -1102,7 +1118,7 @@ class MixlabModel(PreTrainedModel):
                 raise ValueError(
                     f"continuous attention_mask must have shape {expected}"
                 )
-            elif self.cls_token is None and not bool(torch.all(attention_mask.ne(0))):
+            elif (self.cls_token is None or self.input_adapter_kind == "linear_patches") and not bool(torch.all(attention_mask.ne(0))):
                 raise ValueError(
                     "continuous S4D HF export requires fixed unpadded records"
                 )
@@ -1316,7 +1332,7 @@ class MixlabForSequenceClassification(MixlabModel):
         labels=None,
         **kwargs,
     ):
-        if self.input_adapter_kind == "linear_frames" and attention_mask is None:
+        if self.input_adapter_kind in ("linear_frames", "linear_patches") and attention_mask is None:
             if input_values is None or input_values.ndim != 3:
                 raise ValueError("input_values is required for linear_frames classification")
             attention_mask = torch.ones(

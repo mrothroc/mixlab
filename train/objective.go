@@ -140,7 +140,7 @@ func prepareObjectiveBatchWithShape(cfg *ArchConfig, batch trainBatch, step int,
 		if len(batch.codebooks) < codebookNeed {
 			return objectiveBatch{}, fmt.Errorf("input size mismatch: codebook_tokens=%d need=%d", len(batch.codebooks), codebookNeed)
 		}
-	case cfg.LinearFramesEnabled():
+	case cfg.ContinuousInputEnabled():
 		frameNeed := need * cfg.InputAdapter.FeatureDim
 		if len(batch.frames) < frameNeed {
 			return objectiveBatch{}, fmt.Errorf("input size mismatch: continuous_frames=%d need=%d", len(batch.frames), frameNeed)
@@ -263,6 +263,16 @@ func prepareClassificationBatch(cfg *ArchConfig, batch trainBatch, need, seqLen 
 		}
 	}
 	validMask := append([]float32(nil), batch.validMask[:need]...)
+	if cfg.LinearPatchesEnabled() {
+		if seqLen != cfg.SeqLen {
+			return objectiveBatch{}, fmt.Errorf("linear_patches requires fixed seq_len=%d", cfg.SeqLen)
+		}
+		for _, value := range validMask {
+			if value != 1 {
+				return objectiveBatch{}, fmt.Errorf("linear_patches requires full-length image records")
+			}
+		}
+	}
 	var exampleMask []float32
 	if cfg.Training.LengthBucketsChangeShape(cfg.SeqLen) {
 		if len(batch.exampleMask) < batchSize {

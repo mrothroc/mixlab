@@ -1,0 +1,31 @@
+{
+  "name": "image_patch_classifier",
+  "model_dim": 64,
+  "seq_len": 64,
+  "positional_embedding": "none",
+  "norm_type": "layernorm",
+  "norm_affine": true,
+  "input_adapter": {
+    "kind": "linear_patches",
+    "image": {"height": 32, "width": 32, "channels": 3},
+    "patch": 4,
+    "bias": true,
+    "norm": "none",
+    "coords": "learned_xy",
+    "augment": {"hflip": true, "random_crop_pad": 4}
+  },
+  "blocks": [
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional", "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 4, "attention_mask": "bidirectional", "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {"num_labels": 10, "pooling": "cls"},
+    "batch_tokens": 512,
+    "optimizer": "adamw",
+    "lr": 0.001,
+    "steps": 1000,
+    "grad_clip": 1,
+    "seed": 42
+  }
+}

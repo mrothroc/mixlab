@@ -20,6 +20,7 @@ const (
 // LoaderOptions controls training/eval shard traversal. LengthBucketBatchSize
 // fixes the row count for every configured bucket when it is positive.
 type LoaderOptions struct {
+	PatchTransform        *PatchTransform
 	ChunkSize             int
 	NoShardShuffle        bool
 	Framing               ExampleFraming
@@ -156,6 +157,7 @@ func (s *tokenStream) TakeAlignedChunk(n int) ([]uint16, error) {
 
 // Loader wraps a TokenStream to produce batches for training.
 type Loader struct {
+	patches    *patchTransformState
 	stream     *tokenStream
 	sequences  *sequenceStream
 	continuous *continuousSequenceStream
@@ -223,6 +225,9 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 	if err != nil {
 		return nil, err
 	}
+	if opts.PatchTransform != nil && (!found || !isContinuousSequenceShardFormat(manifest.ShardFormat)) {
+		return nil, fmt.Errorf("patch geometry requires continuous frame shards")
+	}
 	if found && isContinuousSequenceShardFormat(manifest.ShardFormat) {
 		continuous, err := newContinuousSequenceStream(
 			pattern, seed, opts.NoShardShuffle, manifest.RecordSeqLen, manifest.FeatureDim,
@@ -231,7 +236,23 @@ func NewLoaderWithOptions(pattern string, seed int64, opts LoaderOptions) (*Load
 		if err != nil {
 			return nil, err
 		}
-		return &Loader{continuous: continuous}, nil
+		patches, err := newPatchTransformState(opts.PatchTransform, seed, manifest.RecordSeqLen, manifest.FeatureDim)
+		if err != nil {
+			return nil, err
+		}
+		if patches != nil {
+			for _, lengths := range continuous.fileLengths {
+				for _, length := range lengths {
+					if int(length) != manifest.RecordSeqLen {
+						return nil, fmt.Errorf("linear_patches requires full-length image records")
+					}
+				}
+			}
+			if len(opts.LengthBuckets) > 0 {
+				return nil, fmt.Errorf("linear_patches does not support bucketed loading")
+			}
+		}
+		return &Loader{continuous: continuous, patches: patches}, nil
 	}
 	if found && manifest.ShardFormat == DatasetShardFormatCodebookSequenceV1 {
 		codebooks, err := newCodebookSequenceStream(
@@ -357,6 +378,9 @@ func (l *Loader) nextContinuousBatch(batchTokens, seqLen int) (Batch, error) {
 			return Batch{}, err
 		}
 		copy(frames[row*seqLen*featureDim:], record)
+		if l.patches != nil {
+			l.patches.apply(frames[row*seqLen*featureDim : (row+1)*seqLen*featureDim])
+		}
 		labels[row] = label
 		for pos := 0; pos < int(length); pos++ {
 			validMask[row*seqLen+pos] = 1
@@ -504,6 +528,7 @@ func NewValSet(pattern string, seed int64, nBatches, batchTokens, seqLen int, ch
 // NewValSetWithOptions loads nBatches fixed validation batches using explicit
 // loader options.
 func NewValSetWithOptions(pattern string, seed int64, nBatches, batchTokens, seqLen int, opts LoaderOptions) (*ValSet, error) {
+	opts = withoutPatchAugmentation(opts)
 	opts = normalizeLoaderOptions(opts, seqLen)
 	loader, err := NewLoaderWithOptions(pattern, seed, opts)
 	if err != nil {

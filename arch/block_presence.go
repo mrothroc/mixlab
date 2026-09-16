@@ -14,7 +14,7 @@ func validateBlockPresence(cfg *ArchConfig, source string) error {
 		return fmt.Errorf("config %q training.objective=%q must define at least one block", source, objective)
 	}
 	switch cfg.EffectiveInputAdapterKind() {
-	case InputAdapterLinearFrames, InputAdapterDiscreteCodebooks:
+	case InputAdapterLinearFrames, InputAdapterLinearPatches, InputAdapterDiscreteCodebooks:
 		return nil
 	case InputAdapterTokenEmbedding:
 		return fmt.Errorf(

@@ -58,6 +58,7 @@ func effectiveLoaderOptions(cfg *ArchConfig) data.LoaderOptions {
 		lengthBuckets = append([]int(nil), cfg.Training.LengthBuckets...)
 	}
 	opts := data.LoaderOptions{
+		PatchTransform:        patchLoaderTransform(cfg, false),
 		ChunkSize:             effectiveShuffleChunkTokens(cfg),
 		NoShardShuffle:        cfg.Data.NoShardShuffle,
 		LengthBuckets:         lengthBuckets,

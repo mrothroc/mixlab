@@ -22,7 +22,7 @@ func EstimateFLOPs(cfg *ArchConfig) FLOPsEstimate {
 		return FLOPsEstimate{}
 	}
 	switch {
-	case cfg.LinearFramesEnabled():
+	case cfg.ContinuousInputEnabled():
 		if cfg.InputFeatureDim() <= 0 {
 			return FLOPsEstimate{}
 		}
@@ -81,7 +81,7 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 	T := cfg.SeqLen
 	D := cfg.ModelDim
 	V := cfg.VocabSize
-	if cfg.LinearFramesEnabled() {
+	if cfg.ContinuousInputEnabled() {
 		V = cfg.InputFeatureDim()
 	} else if cfg.DiscreteCodebooksEnabled() {
 		V = cfg.CodebookEmbeddingRows()
@@ -111,8 +111,11 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 
 	// Token embedding lookup is indexing only. Continuous adapters perform a
 	// dense frame projection before the shared backbone.
-	if cfg.LinearFramesEnabled() {
+	if cfg.ContinuousInputEnabled() {
 		F := cfg.InputFeatureDim()
+		if cfg.LinearPatchesEnabled() && cfg.InputAdapter.Coords == "learned_xy" {
+			forward += i64(B+1) * i64(T) * i64(D)
+		}
 		forward += 2 * i64(B) * i64(T) * i64(F) * i64(D)
 		if cfg.EffectiveInputAdapterBias() {
 			forward += i64(B) * i64(T) * i64(D)
@@ -152,7 +155,7 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 		}
 		forward += 2 * i64(B) * i64(T) * i64(D) // learned scale + residual add
 	}
-	if (cfg.LinearFramesEnabled() || cfg.DiscreteCodebooksEnabled()) && cfg.ClassificationEnabled() {
+	if (cfg.ContinuousInputEnabled() || cfg.DiscreteCodebooksEnabled()) && cfg.ClassificationEnabled() {
 		forward += 2 * i64(B) * i64(D) * i64(cfg.Training.Classification.NumLabels)
 	} else {
 		forward += 2 * i64(B) * i64(T) * i64(D) * i64(V)
@@ -188,7 +191,7 @@ func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	if cfg.LinearFramesEnabled() {
+	if cfg.ContinuousInputEnabled() {
 		uniqueShapes, err := collectLinearFramesWeightShapesWithRefs(cfg, uniqueRefs)
 		if err != nil {
 			return 0, 0, err

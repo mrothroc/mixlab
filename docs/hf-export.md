@@ -1,5 +1,11 @@
 # Hugging Face Export
 
+Image `linear_patches` classifiers export their projection, learned XY tables,
+and selected pooling/head without training crop/flip. Inputs remain already
+patchified float arrays, not raw images. Geometry must match exactly; partial
+images are rejected. See [Image patches](image-patches.md) for layout and
+augmentation boundaries. Existing backbone export restrictions still apply.
+
 `export-hf` writes a Hugging Face custom-code directory from a Mixlab JSON config and a Mixlab safetensors checkpoint. Token-model checkpoints export `AutoModel`, `AutoModelForCausalLM`, and `AutoModelForSequenceClassification`; masked and hybrid checkpoints also export `AutoModelForMaskedLM`. Native continuous S4D classifiers and CLS classifiers export only `AutoModel` and `AutoModelForSequenceClassification`. For masked-capable token exports, `AutoModel` and sequence classification use the bidirectional encoder backbone while `AutoModelForCausalLM` stays causal.
 
 ```bash

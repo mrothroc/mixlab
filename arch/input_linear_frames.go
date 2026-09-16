@@ -3,6 +3,7 @@ package arch
 import "fmt"
 
 type linearFramesInputOptions struct {
+	Adapter             *InputAdapterSpec
 	CLSWeight           string
 	BatchSize           int
 	SeqLen              int
@@ -53,6 +54,7 @@ func emitLinearFramesInputIR(prog *Program, opts linearFramesInputOptions) (int,
 		return 0, fmt.Errorf("unsupported linear frame input norm %q", opts.Norm)
 	}
 	var err error
+	state, wi = emitPatchCoordinates(prog, state, opts.Adapter, wi, B, D)
 	state, T = prependCLSInputIR(prog, state, opts.CLSWeight, B, T, D)
 	if normalizePositionalEmbedding(opts.PositionalEmbedding) == PositionalEmbeddingLearnedAbsolute {
 		state, wi, err = emitLearnedPositionEmbeddingIR(prog, state, B, T, D, wi, opts.MaxPositions)

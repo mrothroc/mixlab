@@ -58,7 +58,7 @@ func materializeNativeClassificationHFExportWeights(cfg *ArchConfig, shapes []We
 	outWeights := append([][]float32(nil), weights...)
 	outShapes[projIdx].Shape = []int{labels, dim}
 	outWeights[projIdx] = transposeMatrix(weights[projIdx], dim, labels)
-	if cfg.LinearFramesEnabled() {
+	if cfg.ContinuousInputEnabled() {
 		return outShapes, outWeights, nil
 	}
 	if !hasWeightShapeName(outShapes, "head") {

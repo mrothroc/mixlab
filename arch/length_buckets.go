@@ -80,7 +80,7 @@ func validateLengthBuckets(cfg *ArchConfig, source string) error {
 	if t.EffectiveObjective() != ObjectiveClassification {
 		return fmt.Errorf("config %q training.length_buckets requires training.objective=%q", source, ObjectiveClassification)
 	}
-	if !cfg.DiscreteCodebooksEnabled() && !cfg.LinearFramesEnabled() {
+	if !cfg.DiscreteCodebooksEnabled() && !cfg.ContinuousInputEnabled() {
 		return fmt.Errorf("config %q training.length_buckets supports input_adapter.kind=%q or %q in v1", source, InputAdapterDiscreteCodebooks, InputAdapterLinearFrames)
 	}
 	previous := 0

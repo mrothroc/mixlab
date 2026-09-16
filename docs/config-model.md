@@ -30,7 +30,7 @@ This page is the short path through the top-level model fields. Use
 | `model_dim` | Hidden size used by blocks and embeddings. |
 | `vocab_size` | Token vocabulary size for the default `token_embedding` adapter. Omit for continuous frames and discrete codebooks. |
 | `seq_len` | Sequence length in tokens or continuous timesteps. |
-| `input_adapter` | Omitted/default `token_embedding`, native `linear_frames` for float32 `[B,T,F]`, or `discrete_codebooks` for int32 `[B,T,Q]` classification data. |
+| `input_adapter` | Omitted/default `token_embedding`; `linear_frames` or geometry-aware `linear_patches` for float32 `[B,T,F]`; `discrete_codebooks` for int32 `[B,T,Q]` classification data. |
 | `mlp_mult` | FFN expansion multiplier used by FFN-style blocks and experts. |
 | `blocks` | Ordered architecture stack. See [config-blocks.md](config-blocks.md). |
 | `training` | Training objective, optimizer, schedule, and runtime settings. See [config-training.md](config-training.md). |
@@ -61,6 +61,10 @@ policy.
 ## Input Adapters
 
 Omitting `input_adapter` preserves the historical token embedding path.
+
+For raster image patches, `linear_patches` adds fixed geometry, learned XY
+coordinates, and training-loader crop/flip while using the same continuous
+shards. See [Image patches](image-patches.md).
 `{"kind":"linear_frames","feature_dim":F}` replaces it with a dense
 `F -> model_dim` projection for fixed-shape continuous records. Optional
 `bias` defaults to true; `norm` accepts `none` or `layernorm`. The backbone

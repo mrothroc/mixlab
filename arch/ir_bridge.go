@@ -276,7 +276,7 @@ func buildIRProgramFromConfigWithStateAndOrder(cfg *ArchConfig, state TrainingPr
 	useTiedHead := cfg.TieEmbeddings && !state.HeadUntied
 	builderVocabSize := cfg.VocabSize
 	builderTieEmbeddings := cfg.TieEmbeddings
-	if cfg.LinearFramesEnabled() {
+	if cfg.ContinuousInputEnabled() {
 		// The classification conversion truncates the temporary LM tail. Using
 		// F as the internal projection width lets the shared backbone builder
 		// retain its shape checks without adding any public dummy vocabulary or

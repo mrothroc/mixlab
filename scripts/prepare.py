@@ -388,6 +388,11 @@ def prepare_continuous(args):
     source, features, embedded_lengths = load_continuous_features(args.input)
     try:
         n_records, seq_len, feature_dim = (int(value) for value in features.shape)
+
+        patch_seq_len = getattr(args, "patch_seq_len", 0)
+        patch_feature_dim = getattr(args, "patch_feature_dim", 0)
+        if patch_seq_len and (seq_len != patch_seq_len or feature_dim != patch_feature_dim):
+            raise ValueError(f"patch geometry requires [T={patch_seq_len},F={patch_feature_dim}], got [T={seq_len},F={feature_dim}]")
         label_map = read_label_tsv(args.label_file)
         expected_ids = {str(index) for index in range(n_records)}
         actual_ids = set(label_map)
@@ -412,6 +417,8 @@ def prepare_continuous(args):
         for row, length in enumerate(lengths):
             if length <= 0 or length > seq_len:
                 raise ValueError(f"continuous length row={row} value={length} outside [1,{seq_len}]")
+            if patch_seq_len and length != seq_len:
+                raise ValueError(f"linear_patches requires full-length image records; row={row} length={length}")
         records = [(str(index), "", labels[index]) for index in range(n_records)]
         num_labels = validate_label_space(records)
         train_records, val_records = split_labeled_records(records, args.val_split)
@@ -1506,6 +1513,8 @@ def main():
     parser.add_argument("--label-field", default="", help="JSON integer-label field; enables labeled per-record classification shards")
     parser.add_argument("--label-file", default="", help="Label TSV: FASTA id<TAB>label or continuous row_index<TAB>label")
     parser.add_argument("--continuous-modality", default="continuous", help="lowercase modality identifier recorded for continuous arrays")
+    parser.add_argument("--patch-seq-len", type=int, default=0, help="expected patch grid length (supplied by mixlab -config)")
+    parser.add_argument("--patch-feature-dim", type=int, default=0, help="expected flattened patch width (supplied by mixlab -config)")
     parser.add_argument("--codebook-vocab-size", type=int, default=0, help="exclusive upper bound for codebook IDs")
     parser.add_argument("--codebook-modality", default="audio", help="lowercase modality identifier recorded for codebook arrays")
     parser.add_argument("--length-file", default="", help="optional row_index<TAB>valid_length file for codebook arrays")

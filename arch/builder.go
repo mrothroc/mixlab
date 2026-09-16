@@ -441,12 +441,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	T := seqLen
 	D := modelDim
 	V := vocabSize
-	linearFrames := normalizeInputAdapterKind(func() string {
-		if inputAdapter == nil {
-			return ""
-		}
-		return inputAdapter.Kind
-	}()) == InputAdapterLinearFrames
+	continuousInput := (&ArchConfig{InputAdapter: inputAdapter}).ContinuousInputEnabled()
 	discreteCodebooks := normalizeInputAdapterKind(func() string {
 		if inputAdapter == nil {
 			return ""
@@ -545,7 +540,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	}
 	nWeights += len(smearWeights)
 	linearFrameWeights := 0
-	if linearFrames {
+	if continuousInput {
 		linearFrameWeights = len(linearFramesExtraWeightShapes(&ArchConfig{
 			ModelDim: D, InputAdapter: inputAdapter,
 		}))
@@ -581,7 +576,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	invarianceEnabled := invariance != nil && invariance.Active()
 	pllMarginEnabled := pllMargin != nil && pllMargin.Active()
 	switch {
-	case linearFrames:
+	case continuousInput:
 		prog.DeclareInput("continuous_frames", TensorFloat32, []int{B, T, inputAdapter.FeatureDim})
 	case discreteCodebooks:
 		prog.DeclareInput("codebook_tokens", TensorInt32, []int{B, T, inputAdapter.NumCodebooks})
@@ -636,8 +631,9 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 
 	var wi int
 	switch {
-	case linearFrames:
+	case continuousInput:
 		wi, err = emitLinearFramesInputIR(prog, linearFramesInputOptions{
+			Adapter:             inputAdapter,
 			CLSWeight:           clsWeight,
 			BatchSize:           B,
 			SeqLen:              T,

@@ -73,6 +73,7 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 | [sequence_classification_bidirectional_mamba3_tiny.json](sequence_classification_bidirectional_mamba3_tiny.json) | Bidirectional recurrent classifier | Shared-weight forward/backward canonical Mamba-3 with valid-prefix reversal |
 | [continuous_mamba3_classification_tiny.json](continuous_mamba3_classification_tiny.json) | Continuous sequence classifier | Float-frame input adapter with a native Mamba3 classification backbone |
 | [cls_frames_classifier.json](cls_frames_classifier.json) | CLS attention classifier | Learned class token plus absolute positions for patch/frame classification; input length excludes CLS |
+| [linear_patches_classifier.json](linear_patches_classifier.json) | Image patch classifier | Geometry-checked projection, learned XY positions, CLS, and training-only crop/flip |
 | [continuous_mamba3_batchnorm_comparison_tiny.json](continuous_mamba3_batchnorm_comparison_tiny.json) | BatchNorm mixer comparison arm | Bidirectional canonical Mamba-3 with the same outer pre-norm BatchNorm policy used by reference-style S4D classifiers |
 | [continuous_s4d_classification_tiny.json](continuous_s4d_classification_tiny.json) | Continuous S4D classifier | LTI diagonal SSM with an FFT-convolution sequence mixer |
 | [continuous_s4d_batchnorm_reference_tiny.json](continuous_s4d_batchnorm_reference_tiny.json) | Reference-style S4D classifier | BatchNorm running statistics plus the opt-in S4D output projection/GLU |

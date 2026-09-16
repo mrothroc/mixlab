@@ -1,5 +1,10 @@
 # CLI: Data Preparation
 
+For image patch arrays, optional `-config model.json` supplies a
+`linear_patches` adapter geometry contract to `-input-format continuous`.
+Preparation checks `[T,F]` and full-image lengths before writing shards; it
+does not apply training augmentation. See [Image patches](image-patches.md).
+
 `prepare` converts text, FASTA, continuous feature arrays, or discrete
 multi-codebook arrays into binary shards
 that Mixlab can train and evaluate against. See [data.md](data.md) for examples

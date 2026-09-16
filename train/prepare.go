@@ -69,6 +69,7 @@ func prepareStderrDetail(stderr *boundedTailBuffer) string {
 
 // PrepareOptions holds flags for the prepare command.
 type PrepareOptions struct {
+	ConfigPath                string
 	Input                     string
 	Output                    string
 	InputFormat               string
@@ -116,6 +117,10 @@ func runPrepare(opts PrepareOptions) error {
 		return fmt.Errorf("-prepare-output-dir (or legacy -output) is required for prepare mode; pass an output directory, e.g.: mixlab -mode prepare -input corpus.jsonl -prepare-output-dir data/")
 	}
 	inputFormat := strings.ToLower(strings.TrimSpace(opts.InputFormat))
+	patchArgs, err := preparePatchArgs(opts.ConfigPath, inputFormat)
+	if err != nil {
+		return err
+	}
 	nucleotideFraming := strings.ToLower(strings.TrimSpace(opts.NucleotideFraming))
 	if nucleotideFraming == "" {
 		nucleotideFraming = "record"
@@ -217,6 +222,7 @@ func runPrepare(opts PrepareOptions) error {
 		"--vocab-size", fmt.Sprintf("%d", opts.VocabSize),
 		"--val-split", fmt.Sprintf("%g", opts.ValSplit),
 	}
+	args = append(args, patchArgs...)
 	if opts.InputFormat != "" {
 		args = append(args, "--input-format", opts.InputFormat)
 	}

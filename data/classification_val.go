@@ -16,6 +16,10 @@ func NewClassificationValSet(pattern string, maxBatches, batchTokens, seqLen int
 // NewClassificationValSetWithOptions loads classification validation data,
 // optionally using the same deterministic length buckets as training.
 func NewClassificationValSetWithOptions(pattern string, maxBatches, batchTokens, seqLen int, opts LoaderOptions) (*ValSet, error) {
+	opts = withoutPatchAugmentation(opts)
+	if err := validatePatchFiles(pattern, opts.PatchTransform); err != nil {
+		return nil, err
+	}
 	if maxBatches < 0 {
 		return nil, fmt.Errorf("classification validation batch limit must be >= 0, got %d", maxBatches)
 	}

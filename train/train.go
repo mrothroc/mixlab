@@ -350,7 +350,7 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	}
 
 	// Create data loader
-	loader, err := data.NewLoaderWithOptions(trainPattern, seed, effectiveLoaderOptions(cfg))
+	loader, err := data.NewLoaderWithOptions(trainPattern, seed, trainingLoaderOptions(cfg))
 	if err != nil {
 		return TrainResult{}, err
 	}
