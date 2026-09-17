@@ -67,7 +67,7 @@ func emitPlainAttentionIRWithKVOptionsEx(prog *Program, x string, wi, H, kvH, D,
 }
 
 func emitPlainAttentionIRWithKVOptionsExConvention(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, ropeDims int, ropeConvention string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int) (int, error) {
-	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, false, nil, ropeDims, ropeConvention, false, false, "", xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, false, false, PositionalEmbeddingRope, sharedRelativeAttentionPlan{WeightIndex: -1}, nil, false, nil)
+	return emitPlainAttentionIRWithKVOptionsExConventionNorm(prog, x, wi, H, kvH, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, skipAttention, qkGain, qkNorm, false, nil, ropeDims, ropeConvention, attentionBiasOptions{}, false, "", xsa, sparseAttnGate, windowSize, attentionMask, relativeAttention, relativeWindow, relativeParameterization, kvSource, kvCache, blockIndex, defaultNormSpec(), NormPlacementPre, false, PlainFFNActivationSiLU, false, false, PositionalEmbeddingRope, sharedRelativeAttentionPlan{WeightIndex: -1}, nil, false, nil)
 }
 
 func emitLinearProjectionIR(prog *Program, input string, wi int, useBias bool, output string) (weightNameUsed, biasNameUsed string, nextWI int) {
@@ -86,7 +86,7 @@ func emitLinearProjectionIR(prog *Program, input string, wi int, useBias bool, o
 	return weightNameUsed, biasNameUsed, wi
 }
 
-func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, differentialAttention bool, differentialLambdaInit *float64, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, attnPostNormMode string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, ffnPreNorm, ffnBias bool, positionalEmbedding string, sharedRel sharedRelativeAttentionPlan, layerAgg *layerAggregationBuildState, segmentMask bool, adaLN *adaLNBuildState) (int, error) {
+func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, skipAttention bool, qkGain float64, qkNorm bool, differentialAttention bool, differentialLambdaInit *float64, ropeDims int, ropeConvention string, bias attentionBiasOptions, attnValueGate bool, attnPostNormMode string, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, kvSource int, kvCache map[int]BlockKVOutputs, blockIndex int, norm NormSpec, normPlacement string, ffnInternalNorm bool, ffnActivation string, ffnPreNorm, ffnBias bool, positionalEmbedding string, sharedRel sharedRelativeAttentionPlan, layerAgg *layerAggregationBuildState, segmentMask bool, adaLN *adaLNBuildState) (int, error) {
 	_ = mlpMult
 	norm = normSpecOrDefault(norm)
 	normPlacement = normPlacementOrDefault(normPlacement)
@@ -184,14 +184,9 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 			wi += len(normWeights("norm", D, norm))
 		}
 		wi += 2 // q, output projection
-		if attnBias {
-			wi += 2 // q and output projection biases
-		}
+		wi += bias.weightCount(reuseKV)
 		if !reuseKV {
 			wi += 2 // k, v
-			if attnBias {
-				wi += 2 // k and value/value-gate projection biases
-			}
 		}
 		if qkNorm {
 			wi++ // q_norm_scale
@@ -230,7 +225,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		}
 
 		// Q projection
-		qWeightName, qBiasName, nextWI := emitLinearProjectionIR(prog, xAttn, wi, attnBias, q)
+		qWeightName, qBiasName, nextWI := emitLinearProjectionIR(prog, xAttn, wi, bias.QKV, q)
 		wi = nextWI
 		prog.Reshape(q, []int{B, T, H, headDim}, q4)
 		prog.Transpose(q4, []int{0, 2, 1, 3}, qh)
@@ -247,16 +242,16 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 			vh = src.V
 		} else {
 			// K/V projections
-			kWeightName, kBiasName, nextWI := emitLinearProjectionIR(prog, xAttn, wi, attnBias, k)
+			kWeightName, kBiasName, nextWI := emitLinearProjectionIR(prog, xAttn, wi, bias.QKV, k)
 			wi = nextWI
 			if attnValueGate {
-				_, _, nextWI = emitLinearProjectionIR(prog, xAttn, wi, attnBias, vRaw)
+				_, _, nextWI = emitLinearProjectionIR(prog, xAttn, wi, bias.QKV, vRaw)
 				wi = nextWI
 				prog.Slice(vRaw, 0, kvProjDim, 1, 1, v)
 				prog.Slice(vRaw, kvProjDim, kvProjDim+D, 1, 1, valueGate)
 				prog.GELU(valueGate, valueGateAct)
 			} else {
-				_, _, nextWI = emitLinearProjectionIR(prog, xAttn, wi, attnBias, v)
+				_, _, nextWI = emitLinearProjectionIR(prog, xAttn, wi, bias.QKV, v)
 				wi = nextWI
 			}
 
@@ -382,7 +377,7 @@ func emitPlainAttentionIRWithKVOptionsExConventionNorm(prog *Program, x string, 
 		}
 
 		// Output projection + residual
-		_, _, wi = emitLinearProjectionIR(prog, flat, wi, attnBias, proj)
+		_, _, wi = emitLinearProjectionIR(prog, flat, wi, bias.Out, proj)
 		if attnPostNorm == PlainAttnPostNormAfterOutProj {
 			postProj := proj + "_post_norm"
 			var err error

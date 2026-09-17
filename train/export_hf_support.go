@@ -21,6 +21,8 @@ func hfExportCapabilities() []hfExportCapability {
 	return []hfExportCapability{
 		{Feature: "plain", Status: hfExportSupported, Reason: "Core attention export with RoPE, GQA, qk_norm, qk_gain, XSA, sparse attention gates, masks, and causal windowing."},
 		{Feature: "plain.attn_bias", Status: hfExportSupported, Reason: "Q/K/V/O projection biases are mirrored in the generated PyTorch template."},
+		{Feature: "plain.attn_qkv_bias", Status: hfExportSupported, Reason: "Q/K/V biases can be enabled independently of the output projection bias."},
+		{Feature: "plain.attn_out_bias", Status: hfExportSupported, Reason: "Output projection bias can be enabled independently of Q/K/V biases."},
 		{Feature: "plain.attn_value_gate", Status: hfExportSupported, Reason: "Value-projection attention gates are mirrored before the output projection in the generated PyTorch template."},
 		{Feature: "plain.attn_post_norm", Status: hfExportSupported, Reason: "Attention post-norm can inherit legacy after-output placement or explicitly run before the output projection."},
 		{Feature: "plain.qk_norm", Status: hfExportSupported, Reason: "Learned Q/K RMSNorm scales are mirrored in the generated PyTorch template."},
@@ -77,6 +79,12 @@ func hfExportBlockCapability(block BlockSpec) hfExportCapability {
 		}
 		if block.AttnBias {
 			return capabilityByFeature("plain.attn_bias")
+		}
+		if block.AttentionQKVBiasEnabled() {
+			return capabilityByFeature("plain.attn_qkv_bias")
+		}
+		if block.AttentionOutBiasEnabled() {
+			return capabilityByFeature("plain.attn_out_bias")
 		}
 		if block.FFNPreNorm {
 			return capabilityByFeature("plain.ffn_pre_norm")

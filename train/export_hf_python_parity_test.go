@@ -684,10 +684,11 @@ if diff >= 1e-3:
 	}
 }
 
-func runNativePythonParityCase(t *testing.T, python, script, config string, compareMaskedLogits, compareTTTState, classificationRoundtrip bool) {
+func runNativePythonParityCase(t *testing.T, python, script, config string, compareMaskedLogits, compareTTTState, classificationRoundtrip bool, mutators ...hfExportWeightMutator) {
 	t.Helper()
 	dir := t.TempDir()
-	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, config, scaleHFExportWeightsToTrainedMagnitude)
+	mutators = append([]hfExportWeightMutator{scaleHFExportWeightsToTrainedMagnitude}, mutators...)
+	cfgPath, weightsPath, tokenizerDir := writeHFExportFixtureWithMutators(t, dir, config, mutators...)
 
 	outDir := filepath.Join(dir, "hf_out")
 	if err := RunExportHF(ExportHFOptions{

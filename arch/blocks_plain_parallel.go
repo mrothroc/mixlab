@@ -5,7 +5,7 @@ import (
 	"math"
 )
 
-func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, differentialAttention bool, differentialLambdaInit *float64, ropeDims int, ropeConvention string, attnBias, attnValueGate bool, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, ffnActivation string, norm NormSpec, ffnPreNorm, ffnBias bool, positionalEmbedding string, sharedRel sharedRelativeAttentionPlan, segmentMask bool) (string, int, error) {
+func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm string, wi, H, kvH, D, T, B, idx int, mlpMult float64, blockScales bool, dropout, attnDropout float32, qkGain float64, qkNorm bool, differentialAttention bool, differentialLambdaInit *float64, ropeDims int, ropeConvention string, bias attentionBiasOptions, attnValueGate bool, xsa, sparseAttnGate bool, windowSize int, attentionMask, relativeAttention string, relativeWindow int, relativeParameterization string, ffnActivation string, norm NormSpec, ffnPreNorm, ffnBias bool, positionalEmbedding string, sharedRel sharedRelativeAttentionPlan, segmentMask bool) (string, int, error) {
 	_ = mlpMult
 	norm = normSpecOrDefault(norm)
 	ffnActivation = normalizePlainFFNActivation(ffnActivation)
@@ -87,15 +87,15 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 	projScaled := prefix + "_proj_scaled"
 	projDrop := prefix + "_proj_dropout"
 
-	qWeightName, qBiasName, wi := emitLinearProjectionIR(prog, xNorm, wi, attnBias, q)
-	kWeightName, kBiasName, wi := emitLinearProjectionIR(prog, xNorm, wi, attnBias, k)
+	qWeightName, qBiasName, wi := emitLinearProjectionIR(prog, xNorm, wi, bias.QKV, q)
+	kWeightName, kBiasName, wi := emitLinearProjectionIR(prog, xNorm, wi, bias.QKV, k)
 	if attnValueGate {
-		_, _, wi = emitLinearProjectionIR(prog, xNorm, wi, attnBias, vRaw)
+		_, _, wi = emitLinearProjectionIR(prog, xNorm, wi, bias.QKV, vRaw)
 		prog.Slice(vRaw, 0, kvProjDim, 1, 1, v)
 		prog.Slice(vRaw, kvProjDim, kvProjDim+D, 1, 1, valueGate)
 		prog.GELU(valueGate, valueGateAct)
 	} else {
-		_, _, wi = emitLinearProjectionIR(prog, xNorm, wi, attnBias, v)
+		_, _, wi = emitLinearProjectionIR(prog, xNorm, wi, bias.QKV, v)
 	}
 
 	prog.Reshape(q, []int{B, T, H, headDim}, q4)
@@ -169,7 +169,7 @@ func emitPlainAttentionParallelDeltaIRWithDropoutEx(prog *Program, x, xNorm stri
 		}
 	}
 
-	_, _, wi = emitLinearProjectionIR(prog, flat, wi, attnBias, proj)
+	_, _, wi = emitLinearProjectionIR(prog, flat, wi, bias.Out, proj)
 	if blockScales {
 		prog.Mul(proj, weightName(wi), projScaled)
 		wi++

@@ -167,7 +167,7 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			metas = append(metas, normWeights("norm", D, norm)...)
 		}
 		metas = append(metas, WeightMeta{Name: "wq", Shape: []int{D, D}})
-		if spec.AttnBias {
+		if spec.AttentionQKVBiasEnabled() {
 			metas = append(metas, WeightMeta{Name: "wq_bias", Shape: []int{D}, InitZero: true})
 		}
 		if spec.KVSource <= 0 {
@@ -178,11 +178,11 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			metas = append(metas,
 				WeightMeta{Name: "wk", Shape: []int{D, kvProjDim}},
 			)
-			if spec.AttnBias {
+			if spec.AttentionQKVBiasEnabled() {
 				metas = append(metas, WeightMeta{Name: "wk_bias", Shape: []int{kvProjDim}, InitZero: true})
 			}
 			metas = append(metas, WeightMeta{Name: "wv", Shape: []int{D, valueProjDim}})
-			if spec.AttnBias {
+			if spec.AttentionQKVBiasEnabled() {
 				metas = append(metas, WeightMeta{Name: "wv_bias", Shape: []int{valueProjDim}, InitZero: true})
 			}
 		}
@@ -223,7 +223,7 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			metas = append(metas, normWeights("post_attn_norm", D, norm)...)
 		}
 		metas = append(metas, WeightMeta{Name: "wo", Shape: []int{D, D}})
-		if spec.AttnBias {
+		if spec.AttentionOutBiasEnabled() {
 			metas = append(metas, WeightMeta{Name: "wo_bias", Shape: []int{D}, InitZero: true})
 		}
 		if attnPostNorm == PlainAttnPostNormAfterOutProj {

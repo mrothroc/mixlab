@@ -155,8 +155,8 @@ func validateHFGPT2ExportConfig(cfg *ArchConfig) error {
 		if mask != "" && mask != "causal" {
 			return unsupportedHFExport(field+".attention_mask", "native GPT-2 export requires causal attention")
 		}
-		if !block.AttnBias {
-			return unsupportedHFExport(field+".attn_bias", "native GPT-2 export requires attention projection biases")
+		if !block.AttentionQKVBiasEnabled() || !block.AttentionOutBiasEnabled() {
+			return unsupportedHFExport(field+".attn_bias", "native GPT-2 export requires both attn_qkv_bias and attn_out_bias (or attn_bias: true)")
 		}
 		if !block.FFNBias {
 			return unsupportedHFExport(field+".ffn_bias", "native GPT-2 export requires FFN biases")

@@ -186,7 +186,7 @@ semantics.
 
 Set top-level `hf_export_format: "gpt2"` when a config is intentionally strict GPT-2-compatible and should export as a native Hugging Face `GPT2LMHeadModel` directory instead of a custom Mixlab directory. Native GPT-2 export writes `model_type: "gpt2"`, `architectures: ["GPT2LMHeadModel"]`, packed `attn.c_attn` QKV tensors, GPT-2 `transformer.wte/wpe/h.*` names, and tied `lm_head.weight`.
 
-The exporter rejects configs that are not exactly representable as GPT-2. The accepted v1 shape is a causal, sequential `plain` stack with `positional_embedding: "learned_absolute"`, affine `norm_type: "layernorm"`, `tie_embeddings: true`, `attn_bias: true`, `ffn_pre_norm: true`, `ffn_bias: true`, `ffn_activation: "gelu_new"` or `"gelu"`, no RoPE/relative attention fields, and no Mixlab training-only or architecture extras.
+The exporter rejects configs that are not exactly representable as GPT-2. The accepted v1 shape is a causal, sequential `plain` stack with `positional_embedding: "learned_absolute"`, affine `norm_type: "layernorm"`, `tie_embeddings: true`, `attn_bias: true` (or both `attn_qkv_bias: true` and `attn_out_bias: true`), `ffn_pre_norm: true`, `ffn_bias: true`, `ffn_activation: "gelu_new"` or `"gelu"`, no RoPE/relative attention fields, and no Mixlab training-only or architecture extras. Asymmetric projection biases require the custom Mixlab export format and are explicitly rejected by native GPT-2 export.
 
 ```json
 {
@@ -226,7 +226,7 @@ HF export supports next-token and masked-LM checkpoints using sequential blocks:
 - configurable core norms through `norm_type`, `norm_eps`, `norm_affine`, `norm_placement`, and `ffn_internal_norm` for sequential `plain`, `swiglu`, `geglu`, and `mlp` blocks
 - `plain` FFN tails with the default `silu` activation, non-gated `ffn_activation: "gelu"` / `"gelu_new"`, optional `ffn_pre_norm` / `ffn_bias`, or gated `ffn_activation: "geglu"` / `"swiglu"`
 - grouped-query attention through `kv_heads`
-- `plain` attention projection biases through `attn_bias`
+- `plain` attention projection biases through `attn_bias` or independent `attn_qkv_bias` / `attn_out_bias`, including asymmetric settings (do not combine the shorthand with split fields)
 - `plain` attention value gates through `attn_value_gate`
 - `plain` attention post-norm placement through `attn_post_norm`, including explicit `before_outproj`
 - learned per-head-dimension `qk_norm`

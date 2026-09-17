@@ -87,7 +87,7 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 			"source":                     "mixlab",
 			"weight_map":                 "weight_map.json",
 			"requires_trust":             "trust_remote_code=True loads repository-provided Python modeling code",
-			"supported_blocks":           []string{"plain", "plain.attn_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.differential_attention", "plain.ffn_activation=gelu", "plain.ffn_activation=gelu_new", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.ffn_pre_norm", "plain.ffn_bias", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "positional_embedding=learned_absolute", "positional_embedding=none", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe", "ttt_mlp", "mamba3-canonical", "s4d"},
+			"supported_blocks":           []string{"plain", "plain.attn_bias", "plain.attn_qkv_bias", "plain.attn_out_bias", "plain.attn_value_gate", "plain.attn_post_norm", "plain.differential_attention", "plain.ffn_activation=gelu", "plain.ffn_activation=gelu_new", "plain.ffn_activation=geglu", "plain.ffn_activation=swiglu", "plain.ffn_pre_norm", "plain.ffn_bias", "plain.qk_norm", "plain.xsa", "plain.sparse_attn_gate", "plain.relative_attention=deberta_p2c_c2p", "plain.relative_attention_parameterization=shared_qk_reuse", "plain.relative_attention_embedding_norm=layernorm", "positional_embedding=learned_absolute", "positional_embedding=none", "layer_aggregation=dwa", "mlm_head=bert", "swiglu", "geglu", "mlp", "moe", "ttt_mlp", "mamba3-canonical", "s4d"},
 			"native_sequence_classifier": cfg.ClassificationEnabled(),
 			"unsupported_fails":          true,
 		},
@@ -215,6 +215,12 @@ func hfBlockEntries(cfg *ArchConfig, masked bool) []map[string]any {
 			}
 			if block.AttnBias {
 				entry["attn_bias"] = true
+			}
+			if block.AttnQKVBias != nil {
+				entry["attn_qkv_bias"] = *block.AttnQKVBias
+			}
+			if block.AttnOutBias != nil {
+				entry["attn_out_bias"] = *block.AttnOutBias
 			}
 			if block.AttnValueGate {
 				entry["attn_value_gate"] = true

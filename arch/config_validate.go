@@ -252,6 +252,9 @@ func s4dSobolevSharedControlsEqual(a, b BlockSpec) bool {
 
 // validateBlockSpec checks that a single block spec has a valid type.
 func validateBlockSpec(b BlockSpec, source, groupName string, idx int) error {
+	if err := b.validateAttentionBias(); err != nil {
+		return fmt.Errorf("config %q %s[%d]: %w", source, groupName, idx, err)
+	}
 	if b.StateLR != nil {
 		switch blockTypeKey(b) {
 		case "s4d", "mamba3-canonical", "gated_deltanet":

@@ -265,7 +265,10 @@ class MixlabPlainBlock(nn.Module):
             self.effective_rope_dims = rope_limit
         self.attention_mask = str(block_config.get("attention_mask", "") or "causal").lower()
         self.window_size = int(block_config.get("window_size", 0) or 0)
-        self.attn_bias = bool(block_config.get("attn_bias", False))
+        if "attn_bias" in block_config and any(k in block_config for k in ("attn_qkv_bias", "attn_out_bias")):
+            raise ValueError("attn_bias cannot be combined with attn_qkv_bias or attn_out_bias")
+        self.attn_qkv_bias = bool(block_config.get("attn_qkv_bias", block_config.get("attn_bias", False)))
+        self.attn_out_bias = bool(block_config.get("attn_out_bias", block_config.get("attn_bias", False)))
         self.attn_value_gate = bool(block_config.get("attn_value_gate", False))
         self.xsa = bool(block_config.get("xsa", False))
         self.sparse_attn_gate = bool(block_config.get("sparse_attn_gate", False))
@@ -290,10 +293,10 @@ class MixlabPlainBlock(nn.Module):
         self.ffn_pre_norm = bool(block_config.get("ffn_pre_norm", False))
         self.ffn_bias = bool(block_config.get("ffn_bias", False))
         self.norm = make_mixlab_norm(config, dim) if self.norm_placement in ("pre", "sandwich") else None
-        self.wq = MixlabLinear(dim, dim, bias=self.attn_bias)
-        self.wk = MixlabLinear(dim, self.kv_heads * self.head_dim, bias=self.attn_bias)
+        self.wq = MixlabLinear(dim, dim, bias=self.attn_qkv_bias)
+        self.wk = MixlabLinear(dim, self.kv_heads * self.head_dim, bias=self.attn_qkv_bias)
         self.value_dim = self.kv_heads * self.head_dim
-        self.wv = MixlabLinear(dim, self.value_dim + (dim if self.attn_value_gate else 0), bias=self.attn_bias)
+        self.wv = MixlabLinear(dim, self.value_dim + (dim if self.attn_value_gate else 0), bias=self.attn_qkv_bias)
         self.q_norm = None
         self.k_norm = None
         if bool(block_config.get("qk_norm", False)):
@@ -350,7 +353,7 @@ class MixlabPlainBlock(nn.Module):
             self.attn_gate_w = nn.Parameter(torch.empty(heads, self.attn_gate_dim))
             nn.init.zeros_(self.attn_gate_w)
         self.post_attn_norm = make_mixlab_norm(config, dim) if self.attn_post_norm != "none" else None
-        self.wo = MixlabLinear(dim, dim, bias=self.attn_bias)
+        self.wo = MixlabLinear(dim, dim, bias=self.attn_out_bias)
         self.ffn_norm = make_mixlab_norm(config, dim) if self.norm_placement == "sandwich" or self.ffn_pre_norm else None
         ffn_dim = max(dim, int(round(dim * float(config.mlp_mult))))
         self.ff_gate = MixlabLinear(dim, ffn_dim) if self.ffn_activation in ("geglu", "swiglu") else None

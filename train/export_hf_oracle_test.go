@@ -174,15 +174,15 @@ func runHFCPUHiddenWithDWAScope(t *testing.T, cfg *ArchConfig, weights map[strin
 				weights[prefix+"norm.weight"],
 				weights[prefix+"wq.weight"],
 			}
-			if block.AttnBias {
+			if block.AttentionQKVBiasEnabled() {
 				blockWeights = append(blockWeights, weights[prefix+"wq.bias"])
 			}
 			blockWeights = append(blockWeights, weights[prefix+"wk.weight"])
-			if block.AttnBias {
+			if block.AttentionQKVBiasEnabled() {
 				blockWeights = append(blockWeights, weights[prefix+"wk.bias"])
 			}
 			blockWeights = append(blockWeights, weights[prefix+"wv.weight"])
-			if block.AttnBias {
+			if block.AttentionQKVBiasEnabled() {
 				blockWeights = append(blockWeights, weights[prefix+"wv.bias"])
 			}
 			if block.QKNorm {
@@ -209,7 +209,7 @@ func runHFCPUHiddenWithDWAScope(t *testing.T, cfg *ArchConfig, weights map[strin
 				blockWeights = append(blockWeights, weights[prefix+"post_attn_norm.weight"])
 			}
 			blockWeights = append(blockWeights, weights[prefix+"wo.weight"])
-			if block.AttnBias {
+			if block.AttentionOutBiasEnabled() {
 				blockWeights = append(blockWeights, weights[prefix+"wo.bias"])
 			}
 			if attnPostNorm == "after_outproj" {
@@ -332,8 +332,11 @@ func hfFeatureWeights(weights map[string][]float64, feature string) [][]float64 
 
 func plainHFExportWeightCount(block BlockSpec, normPlacement string) int {
 	n := 7
-	if block.AttnBias {
-		n += 4
+	if block.AttentionQKVBiasEnabled() {
+		n += 3
+	}
+	if block.AttentionOutBiasEnabled() {
+		n++
 	}
 	if block.QKNorm {
 		n += 2
@@ -554,21 +557,21 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 	qWeight := w[wi]
 	wi++
 	var qBias []float64
-	if block.AttnBias {
+	if block.AttentionQKVBiasEnabled() {
 		qBias = w[wi]
 		wi++
 	}
 	kWeight := w[wi]
 	wi++
 	var kBias []float64
-	if block.AttnBias {
+	if block.AttentionQKVBiasEnabled() {
 		kBias = w[wi]
 		wi++
 	}
 	vWeight := w[wi]
 	wi++
 	var vBias []float64
-	if block.AttnBias {
+	if block.AttentionQKVBiasEnabled() {
 		vBias = w[wi]
 		wi++
 	}
@@ -716,7 +719,7 @@ func plainCPUForward(t *testing.T, cfg *ArchConfig, block BlockSpec, x [][][]flo
 	projWeight := w[woIndex]
 	woIndex++
 	var projBias []float64
-	if block.AttnBias {
+	if block.AttentionOutBiasEnabled() {
 		projBias = w[woIndex]
 		woIndex++
 	}

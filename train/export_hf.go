@@ -485,8 +485,12 @@ func buildHFWeightMap(cfg *ArchConfig, shapes []WeightShape) ([]hfWeightMapping,
 					continue
 				}
 				switch name.mixlab {
-				case "wq_bias", "wk_bias", "wv_bias", "wo_bias":
-					if !block.AttnBias {
+				case "wq_bias", "wk_bias", "wv_bias":
+					if !block.AttentionQKVBiasEnabled() {
+						continue
+					}
+				case "wo_bias":
+					if !block.AttentionOutBiasEnabled() {
 						continue
 					}
 				}

@@ -173,6 +173,8 @@ type BlockSpec struct {
 	DifferentialAttention             bool         `json:"differential_attention,omitempty"`              // plain: DIFF Transformer two-softmax differential attention.
 	DifferentialLambdaInit            *float64     `json:"differential_lambda_init,omitempty"`            // plain differential attention: optional lambda_init override.
 	AttnBias                          bool         `json:"attn_bias,omitempty"`                           // plain: add learned biases to Q/K/V/O projections.
+	AttnQKVBias                       *bool        `json:"attn_qkv_bias,omitempty"`                       // plain: independent Q/K/V biases.
+	AttnOutBias                       *bool        `json:"attn_out_bias,omitempty"`                       // plain: independent output bias.
 	AttnValueGate                     bool         `json:"attn_value_gate,omitempty"`                     // plain: widen V projection to value+GELU gate and gate the attention output before WO.
 	AttnPostNorm                      string       `json:"attn_post_norm,omitempty"`                      // plain: "", "inherit", "none", "after_outproj", or "before_outproj".
 	XSA                               bool         `json:"xsa,omitempty"`                                 // enable V-orthogonal projection after attention
@@ -224,6 +226,7 @@ type BlockSpec struct {
 	innerHiddenMultSet       bool
 	innerLRBaseSet           bool
 	innerLRInitSet           bool
+	attnBiasSet              bool
 }
 
 // UnmarshalJSON records MoE scalar field presence so an explicit
@@ -240,6 +243,15 @@ func (b *BlockSpec) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*b = BlockSpec(alias)
+	_, b.attnBiasSet = raw["attn_bias"]
+	for _, name := range []string{"attn_qkv_bias", "attn_out_bias"} {
+		if value, ok := raw[name]; ok && string(value) == "null" {
+			return fmt.Errorf("%s must be a boolean", name)
+		}
+	}
+	if err := b.validateAttentionBias(); err != nil {
+		return err
+	}
 	_, b.loadBalanceLossWeightSet = raw["load_balance_loss_weight"]
 	_, b.chunkSizeSet = raw["chunk_size"]
 	_, b.innerHiddenMultSet = raw["inner_hidden_mult"]

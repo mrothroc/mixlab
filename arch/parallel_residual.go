@@ -417,7 +417,7 @@ func emitParallelFirstBranchStateIR(prog *Program, spec BlockSpec, x, xNorm stri
 		if heads <= 0 {
 			heads = 4
 		}
-		return emitPlainAttentionParallelDeltaIRWithDropoutEx(prog, x, xNorm, wi, heads, spec.KVHeads, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, spec.QKGain, spec.QKNorm, spec.DifferentialAttention, spec.DifferentialLambdaInit, spec.RopeDims, spec.RopeConvention, spec.AttnBias, spec.AttnValueGate, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.RelativeAttentionParameterization, spec.FFNActivation, norm, spec.FFNPreNorm, spec.FFNBias, positionalEmbedding, sharedRel, segmentMask)
+		return emitPlainAttentionParallelDeltaIRWithDropoutEx(prog, x, xNorm, wi, heads, spec.KVHeads, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, spec.QKGain, spec.QKNorm, spec.DifferentialAttention, spec.DifferentialLambdaInit, spec.RopeDims, spec.RopeConvention, spec.attentionBiases(), spec.AttnValueGate, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.RelativeAttentionParameterization, spec.FFNActivation, norm, spec.FFNPreNorm, spec.FFNBias, positionalEmbedding, sharedRel, segmentMask)
 	case "gated_deltanet", "hgrn2":
 		prefix := tmpName(x+"_parallel_"+blockTypeKey(spec), idx)
 		delta, nextWI, err := emitParallelBranchDeltaIR(prog, spec, x, xNorm, wi, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, norm, positionalEmbedding, sharedRel, segmentMask)
@@ -439,7 +439,7 @@ func emitParallelBranchDeltaIR(prog *Program, spec BlockSpec, x, xNorm string, w
 		if heads <= 0 {
 			heads = 4
 		}
-		state, nextWI, err := emitPlainAttentionParallelDeltaIRWithDropoutEx(prog, x, xNorm, wi, heads, spec.KVHeads, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, spec.QKGain, spec.QKNorm, spec.DifferentialAttention, spec.DifferentialLambdaInit, spec.RopeDims, spec.RopeConvention, spec.AttnBias, spec.AttnValueGate, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.RelativeAttentionParameterization, spec.FFNActivation, norm, spec.FFNPreNorm, spec.FFNBias, positionalEmbedding, sharedRel, segmentMask)
+		state, nextWI, err := emitPlainAttentionParallelDeltaIRWithDropoutEx(prog, x, xNorm, wi, heads, spec.KVHeads, D, T, B, idx, mlpMult, blockScales, dropout, attnDropout, spec.QKGain, spec.QKNorm, spec.DifferentialAttention, spec.DifferentialLambdaInit, spec.RopeDims, spec.RopeConvention, spec.attentionBiases(), spec.AttnValueGate, spec.XSA, spec.SparseAttnGate, spec.WindowSize, spec.AttentionMask, spec.RelativeAttention, spec.RelativeAttentionWindow, spec.RelativeAttentionParameterization, spec.FFNActivation, norm, spec.FFNPreNorm, spec.FFNBias, positionalEmbedding, sharedRel, segmentMask)
 		if err != nil {
 			return "", wi, err
 		}

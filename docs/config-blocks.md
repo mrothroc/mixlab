@@ -69,7 +69,7 @@ models.
 |------|--------|
 | Attention shape | `heads`, `kv_heads`, `attention_mask`, `window_size`, `differential_attention`, `differential_lambda_init` |
 | Position handling | `rope_dims`, `rope_convention`, `relative_attention`, `relative_attention_window`, `relative_attention_parameterization` |
-| Projection extras | `attn_bias`, `attn_value_gate`, `qk_norm`, `qk_gain`, `xsa`, `sparse_attn_gate` |
+| Projection extras | `attn_bias` or independent `attn_qkv_bias` / `attn_out_bias`, `attn_value_gate`, `qk_norm`, `qk_gain`, `xsa`, `sparse_attn_gate` |
 | FFN tail | `ffn_activation`, `ffn_pre_norm`, `ffn_bias` |
 | Composition | `kv_source`, `skip_attention`, `parallel_residual`, `parallel_group`, `residual_scale_init`, `weight_group` |
 
