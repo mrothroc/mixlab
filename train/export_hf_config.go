@@ -60,6 +60,7 @@ func writeHFConfigWithOptions(path string, cfg *ArchConfig, specials hfTokenizer
 		LayerAggregation:              hfExportLayerAggregation(cfg),
 		LayerAggregationScope:         normalizeHFLayerAggregationScope(opts.LayerAggregationScope),
 		SequenceClassificationPooling: hfSequenceClassificationPooling(cfg, maskedBlocks),
+		CLSPosition:                   cfg.EffectiveCLSPosition(),
 		NumLabels:                     hfSequenceClassificationNumLabels(cfg),
 		ClassifierDropout:             hfSequenceClassificationDropout(cfg),
 		HiddenDropout:                 cfg.EffectiveHiddenDropout(),

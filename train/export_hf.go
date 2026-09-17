@@ -45,6 +45,7 @@ type hfConfigJSON struct {
 	LayerAggregation              string                 `json:"layer_aggregation,omitempty"`
 	LayerAggregationScope         string                 `json:"layer_aggregation_scope,omitempty"`
 	SequenceClassificationPooling string                 `json:"sequence_classification_pooling,omitempty"`
+	CLSPosition                   string                 `json:"cls_position,omitempty"`
 	NumLabels                     int                    `json:"num_labels,omitempty"`
 	ClassifierDropout             *float32               `json:"classifier_dropout,omitempty"`
 	HiddenDropout                 float32                `json:"hidden_dropout,omitempty"`

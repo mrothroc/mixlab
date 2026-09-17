@@ -37,7 +37,7 @@ func hfExportCapabilities() []hfExportCapability {
 		{Feature: "plain.ffn_bias", Status: hfExportSupported, Reason: "Plain-block FFN projection biases are mirrored in the generated PyTorch template."},
 		{Feature: "positional_embedding=learned_absolute", Status: hfExportSupported, Reason: "Learned absolute position embeddings export as a model-level WPE table and disable RoPE."},
 		{Feature: "positional_embedding=none", Status: hfExportSupported, Reason: "No-position configs export raw QK attention without RoPE or WPE."},
-		{Feature: "classification.pooling=cls", Status: hfExportSupported, Reason: "Learned CLS pooling exports for supported token, linear_frames, and linear_patches bidirectional attention classifiers. Token/frame padding is supported; patches require full images."},
+		{Feature: "classification.pooling=cls", Status: hfExportSupported, Reason: "CLS head/middle/tail placement exports for supported classification backbones. Middle requires full-length records; attention supports right-padded tail batches. S4D and patches require unpadded records; recurrent export gates still apply."},
 		{Feature: "input_adapter.kind=linear_patches", Status: hfExportSupported, Reason: "Fixed raster patch projection and learned XY tables export for supported classification backbones; training crop/flip is never applied."},
 		{Feature: "hf_export_format=gpt2", Status: hfExportSupported, Reason: "Strict GPT-2-compatible configs can export as native GPT2LMHeadModel directories with packed QKV tensors."},
 		{Feature: "plain.relative_attention=deberta_p2c_c2p", Status: hfExportSupported, Reason: "DeBERTa/GPT-BERT C2P/P2C relative bias uses log-bucketed q-k positions in the generated PyTorch template."},

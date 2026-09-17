@@ -13,7 +13,7 @@ from transformers.modeling_outputs import (
 )
 
 from .configuration_mixlab import MixlabConfig
-from .pooling_mixlab import pool_sequence
+from .pooling_mixlab import pool_sequence, cls_layout, insert_cls
 # MIXLAB_OPTIONAL_BLOCK_IMPORTS
 
 
@@ -1022,7 +1022,7 @@ class MixlabModel(PreTrainedModel):
         out[:, 2:] = h + 1
         return out
 
-    def _embed_features(self, input_ids=None, input_values=None):
+    def _embed_features(self, input_ids=None, input_values=None, attention_mask=None):
         if self.input_adapter_kind in ("linear_frames", "linear_patches"):
             if input_ids is not None:
                 raise ValueError("linear_frames models accept input_values, not input_ids")
@@ -1054,7 +1054,9 @@ class MixlabModel(PreTrainedModel):
                 raise ValueError("input_ids is required")
             x = self.embed_tokens(input_ids)
         if self.cls_token is not None:
-            x = torch.cat((self.cls_token.unsqueeze(0).expand(x.shape[0], -1, -1), x), dim=1)
+            x = insert_cls(
+                x, self.cls_token, attention_mask, self.config.cls_position, self.config.seq_len
+            )
         if self.position_embeddings is not None:
             seq_len = x.shape[1]
             if seq_len > int(self.config.max_position_embeddings):
@@ -1103,14 +1105,13 @@ class MixlabModel(PreTrainedModel):
         ttt_state=None,
         use_cache=False,
     ):
-        x = self._embed_features(input_ids=input_ids, input_values=input_values)
+        x = self._embed_features(
+            input_ids=input_ids, input_values=input_values, attention_mask=attention_mask
+        )
         if self.cls_token is not None:
-            expected = (x.shape[0], x.shape[1] - 1)
-            if attention_mask is None:
-                attention_mask = torch.ones(expected, dtype=torch.long, device=x.device)
-            elif attention_mask.ndim != 2 or tuple(attention_mask.shape) != expected:
-                raise ValueError(f"CLS attention_mask must have input shape {expected}")
-            attention_mask = torch.cat((torch.ones_like(attention_mask[:, :1]), attention_mask), dim=1)
+            _, _, attention_mask = cls_layout(
+                x[:, 1:], attention_mask, self.config.cls_position, self.config.seq_len
+            )
         if self.input_adapter_kind in ("linear_frames", "linear_patches"):
             expected = tuple(x.shape[:2])
             if attention_mask is None:
@@ -1348,6 +1349,8 @@ class MixlabForSequenceClassification(MixlabModel):
             hidden,
             attention_mask,
             self.sequence_classification_pooling,
+            self.config.cls_position,
+            self.config.seq_len,
         )
         logits = self.classifier(self.classifier_dropout(pooled))
 

@@ -371,7 +371,7 @@ func buildIRProgramWithDropoutNgramsAndOrder(
 		nil,
 		false,
 		nil,
-		false,
+		"",
 	)
 }
 
@@ -418,7 +418,7 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	pllMargin *PLLMarginSpec,
 	rcEquivariant bool,
 	inputAdapter *InputAdapterSpec,
-	clsPooling bool,
+	clsPosition string,
 ) (*Program, error) {
 	if mlpMult <= 0 {
 		mlpMult = DefaultFFNMultiplier
@@ -563,12 +563,15 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 	nWeights += len(layerAggregationWeights)
 	layerAggregationWeightStart := nWeights - len(layerAggregationWeights)
 	clsWeight := ""
-	if clsPooling {
+	if clsPosition != "" {
 		clsWeight = weightName(nWeights)
 		nWeights++
 	}
 
 	prog := NewProgram(nWeights)
+	if clsPosition != "" && clsPosition != "head" {
+		prog.DeclareInput(clsInsertionInput, TensorInt32, []int{B, T + 1})
+	}
 	maskedObjective := isMaskedTrainingObjective(objective)
 	maskedLoss := maskedObjective || (framedCausalLoss && objective == ObjectiveCausal)
 	distillationEnabled := distillation != nil && distillation.EffectiveKLActive()
@@ -697,7 +700,13 @@ func buildIRProgramWithDropoutNgramsOrderAndSmear(
 		if segmentAttentionMask {
 			prog.Full([]int{B, 1}, 0, "cls_segment")
 			prog.Concat("cls_segment", "segment_ids", 1, "segment_ids")
+			if clsPosition != "head" {
+				prog.Reshape("segment_ids", []int{B, T, 1}, "cls_segments_3d")
+				reorderCLSIR(prog, "cls_segments_3d", B, T, 1)
+				prog.Reshape("cls_segments_3d", []int{B, T}, "segment_ids")
+			}
 		}
+		expandCLSValidMaskIR(prog, B, T)
 	}
 	sharedRel, err := newSharedRelativeAttentionPlan(blocks)
 	if err != nil {

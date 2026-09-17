@@ -19,6 +19,7 @@ const (
 type ClassificationSpec struct {
 	NumLabels         int      `json:"num_labels"`
 	Pooling           string   `json:"pooling,omitempty"`
+	CLSPosition       string   `json:"cls_position,omitempty"`
 	ClassifierDropout *float32 `json:"classifier_dropout,omitempty"`
 	Bias              *bool    `json:"bias,omitempty"`
 }

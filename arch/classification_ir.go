@@ -55,8 +55,13 @@ func convertToClassificationIR(cfg *ArchConfig, state TrainingProgramState, prog
 	pooled := "classification_pooled"
 	switch cfg.EffectiveClassificationPooling() {
 	case ClassificationPoolingCLS:
-		prog.Slice("x_hidden", 0, 1, 1, 1, "classification_cls_hidden")
-		prog.Reshape("classification_cls_hidden", []int{B, D}, pooled)
+		if cfg.EffectiveCLSPosition() == "head" {
+			prog.Slice("x_hidden", 0, 1, 1, 1, "classification_cls_hidden")
+			prog.Reshape("classification_cls_hidden", []int{B, D}, pooled)
+		} else {
+			prog.DeclareInput("classification_positions", TensorInt32, []int{B})
+			prog.Embed("x_final_norm", "classification_positions", pooled)
+		}
 	case ClassificationPoolingLast:
 		prog.DeclareInput("classification_positions", TensorInt32, []int{B})
 		prog.Embed("x_final_norm", "classification_positions", pooled)

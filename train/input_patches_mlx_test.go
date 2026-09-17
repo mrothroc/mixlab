@@ -161,10 +161,18 @@ func TestLinearPatchesNativeHFParity(t *testing.T) {
 	if err := exec.Command(python, "-c", "import torch, transformers, safetensors").Run(); err != nil {
 		t.Skip("HF dependencies unavailable")
 	}
-	for _, tt := range []struct{ pool, coords, pos string }{{"mean", "none", "none"}, {"mean", "learned_xy", "rope"}, {"cls", "learned_xy", "none"}, {"cls", "learned_xy", "learned_absolute"}} {
-		t.Run(tt.pool+"_"+tt.coords+"_"+tt.pos, func(t *testing.T) {
+	for _, tt := range []struct{ pool, coords, pos, clsPos string }{
+		{"mean", "none", "none", ""}, {"mean", "learned_xy", "rope", ""},
+		{"cls", "learned_xy", "none", ""}, {"cls", "learned_xy", "learned_absolute", ""},
+		{"cls", "learned_xy", "learned_absolute", "middle"}, {"cls", "learned_xy", "learned_absolute", "tail"},
+	} {
+		t.Run(tt.pool+"_"+tt.coords+"_"+tt.pos+"_"+tt.clsPos, func(t *testing.T) {
 			dir := t.TempDir()
-			cp, wp, _ := writeHFExportFixtureWithMutators(t, dir, patchModelJSON(tt.pool, tt.coords, tt.pos))
+			config := patchModelJSON(tt.pool, tt.coords, tt.pos)
+			if tt.clsPos != "" {
+				config = strings.Replace(config, `"pooling":"cls"`, `"pooling":"cls","cls_position":"`+tt.clsPos+`"`, 1)
+			}
+			cp, wp, _ := writeHFExportFixtureWithMutators(t, dir, config)
 			cfg, err := LoadArchConfigQuiet(cp)
 			if err != nil {
 				t.Fatal(err)
@@ -206,7 +214,8 @@ with torch.no_grad():
         for i in range(6):
             projected[:,i] += m.input_adapter_coord_x[i % 3] + m.input_adapter_coord_y[i // 3]
     if m.cls_token is not None:
-        projected = torch.cat((m.cls_token.unsqueeze(0).expand(2,-1,-1), projected),1)
+        index = {'head': 0, 'middle': 3, 'tail': 6}[m.config.cls_position]
+        projected = torch.cat((projected[:,:index], m.cls_token.unsqueeze(0).expand(2,-1,-1), projected[:,index:]),1)
     if m.position_embeddings is not None:
         projected += m.position_embeddings.weight[:projected.shape[1]].unsqueeze(0)
     torch.testing.assert_close(m._embed_features(input_values=x), projected, atol=1e-6, rtol=1e-6)

@@ -1291,22 +1291,39 @@ Mean pooling uses the validity-mask-weighted mean. Last pooling selects the
 final non-padding token. Both reject empty rows.
 `classifier_dropout` defaults to top-level `hidden_dropout`.
 
-Explicit `pooling: "cls"` prepends a trainable `cls_token: [1, model_dim]`
+Explicit `pooling: "cls"` inserts a trainable `cls_token: [1, model_dim]`
 after the input adapter, before positional embeddings and embedding dropout.
-The classifier reads position zero after final normalization. `seq_len` and
-`batch_tokens` still count input tokens/frames; backbone length is `seq_len + 1`.
+Patch XY coordinates apply to content patches before insertion, not to CLS.
+`training.classification.cls_position` accepts `"head"` (default, index 0),
+`"middle"` (index `floor(L/2)`), or `"tail"` (index `L`), where `L` is the valid
+content length. The classifier reads that position after final normalization.
+Head preserves existing behavior. Middle requires every record to fill configured
+`seq_len`, enforced on every training/eval batch; variable-length records and
+shape-changing length buckets are rejected. Tail supports variable-length
+right-padded records and inserts before padding. Middle/tail reject empty,
+non-binary, or non-prefix validity masks. `cls_position` requires `pooling: "cls"`.
+`seq_len` and `batch_tokens` still count input tokens/frames; backbone length is
+`seq_len + 1`.
 Learned positional capacity defaults to that longer length; explicit
 `max_positions` must cover it. Padding masks include CLS as always valid.
 CLS defaults to Normal(0, 0.02); `training.weight_init: "normal"` uses
 `training.weight_init_std` instead (e.g. 1 for a unit-normal class token).
 CLS is stored after backbone weights, before the classifier. Existing mean/last
 layouts are unchanged; switching pooling modes is not checkpoint-compatible.
+Changing only `cls_position` preserves weight shapes and allows weight loading,
+but changes the model's semantics and is not an exact-resume equivalent.
 
-V1 supports token embeddings, `linear_frames`, and `discrete_codebooks` with
-bidirectional/none `plain` attention, optionally composed with `mlp`, `swiglu`,
-`geglu`, or `moe`. At least one attention block is required. Causal/recurrent
-mixers, BatchNorm, RC equivariance, smear/char/ngram channels are rejected.
+V1 supports token embeddings, `linear_frames`, `linear_patches`, and
+`discrete_codebooks` with bidirectional/none `plain` attention or bidirectional
+`mamba3-canonical`, `gated_deltanet`, and `s4d`, including hybrid stacks and
+optional `mlp`, `swiglu`, `geglu`, or `moe`. At least one active bidirectional
+token mixer is required; pure recurrent stacks are valid. Causal/unidirectional
+mixers, other recurrent block types, BatchNorm, RC equivariance, and
+smear/char/ngram channels remain rejected.
 Codebook classification remains native-only under the existing HF export policy.
+CLS placement enables pooling ablations, not a faithful Vision Mamba reproduction
+or a guaranteed accuracy improvement; Mixlab retains its own bidirectional mixer
+parameterizations.
 
 The classifier projection follows the model-wide `training.weight_init`
 policy. The default remains Xavier uniform for backward compatibility. Use

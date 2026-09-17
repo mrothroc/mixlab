@@ -120,11 +120,16 @@ backbone:
 Native classification exports use the explicit/defaulted
 `training.classification.pooling` from the training config.
 
-Native `pooling: "cls"` classifiers export their learned `cls_token` and read
-position zero after final normalization. Supported token and `linear_frames`
-attention stacks preserve raw input lengths and prepend the valid CLS mask
-internally, including padded batches. Learned positions include the extra CLS
-row. Codebook adapters remain native-only; other export restrictions still apply.
+Native `pooling: "cls"` classifiers export their learned `cls_token` and
+`cls_position` (`head`, `middle`, or `tail`) and read the inserted position after
+final normalization. Older exports default to `head`. Supported attention
+classifiers preserve raw input lengths and insert CLS into the validity mask,
+including right-padded tail batches. Middle requires full-length unpadded records
+at configured `seq_len`. Learned positions include the extra CLS row.
+Supported S4D CLS exports still require unpadded records. Bidirectional canonical
+Mamba-3 and Gated DeltaNet CLS are native-only under existing export gates;
+codebook adapters remain native-only. Changing position preserves tensor shapes,
+not inference semantics. Other export restrictions still apply.
 
 ### Continuous S4D classifiers
 

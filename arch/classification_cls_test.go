@@ -95,7 +95,7 @@ func TestCLSPoolingValidation(t *testing.T) {
 		{"ffn_only", func(c *ArchConfig) { c.Blocks = []BlockSpec{{Type: "geglu"}} }},
 		{"causal", func(c *ArchConfig) { c.Blocks[0].AttentionMask = "causal" }},
 		{"skipped_attention", func(c *ArchConfig) { c.Blocks[0].SkipAttention = true }},
-		{"recurrent", func(c *ArchConfig) { c.Blocks = []BlockSpec{{Type: "s4d", Bidirectional: true}} }},
+		{"recurrent_unidirectional", func(c *ArchConfig) { c.Blocks = []BlockSpec{{Type: "s4d"}} }},
 		{"capacity", func(c *ArchConfig) { c.MaxPositions = c.SeqLen }},
 		{"features", func(c *ArchConfig) { c.BigramVocabSize = 8 }},
 	} {

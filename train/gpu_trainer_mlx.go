@@ -62,6 +62,7 @@ type mlxGPUTrainer struct {
 	sequenceValidMaskInput     bool
 	classificationRowMaskInput bool
 	classificationPosInput     bool
+	clsInsertInput             bool
 	batchNorm                  bool
 	rcTokensInput              bool
 	rcAlignmentInput           bool
@@ -103,6 +104,7 @@ type mlxGPUTrainer struct {
 	classificationMaskBuf    []float32
 	classificationRowMaskBuf []float32
 	classificationPosBuf     []int32
+	clsInsertBuf             []int32
 	rcTokenBuf               []int32
 	rcAlignmentBuf           []int32
 	rcComplementIDs          []int32
@@ -561,6 +563,7 @@ func initMLXGPUTrainerWithDistributedContext(
 		classificationRowMaskInput:  classificationRowMaskInput,
 		batchNorm:                   cfg.EffectiveNormSpec().Type == ir.NormTypeBatchNorm,
 		classificationPosInput:      classificationPosInput,
+		clsInsertInput:              programDeclaresInput(irProg, "cls_insert_positions"),
 		rcTokensInput:               rcTokensInput,
 		rcAlignmentInput:            rcAlignmentInput,
 		rcComplementInput:           rcComplementInput,
@@ -839,6 +842,7 @@ func (t *mlxGPUTrainer) SetProgramGPU(irProg *ir.Program) error {
 	t.sequenceValidMaskInput = programDeclaresInput(irProg, "sequence_valid_mask")
 	t.classificationRowMaskInput = programDeclaresInput(irProg, "classification_example_mask")
 	t.classificationPosInput = programDeclaresInput(irProg, "classification_positions")
+	t.clsInsertInput = programDeclaresInput(irProg, "cls_insert_positions")
 	t.rcTokensInput = programDeclaresInput(irProg, "rc_tokens")
 	t.rcAlignmentInput = programDeclaresInput(irProg, "rc_alignment_positions")
 	t.rcComplementInput = programDeclaresInput(irProg, "rc_complement_ids")

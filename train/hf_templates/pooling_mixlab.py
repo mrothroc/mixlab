@@ -63,15 +63,61 @@ def pool_mean(hidden, attention_mask=None):
     return (hidden * weights).sum(dim=1) / weights.sum(dim=1)
 
 
-def pool_sequence(hidden, attention_mask, mode):
+def cls_layout(x, attention_mask, position, configured_length=None):
+    # x supplies only the raw sequence shape/device. Indices address the
+    # prefixed [CLS, content...] tensor, identically for embeddings and masks.
+    batch, length = x.shape[:2]
+    if attention_mask is None:
+        mask = torch.ones((batch, length), dtype=torch.long, device=x.device)
+    else:
+        if attention_mask.ndim != 2 or tuple(attention_mask.shape) != (batch, length):
+            raise ValueError("CLS attention_mask must have input shape [batch, sequence]")
+        mask = attention_mask.to(device=x.device)
+    indices = torch.arange(length + 1, device=x.device).expand(batch, -1)
+    positions = torch.zeros(batch, dtype=torch.long, device=x.device)
+    if position != "head":
+        if not bool(torch.all((mask == 0) | (mask == 1))):
+            raise ValueError("CLS placement requires a binary attention_mask")
+        lengths = mask.long().sum(dim=1)
+        prefix = torch.arange(length, device=x.device)[None, :] < lengths[:, None]
+        if not bool(torch.all(mask.bool() == prefix)) or not bool(torch.all(lengths > 0)):
+            raise ValueError("CLS placement requires non-empty right-padded valid prefixes")
+        if position == "middle":
+            if length != configured_length or not bool(torch.all(lengths == length)):
+                raise ValueError("cls_position=middle requires fixed full-length records at seq_len")
+            positions = lengths // 2
+        elif position == "tail":
+            positions = lengths
+        else:
+            raise ValueError("cls_position must be head, middle, or tail")
+        indices = torch.where(indices < positions[:, None], indices + 1, indices)
+        is_cls = torch.arange(length + 1, device=x.device)[None, :] == positions[:, None]
+        indices = torch.where(is_cls, 0, indices)
+    cls_mask = torch.ones((batch, 1), dtype=mask.dtype, device=x.device)
+    expanded = torch.cat((cls_mask, mask), dim=1)
+    return indices, positions, expanded.gather(1, indices)
+
+
+def insert_cls(x, token, attention_mask, position, configured_length):
+    prefixed = torch.cat((token.unsqueeze(0).expand(x.shape[0], -1, -1), x), dim=1)
+    if position == "head":
+        return prefixed
+    indices, _, _ = cls_layout(x, attention_mask, position, configured_length)
+    return prefixed.gather(1, indices.unsqueeze(-1).expand(-1, -1, x.shape[-1]))
+
+
+def pool_sequence(hidden, attention_mask, mode, cls_position="head", configured_length=None):
     mode = str(mode or "").strip().lower()
     if mode == "cls":
-        return hidden[:, 0]
+        if cls_position == "head":
+            return hidden[:, 0]
+        _, positions, _ = cls_layout(hidden[:, 1:], attention_mask, cls_position, configured_length)
+        return hidden[torch.arange(hidden.shape[0], device=hidden.device), positions]
     if mode == "last":
         return pool_last(hidden, attention_mask)
     if mode == "mean":
         return pool_mean(hidden, attention_mask)
     raise ValueError(
-        "sequence_classification_pooling must be 'last' or 'mean'; "
+        "sequence_classification_pooling must be 'last', 'mean', or 'cls'; "
         "pass an explicit value when the exported backbone is ambiguous"
     )

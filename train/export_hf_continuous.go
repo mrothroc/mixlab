@@ -37,8 +37,8 @@ func validateHFContinuousClassificationComposition(cfg *ArchConfig) error {
 		return unsupportedHFExport("blocks", "linear_frames classification export requires at least one block")
 	}
 	if cfg.CLSPoolingEnabled() {
-		// Validated CLS stacks are bidirectional attention with padding-aware
-		// masks, so the s4d-only restriction below does not apply to them.
+		// CLS stacks can mix supported bidirectional token mixers. Per-block
+		// export validation and runtime padding checks still apply.
 		return nil
 	}
 	if cfg.LinearPatchesEnabled() {

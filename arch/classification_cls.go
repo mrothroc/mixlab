@@ -1,6 +1,22 @@
 package arch
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+const clsInsertionInput = "cls_insert_positions"
+
+func (c *ArchConfig) EffectiveCLSPosition() string {
+	if !c.CLSPoolingEnabled() {
+		return ""
+	}
+	position := strings.ToLower(strings.TrimSpace(c.Training.Classification.CLSPosition))
+	if position == "" {
+		return "head"
+	}
+	return position
+}
 
 // ClassTokenInitMode marks the learned classification token, which draws from
 // Normal(0, 0.02) unless the model-wide "normal" weight-init policy supplies a
@@ -21,7 +37,19 @@ func (c *ArchConfig) EffectiveBackboneSeqLen() int {
 
 func validateCLSPooling(c *ArchConfig) error {
 	if !c.CLSPoolingEnabled() {
+		if c.Training.Classification.CLSPosition != "" {
+			return fmt.Errorf("classification cls_position requires pooling=cls")
+		}
 		return nil
+	}
+	switch c.EffectiveCLSPosition() {
+	case "head", "tail":
+	case "middle":
+		if c.Training.LengthBucketsChangeShape(c.SeqLen) {
+			return fmt.Errorf("classification cls_position=middle requires fixed full-length records, not length bucketing")
+		}
+	default:
+		return fmt.Errorf("classification cls_position must be head, middle, or tail")
 	}
 	if c.EffectiveNormSpec().Type == NormTypeBatchNorm {
 		return fmt.Errorf("classification pooling=cls requires tokenwise normalization, not batchnorm")
@@ -29,7 +57,7 @@ func validateCLSPooling(c *ArchConfig) error {
 	if c.CharVocabSize > 0 || c.BigramVocabSize > 0 || c.TrigramVocabSize > 0 || c.SmearEmbeddings || c.RCEquivarianceEnabled() {
 		return fmt.Errorf("classification pooling=cls does not yet support embedding side channels or RC equivariance")
 	}
-	attention := false
+	mixer := false
 	for _, b := range c.Blocks {
 		switch blockTypeKey(b) {
 		case "plain":
@@ -37,14 +65,19 @@ func validateCLSPooling(c *ArchConfig) error {
 			if mask != AttentionMaskBidirectional && mask != AttentionMaskNone {
 				return fmt.Errorf("classification pooling=cls requires bidirectional plain attention")
 			}
-			attention = attention || !b.SkipAttention
+			mixer = mixer || !b.SkipAttention
+		case "mamba3-canonical", "gated_deltanet", "s4d":
+			if !b.Bidirectional {
+				return fmt.Errorf("classification pooling=cls requires bidirectional %s; unidirectional mixers are unsupported", b.Type)
+			}
+			mixer = true
 		case "swiglu", "geglu", "mlp", "moe":
 		default:
 			return fmt.Errorf("classification pooling=cls does not yet support block %q", b.Type)
 		}
 	}
-	if !attention {
-		return fmt.Errorf("classification pooling=cls requires at least one bidirectional plain block")
+	if !mixer {
+		return fmt.Errorf("classification pooling=cls requires at least one bidirectional token mixer")
 	}
 	if c.EffectiveMaxPositions() < c.EffectiveBackboneSeqLen() {
 		return fmt.Errorf("classification pooling=cls requires max_positions >= seq_len + 1")
@@ -60,5 +93,25 @@ func prependCLSInputIR(p *Program, state, weight string, B, T, D int) (string, i
 	p.Full([]int{B, 1, 1}, 1, "cls_broadcast")
 	p.Mul("cls_token_11d", "cls_broadcast", "cls_token_b1d")
 	p.Concat("cls_token_b1d", state, 1, "cls_input")
+	reorderCLSIR(p, "cls_input", B, T+1, D)
 	return "cls_input", T + 1
+}
+
+// All CLS-bearing tensors use the same per-row permutation of [CLS, content].
+func reorderCLSIR(p *Program, name string, B, T, D int) {
+	if programDeclaresInput(p, clsInsertionInput) {
+		p.Reshape(name, []int{B * T, D}, name+"_flat")
+		p.Embed(name+"_flat", clsInsertionInput, name)
+	}
+}
+
+func expandCLSValidMaskIR(p *Program, B, T int) {
+	if !programDeclaresInput(p, sequenceValidMaskInput) {
+		return
+	}
+	p.Full([]int{B, 1}, 1, "cls_valid")
+	p.Concat("cls_valid", sequenceValidMaskInput, 1, sequenceValidMaskInput)
+	p.Reshape(sequenceValidMaskInput, []int{B, T, 1}, "cls_valid_3d")
+	reorderCLSIR(p, "cls_valid_3d", B, T, 1)
+	p.Reshape("cls_valid_3d", []int{B, T}, sequenceValidMaskInput)
 }

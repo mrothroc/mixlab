@@ -1,0 +1,22 @@
+{
+  "name": "cls_recurrent_classifier",
+  "model_dim": 64,
+  "seq_len": 64,
+  "input_adapter": {"kind": "linear_frames", "feature_dim": 48, "norm": "none"},
+  "positional_embedding": "learned_absolute",
+  "norm_type": "layernorm",
+  "norm_affine": true,
+  "blocks": [
+    {"type": "s4d", "state_size": 32, "bidirectional": true},
+    {"type": "geglu"},
+    {"type": "s4d", "state_size": 32, "bidirectional": true}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {"num_labels": 10, "pooling": "cls", "cls_position": "middle"},
+    "optimizer": "adamw",
+    "lr": 0.001,
+    "steps": 1000,
+    "batch_tokens": 512
+  }
+}

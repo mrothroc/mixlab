@@ -153,6 +153,13 @@ func runCLSPoolingNativeHFParity(t *testing.T, config string) {
 		t.Fatal(err)
 	}
 	raw := trainBatch{x: []int{1, 2, 3, 4, 7, 6}, frames: []float32{-1, 0.3, 0.8, 0.4, 99, -77}, labels: []int32{2}, validMask: []float32{1, 1, 1, 1, 0, 0}}
+	fullOnly := cfg.EffectiveCLSPosition() == "middle"
+	for _, block := range cfg.Blocks {
+		fullOnly = fullOnly || block.Type == "s4d"
+	}
+	if fullOnly {
+		raw.validMask = []float32{1, 1, 1, 1, 1, 1}
+	}
 	want := clsForward(t, cfg, weights, raw)
 	fullRaw := raw
 	fullRaw.validMask = []float32{1, 1, 1, 1, 1, 1}
@@ -176,15 +183,27 @@ key = 'input_values' if continuous else 'input_ids'
 if not continuous:
     x = torch.tensor([[1,2,3,4,7,6]])
 mask = torch.tensor([[1,1,1,1,0,0]])
+full_only = sys.argv[4] == 'true'
+if full_only:
+    mask = torch.ones_like(mask)
 with torch.no_grad():
     actual = m(**{key:x}, attention_mask=mask).logits
-    short = m(**{key:x[:,:4]}).logits
+    if not full_only:
+        short = m(**{key:x[:,:4]}).logits
     batched = m(**{key:x.repeat(2,1,1) if continuous else x.repeat(2,1)}, attention_mask=mask.repeat(2,1)).logits
 expected = torch.tensor(json.loads(sys.argv[2])).reshape(1,3)
 diff = (actual-expected).abs().max().item()
 print(f"CLS native/HF max logit diff={diff:.3e}")
 assert diff <= 1e-4
-torch.testing.assert_close(actual, short, atol=1e-5, rtol=1e-5)
+if not full_only:
+    torch.testing.assert_close(actual, short, atol=1e-5, rtol=1e-5)
+else:
+    try:
+        m(**{key:x}, attention_mask=torch.tensor([[1,1,1,1,0,0]]))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError('middle/S4D accepted padded input')
 torch.testing.assert_close(actual.expand(2,-1), batched, atol=1e-5, rtol=1e-5)
 assert tuple(m.cls_token.shape) == (1,8)
 if continuous and __import__('os').environ.get('HF_CLS_VIT_REFERENCE') == '1':
@@ -225,7 +244,8 @@ if continuous and __import__('os').environ.get('HF_CLS_VIT_REFERENCE') == '1':
     print(f"vit-pytorch {importlib.metadata.version('vit-pytorch')} matched-adapter CLS/native diff={ref_diff:.3e}")
     assert ref_diff <= 1e-4
 `
-	out, err := exec.Command(python, "-c", script, outDir, string(wantJSON), string(fullJSON)).CombinedOutput()
+	fullOnlyJSON, _ := json.Marshal(fullOnly)
+	out, err := exec.Command(python, "-c", script, outDir, string(wantJSON), string(fullJSON), string(fullOnlyJSON)).CombinedOutput()
 	t.Logf("%s", out)
 	if err != nil {
 		t.Fatal(err)

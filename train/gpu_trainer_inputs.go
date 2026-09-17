@@ -325,6 +325,19 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 			Name: "classification_positions", DType: gpu.TensorInt32, Shape: []int{batchSize}, Data: t.classificationPosBuf[:batchSize],
 		})
 	}
+	if t.clsInsertInput {
+		count := batchSize * (seqLen + 1)
+		if len(batch.clsInsertPositions) != count {
+			return nil, fmt.Errorf("objective batch missing cls_insert_positions: got=%d need=%d", len(batch.clsInsertPositions), count)
+		}
+		if len(t.clsInsertBuf) < count {
+			t.clsInsertBuf = make([]int32, count)
+		}
+		copy(t.clsInsertBuf[:count], batch.clsInsertPositions)
+		inputs = append(inputs, gpu.TensorInput{
+			Name: "cls_insert_positions", DType: gpu.TensorInt32, Shape: []int{batchSize, seqLen + 1}, Data: t.clsInsertBuf[:count],
+		})
+	}
 	if t.dropoutKeyCount > 0 {
 		needKeys := t.dropoutKeyCount * 2
 		if len(t.dropoutKeyBuf) < needKeys {

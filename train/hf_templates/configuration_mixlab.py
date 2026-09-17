@@ -23,6 +23,7 @@ class MixlabConfig(PretrainedConfig):
         layer_aggregation="none",
         layer_aggregation_scope="",
         sequence_classification_pooling="",
+        cls_position="head",
         classifier_dropout=None,
         hidden_dropout=0.0,
         embedding_dropout=0.0,
@@ -62,6 +63,9 @@ class MixlabConfig(PretrainedConfig):
         self.layer_aggregation = layer_aggregation
         self.layer_aggregation_scope = layer_aggregation_scope
         self.sequence_classification_pooling = sequence_classification_pooling
+        self.cls_position = str(cls_position).strip().lower()
+        if self.cls_position not in ("head", "middle", "tail"):
+            raise ValueError("cls_position must be head, middle, or tail")
         self.classifier_dropout = classifier_dropout
         self.hidden_dropout = hidden_dropout
         self.embedding_dropout = embedding_dropout

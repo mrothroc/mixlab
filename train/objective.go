@@ -41,6 +41,7 @@ type objectiveBatch struct {
 	classificationMask    []float32
 	classificationRowMask []float32
 	classificationPos     []int32
+	clsInsertPositions    []int32
 	rcTokens              []int
 	rcAlignmentPositions  []int32
 	mlmMaskStats          mlmMaskStats
@@ -309,6 +310,13 @@ func prepareClassificationBatch(cfg *ArchConfig, batch trainBatch, need, seqLen 
 		positions[row] = int32(row*seqLen + last)
 	}
 	codebookNeed := 0
+	clsIndices, clsPositions, err := clsBatchPositions(cfg, validMask, seqLen)
+	if err != nil {
+		return objectiveBatch{}, err
+	}
+	if clsPositions != nil {
+		positions = clsPositions
+	}
 	if cfg.DiscreteCodebooksEnabled() {
 		codebookNeed = need * cfg.InputAdapter.NumCodebooks
 	}
@@ -322,6 +330,7 @@ func prepareClassificationBatch(cfg *ArchConfig, batch trainBatch, need, seqLen 
 		classificationMask:    validMask,
 		classificationRowMask: exampleMask,
 		classificationPos:     positions,
+		clsInsertPositions:    clsIndices,
 		segmentIDs:            segmentIDs,
 	}, nil
 }
