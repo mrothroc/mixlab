@@ -2,6 +2,11 @@ package arch
 
 import "strings"
 
+// MinLRFractionConfigured distinguishes an explicit zero floor from legacy defaults.
+func (t TrainingSpec) MinLRFractionConfigured() bool {
+	return t.minLRFractionSet || t.MinLRFraction != 0
+}
+
 // WarmupStepsConfigured reports whether training.warmup_steps was provided.
 func (t TrainingSpec) WarmupStepsConfigured() bool {
 	return t.warmupStepsSet || t.WarmupSteps != 0

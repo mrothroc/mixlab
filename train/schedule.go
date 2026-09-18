@@ -30,12 +30,13 @@ type phaseSchedule struct {
 }
 
 type trainingScheduleOptions struct {
-	WarmupSteps    int
-	WarmupStepsSet bool
-	WarmupRatio    float64
-	WarmupRatioSet bool
-	HoldSteps      int
-	HoldStepsSet   bool
+	WarmupSteps      int
+	WarmupStepsSet   bool
+	WarmupRatio      float64
+	WarmupRatioSet   bool
+	HoldSteps        int
+	HoldStepsSet     bool
+	MinLRFractionSet bool
 }
 
 // At returns the learning rate at the given step.
@@ -154,7 +155,7 @@ func trainingScheduleWithOptions(lr float32, steps, warmdown int, minLRFraction 
 		}
 	}
 	minLR := lr * 0.1
-	if minLRFraction > 0 {
+	if opts.MinLRFractionSet || minLRFraction > 0 {
 		minLR = lr * minLRFraction
 	}
 	return LRSchedule{
@@ -164,11 +165,15 @@ func trainingScheduleWithOptions(lr float32, steps, warmdown int, minLRFraction 
 		Hold:               hold,
 		Warmdown:           warmdown,
 		MaxSteps:           steps,
-		ClampWarmdownToMin: minLRFraction > 0,
+		ClampWarmdownToMin: opts.MinLRFractionSet || minLRFraction > 0,
 	}
 }
 
 func newPhaseSchedule(phases []TrainingPhase, warmdown int, minLRFraction float32) phaseSchedule {
+	return newPhaseScheduleWithFloor(phases, warmdown, minLRFraction, false)
+}
+
+func newPhaseScheduleWithFloor(phases []TrainingPhase, warmdown int, minLRFraction float32, floorConfigured bool) phaseSchedule {
 	totalSteps := 0
 	for _, phase := range phases {
 		totalSteps += phase.Steps
@@ -201,6 +206,9 @@ func newPhaseSchedule(phases []TrainingPhase, warmdown int, minLRFraction float3
 	warmdownStart := totalSteps - lastPhaseWarmdown
 	startLR := sched.lrs[warmdownStart]
 	targetLR := float32(lastPhase.LR) * 0.01
+	if floorConfigured && minLRFraction == 0 {
+		targetLR = 0
+	}
 	if minLRFraction > 0 {
 		minLR := float32(lastPhase.LR) * minLRFraction
 		if targetLR < minLR {
@@ -223,15 +231,16 @@ func buildTrainingScheduler(spec TrainingSpec) (trainingScheduler, int) {
 	}
 	if len(spec.Phases) > 0 {
 		totalSteps := spec.TotalSteps()
-		return newPhaseSchedule(spec.Phases, spec.WarmdownSteps, spec.MinLRFraction), totalSteps
+		return newPhaseScheduleWithFloor(spec.Phases, spec.WarmdownSteps, spec.MinLRFraction, spec.MinLRFractionConfigured()), totalSteps
 	}
 	opts := trainingScheduleOptions{
-		WarmupSteps:    spec.WarmupSteps,
-		WarmupStepsSet: spec.WarmupStepsConfigured(),
-		WarmupRatio:    spec.WarmupRatio,
-		WarmupRatioSet: spec.WarmupRatioConfigured(),
-		HoldSteps:      spec.HoldSteps,
-		HoldStepsSet:   spec.HoldStepsConfigured(),
+		WarmupSteps:      spec.WarmupSteps,
+		WarmupStepsSet:   spec.WarmupStepsConfigured(),
+		WarmupRatio:      spec.WarmupRatio,
+		WarmupRatioSet:   spec.WarmupRatioConfigured(),
+		HoldSteps:        spec.HoldSteps,
+		HoldStepsSet:     spec.HoldStepsConfigured(),
+		MinLRFractionSet: spec.MinLRFractionConfigured(),
 	}
 	scheduleSteps := spec.EffectiveLRScheduleSteps()
 	return trainingScheduleWithOptions(float32(spec.LR), scheduleSteps, spec.WarmdownSteps, spec.MinLRFraction, opts), spec.Steps

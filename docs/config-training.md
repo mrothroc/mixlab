@@ -148,6 +148,19 @@ LAMB behavior.
 
 ## Learning-Rate Schedules
 
+For a plain cosine recipe that anneals to zero, set `warmup_steps: 0`,
+`hold_steps: 0`, and `min_lr_fraction: 0` explicitly. Omitted floor settings
+retain the legacy 10% cosine endpoint (1% with warmdown). A positive fraction
+sets the cosine endpoint, e.g. `0.001` with peak LR `1e-4` targets `1e-7`.
+The endpoint is reached at `lr_schedule_steps` (or `steps` when omitted);
+the final optimizer update at index `steps - 1` is slightly above it when
+training and schedule horizons match. Warmup is not subject to the floor.
+
+Compatibility note: explicit zero previously selected the legacy floor;
+it now means zero, including warmdown. Omitted settings and positive values
+are unchanged. Resumable checkpoints replay their saved schedule rather than
+retroactively changing it; use a new run to adopt a different floor.
+
 Omitting `lr_schedule` keeps Mixlab's existing step-driven warmup, hold, and
 cosine schedule unchanged. Classification recipes that need validation-driven
 annealing can opt into NewBob:

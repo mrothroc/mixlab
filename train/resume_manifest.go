@@ -31,6 +31,7 @@ type resumeSchedule struct {
 	Phases             []TrainingPhase      `json:"phases,omitempty"`
 	WarmdownSteps      int                  `json:"warmdown_steps,omitempty"`
 	MinLRFraction      float32              `json:"min_lr_fraction,omitempty"`
+	MinLRFractionSet   bool                 `json:"min_lr_fraction_set,omitempty"`
 	ExtensionPolicy    string               `json:"extension_policy"`
 }
 
@@ -104,6 +105,7 @@ func resumeScheduleFrom(spec TrainingSpec, scheduler trainingScheduler, total in
 		out.Phases = append([]TrainingPhase(nil), spec.Phases...)
 		out.WarmdownSteps = spec.WarmdownSteps
 		out.MinLRFraction = spec.MinLRFraction
+		out.MinLRFractionSet = spec.MinLRFractionConfigured()
 	case *newBobSchedule:
 		state := s.snapshot()
 		if err := validateNewBobScheduleState(state); err != nil {
@@ -145,7 +147,7 @@ func schedulerForResume(saved resumeSchedule, configuredSteps int) (trainingSche
 		return scheduler, configuredSteps, nil
 	}
 	if saved.Kind == "phases" {
-		return newPhaseSchedule(saved.Phases, saved.WarmdownSteps, saved.MinLRFraction), configuredSteps, nil
+		return newPhaseScheduleWithFloor(saved.Phases, saved.WarmdownSteps, saved.MinLRFraction, saved.MinLRFractionSet), configuredSteps, nil
 	}
 	return resumedScheduler{saved: saved}, configuredSteps, nil
 }

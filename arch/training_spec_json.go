@@ -4,8 +4,8 @@ import "encoding/json"
 
 // TrainingSpec custom JSON (un)marshaling. UnmarshalJSON records which fields
 // were present so defaulting can distinguish an explicit zero from an omitted
-// field; MarshalJSON drops never-set zero-valued decay fields so configs round
-// trip without spurious keys.
+// field; MarshalJSON preserves explicit LR floors and drops never-set
+// zero-valued decay fields so configs round trip without spurious keys.
 
 func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	type alias TrainingSpec
@@ -30,6 +30,9 @@ func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	_, t.warmupStepsSet = fields["warmup_steps"]
 	_, t.warmupRatioSet = fields["warmup_ratio"]
 	_, t.holdStepsSet = fields["hold_steps"]
+	// Unlike the presence flags above, an explicit null counts as omitted: the
+	// floor's explicit zero means "decay to zero", and null must not select it.
+	t.minLRFractionSet = len(fields["min_lr_fraction"]) > 0 && string(fields["min_lr_fraction"]) != "null"
 	_, t.weightDecaySet = fields["weight_decay"]
 	_, t.embedWeightDecaySet = fields["embed_weight_decay"]
 	_, t.matrixWeightDecaySet = fields["matrix_weight_decay"]
@@ -60,6 +63,9 @@ func (t TrainingSpec) MarshalJSON() ([]byte, error) {
 	}
 	if !t.weightDecaySet && t.WeightDecay == 0 {
 		delete(fields, "weight_decay")
+	}
+	if t.minLRFractionSet && t.MinLRFraction == 0 {
+		fields["min_lr_fraction"] = json.RawMessage("0")
 	}
 	if !t.embedWeightDecaySet && t.EmbedWeightDecay == 0 {
 		delete(fields, "embed_weight_decay")

@@ -438,9 +438,8 @@ type TrainingSpec struct {
 	ScalarWeightDecay   float32 `json:"scalar_weight_decay"`
 	HeadWeightDecay     float32 `json:"head_weight_decay"`
 	// MinLRFraction sets the minimum LR as a fraction of peak LR.
-	// 0 (default) = current behavior (warmdown ends near 0).
-	// 0.10 = recommended (LR never drops below 10% of peak).
-	// Used as an absolute floor across both cosine decay and warmdown phases.
+	// Omitted preserves legacy cosine (10%) and warmdown (1%) endpoints.
+	// Explicit zero enables decay to zero; positive values floor decay/warmdown.
 	MinLRFraction float32 `json:"min_lr_fraction,omitempty"`
 	SWAStart      int     `json:"swa_start,omitempty"`
 	SWADecay      float32 `json:"swa_decay,omitempty"`
@@ -469,6 +468,7 @@ type TrainingSpec struct {
 	warmupStepsSet                     bool
 	warmupRatioSet                     bool
 	holdStepsSet                       bool
+	minLRFractionSet                   bool
 	weightDecaySet                     bool
 	embedWeightDecaySet                bool
 	matrixWeightDecaySet               bool
