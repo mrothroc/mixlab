@@ -137,10 +137,19 @@ func main() {
 	prepNucleotideFraming := flag.String("nucleotide-framing", "record", "FASTA shard layout: record or stream (prepare mode)")
 	prepNucleotideStreamSeparator := flag.String("nucleotide-stream-separator", "eos", "separator between FASTA contigs in stream mode: eos or none")
 
+	showVersion := flag.Bool("version", false, "print the build version, commit, and build time, then exit")
+
 	flag.Usage = func() {
 		printUsage(os.Stderr, requestedHelpMode(os.Args[1:]))
 	}
 	flag.Parse()
+
+	// Answered before any mode dispatch or GPU probing so it works on a broken
+	// install and needs no -mode.
+	if *showVersion {
+		fmt.Println(versionString())
+		return
+	}
 	providedFlags := providedFlagSet()
 	effectiveParityThreshold := *parityThreshold
 	if providedFlags["parity-loss-threshold"] {
@@ -554,7 +563,7 @@ func printUsage(w io.Writer, mode string) {
 		fprintf(w, "Modes: %s\n\n", strings.Join(supportedModes, ", "))
 		fprintln(w, "Use `mixlab -mode MODE -h` for mode-specific flags.")
 		fprintln(w, "Common flags:")
-		printFlagGroup(w, flagGroup{"", []string{"mode", "config", "train", "safetensors", "safetensors-load"}})
+		printFlagGroup(w, flagGroup{"", []string{"mode", "config", "train", "safetensors", "safetensors-load", "version"}})
 		return
 	}
 	groups, ok := modeFlagGroups[mode]

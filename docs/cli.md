@@ -44,6 +44,26 @@ mode-specific flags.
 - The training flag `-eval` remains supported. New scripts can use
   `-eval-after-train` to avoid confusion with `-mode eval`.
 
+## Version
+
+`-version` prints the build identity and exits. It takes no `-mode` and runs
+before any GPU probing, so it still answers on a machine where MLX is broken:
+
+```bash
+$ mixlab -version
+mixlab v0.115.1 (e00e54f2efe2, 2026-09-18T13:28:21Z)
+```
+
+The version, commit, and build time come from the information the Go linker
+stamps into the binary, so they describe the binary in hand rather than
+whatever a package manager last recorded. A binary built from a modified tree
+marks its commit `-dirty`, and a build without VCS stamping prints the module
+version alone. An untagged build reports `(devel)` as its version.
+
+This is the identity to quote in a bug report. Container images carry the same
+value in their `org.opencontainers.image.version` label, but that label
+describes the image while `-version` describes the executable inside it.
+
 ## Validate
 
 Validate a config before allocating a GPU or loading training data:
