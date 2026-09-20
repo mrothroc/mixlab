@@ -1,14 +1,92 @@
 package main
 
 import (
-	"flag"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
+
+// flagRegistrars are the package-level flag constructors whose first string
+// argument (second for the Var forms) is the flag name.
+var flagRegistrars = map[string]bool{
+	"Bool": true, "Duration": true, "Float64": true, "Int": true, "Int64": true,
+	"String": true, "Uint": true, "Uint64": true, "Func": true, "TextVar": true,
+	"BoolVar": true, "DurationVar": true, "Float64Var": true, "IntVar": true,
+	"Int64Var": true, "StringVar": true, "UintVar": true, "Uint64Var": true, "Var": true,
+}
+
+// declaredCLIFlagNames parses the command's source for flag registrations.
+//
+// The flags are locals inside main(), so they are never installed on
+// flag.CommandLine during a test binary's run. An earlier version of this guard
+// walked flag.CommandLine and therefore inspected nothing at all, passing no
+// matter what was undocumented. Reading the source keeps the check honest
+// without reshaping main() purely to satisfy a test.
+func declaredCLIFlagNames(t *testing.T, dir string) []string {
+	t.Helper()
+	sources, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	if err != nil {
+		t.Fatalf("glob %s: %v", dir, err)
+	}
+	fset := token.NewFileSet()
+	var names []string
+	for _, path := range sources {
+		if strings.HasSuffix(path, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || !flagRegistrars[sel.Sel.Name] {
+				return true
+			}
+			pkgIdent, ok := sel.X.(*ast.Ident)
+			if !ok || pkgIdent.Name != "flag" {
+				return true
+			}
+			arg := 0
+			if strings.HasSuffix(sel.Sel.Name, "Var") {
+				arg = 1
+			}
+			if len(call.Args) <= arg {
+				return true
+			}
+			lit, ok := call.Args[arg].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				t.Errorf("flag.%s at %s uses a non-literal name; the documentation guard cannot check it",
+					sel.Sel.Name, fset.Position(call.Pos()))
+				return true
+			}
+			name, err := strconv.Unquote(lit.Value)
+			if err != nil {
+				t.Fatalf("unquote flag name %s: %v", lit.Value, err)
+			}
+			names = append(names, name)
+			return true
+		})
+	}
+	sort.Strings(names)
+	// A parse that finds nothing would silently pass every flag, which is the
+	// exact failure this guard exists to prevent.
+	if len(names) == 0 {
+		t.Fatalf("no flag registrations found in %s; the documentation guard is not inspecting anything", dir)
+	}
+	return names
+}
 
 func TestPublicCLIFlagsAreDocumented(t *testing.T) {
 	root := filepath.Join("..", "..")
@@ -34,14 +112,11 @@ func TestPublicCLIFlagsAreDocumented(t *testing.T) {
 	allDocs := corpus.String()
 
 	var missing []string
-	flag.CommandLine.VisitAll(func(f *flag.Flag) {
-		if strings.HasPrefix(f.Name, "test.") {
-			return
+	for _, name := range declaredCLIFlagNames(t, ".") {
+		if !strings.Contains(allDocs, "-"+name) {
+			missing = append(missing, name)
 		}
-		if !strings.Contains(allDocs, "-"+f.Name) {
-			missing = append(missing, f.Name)
-		}
-	})
+	}
 	sort.Strings(missing)
 	if len(missing) > 0 {
 		t.Fatalf("public CLI flags missing from README/docs:\n  -%s",
