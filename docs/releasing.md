@@ -118,8 +118,39 @@ printf '>a\nACGT\n>b\nTGCA\n>c\nAAAA\n>d\nCCCC\n' > "$tmpdir/input.fasta"
 For CLI/container packaging changes, rebuild both app and RunPod images. The
 app build must pass its non-root embedded preparation check, not just the
 optional GPU smoke. Supply `_RELEASE_VERSION=vX.Y.Z` and
-`_SOURCE_REVISION=<release commit>` for manual Cloud Build submissions; tag
-triggers populate these automatically. Inspect the published image's OCI
+`_SOURCE_REVISION=<release commit>` for manual Cloud Build submissions.
+
+**There is no tag trigger.** The only trigger, `build-mixlab-images`, fires on
+`push.branch: ^main$`, so `${TAG_NAME:-dev}` always resolves to `dev` for
+automatic builds. Every release image must be submitted by hand:
+
+```bash
+gcloud builds submit --region=us-central1 \
+  --project=zapbox-cloud --account=michael.rothrock@gmail.com \
+  --config=docker/cloudbuild-ci.yaml \
+  --substitutions=_REGISTRY_PREFIX=us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf,\
+_MLX_BASE_IMAGE=us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf/golf-mlx-cuda:latest,\
+_DOCKERHUB_USER=michaelrothrock,_RELEASE_VERSION=vX.Y.Z,_SOURCE_REVISION=<release commit>
+```
+
+**Submit it last, after every branch build has drained.** The build publishes
+only the mutable tags `latest` and `runpod`, so whichever build finishes last
+owns those tags. Pushing the formula commit starts a branch build stamped
+`version=dev`; if it lands after the release build, the release labels are
+silently replaced. This has happened. Wait for the queue to empty first:
+
+```bash
+gcloud builds list --ongoing --region=us-central1 \
+  --project=zapbox-cloud --account=michael.rothrock@gmail.com
+```
+
+`--region=us-central1` is not optional. Omitting it queries the global region,
+which reports `Listed 0 items.` while builds are running in us-central1 — it
+reads as a drained queue at exactly the moment the check matters.
+
+Because both published tags are mutable, the labels on `latest` are only
+correct until the next push to main. Record the image **digest**, which is
+immutable, as the durable release identifier. Inspect the published image's OCI
 version/revision labels and digest before updating the RunPod endpoint. See
 [image provenance](../docker/README.md#image-provenance).
 
