@@ -425,18 +425,20 @@ type TrainingSpec struct {
 	// "" or "fixed" = canonical (3.4445, -4.7750, 2.0315) per iteration.
 	// "polar_express" = per-iteration Chebyshev minimax-optimal tuples
 	// (You Jiacheng, arXiv:2505.16932).
-	NewtonSchulzVariant string  `json:"newton_schulz_variant,omitempty"`
-	MuonNesterov        *bool   `json:"muon_nesterov,omitempty"`
-	Optimizer           string  `json:"optimizer,omitempty"` // "muon" (default), "muon_eq_r", "normuon", "adamw", or "lamb"
-	ComputeDType        string  `json:"compute_dtype,omitempty"`
-	QAT                 string  `json:"qat,omitempty"` // "none" (default), "int8", or "int6"
-	QATStart            int     `json:"qat_start,omitempty"`
-	WeightInit          string  `json:"weight_init,omitempty"`     // "xavier_uniform" (default), "normal", "gptbert", "gpt2", or "pytorch_linear"
-	WeightInitStd       float32 `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
-	EmbedWeightDecay    float32 `json:"embed_weight_decay"`
-	MatrixWeightDecay   float32 `json:"matrix_weight_decay"`
-	ScalarWeightDecay   float32 `json:"scalar_weight_decay"`
-	HeadWeightDecay     float32 `json:"head_weight_decay"`
+	NewtonSchulzVariant      string   `json:"newton_schulz_variant,omitempty"`
+	MuonNesterov             *bool    `json:"muon_nesterov,omitempty"`
+	Optimizer                string   `json:"optimizer,omitempty"` // "muon" (default), "muon_eq_r", "normuon", "adamw", or "lamb"
+	ComputeDType             string   `json:"compute_dtype,omitempty"`
+	QAT                      string   `json:"qat,omitempty"` // "none" (default), "int8", or "int6"
+	QATStart                 int      `json:"qat_start,omitempty"`
+	WeightInit               string   `json:"weight_init,omitempty"`     // See validateWeightInitialization for supported policies.
+	WeightInitStd            float32  `json:"weight_init_std,omitempty"` // std for normal init (default 0.02)
+	PositionEmbeddingInitStd *float64 `json:"position_embedding_init_std,omitempty"`
+	CLSTokenInitStd          *float64 `json:"cls_token_init_std,omitempty"`
+	EmbedWeightDecay         float32  `json:"embed_weight_decay"`
+	MatrixWeightDecay        float32  `json:"matrix_weight_decay"`
+	ScalarWeightDecay        float32  `json:"scalar_weight_decay"`
+	HeadWeightDecay          float32  `json:"head_weight_decay"`
 	// MinLRFraction sets the minimum LR as a fraction of peak LR.
 	// Omitted preserves legacy cosine (10%) and warmdown (1%) endpoints.
 	// Explicit zero enables decay to zero; positive values floor decay/warmdown.
@@ -469,6 +471,11 @@ type TrainingSpec struct {
 	warmupRatioSet                     bool
 	holdStepsSet                       bool
 	minLRFractionSet                   bool
+	lrSet                              bool
+	embedLRSet                         bool
+	matrixLRSet                        bool
+	scalarLRSet                        bool
+	headLRSet                          bool
 	weightDecaySet                     bool
 	embedWeightDecaySet                bool
 	matrixWeightDecaySet               bool
@@ -791,10 +798,11 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	default:
 		return nil, fmt.Errorf("config %q has invalid training.optimizer=%q (must be \"adamw\", \"muon\", \"muon_eq_r\", \"normuon\", or \"lamb\")", source, cfg.Training.Optimizer)
 	}
-	switch cfg.Training.WeightInit {
-	case "", "xavier_uniform", "normal", "gptbert", "gpt2", "pytorch_linear":
-	default:
-		return nil, fmt.Errorf("config %q has invalid training.weight_init=%q (must be \"xavier_uniform\", \"normal\", \"gptbert\", \"gpt2\", or \"pytorch_linear\")", source, cfg.Training.WeightInit)
+	if err := validateWeightInitialization(cfg, source); err != nil {
+		return nil, err
+	}
+	if err := validateTrainingLearningRates(cfg.Training, source); err != nil {
+		return nil, err
 	}
 	switch cfg.Training.EffectiveComputeDType() {
 	case "float32", "bf16":

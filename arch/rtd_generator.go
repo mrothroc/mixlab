@@ -77,9 +77,9 @@ func rtdDedicatedGeneratorWeightShapes(cfg *ArchConfig) ([]WeightMeta, error) {
 	}
 	shapes = append(shapes, prefixedWeightMetas(RTDGeneratorPrefix+"_", normWeights("final_norm", D, norm))...)
 	shapes = append(shapes,
-		WeightMeta{Name: RTDGeneratorPrefix + "_mlm_dense", Shape: []int{D, D}},
-		WeightMeta{Name: RTDGeneratorPrefix + "_mlm_dense_bias", Shape: []int{D}, InitZero: true},
-		WeightMeta{Name: RTDGeneratorPrefix + "_mlm_output_bias", Shape: []int{V}, InitZero: true},
+		WeightMeta{Name: RTDGeneratorPrefix + "_mlm_dense", Shape: []int{D, D}, LinearFanIn: D},
+		WeightMeta{Name: RTDGeneratorPrefix + "_mlm_dense_bias", Shape: []int{D}, InitZero: true, LinearFanIn: D},
+		WeightMeta{Name: RTDGeneratorPrefix + "_mlm_output_bias", Shape: []int{V}, InitZero: true, LinearFanIn: D},
 	)
 	return shapes, nil
 }

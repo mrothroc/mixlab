@@ -95,7 +95,7 @@ func (t *TrainingSpec) ApplyDefaults() {
 	if t.Steps <= 0 {
 		t.Steps = d.Steps
 	}
-	if t.LR <= 0 {
+	if !t.lrSet && t.LR == 0 {
 		t.LR = d.LR
 	}
 	// Note: seed=0 in JSON is indistinguishable from omitted; defaults to 42.
@@ -173,16 +173,16 @@ func (t *TrainingSpec) ApplyDefaults() {
 	if !t.lambTrustRatioCapSet && t.LAMBTrustRatioCap == 0 {
 		t.LAMBTrustRatioCap = d.LAMBTrustRatioCap
 	}
-	if t.EmbedLR == 0 {
+	if !t.embedLRSet && t.EmbedLR == 0 {
 		t.EmbedLR = float32(t.LR)
 	}
-	if t.MatrixLR == 0 {
+	if !t.matrixLRSet && t.MatrixLR == 0 {
 		t.MatrixLR = float32(t.LR)
 	}
-	if t.ScalarLR == 0 {
+	if !t.scalarLRSet && t.ScalarLR == 0 {
 		t.ScalarLR = float32(t.LR)
 	}
-	if t.HeadLR == 0 {
+	if !t.headLRSet && t.HeadLR == 0 {
 		t.HeadLR = float32(t.LR)
 	}
 	if t.TTTLR == 0 {

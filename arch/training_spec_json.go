@@ -33,6 +33,11 @@ func (t *TrainingSpec) UnmarshalJSON(data []byte) error {
 	// Unlike the presence flags above, an explicit null counts as omitted: the
 	// floor's explicit zero means "decay to zero", and null must not select it.
 	t.minLRFractionSet = len(fields["min_lr_fraction"]) > 0 && string(fields["min_lr_fraction"]) != "null"
+	t.lrSet = jsonFieldPresent(fields, "lr")
+	t.embedLRSet = jsonFieldPresent(fields, "embed_lr")
+	t.matrixLRSet = jsonFieldPresent(fields, "matrix_lr")
+	t.scalarLRSet = jsonFieldPresent(fields, "scalar_lr")
+	t.headLRSet = jsonFieldPresent(fields, "head_lr")
 	_, t.weightDecaySet = fields["weight_decay"]
 	_, t.embedWeightDecaySet = fields["embed_weight_decay"]
 	_, t.matrixWeightDecaySet = fields["matrix_weight_decay"]
@@ -64,6 +69,25 @@ func (t TrainingSpec) MarshalJSON() ([]byte, error) {
 	if !t.weightDecaySet && t.WeightDecay == 0 {
 		delete(fields, "weight_decay")
 	}
+	for _, field := range []struct {
+		name  string
+		set   bool
+		value float64
+	}{
+		{"lr", t.lrSet, t.LR},
+		{"embed_lr", t.embedLRSet, float64(t.EmbedLR)},
+		{"matrix_lr", t.matrixLRSet, float64(t.MatrixLR)},
+		{"scalar_lr", t.scalarLRSet, float64(t.ScalarLR)},
+		{"head_lr", t.headLRSet, float64(t.HeadLR)},
+	} {
+		if field.value == 0 {
+			if field.set {
+				fields[field.name] = json.RawMessage("0")
+			} else {
+				delete(fields, field.name)
+			}
+		}
+	}
 	if t.minLRFractionSet && t.MinLRFraction == 0 {
 		fields["min_lr_fraction"] = json.RawMessage("0")
 	}
@@ -86,4 +110,8 @@ func (t TrainingSpec) MarshalJSON() ([]byte, error) {
 		delete(fields, "batch_tokens")
 	}
 	return json.Marshal(fields)
+}
+
+func jsonFieldPresent(fields map[string]json.RawMessage, name string) bool {
+	return len(fields[name]) > 0 && string(fields[name]) != "null"
 }

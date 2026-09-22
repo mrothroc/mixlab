@@ -32,6 +32,8 @@ type WeightShape struct {
 	GPT2Scale            float32
 	ModelDim             int
 	PyTorchLinearFanIn   int
+	LinearFanIn          int
+	NormalInitStd        *float64
 	OptimizerRole        string
 	OptimizerLR          float32
 	OptimizerWeightDecay float32
@@ -70,11 +72,18 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 			GPT2Scale:            m.GPT2Scale,
 			ModelDim:             cfg.ModelDim,
 			PyTorchLinearFanIn:   m.PyTorchLinearFanIn,
+			LinearFanIn:          m.LinearFanIn,
 			OptimizerRole:        m.OptimizerRole,
 			OptimizerLR:          m.OptimizerLR,
 			OptimizerWeightDecay: m.OptimizerWeightDecay,
 			ForceNoDecay:         m.ForceNoDecay,
 			ForceDecay:           m.ForceDecay,
+		}
+		switch m.Name {
+		case "position_embeddings":
+			shapes[i].NormalInitStd = cfg.Training.PositionEmbeddingInitStd
+		case "cls_token":
+			shapes[i].NormalInitStd = cfg.Training.CLSTokenInitStd
 		}
 	}
 	return shapes, nil
@@ -105,7 +114,7 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 			weights[i] = data
 			continue
 		}
-		if weightInit == "pytorch_linear" && ws.PyTorchLinearFanIn > 0 {
+		if fanIn := weightInitLinearFanIn(ws, weightInit); fanIn > 0 {
 			linearRNG := rng
 			if len(ws.Shape) == 1 {
 				// PyTorch-style biases add random draws where Mixlab historically
@@ -113,7 +122,7 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 				// specialized initializers remain byte-identical.
 				linearRNG = rand.New(rand.NewSource(pytorchLinearBiasSeed(seed, i)))
 			}
-			fillFanInUniform(data, ws.PyTorchLinearFanIn, linearRNG)
+			fillFanInUniform(data, fanIn, linearRNG)
 			weights[i] = data
 			continue
 		}
@@ -171,6 +180,16 @@ func initWeightData(shapes []WeightShape, seed int64, weightInit string, weightI
 			}
 		}
 		weights[i] = data
+	}
+	// Overrides have independent streams; unrelated weights retain their draws.
+	for i, ws := range shapes {
+		if ws.NormalInitStd == nil {
+			continue
+		}
+		overrideRNG := rand.New(rand.NewSource(pytorchLinearBiasSeed(seed, i) ^ 0x656d626564))
+		for j := range weights[i] {
+			weights[i][j] = float32(overrideRNG.NormFloat64() * *ws.NormalInitStd)
+		}
 	}
 	return weights
 }

@@ -126,6 +126,8 @@ When SWA/EMA weights are populated, Mixlab writes the live final weights to `mod
 
 ## Which config should I use?
 
+- **Config-only ViT initialization**: [vit_pytorch_init.json](vit_pytorch_init.json) demonstrates `pytorch_linear_all` across all 38 affine matrices, with unit-normal positional/CLS embeddings and explicit zero classifier dropout. It is an initialization example, not a benchmark accuracy claim. Match image normalization and augmentation `pad_value` to your prepared data and tune the schedule/batch size for the experiment.
+
 - **Learning mixlab**: Start with `plain_3L.json` — it trains in seconds.
 - **Masked objectives**: Use `mlm_tiny.json` as the smallest bidirectional MLM starting point.
 - **Nucleotide sequences**: Prepare FASTA with `-input-format fasta`, then use `nucleotide_dna_causal_tiny.json` or `nucleotide_dna_mlm_tiny.json` for record-isolated attention models. For recurrent/SSM causal pretraining, prepare with `-nucleotide-framing stream` and use `nucleotide_dna_mamba3_canonical_stream_tiny.json`. Match `vocab_size` to the emitted `nucleotide_vocab.json` when enabling ambiguity symbols beyond the default `N`.

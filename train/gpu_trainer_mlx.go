@@ -180,6 +180,9 @@ func initMLXGPUTrainerWithDistributedContext(
 		weightData = loadedWeights
 	} else {
 		weightData = initWeightData(shapes, cfg.Training.Seed, cfg.Training.WeightInit, cfg.Training.WeightInitStd)
+		if coverage := weightInitCoverage(shapes, cfg.Training.WeightInit); coverage != "" {
+			fmt.Println(coverage)
+		}
 	}
 	if loadedWeights == nil && cfg.MTPUntieEnabled() && cfg.EffectiveMTPUntieStep() <= 0 {
 		if err := copyWeightDataByName(weightData, shapes, "head", "embed"); err != nil {

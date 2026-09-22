@@ -116,6 +116,9 @@ func validateMetricDrivenLRSchedule(cfg *ArchConfig, source string) error {
 	if t.NewBob == nil {
 		return fmt.Errorf("config %q training.lr_schedule=%q requires training.newbob", source, LRScheduleNewBob)
 	}
+	if t.LR <= 0 {
+		return fmt.Errorf("config %q training.lr_schedule=%q requires training.lr > 0", source, LRScheduleNewBob)
+	}
 	if t.EffectiveObjective() != ObjectiveClassification {
 		return fmt.Errorf("config %q training.lr_schedule=%q currently supports training.objective=%q only", source, LRScheduleNewBob, ObjectiveClassification)
 	}

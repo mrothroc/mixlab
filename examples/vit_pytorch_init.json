@@ -1,0 +1,43 @@
+{
+  "name": "vit_pytorch_init",
+  "model_dim": 512,
+  "seq_len": 64,
+  "mlp_mult": 1,
+  "positional_embedding": "learned_absolute",
+  "norm_type": "layernorm",
+  "norm_affine": true,
+  "embedding_dropout": 0.1,
+  "hidden_dropout": 0.1,
+  "attn_dropout": 0.0,
+  "input_adapter": {
+    "kind": "linear_patches",
+    "image": {"height": 32, "width": 32, "channels": 3},
+    "patch": 4,
+    "bias": true,
+    "norm": "none",
+    "coords": "none",
+    "augment": {"hflip": true, "random_crop_pad": 4}
+  },
+  "blocks": [
+    {"type": "plain", "heads": 8, "attention_mask": "bidirectional", "attn_qkv_bias": false, "attn_out_bias": true, "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 8, "attention_mask": "bidirectional", "attn_qkv_bias": false, "attn_out_bias": true, "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 8, "attention_mask": "bidirectional", "attn_qkv_bias": false, "attn_out_bias": true, "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 8, "attention_mask": "bidirectional", "attn_qkv_bias": false, "attn_out_bias": true, "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 8, "attention_mask": "bidirectional", "attn_qkv_bias": false, "attn_out_bias": true, "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true},
+    {"type": "plain", "heads": 8, "attention_mask": "bidirectional", "attn_qkv_bias": false, "attn_out_bias": true, "ffn_activation": "gelu", "ffn_pre_norm": true, "ffn_bias": true}
+  ],
+  "training": {
+    "objective": "classification",
+    "classification": {"num_labels": 10, "pooling": "cls", "classifier_dropout": 0},
+    "weight_init": "pytorch_linear_all",
+    "position_embedding_init_std": 1.0,
+    "cls_token_init_std": 1.0,
+    "batch_tokens": 1024,
+    "optimizer": "adamw",
+    "lr": 0.0001,
+    "weight_decay": 0,
+    "min_lr_fraction": 0,
+    "steps": 1000,
+    "seed": 42
+  }
+}

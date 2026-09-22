@@ -32,7 +32,10 @@ type WeightMeta struct {
 	// weight or paired bias. It is consumed only when
 	// training.weight_init="pytorch_linear"; InitMode is the unconditional
 	// per-weight initialization mechanism.
-	PyTorchLinearFanIn   int
+	PyTorchLinearFanIn int
+	// LinearFanIn identifies ordinary affine weights/biases for pytorch_linear_all.
+	// Keep it separate from the legacy policy's deliberately narrower coverage.
+	LinearFanIn          int
 	OptimizerRole        string
 	OptimizerLR          float32
 	OptimizerWeightDecay float32
@@ -42,13 +45,13 @@ type WeightMeta struct {
 
 func linearWeightMeta(name string, fanIn, fanOut int) WeightMeta {
 	return WeightMeta{
-		Name: name, Shape: []int{fanIn, fanOut}, PyTorchLinearFanIn: fanIn,
+		Name: name, Shape: []int{fanIn, fanOut}, PyTorchLinearFanIn: fanIn, LinearFanIn: fanIn,
 	}
 }
 
 func linearBiasWeightMeta(name string, fanIn, fanOut int) WeightMeta {
 	return WeightMeta{
-		Name: name, Shape: []int{fanOut}, InitZero: true, PyTorchLinearFanIn: fanIn,
+		Name: name, Shape: []int{fanOut}, InitZero: true, PyTorchLinearFanIn: fanIn, LinearFanIn: fanIn,
 	}
 }
 
@@ -166,9 +169,9 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		if placement == NormPlacementPre || placement == NormPlacementSandwich {
 			metas = append(metas, normWeights("norm", D, norm)...)
 		}
-		metas = append(metas, WeightMeta{Name: "wq", Shape: []int{D, D}})
+		metas = append(metas, WeightMeta{Name: "wq", Shape: []int{D, D}, LinearFanIn: D})
 		if spec.AttentionQKVBiasEnabled() {
-			metas = append(metas, WeightMeta{Name: "wq_bias", Shape: []int{D}, InitZero: true})
+			metas = append(metas, WeightMeta{Name: "wq_bias", Shape: []int{D}, InitZero: true, LinearFanIn: D})
 		}
 		if spec.KVSource <= 0 {
 			valueProjDim := kvProjDim
@@ -176,14 +179,14 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 				valueProjDim += D
 			}
 			metas = append(metas,
-				WeightMeta{Name: "wk", Shape: []int{D, kvProjDim}},
+				WeightMeta{Name: "wk", Shape: []int{D, kvProjDim}, LinearFanIn: D},
 			)
 			if spec.AttentionQKVBiasEnabled() {
-				metas = append(metas, WeightMeta{Name: "wk_bias", Shape: []int{kvProjDim}, InitZero: true})
+				metas = append(metas, WeightMeta{Name: "wk_bias", Shape: []int{kvProjDim}, InitZero: true, LinearFanIn: D})
 			}
-			metas = append(metas, WeightMeta{Name: "wv", Shape: []int{D, valueProjDim}})
+			metas = append(metas, WeightMeta{Name: "wv", Shape: []int{D, valueProjDim}, LinearFanIn: D})
 			if spec.AttentionQKVBiasEnabled() {
-				metas = append(metas, WeightMeta{Name: "wv_bias", Shape: []int{valueProjDim}, InitZero: true})
+				metas = append(metas, WeightMeta{Name: "wv_bias", Shape: []int{valueProjDim}, InitZero: true, LinearFanIn: D})
 			}
 		}
 		if spec.QKNorm {
@@ -208,8 +211,8 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			relWindow := effectiveRelativeAttentionWindow(spec)
 			metas = append(metas,
 				WeightMeta{Name: "relative_embeddings", Shape: []int{2*relWindow - 1, D}},
-				WeightMeta{Name: "w_pos_key", Shape: []int{D, D}},
-				WeightMeta{Name: "w_pos_query", Shape: []int{D, D}},
+				WeightMeta{Name: "w_pos_key", Shape: []int{D, D}, LinearFanIn: D},
+				WeightMeta{Name: "w_pos_query", Shape: []int{D, D}, LinearFanIn: D},
 			)
 		}
 		if spec.QKGain > 0 {
@@ -222,9 +225,9 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		if attnPostNorm == PlainAttnPostNormBeforeOutProj {
 			metas = append(metas, normWeights("post_attn_norm", D, norm)...)
 		}
-		metas = append(metas, WeightMeta{Name: "wo", Shape: []int{D, D}})
+		metas = append(metas, WeightMeta{Name: "wo", Shape: []int{D, D}, LinearFanIn: D})
 		if spec.AttentionOutBiasEnabled() {
-			metas = append(metas, WeightMeta{Name: "wo_bias", Shape: []int{D}, InitZero: true})
+			metas = append(metas, WeightMeta{Name: "wo_bias", Shape: []int{D}, InitZero: true, LinearFanIn: D})
 		}
 		if attnPostNorm == PlainAttnPostNormAfterOutProj {
 			metas = append(metas, normWeights("post_attn_norm", D, norm)...)
@@ -236,18 +239,18 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			metas = append(metas, normWeights("ffn_norm", D, norm)...)
 		}
 		if plainFFNActivationUsesGate(spec.FFNActivation) {
-			metas = append(metas, WeightMeta{Name: "ff_gate", Shape: []int{D, ffn}})
+			metas = append(metas, WeightMeta{Name: "ff_gate", Shape: []int{D, ffn}, LinearFanIn: D})
 		}
-		metas = append(metas, WeightMeta{Name: "ff1", Shape: []int{D, ffn}})
+		metas = append(metas, WeightMeta{Name: "ff1", Shape: []int{D, ffn}, LinearFanIn: D})
 		if spec.FFNBias {
-			metas = append(metas, WeightMeta{Name: "ff1_bias", Shape: []int{ffn}, InitZero: true})
+			metas = append(metas, WeightMeta{Name: "ff1_bias", Shape: []int{ffn}, InitZero: true, LinearFanIn: D})
 		}
 		if ffnInternalNorm {
 			metas = append(metas, normWeights("ffn_internal_norm", ffn, norm)...)
 		}
-		metas = append(metas, WeightMeta{Name: "ff2", Shape: []int{ffn, D}})
+		metas = append(metas, WeightMeta{Name: "ff2", Shape: []int{ffn, D}, LinearFanIn: ffn})
 		if spec.FFNBias {
-			metas = append(metas, WeightMeta{Name: "ff2_bias", Shape: []int{D}, InitZero: true})
+			metas = append(metas, WeightMeta{Name: "ff2_bias", Shape: []int{D}, InitZero: true, LinearFanIn: ffn})
 		}
 		if placement == NormPlacementPost || placement == NormPlacementSandwich {
 			metas = append(metas, normWeights("post_ffn_norm", D, norm)...)
@@ -267,13 +270,13 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			metas = append(metas, normWeights("ffn_norm", D, norm)...)
 		}
 		metas = append(metas,
-			WeightMeta{Name: "w_gate", Shape: []int{D, ffn}},
-			WeightMeta{Name: "w_up", Shape: []int{D, ffn}},
+			WeightMeta{Name: "w_gate", Shape: []int{D, ffn}, LinearFanIn: D},
+			WeightMeta{Name: "w_up", Shape: []int{D, ffn}, LinearFanIn: D},
 		)
 		if ffnInternalNorm {
 			metas = append(metas, normWeights("ffn_internal_norm", ffn, norm)...)
 		}
-		metas = append(metas, WeightMeta{Name: "w_down", Shape: []int{ffn, D}})
+		metas = append(metas, WeightMeta{Name: "w_down", Shape: []int{ffn, D}, LinearFanIn: ffn})
 		if placement == NormPlacementPost || placement == NormPlacementSandwich {
 			metas = append(metas, normWeights("post_ffn_norm", D, norm)...)
 		}
@@ -288,11 +291,11 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		if placement == NormPlacementPre || placement == NormPlacementSandwich {
 			metas = append(metas, normWeights("ffn_norm", D, norm)...)
 		}
-		metas = append(metas, WeightMeta{Name: "w_up", Shape: []int{D, ffn}})
+		metas = append(metas, WeightMeta{Name: "w_up", Shape: []int{D, ffn}, LinearFanIn: D})
 		if ffnInternalNorm {
 			metas = append(metas, normWeights("ffn_internal_norm", ffn, norm)...)
 		}
-		metas = append(metas, WeightMeta{Name: "w_down", Shape: []int{ffn, D}})
+		metas = append(metas, WeightMeta{Name: "w_down", Shape: []int{ffn, D}, LinearFanIn: ffn})
 		if placement == NormPlacementPost || placement == NormPlacementSandwich {
 			metas = append(metas, normWeights("post_ffn_norm", D, norm)...)
 		}
@@ -309,20 +312,20 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		}
 		return []WeightMeta{
 			{Name: "latent_init", Shape: []int{L, D}},
-			{Name: "wq_cross", Shape: []int{D, D}},
-			{Name: "wk_cross", Shape: []int{D, D}},
-			{Name: "wv_cross", Shape: []int{D, D}},
-			{Name: "wo_cross", Shape: []int{D, D}},
-			{Name: "wq_self", Shape: []int{D, D}},
-			{Name: "wk_self", Shape: []int{D, D}},
-			{Name: "wv_self", Shape: []int{D, D}},
-			{Name: "wo_self", Shape: []int{D, D}},
-			{Name: "wq_broad", Shape: []int{D, D}},
-			{Name: "wk_broad", Shape: []int{D, D}},
-			{Name: "wv_broad", Shape: []int{D, D}},
-			{Name: "wo_broad", Shape: []int{D, D}},
-			{Name: "ff1", Shape: []int{D, D * 2}},
-			{Name: "ff2", Shape: []int{D * 2, D}},
+			{Name: "wq_cross", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wk_cross", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wv_cross", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wo_cross", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wq_self", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wk_self", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wv_self", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wo_self", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wq_broad", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wk_broad", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wv_broad", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wo_broad", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "ff1", Shape: []int{D, D * 2}, LinearFanIn: D},
+			{Name: "ff2", Shape: []int{D * 2, D}, LinearFanIn: D * 2},
 		}, nil
 
 	case "retnet":
@@ -333,27 +336,27 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		retFFN := D * 2
 		return []WeightMeta{
 			{Name: "norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
-			{Name: "wq", Shape: []int{D, D}},
-			{Name: "wk", Shape: []int{D, D}},
-			{Name: "wv", Shape: []int{D, D}},
+			{Name: "wq", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wk", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wv", Shape: []int{D, D}, LinearFanIn: D},
 			{Name: "decay", Shape: []int{heads}},
-			{Name: "wo", Shape: []int{D, D}},
-			{Name: "ff1", Shape: []int{D, retFFN}},
-			{Name: "ff2", Shape: []int{retFFN, D}},
+			{Name: "wo", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "ff1", Shape: []int{D, retFFN}, LinearFanIn: D},
+			{Name: "ff2", Shape: []int{retFFN, D}, LinearFanIn: retFFN},
 		}, nil
 
 	case "rwkv":
 		return []WeightMeta{
 			{Name: "mu", Shape: []int{D}},
-			{Name: "wr", Shape: []int{D, D}},
-			{Name: "wk", Shape: []int{D, D}},
-			{Name: "wv", Shape: []int{D, D}},
+			{Name: "wr", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wk", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wv", Shape: []int{D, D}, LinearFanIn: D},
 			{Name: "w_decay", Shape: []int{D}},
-			{Name: "wo", Shape: []int{D, D}},
+			{Name: "wo", Shape: []int{D, D}, LinearFanIn: D},
 			{Name: "mu2", Shape: []int{D}},
-			{Name: "wr2", Shape: []int{D, D}},
-			{Name: "wk2", Shape: []int{D, D}},
-			{Name: "wv2", Shape: []int{D, D}},
+			{Name: "wr2", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wk2", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wv2", Shape: []int{D, D}, LinearFanIn: D},
 		}, nil
 
 	case "legacy_mamba":
@@ -362,9 +365,9 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			inner = D
 		}
 		return []WeightMeta{
-			{Name: "in_proj", Shape: []int{D, 2 * inner}},
-			{Name: "conv_w", Shape: []int{inner, inner}},
-			{Name: "out_proj", Shape: []int{inner, D}},
+			{Name: "in_proj", Shape: []int{D, 2 * inner}, LinearFanIn: D},
+			{Name: "conv_w", Shape: []int{inner, inner}, LinearFanIn: inner},
+			{Name: "out_proj", Shape: []int{inner, D}, LinearFanIn: inner},
 			{Name: "scan_decay", Shape: []int{inner}},
 		}, nil
 
@@ -375,10 +378,10 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		}
 		return []WeightMeta{
 			{Name: "norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
-			{Name: "w_gate", Shape: []int{D, inner}},
-			{Name: "w_ssm", Shape: []int{D, inner}},
-			{Name: "w_dt", Shape: []int{D, inner}},
-			{Name: "wo", Shape: []int{inner, D}},
+			{Name: "w_gate", Shape: []int{D, inner}, LinearFanIn: D},
+			{Name: "w_ssm", Shape: []int{D, inner}, LinearFanIn: D},
+			{Name: "w_dt", Shape: []int{D, inner}, LinearFanIn: D},
+			{Name: "wo", Shape: []int{inner, D}, LinearFanIn: inner},
 			{Name: "scan_decay", Shape: []int{inner}},
 		}, nil
 
@@ -422,20 +425,20 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		}
 		groupState := nGroups * stateSize
 		metas := append([]WeightMeta{}, normWeights("pre_norm", D, norm)...)
-		metas = append(metas, WeightMeta{Name: "w_x", Shape: []int{D, inner}})
+		metas = append(metas, WeightMeta{Name: "w_x", Shape: []int{D, inner}, LinearFanIn: D})
 		useConv := spec.UseConv == nil || *spec.UseConv
 		if useConv {
 			metas = append(metas, WeightMeta{Name: "conv_w", Shape: []int{inner, convKernel}})
 		}
 		metas = append(metas,
-			WeightMeta{Name: "w_dt_low", Shape: []int{inner, dtRank}},
-			WeightMeta{Name: "w_dt_high", Shape: []int{dtRank, inner}},
-			WeightMeta{Name: "w_lambda_low", Shape: []int{inner, dtRank}},
-			WeightMeta{Name: "w_lambda_high", Shape: []int{dtRank, inner}},
-			WeightMeta{Name: "w_theta_low", Shape: []int{inner, dtRank}},
-			WeightMeta{Name: "w_theta_high", Shape: []int{dtRank, inner * (stateSize / 2)}},
-			WeightMeta{Name: "w_B", Shape: []int{inner, groupState}},
-			WeightMeta{Name: "w_C", Shape: []int{inner, groupState}},
+			WeightMeta{Name: "w_dt_low", Shape: []int{inner, dtRank}, LinearFanIn: inner},
+			WeightMeta{Name: "w_dt_high", Shape: []int{dtRank, inner}, LinearFanIn: dtRank},
+			WeightMeta{Name: "w_lambda_low", Shape: []int{inner, dtRank}, LinearFanIn: inner},
+			WeightMeta{Name: "w_lambda_high", Shape: []int{dtRank, inner}, LinearFanIn: dtRank},
+			WeightMeta{Name: "w_theta_low", Shape: []int{inner, dtRank}, LinearFanIn: inner},
+			WeightMeta{Name: "w_theta_high", Shape: []int{dtRank, inner * (stateSize / 2)}, LinearFanIn: dtRank},
+			WeightMeta{Name: "w_B", Shape: []int{inner, groupState}, LinearFanIn: inner},
+			WeightMeta{Name: "w_C", Shape: []int{inner, groupState}, LinearFanIn: inner},
 			WeightMeta{Name: "B_norm_scale", Shape: []int{stateSize}, IsNormScale: true, InitOne: true},
 			WeightMeta{Name: "C_norm_scale", Shape: []int{stateSize}, IsNormScale: true, InitOne: true},
 			WeightMeta{Name: "B_bias", Shape: []int{groupState}, InitOne: true},
@@ -443,8 +446,8 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 			WeightMeta{Name: "A_log", Shape: []int{inner, stateSize}, InitLogArange: true, ForceNoDecay: true},
 			WeightMeta{Name: "dt_bias", Shape: []int{inner}, InitDtBias: true, DtMin: dtMin, DtMax: dtMax, ForceNoDecay: true},
 			WeightMeta{Name: "post_norm_scale", Shape: []int{inner}, IsNormScale: true, InitOne: true},
-			WeightMeta{Name: "w_gate", Shape: []int{D, inner}},
-			WeightMeta{Name: "w_out", Shape: []int{inner, D}},
+			WeightMeta{Name: "w_gate", Shape: []int{D, inner}, LinearFanIn: D},
+			WeightMeta{Name: "w_out", Shape: []int{inner, D}, LinearFanIn: inner},
 		)
 		applyDynamicsStateLR(metas, spec)
 		return metas, nil
@@ -461,17 +464,17 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		ffn := ffnDim(D, mlpMult)
 		return []WeightMeta{
 			{Name: "norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
-			{Name: "wq", Shape: []int{D, D}},
-			{Name: "wk", Shape: []int{D, D}},
-			{Name: "wv", Shape: []int{D, D}},
-			{Name: "wo", Shape: []int{D, D}},
-			{Name: "ff1", Shape: []int{D, ffn}},
-			{Name: "ff2", Shape: []int{ffn, D}},
+			{Name: "wq", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wk", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wv", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "wo", Shape: []int{D, D}, LinearFanIn: D},
+			{Name: "ff1", Shape: []int{D, ffn}, LinearFanIn: D},
+			{Name: "ff2", Shape: []int{ffn, D}, LinearFanIn: ffn},
 		}, nil
 
 	case "token_blend":
 		return []WeightMeta{
-			{Name: "w_gate", Shape: []int{D, D}},
+			{Name: "w_gate", Shape: []int{D, D}, LinearFanIn: D},
 		}, nil
 
 	case "custom":
@@ -650,7 +653,7 @@ func bigramWeightShapes(modelDim, bigramVocabSize, bigramDim int) []WeightMeta {
 		{Name: "bigram_table", Shape: []int{bigramVocabSize, bigramDim}},
 	}
 	if bigramDim != D {
-		shapes = append(shapes, WeightMeta{Name: "bigram_proj", Shape: []int{bigramDim, D}})
+		shapes = append(shapes, WeightMeta{Name: "bigram_proj", Shape: []int{bigramDim, D}, LinearFanIn: bigramDim})
 	}
 	shapes = append(shapes, WeightMeta{Name: "bigram_scale", Shape: []int{1}, InitOne: true})
 	return shapes
@@ -668,7 +671,7 @@ func trigramWeightShapes(modelDim, trigramVocabSize, trigramDim int) []WeightMet
 		{Name: "trigram_table", Shape: []int{trigramVocabSize, trigramDim}},
 	}
 	if trigramDim != D {
-		shapes = append(shapes, WeightMeta{Name: "trigram_proj", Shape: []int{trigramDim, D}})
+		shapes = append(shapes, WeightMeta{Name: "trigram_proj", Shape: []int{trigramDim, D}, LinearFanIn: trigramDim})
 	}
 	shapes = append(shapes, WeightMeta{Name: "trigram_scale", Shape: []int{1}, InitOne: true})
 	return shapes
@@ -686,7 +689,7 @@ func charWeightShapes(modelDim, charVocabSize, charDim int) []WeightMeta {
 		{Name: "char_table", Shape: []int{charVocabSize, charDim}},
 	}
 	if charDim != D {
-		shapes = append(shapes, WeightMeta{Name: "char_proj", Shape: []int{charDim, D}})
+		shapes = append(shapes, WeightMeta{Name: "char_proj", Shape: []int{charDim, D}, LinearFanIn: charDim})
 	}
 	shapes = append(shapes, WeightMeta{Name: "char_scale", Shape: []int{1}, InitOne: true})
 	return shapes
@@ -801,6 +804,7 @@ func collectLinearFramesWeightShapesWithRefs(cfg *ArchConfig, refs []int) ([]Wei
 	}
 	metas[0].Name = "input_adapter_proj"
 	metas[0].PyTorchLinearFanIn = cfg.InputAdapter.FeatureDim
+	metas[0].LinearFanIn = cfg.InputAdapter.FeatureDim
 
 	fixed := fixedWeightCountWithHeadAndNorm(false, cfg.EffectiveNormSpec(), cfg.EffectiveFinalNorm())
 	extra := linearFramesExtraWeightShapes(cfg)
@@ -937,7 +941,7 @@ func collectWeightShapesWithRefsHeadLayoutFeaturesNorm(
 	// Fixed weights: embed + optional head + optional final norm.
 	shapes = append(shapes, WeightMeta{Name: "embed", Shape: []int{V, D}})
 	if reserveHead {
-		shapes = append(shapes, WeightMeta{Name: "head", Shape: []int{D, V}})
+		shapes = append(shapes, WeightMeta{Name: "head", Shape: []int{D, V}, LinearFanIn: D})
 	}
 	if effectiveOptionalBool(true, finalNorm) {
 		shapes = append(shapes, normWeights("final_norm", D, norm)...)

@@ -191,9 +191,9 @@ func TestLinearFramesWeightsIRAndCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPrefix := []WeightMeta{
-		{Name: "input_adapter_proj", Shape: []int{1, 8}, PyTorchLinearFanIn: 1},
+		{Name: "input_adapter_proj", Shape: []int{1, 8}, PyTorchLinearFanIn: 1, LinearFanIn: 1},
 		{Name: "final_norm", Shape: []int{8}, IsNormScale: true, InitOne: true},
-		{Name: "input_adapter_bias", Shape: []int{8}, InitZero: true, PyTorchLinearFanIn: 1},
+		{Name: "input_adapter_bias", Shape: []int{8}, InitZero: true, PyTorchLinearFanIn: 1, LinearFanIn: 1},
 		{Name: "input_adapter_norm_scale", Shape: []int{8}, IsNormScale: true, InitOne: true},
 		{Name: "input_adapter_norm_bias", Shape: []int{8}, InitZero: true},
 	}

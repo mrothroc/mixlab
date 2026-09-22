@@ -124,20 +124,20 @@ func moeWeightShapesWithOptions(spec BlockSpec, D int, mlpMult float64, blockSca
 	ffn := ffnDim(D, mlpMult)
 	metas := []WeightMeta{
 		{Name: "moe_norm_scale", Shape: []int{D}, IsNormScale: true, InitOne: true},
-		{Name: "router_w", Shape: []int{D, spec.NumExperts}},
+		{Name: "router_w", Shape: []int{D, spec.NumExperts}, LinearFanIn: D},
 	}
 	for i := 0; i < spec.NumExperts; i++ {
 		switch expertType {
 		case moeExpertSwiGLU, moeExpertGEGLU:
 			metas = append(metas,
-				WeightMeta{Name: fmt.Sprintf("expert_%d_w_gate", i), Shape: []int{D, ffn}},
-				WeightMeta{Name: fmt.Sprintf("expert_%d_w_up", i), Shape: []int{D, ffn}},
-				WeightMeta{Name: fmt.Sprintf("expert_%d_w_down", i), Shape: []int{ffn, D}},
+				WeightMeta{Name: fmt.Sprintf("expert_%d_w_gate", i), Shape: []int{D, ffn}, LinearFanIn: D},
+				WeightMeta{Name: fmt.Sprintf("expert_%d_w_up", i), Shape: []int{D, ffn}, LinearFanIn: D},
+				WeightMeta{Name: fmt.Sprintf("expert_%d_w_down", i), Shape: []int{ffn, D}, LinearFanIn: ffn},
 			)
 		case moeExpertMLP:
 			metas = append(metas,
-				WeightMeta{Name: fmt.Sprintf("expert_%d_w_up", i), Shape: []int{D, ffn}},
-				WeightMeta{Name: fmt.Sprintf("expert_%d_w_down", i), Shape: []int{ffn, D}},
+				WeightMeta{Name: fmt.Sprintf("expert_%d_w_up", i), Shape: []int{D, ffn}, LinearFanIn: D},
+				WeightMeta{Name: fmt.Sprintf("expert_%d_w_down", i), Shape: []int{ffn, D}, LinearFanIn: ffn},
 			)
 		default:
 			return nil, fmt.Errorf("unsupported moe expert type %d", expertType)

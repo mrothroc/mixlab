@@ -177,11 +177,11 @@ func data2VecWeightShapes(modelDim int, spec *Data2VecSpec) []WeightMeta {
 	}
 	if spec.PredictorHidden > 0 {
 		return []WeightMeta{
-			{Name: "data2vec_pred_1", Shape: []int{modelDim, spec.PredictorHidden}},
-			{Name: "data2vec_pred_2", Shape: []int{spec.PredictorHidden, modelDim}},
+			{Name: "data2vec_pred_1", Shape: []int{modelDim, spec.PredictorHidden}, LinearFanIn: modelDim},
+			{Name: "data2vec_pred_2", Shape: []int{spec.PredictorHidden, modelDim}, LinearFanIn: spec.PredictorHidden},
 		}
 	}
-	return []WeightMeta{{Name: "data2vec_pred", Shape: []int{modelDim, modelDim}}}
+	return []WeightMeta{{Name: "data2vec_pred", Shape: []int{modelDim, modelDim}, LinearFanIn: modelDim}}
 }
 
 func data2VecWeightCount(spec *Data2VecSpec) int {

@@ -37,9 +37,9 @@ func mlmHeadWeightShapes(modelDim, vocabSize int, mlmHead string) []WeightMeta {
 		return nil
 	}
 	return []WeightMeta{
-		{Name: MLMHeadDenseWeightName, Shape: []int{modelDim, modelDim}},
-		{Name: MLMHeadDenseBiasName, Shape: []int{modelDim}, InitZero: true},
-		{Name: MLMHeadOutputBiasName, Shape: []int{vocabSize}, InitZero: true},
+		{Name: MLMHeadDenseWeightName, Shape: []int{modelDim, modelDim}, LinearFanIn: modelDim},
+		{Name: MLMHeadDenseBiasName, Shape: []int{modelDim}, InitZero: true, LinearFanIn: modelDim},
+		{Name: MLMHeadOutputBiasName, Shape: []int{vocabSize}, InitZero: true, LinearFanIn: modelDim},
 	}
 }
 

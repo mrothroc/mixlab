@@ -462,7 +462,7 @@ func collectMultiheadWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, erro
 		condDim := multiheadAdaLNDim(cfg.Training)
 		for i := range cfg.Blocks {
 			shapes = append(shapes,
-				WeightMeta{Name: fmt.Sprintf("adaln_%d_w1", i), Shape: []int{1, condDim}},
+				WeightMeta{Name: fmt.Sprintf("adaln_%d_w1", i), Shape: []int{1, condDim}, LinearFanIn: 1},
 				WeightMeta{Name: fmt.Sprintf("adaln_%d_w2", i), Shape: []int{condDim, 2 * cfg.ModelDim}, InitZero: true},
 			)
 		}
@@ -517,23 +517,23 @@ func multiheadHeadWeightShapes(modelDim, vocabSize int, blocks []BlockSpec, norm
 	switch h.OutputHead {
 	case MultiheadOutputBERTMLM:
 		shapes = append(shapes,
-			WeightMeta{Name: prefix + "_mlm_dense", Shape: []int{modelDim, modelDim}},
-			WeightMeta{Name: prefix + "_mlm_dense_bias", Shape: []int{modelDim}, InitZero: true},
-			WeightMeta{Name: prefix + "_mlm_output_bias", Shape: []int{vocabSize}, InitZero: true},
+			WeightMeta{Name: prefix + "_mlm_dense", Shape: []int{modelDim, modelDim}, LinearFanIn: modelDim},
+			WeightMeta{Name: prefix + "_mlm_dense_bias", Shape: []int{modelDim}, InitZero: true, LinearFanIn: modelDim},
+			WeightMeta{Name: prefix + "_mlm_output_bias", Shape: []int{vocabSize}, InitZero: true, LinearFanIn: modelDim},
 		)
 	case MultiheadOutputLinear:
 		if !h.TieEmbeddings {
-			shapes = append(shapes, WeightMeta{Name: prefix + "_proj", Shape: []int{modelDim, vocabSize}})
+			shapes = append(shapes, WeightMeta{Name: prefix + "_proj", Shape: []int{modelDim, vocabSize}, LinearFanIn: modelDim})
 		}
 	case MultiheadOutputBinary:
 		shapes = append(shapes,
-			WeightMeta{Name: prefix + "_binary_proj", Shape: []int{modelDim, 1}},
-			WeightMeta{Name: prefix + "_binary_bias", Shape: []int{1}, InitZero: true},
+			WeightMeta{Name: prefix + "_binary_proj", Shape: []int{modelDim, 1}, LinearFanIn: modelDim},
+			WeightMeta{Name: prefix + "_binary_bias", Shape: []int{1}, InitZero: true, LinearFanIn: modelDim},
 		)
 	case MultiheadOutputScalar:
 		shapes = append(shapes,
-			WeightMeta{Name: prefix + "_energy_proj", Shape: []int{modelDim, 1}},
-			WeightMeta{Name: prefix + "_energy_bias", Shape: []int{1}, InitZero: true},
+			WeightMeta{Name: prefix + "_energy_proj", Shape: []int{modelDim, 1}, LinearFanIn: modelDim},
+			WeightMeta{Name: prefix + "_energy_bias", Shape: []int{1}, InitZero: true, LinearFanIn: modelDim},
 		)
 	}
 	return shapes

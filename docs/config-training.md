@@ -67,6 +67,15 @@ The classifier follows the model-wide `weight_init` policy. Omission uses the
 historical Xavier-uniform default. Set `weight_init: "pytorch_linear"` when a
 reference recipe expects `torch.nn.Linear.reset_parameters()`; this uses
 `model_dim` as fan-in for both the classifier projection and optional bias.
+That legacy policy does not cover plain attention/FFN matrices. Use
+`weight_init: "pytorch_linear_all"` to cover all ordinary built-in affine
+weights and paired biases while retaining specialized initializers. Optional
+`position_embedding_init_std` and `cls_token_init_std` set independent normal
+initialization for learned absolute positions and the CLS token. See
+[initialization policies](config-reference.md#training) and the
+[ViT initialization example](../examples/vit_pytorch_init.json).
+Set `training.classification.classifier_dropout: 0` explicitly to disable
+classifier dropout; only omission inherits `hidden_dropout`.
 
 Classification with an external `linear_frames` or `discrete_codebooks` input
 adapter may set `blocks: []` to train a pure representation probe. The forward

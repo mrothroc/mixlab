@@ -115,8 +115,8 @@ func TestBlockWeightShapes_MLP(t *testing.T) {
 	}
 	want := []WeightMeta{
 		{Name: "ffn_norm_scale", Shape: []int{64}, IsNormScale: true, InitOne: true},
-		{Name: "w_up", Shape: []int{64, 128}},
-		{Name: "w_down", Shape: []int{128, 64}},
+		{Name: "w_up", Shape: []int{64, 128}, LinearFanIn: 64},
+		{Name: "w_down", Shape: []int{128, 64}, LinearFanIn: 128},
 	}
 	if !reflect.DeepEqual(metas, want) {
 		t.Fatalf("mlp weight shapes = %+v, want %+v", metas, want)
@@ -148,9 +148,9 @@ func TestBlockWeightShapes_GEGLU(t *testing.T) {
 	}
 	want := []WeightMeta{
 		{Name: "ffn_norm_scale", Shape: []int{64}, IsNormScale: true, InitOne: true},
-		{Name: "w_gate", Shape: []int{64, 128}},
-		{Name: "w_up", Shape: []int{64, 128}},
-		{Name: "w_down", Shape: []int{128, 64}},
+		{Name: "w_gate", Shape: []int{64, 128}, LinearFanIn: 64},
+		{Name: "w_up", Shape: []int{64, 128}, LinearFanIn: 64},
+		{Name: "w_down", Shape: []int{128, 64}, LinearFanIn: 128},
 		{Name: "mlp_scale", Shape: []int{64}, InitOne: true},
 	}
 	if !reflect.DeepEqual(metas, want) {

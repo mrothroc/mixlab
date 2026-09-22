@@ -83,6 +83,7 @@ func TestNewBobConfigValidation(t *testing.T) {
 		want string
 	}{
 		{name: "missing object", old: `"newbob":{"annealing_factor":0.9,"improvement_threshold":0.0025,"patient":0,"metric":"val_error_rate"},`, want: "requires training.newbob"},
+		{name: "zero LR", old: `"lr":0.0002`, new: `"lr":0`, want: "requires training.lr > 0"},
 		{name: "missing cadence", old: `"val_every_steps":5,`, want: "requires training.val_every_steps > 0"},
 		{name: "invalid factor", old: `"annealing_factor":0.9`, new: `"annealing_factor":1.1`, want: "annealing_factor"},
 		{name: "negative threshold", old: `"improvement_threshold":0.0025`, new: `"improvement_threshold":-0.1`, want: "improvement_threshold"},

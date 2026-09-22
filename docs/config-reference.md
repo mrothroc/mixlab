@@ -1167,7 +1167,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | Field | Type | Required | Default | Notes |
 |------|------|----------|---------|-------|
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
-| `lr` | number | No | `3e-4` | Base learning rate. Must be `> 0`. |
+| `lr` | number | No | `3e-4` | Base learning rate. Finite and `>= 0`; explicit `0` freezes groups inheriting this rate. Omission/null uses the default. Explicit group overrides and phase schedules are independent; NewBob requires a positive base LR. |
 | `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, `"hybrid"`, `"block_diffusion"`, `"multihead"`, or `"classification"`. Existing configs default to causal next-token training. |
 | `lr_schedule` | string | No | `"cosine"` | Outer learning-rate schedule: existing step-driven `"cosine"` behavior or validation-driven `"newbob"`. NewBob is classification-only in v1. |
 | `newbob` | object | Required for `lr_schedule: "newbob"` | Disabled | NewBob controls: `annealing_factor`, `improvement_threshold`, `patient`, and `metric` (`"val_loss"` or `"val_error_rate"`). |
@@ -1224,8 +1224,10 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `compute_dtype` | string | No | `"float32"` | MLX training compute dtype: `"float32"` or experimental `"bf16"`. BF16 keeps fp32 master weights and optimizer state, and currently supports `plain`, `swiglu`, `geglu`, `mlp`, and `moe` blocks. Unsupported blocks and QAT fail fast instead of silently falling back. |
 | `qat` | string | No | `"none"` | Quantization-aware training mode for rank-2 weights during the training forward pass. `"none"` disables it, `"int8"` applies per-row fake int8 quantization, and `"int6"` applies a coarser fake quantization with STE. |
 | `qat_start` | integer | No | `0` | Delays QAT until this zero-based training step. Before activation the normal unquantized training graph is used. Must be `>= 0`; positive values require `qat` to be enabled. |
-| `weight_init` | string | No | `"xavier_uniform"` | Initialization policy: `"xavier_uniform"`, `"normal"`, `"gptbert"`, `"gpt2"`, or `"pytorch_linear"`. The PyTorch mode applies `nn.Linear`-compatible fan-in uniform initialization only to affine tensors identified by architecture metadata; specialized tensors and embeddings retain their existing initialization. |
-| `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` and `"gpt2"` initialization. Ignored by `"xavier_uniform"`, `"gptbert"`, and `"pytorch_linear"`. |
+| `weight_init` | string | No | `"xavier_uniform"` | Initialization policy: `"xavier_uniform"`, `"normal"`, `"gptbert"`, `"gpt2"`, `"pytorch_linear"`, or `"pytorch_linear_all"`. The legacy PyTorch mode covers adapters/classifiers/S4D output projections; the new `_all` mode also covers ordinary built-in attention, FFN, expert, and head affine tensors and paired biases. Specialized initializers and embeddings retain their policies. |
+| `weight_init_std` | number | No | `0.02` | Standard deviation for `"normal"` and `"gpt2"` initialization. Ignored by `"xavier_uniform"`, `"gptbert"`, `"pytorch_linear"`, and `"pytorch_linear_all"`. |
+| `position_embedding_init_std` | number | No | Existing policy | Optional normal-distribution std for the learned absolute `position_embeddings` table; requires `positional_embedding: "learned_absolute"`. Finite, float32-representable and `>= 0`. Explicit `0` zeros this tensor; omission/null preserves its policy. Does not affect token/relative/coordinate embeddings. |
+| `cls_token_init_std` | number | No | Existing policy | Optional normal-distribution std for the classification `cls_token`; requires classification with `pooling: "cls"`. Finite, float32-representable and `>= 0`. Explicit `0` zeros the token; omission/null preserves its policy (normally std `0.02`). |
 | `grad_clip` | number | No | `0` | Max grad norm. `0` means no clipping. Must be `>= 0`. |
 | `weight_decay` | number | No | `0.01` | Global fallback weight decay. Must be `>= 0`; explicit `0` disables decay for groups that inherit it. |
 | `weight_decay_policy` | string | No | `"matrix_only"` | `"matrix_only"` preserves the existing no-decay treatment for scalar/vector parameters. `"all"` enables decay for every ordinary trainable parameter; explicit exemptions for S4D A/B/dt and Mamba3/Gated DeltaNet `A_log`/`dt_bias` still win. See [dynamics optimizer policy](dynamics-optimizer-policy.md). |
@@ -1460,6 +1462,34 @@ sequence-length transition after two passes uses `ceil(2*T/B)`.
 `weight_init: "gpt2"` matches the Hugging Face GPT-2 initializer: rank-2-or-higher weights and embedding tables use `Normal(0, weight_init_std)`, defaulting to `0.02`; 1D norm scales initialize to `1` and biases to `0`; residual output projections (`plain.wo`, `plain.ff2`, GLU/MLP `w_down`, and MoE expert down projections) use the constant scale `weight_init_std / sqrt(2 * len(blocks))` across all layers.
 
 `weight_init: "pytorch_linear"` matches `torch.nn.Linear.reset_parameters()` for affine tensors explicitly identified by the architecture: weights and paired biases use `Uniform(-1/sqrt(fan_in), +1/sqrt(fan_in))`. This includes continuous `linear_frames` input projections, S4D GLU output projections, and native classification heads. Per-weight initialization modes, SSM state parameters, embeddings, and other unmarked tensors keep their existing initialization. Omission remains byte-compatible with the historical Xavier default.
+
+`weight_init: "pytorch_linear_all"` extends that distribution to ordinary built-in
+affine projections: plain Q/K/V/O and FFN weights/biases, GLU/MLP and MoE experts,
+ordinary recurrent projections, feature-channel projections, untied output
+heads, and predictor heads. Fan-in comes from explicit architecture metadata,
+including the input width of each paired bias. Embeddings, learned latents,
+convolution kernels, normalization buffers/scales, residual mixing, intentionally
+zero-initialized gates, and architecture-specific SSM/TTT initializers are not
+reinterpreted as linear layers. Custom JSON weights retain their prior policy;
+registered architecture providers can opt ordinary affine tensors in using
+`WeightMeta.LinearFanIn`. The legacy mode is not widened.
+
+Both PyTorch modes print fresh-initialization coverage counts for matrices and
+biases. For a six-layer plain image classifier the legacy mode covers 2/38
+ordinary affine matrices, while `_all` covers 38/38. Loading a checkpoint does
+not reinitialize it or print a fresh-initialization count.
+
+See [the ViT initialization example](../examples/vit_pytorch_init.json) for
+config-only affine initialization with independent unit-normal positional and
+CLS embeddings. These controls match distributions, not PyTorch's random draws
+for the same seed, and do not promise benchmark reproduction. Match the data,
+dropout sites, optimizer, and schedule separately. With normalized image data,
+set augmentation `pad_value` to normalized black for each channel.
+
+Explicit zero `embed_lr`, `matrix_lr`, `scalar_lr`, and `head_lr` values are
+preserved; omitted/null groups inherit `lr`. A zero LR prevents parameter
+updates but does not disable forward-time running buffers or optimizer-state
+accumulation. Architecture-specific state LR overrides remain independent.
 
 `lr_schedule_steps` separates the standard cosine schedule horizon from the number of optimizer updates. For example, `steps: 180000` with `lr_schedule_steps: 200000` stops after 180,000 updates while evaluating every learning rate against a 200,000-step cosine. When omitted, both horizons remain identical as before.
 
