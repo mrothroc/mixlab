@@ -1248,7 +1248,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `shuffle_chunk_tokens` | integer | No | `seq_len` | Token-block shuffle granularity for train/validation loaders. Values `<= 0` inherit `seq_len`; set to `2048` to reproduce the previous fixed-block behavior. |
 | `reverse_complement_prob` | number | No | `0` | Deterministic DNA reverse-complement augmentation probability in `[0,1]`. It applies per packed segment for record shards and per framed row for continuous nucleotide streams. Requires a manifest-backed FASTA DNA dataset; RNA and legacy/text shards reject nonzero values. Randomness is derived from `training.seed` and step, independent of loader prefetch. |
 | `embed_lr` | number | No | `lr` | Learning rate for embedding-class weights. |
-| `matrix_lr` | number | No | `lr` | Learning rate for matrix weights. Used with Muon. |
+| `matrix_lr` | number | No | `lr` | Learning rate for matrix-class weights under Muon variants, AdamW, or LAMB. |
 | `scalar_lr` | number | No | `lr` | Learning rate for scalar and vector weights. |
 | `head_lr` | number | No | `lr` | Learning rate for the output head. Ignored when `tie_embeddings=true` unless `mtp.untie_embed_at_frac < 1` reserves and later activates a separate head. |
 | `muon_momentum` | number | No | `beta1` | Muon momentum term for matrix weights. Must be `>= 0`. |
@@ -1629,6 +1629,30 @@ The trainer classifies weights into four optimizer groups. Muon-family optimizer
 | Head | AdamW or LAMB | `head` | `head_lr` | `head_weight_decay` |
 | Scalar | AdamW or LAMB | Norm scales, decay vectors, learned scalar scales | `scalar_lr` | `scalar_weight_decay` |
 | Matrix | Muon variant, AdamW, or LAMB | Projection and FFN matrices | `matrix_lr` | `matrix_weight_decay` |
+
+These are routing classes, not semantic guarantees based on a tensor's name.
+The embedding class recognizes `embed`, `rtd_generator_embed`, `char_table`,
+`bigram_table`, and `trigram_table`; the head class recognizes `head` and
+`head_*`. Norms, designated dynamics/scale tensors, and remaining rank-1
+tensors use the scalar class. Other rank-2 tensors use the matrix class.
+In particular, **`position_embeddings`, `cls_token` (stored as `[1,D]`), and
+`input_adapter_proj` currently use the matrix class**, including Muon when
+selected. A continuous-input classifier can therefore have an empty embedding
+group: `embed_lr` does not affect these tensors. This legacy routing is retained
+for recipe compatibility; there is no general per-pattern group override.
+
+Inspect the resolved assignment rather than inferring it from tensor names:
+
+```bash
+mixlab -mode optimizer-report -config model.json > optimizer-groups.json
+```
+
+The report needs no GPU or training data. It includes unique stored tensors,
+stable weight indices, shapes, optimizer variants, configured group LRs, and
+effective per-tensor decay after exclusions. Training prints a compact summary
+from the resolved optimizer spec as well. See [Optimizer report](cli.md#optimizer-report)
+for schema and schedule semantics. Frozen weights and buffers are listed
+separately, not charged to active optimizer groups.
 
 S4D blocks with `state_lr` add metadata-driven adaptive groups: dt/A/B use
 `state_lr` with no decay; C/D use global

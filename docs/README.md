@@ -11,6 +11,7 @@ Use this page to choose the shortest path for the task at hand. The root
 | Choose an architecture or objective | [Architecture guide](architecture.md) | [Model](config-model.md), [blocks](config-blocks.md), and [training](config-training.md) guides |
 | Check a config without a GPU | `mixlab -mode validate -config model.json` | [Configuration reference](config-reference.md) |
 | Count parameters and estimated compute | `mixlab -mode count -config model.json` | [Count and eval CLI](cli-eval.md) |
+| Audit optimizer coverage, rates, and decay | `mixlab -mode optimizer-report -config model.json` | [Optimizer report](cli.md#optimizer-report) |
 | Train, compare, or resume runs | [Training CLI](cli-train.md) | [Performance](performance.md) |
 | Evaluate or score checkpoints | [Count and eval CLI](cli-eval.md) | [Feature matrix](feature-matrix.md) |
 | Generate causal or diffusion samples | [Generation CLI](cli-generate.md) | [Grammar constraints](grammar-constrained-generation.md) |

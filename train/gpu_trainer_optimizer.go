@@ -1,5 +1,3 @@
-//go:build mlx && cgo && (darwin || linux)
-
 package train
 
 import (

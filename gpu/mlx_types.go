@@ -242,6 +242,8 @@ const (
 )
 
 type OptimizerGroup struct {
+	// ReportName is diagnostic only; it must not change checkpoint compatibility.
+	ReportName                        string `json:"-"`
 	Kind                              OptimizerKind
 	LR                                float32
 	Beta1                             float32

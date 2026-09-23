@@ -18,6 +18,7 @@ mode-specific flags.
 | `prepare` | Tokenize raw text or JSONL into binary training shards. | [cli-prepare.md](cli-prepare.md) |
 | `prepare-pairs` | Validate minimal-pair, invariance-pair, or annotated PLL-margin JSONL and optionally compile it to a compact pair shard. | [cli-prepare.md](cli-prepare.md) |
 | `count` | Print parameter, size, block, FLOP, and IR op counts for a config. | [cli-eval.md](cli-eval.md) |
+| `optimizer-report` | Write resolved optimizer groups and per-tensor assignments as JSON without a GPU. | This page |
 | `eval` | Load safetensors and evaluate validation loss or per-token exports. | [cli-eval.md](cli-eval.md) |
 | `hiddenstats` | Export one batch of hidden states as float32 binary. | [cli-eval.md](cli-eval.md) |
 | `generate` | Generate token IDs from a causal checkpoint. | [cli-generate.md](cli-generate.md) |
@@ -75,6 +76,48 @@ mixlab -mode validate -config examples/plain_3L.json
 This applies defaults, rejects unknown or incompatible fields, and builds the
 native IR. A successful command exits zero and prints one summary line. Use
 `count` when you also want parameter, memory, op, and FLOP estimates.
+
+## Optimizer Report
+
+Inspect the optimizer coverage before starting a run:
+
+```bash
+mixlab -mode optimizer-report -config examples/vit_pytorch_init.json > optimizer-groups.json
+```
+
+Only `-config` is required. JSON goes to stdout; warnings go to stderr. This
+mode needs neither MLX nor training shards, allocates no weight arrays, and
+does not initialize the GPU. It resolves config defaults through the same
+optimizer builder used in training, without loading checkpoint state or applying
+runtime-only optimizer overrides.
+
+The `mixlab_optimizer_report_v1` document contains:
+
+- `groups`: the four standard classes (including empty classes), followed by
+  any specialized groups in resolution order. Each active group includes its
+  optimizer-spec `index`, optimizer variant, configured LR/decay, tensor and
+  parameter counts, and decay-eligible tensor count. Unused classes have no
+  optimizer or rate fields.
+- `tensors`: one row per unique stored weight or buffer, in checkpoint order.
+  `index` disambiguates repeated names such as `wq`; `name`, `shape`, and
+  `parameters` identify the tensor. Active rows include `group_index`, `group`,
+  `optimizer`, `configured_lr`, `configured_weight_decay`, `decay_eligible`,
+  and `effective_weight_decay`. Frozen/buffer rows have no optimizer assignment.
+- `frozen_tensors` and `buffer_tensors`: disjoint inactive counts. Buffer rows
+  also have `frozen:true` because optimizers never update them.
+- `rate_basis: "configured_before_schedule"`: these are base group rates,
+  not instantaneous rates after warmup, phases, schedule changes, or resume.
+  Effective decay is the configured coefficient after tensor exclusions, not
+  the realized update magnitude or a cautious-decay activation indicator.
+
+Training also prints an `optimizer (configured rates, before schedule)` summary
+at trainer creation. It reflects the final runtime spec, including optimizer
+overrides; custom unnamed groups are labeled `group_<index>`. Counts do not
+multiply shared weights by their number of uses. Zero LR is reported as zero,
+not as frozen: optimizer state can still accumulate with zero LR.
+
+See [Optimizer groups](config-reference.md#optimizer-groups) for current routing
+rules and specialized SSM groups. This reporting feature does not change them.
 
 ## Smoke
 

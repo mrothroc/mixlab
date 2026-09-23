@@ -36,6 +36,11 @@ Common flags:
 | `-swa-decay X` | Override `training.swa_decay`. |
 | `-swa-interval N` | Override `training.swa_interval`. |
 
+Trainer startup prints resolved optimizer-group coverage, configured rates,
+and decay eligibility. To inspect every tensor before allocating a GPU, use
+[`optimizer-report`](cli.md#optimizer-report). The report preserves existing
+routing, including positional embeddings and CLS tokens in the matrix group.
+
 ### Resume And Extension
 
 Periodic checkpoints remain usable as ordinary model-weight files, but now

@@ -68,6 +68,7 @@ func BuildTrainerOptimizerSpec(cfg TrainerOptimizerConfig) (TrainerOptimizerSpec
 		if err != nil {
 			return 0, err
 		}
+		group.ReportName = key
 		idx := len(groups)
 		groups = append(groups, group)
 		groupIndexByKey[key] = idx
@@ -83,7 +84,7 @@ func BuildTrainerOptimizerSpec(cfg TrainerOptimizerConfig) (TrainerOptimizerSpec
 		if err != nil {
 			return TrainerOptimizerSpec{}, err
 		}
-		groupKey := fmt.Sprintf("class:%d", class)
+		groupKey := [...]string{"embed", "head", "scalar", "matrix"}[class]
 		settings, err := optimizerSettingsForClass(cfg, class, weight.Name)
 		if weight.Group != "" {
 			var ok bool

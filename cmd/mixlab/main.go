@@ -14,7 +14,7 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "arch", "run mode: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
+	mode := flag.String("mode", "arch", "run mode: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
@@ -271,6 +271,10 @@ func main() {
 		must(train.RunCount(*configPath))
 		return
 	}
+	if *mode == "optimizer-report" {
+		must(train.RunOptimizerReport(*configPath, os.Stdout))
+		return
+	}
 	if *mode == "export-hf" {
 		exportOutput, err := aliasedStringFlagValue(*prepOutput, "export-dir", *exportDir, providedFlags)
 		must(err)
@@ -433,7 +437,7 @@ func main() {
 			LogitTokens:     *parityLogitTokens,
 		}))
 	default:
-		must(fmt.Errorf("unknown mode %q (supported: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity)", *mode))
+		must(fmt.Errorf("unknown mode %q (supported: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity)", *mode))
 	}
 }
 
@@ -442,7 +446,7 @@ type flagGroup struct {
 	Names []string
 }
 
-var supportedModes = []string{"smoke", "validate", "arch", "arch_race", "prepare", "prepare-pairs", "count", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "export-hf", "parity"}
+var supportedModes = []string{"smoke", "validate", "arch", "arch_race", "prepare", "prepare-pairs", "count", "optimizer-report", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "export-hf", "parity"}
 
 var modeFlagGroups = map[string][]flagGroup{
 	"arch": {
@@ -481,6 +485,9 @@ var modeFlagGroups = map[string][]flagGroup{
 		{"Required", []string{"config"}},
 	},
 	"count": {
+		{"Required", []string{"config"}},
+	},
+	"optimizer-report": {
 		{"Required", []string{"config"}},
 	},
 	"eval": {

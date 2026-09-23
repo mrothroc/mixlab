@@ -232,6 +232,13 @@ func initMLXGPUTrainerWithDistributedContext(
 			return nil, fmt.Errorf("optimizer override returned invalid spec: %w", err)
 		}
 	}
+	report, err := resolvedOptimizerReport(optimizerSpec, shapes)
+	if err != nil {
+		gpuProg.Destroy()
+		gpu.FreeHandles(handles)
+		return nil, err
+	}
+	fmt.Println(report.summary())
 	computeDType, err := gpuComputeDTypeForTraining(cfg)
 	if err != nil {
 		gpuProg.Destroy()

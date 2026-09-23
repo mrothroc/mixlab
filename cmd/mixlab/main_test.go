@@ -72,6 +72,18 @@ func TestValidateModeHasConfigHelp(t *testing.T) {
 	}
 }
 
+func TestOptimizerReportModeHasConfigHelp(t *testing.T) {
+	if !flagGroupContains(modeFlagGroups["optimizer-report"], "config") {
+		t.Fatal("optimizer-report help groups missing config")
+	}
+	for _, mode := range supportedModes {
+		if mode == "optimizer-report" {
+			return
+		}
+	}
+	t.Fatal("optimizer-report missing from mode list")
+}
+
 func TestResumeFlagInArchCheckpointHelpGroup(t *testing.T) {
 	if !flagGroupContains(modeFlagGroups["arch"], "resume") {
 		t.Fatal("arch help groups missing resume")
