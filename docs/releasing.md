@@ -149,8 +149,25 @@ which reports `Listed 0 items.` while builds are running in us-central1 — it
 reads as a drained queue at exactly the moment the check matters.
 
 Because both published tags are mutable, the labels on `latest` are only
-correct until the next push to main. Record the image **digest**, which is
-immutable, as the durable release identifier. Inspect the published image's OCI
+correct until the next push to main. This is not hypothetical: v0.117.0's
+labels survived two days before the next feature push re-stamped `latest` with
+`version=dev`.
+
+So after verifying the build, tag the release digests immutably. This is a
+registry-side operation; it copies nothing and rebuilds nothing:
+
+```bash
+REG=us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf
+gcloud artifacts docker tags add $REG/mixlab:latest $REG/mixlab:vX.Y.Z \
+  --project=zapbox-cloud --account=michael.rothrock@gmail.com
+gcloud artifacts docker tags add $REG/mixlab:runpod $REG/mixlab:vX.Y.Z-runpod \
+  --project=zapbox-cloud --account=michael.rothrock@gmail.com
+```
+
+Pin RunPod templates and any reproducibility-sensitive consumer to `vX.Y.Z-runpod`
+or to the digest, never to `runpod`. Record the image **digest** as well; it is
+the one identifier nothing can move. Docker Hub still publishes only the mutable
+tags. Inspect the published image's OCI
 version/revision labels and digest before updating the RunPod endpoint. See
 [image provenance](../docker/README.md#image-provenance).
 
