@@ -30,6 +30,11 @@ func runArchRace(configsDir, trainPattern string, opts TrainOptions) error {
 	if len(configs) == 0 {
 		return fmt.Errorf("no .json config files found in %q", configsDir)
 	}
+	for _, cfg := range configs {
+		if cfg.Training.Distributed != nil {
+			return fmt.Errorf("arch_race does not support training.distributed (%s)", cfg.Name)
+		}
+	}
 
 	// Validate that all configs share vocab_size, seq_len, and batch_tokens
 	// so they can use the same validation set.

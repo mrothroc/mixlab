@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mrothroc/mixlab/data"
 	"github.com/mrothroc/mixlab/distributed"
 	"github.com/mrothroc/mixlab/gpu"
 )
@@ -25,9 +26,10 @@ type distributedResumeTopology struct {
 }
 
 type distributedResumeSamplerState struct {
-	Epoch                   int    `json:"epoch"`
-	LocalBatchCursor        uint64 `json:"local_batch_cursor"`
-	LocalMicrostepsConsumed uint64 `json:"local_microsteps_consumed"`
+	Counter                 *data.DistributedSamplerState `json:"counter,omitempty"`
+	Epoch                   int                           `json:"epoch"`
+	LocalBatchCursor        uint64                        `json:"local_batch_cursor"`
+	LocalMicrostepsConsumed uint64                        `json:"local_microsteps_consumed"`
 }
 
 type distributedResumeManifest struct {

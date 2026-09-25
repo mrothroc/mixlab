@@ -80,6 +80,7 @@ func runTwoRankCase(t *testing.T, name string, child func(*testing.T, int)) {
 	args = append(
 		args,
 		"--",
+		"env",
 		os.Args[0],
 		"-test.run", "^"+t.Name()+"$",
 		"-test.count=1",
@@ -91,6 +92,11 @@ func runTwoRankCase(t *testing.T, name string, child func(*testing.T, int)) {
 	}
 	if err != nil {
 		t.Fatalf("two-rank case %s failed: %v\n%s", name, err, output)
+	}
+	// Some mlx.launch versions exit zero after a child fails. A successful
+	// launcher is not proof that either native test process actually ran.
+	if strings.Count(string(output), "PASS") != 2 || strings.Contains(string(output), "FAIL") {
+		t.Fatalf("two-rank case %s did not pass on both ranks:\n%s", name, output)
 	}
 }
 
@@ -379,11 +385,13 @@ func runDistributedResumeStep(
 func reserveRingPortPair(t *testing.T) int {
 	t.Helper()
 	for attempt := 0; attempt < 20; attempt++ {
-		first, err := net.Listen("tcp", "127.0.0.1:0")
+		// Stay outside the ephemeral client range: MLX connects while its peer
+		// is still binding, so an ephemeral source port can steal the listener.
+		port := 20000 + int(time.Now().UnixNano()%20000)
+		first, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 		if err != nil {
-			t.Fatalf("reserve ring port: %v", err)
+			continue
 		}
-		port := first.Addr().(*net.TCPAddr).Port
 		second, secondErr := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port+1))
 		if secondErr == nil {
 			_ = second.Close()
@@ -695,6 +703,12 @@ func runUnequalDenominatorChild(t *testing.T, rank int) {
 		t.Fatalf("read reference weights: %v", err)
 	}
 	if diff := maxWeightDifference(distributedWeights, referenceWeights); diff > 1e-5 {
+		shapes, _ := computeWeightShapes(localCfg)
+		for i := range distributedWeights {
+			if d := maxWeightDifference(distributedWeights[i:i+1], referenceWeights[i:i+1]); d > 1e-5 {
+				t.Logf("unequal denominator weight %s difference %g", shapes[i].Name, d)
+			}
+		}
 		t.Fatalf("unequal-denominator max diff=%g, want <=1e-5", diff)
 	}
 }
@@ -708,7 +722,12 @@ func maskedRankBatch(rank int) objectiveBatch {
 	}
 	mask := make([]float32, len(x))
 	for i := 0; i < maskCount; i++ {
-		x[i] = 31
+		// Keep some selected tokens unchanged (a valid MLM replacement). Fully
+		// identical values make Q/K gradients analytically zero; Adam's tiny
+		// epsilon then amplifies batch-reduction roundoff, not normalization.
+		if i%2 == 0 {
+			x[i] = 31
+		}
 		mask[i] = 1
 	}
 	return objectiveBatch{

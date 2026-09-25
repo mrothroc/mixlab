@@ -1,9 +1,13 @@
 # R1 DDP Hardware Acceptance
 
-This procedure is the manual release gate for fixed-world R1 DDP. It runs the
-same opt-in worker on two Metal hosts with the MLX TCP ring and on two CUDA
-devices with MLX NCCL. Do not mark the gate complete from singleton or
-loopback-ring results.
+This procedure is the manual **DDP-core hardware gate** for fixed-world R1.
+It runs the same opt-in worker on two Metal hosts with the MLX TCP ring and on
+two CUDA devices with MLX NCCL. Do not mark this gate complete from singleton
+or loopback-ring results. The worker pass does not replace the separate
+release-candidate `mixlab -mode arch` end-to-end gate.
+
+The [2026-09-25 production executable record](#execution-record-2026-09-25-production-executable)
+below completes that separate end-to-end gate on both hardware configurations.
 
 ## Build
 
@@ -151,7 +155,7 @@ diagnostics.
   `4.531685` to `1.9450593`; rank 1 decreased from `4.502567` to `1.9095266`.
   Update microsteps reported nonzero collective, wait, all-reduce, bandwidth,
   global-throughput, accumulation, bucket, and effective-token telemetry.
-- The required cross-host Metal run did not pass the release gate. TCP
+- The required cross-host Metal run did not pass the hardware gate. TCP
   reachability succeeded in both directions, but the M4 application firewall
   listed `/private/tmp/mixlab-ddp-hw.test` as blocked. MLX ring initialization
   timed out before step 1. Administrator authentication was unavailable to
@@ -162,7 +166,7 @@ diagnostics.
 Verdict: worker behavior and loopback ring execution are verified. The
 two-host Metal run subsequently passed (see the continued record below). The
 two-GPU CUDA/NCCL run remains outstanding because no CUDA host is configured in
-this environment; the manual release gate is complete for Metal and pending
+this environment; the DDP-core hardware gate is complete for Metal and pending
 only the CUDA/NCCL leg.
 
 ## Execution Record: 2026-07-27 (continued) — cross-host Metal PASS
@@ -236,6 +240,114 @@ platform-neutral file (`train/synthetic_batch_test.go`, build-tagged
 `mlx && cgo && (darwin || linux)`); previously the CUDA build could not compile
 the package. This is fixed in the same change as this record.
 
-Verdict: **both R1 hardware-acceptance legs pass** — two-host Metal TCP ring
-(2026-07-27) and two-GPU CUDA/NCCL (2026-07-28). The manual R1 release gate is
-complete.
+Verdict: **both R1 DDP-core hardware-acceptance legs pass** — two-host Metal
+TCP ring (2026-07-27) and two-GPU CUDA/NCCL (2026-07-28). This primitive gate
+is complete; production-executable acceptance remains open.
+
+## Execution Record: 2026-09-25 Production Executable
+
+**PASS on both hardware legs**, using the actual `mixlab -mode arch` path,
+not the internal hardware worker. This completes the remaining R1 hardware
+gate; commit/tag/deployment remain a separate release ceremony.
+
+Build provenance: base commit `38137aa0a852d5b41c6d2932c82dac38b9f22b96`
+plus the R1 closeout worktree. The test source archive (excluding credentials
+and `.git`) has SHA-256
+`7a5b843ff0f7f8670e3a4686ea12f0e4d47577e240838b93c4600d1221091d0d`.
+Later test/documentation-only edits do not change the tested executable.
+
+| Build | Executable SHA-256 |
+|---|---|
+| macOS arm64 | `245c7d9d042a30d7d784b1f947d7ccdb5913d6af4a9e46882d1ebe2fce5ef1f1` |
+| Linux amd64 CUDA | `dba1dee58750d648e58d7ee61fc156441c6d24463f57f1024a6013aa2e441e98` |
+
+Recipe: `examples/distributed_causal.json`, D=64, V=64, T=8, local batch=128,
+K=2, world=2, AdamW, dropout=0.1, eight optimizer attempts. Synthetic train and
+validation shards each contain 8,193 tokens, `1 + i % 60`. Dataset content ID:
+`9fc1ed337e1dae7acdc53b91c86323c39afd80caaebbd1651be11f9405b49d61`.
+Each run commits eight updates, consumes sixteen local microbatches / 4,096
+global valid targets, validates, and publishes checkpoints at attempts 4 and 8.
+Restart resumes attempt 4 with the same membership and a new launch-attempt ID.
+
+### Metal Executable
+
+M1 Max and M4 Max, Ethernet addresses `10.105.5.143` and `10.105.5.173`.
+MLX 0.32.1 on both hosts. Hostfile entries use SSH `127.0.0.1` and `m4`, respectively.
+The native binary and identical synthetic data/config were staged at
+`/tmp/mixlab-r1-closeout` on both machines.
+
+```bash
+mlx.launch --hostfile /tmp/mixlab-r1-closeout/metal-hosts.json \
+  --starting-port 29450 -- env /tmp/mixlab-r1-closeout/mixlab \
+  -mode arch -config /tmp/mixlab-r1-closeout/distributed_causal.json \
+  -train '/tmp/mixlab-r1-closeout/train_*.bin' \
+  -checkpoint-dir /tmp/mixlab-r1-closeout/metal-final-checkpoints \
+  -checkpoint-every 4 -safetensors /tmp/mixlab-r1-closeout/metal-final-v2.safetensors \
+  -telemetry-out /tmp/mixlab-r1-closeout/metal-final-v2.jsonl \
+  -log-every 1 -val-every 2
+```
+
+Both ranks completed. First/last loss `4.357527 -> 3.891680`; validation loss
+`3.5439`. Representative final-step telemetry: compute `18.33 ms`, wait
+`21.98 ms`, collective `22.00 ms`, all-reduce `18.59 ms`, effective bandwidth
+`0.032 GB/s`, global throughput `12,702 tokens/s`, gradient bytes `602,880`.
+These are correctness-test measurements, not a speedup claim.
+
+The restart command used port 29430, copied the complete midpoint bundle to the
+M4, added `-resume .../metal-checkpoints/step_000004.distributed.resume.json`,
+and selected separate `metal-resumed` outputs. Original run/restart maximum
+weight difference was `1.49e-8`, optimizer-state difference `1.40e-9`.
+The final fresh executable run also matched that restart within `6.71e-7`
+for weights and `2.57e-9` for moments (tolerance `1e-6`).
+
+Initial startup timed out with both application firewalls enabled. The owner
+added and unblocked the exact staged executable on both hosts using
+`socketfilterfw --add` / `--unblockapp`; the next run passed. **Neither firewall
+was disabled.** This supersedes the earlier host-specific conclusion that the
+command-line exception could not suffice. Recheck exceptions after replacing
+the executable; R1.1's signed packaging remains separate work.
+
+### CUDA Executable
+
+Temporary RunPod host: two NVIDIA A40 GPUs (sm_86), driver `580.159.04`,
+MLX `0.32.0`, image `michaelrothrock/mixlab:runpod`. The current source was built
+inside the image; `libfmt-dev` was installed for the MLX development headers.
+No real user training data or credentials were included in the source upload.
+
+The bounded test driver launched two copies of `/tmp/mixlab-r1`, one per GPU,
+with `MLX_WORLD_SIZE=2`, `MLX_RANK=0/1`, `CUDA_VISIBLE_DEVICES=0/1`,
+`NCCL_HOST_IP=127.0.0.1`, `NCCL_PORT=29472`, and `NCCL_P2P_DISABLE=1`.
+Both used the recipe above with backend `nccl`, identical `-mode arch` flags,
+checkpoint interval 4, log interval 1, and validation interval 2. The driver
+checked both process exit codes, killed peers on failure/timeout, then relaunched
+from the attempt-4 manifest into a separate artifact directory.
+
+Both fresh and resumed ranks exited zero. First/last loss
+`4.357527 -> 3.891700`, validation loss `3.5439`. Final fresh step: compute
+`28.10 ms`, wait `8.26 ms`, collective `8.28 ms`, all-reduce `1.24 ms`, effective
+bandwidth `0.485 GB/s`, global throughput `14,083 tokens/s`.
+Maximum final weight difference `8.94e-8`; optimizer-state difference `5.00e-8`.
+JSONL assertions also verified lifetime optimizer-attempt, microstep, and
+valid-token counters after resume. Non-root logs contained no training progress.
+
+A separate negative rerun deliberately encountered an existing checkpoint:
+rank zero refused to overwrite it and rank one reported publication failure;
+both failed instead of continuing with an inconsistent checkpoint.
+
+### Regression Evidence
+
+- `go test ./... -count=1`: pass, using the repository Python environment.
+- `make lint`: pass, zero issues.
+- Focused MLX `gpu` / `train` distributed suite: pass, including the real CLI
+  gate for flat and record datasets, rank-zero early stop, copied-path resume,
+  K=4 global-batch parity, unequal normalization, one-rank NaN/global skip,
+  initialization mismatch, and changed-member rejection.
+- A one-rank strict MLX ring fails closed within the 30-second startup bound
+  on this MLX version, before loading data. No single-process fallback occurs.
+- Tests require native child `PASS` evidence, not only `mlx.launch`'s exit code;
+  the installed launcher can return zero after a failed child.
+
+Synthetic hardware artifacts were retained outside the repository under
+`/tmp/mixlab-r1-closeout`; the CUDA archive is `cuda-ddp-evidence.tar.gz`.
+The temporary RunPod pod was terminated after evidence retrieval; a follow-up
+API query confirmed that no pods remained in the account.

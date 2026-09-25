@@ -1,25 +1,67 @@
 # Distributed (DDP) training — current state and contributor guide
 
-This is a **contributor/maintainer** document, not a user guide. It records how
-data-parallel (DDP) training works in mixlab **today** and the operational
-traps we already paid for, so contributors don't repeat the discovery. The
-user-facing "train your model across N machines" CLI does **not** exist yet
-(see [Status](#status)); when it lands, this doc's user-facing successor should
-supersede the "How to run it today" section.
+Later releases add a cluster manager, enrollment, LAN recruitment, and DiLoCo.
+Those are not part of this release and are not documented here.
+
+This guide covers explicitly launched fixed-world data-parallel training and
+the lower-level contributor tests. Host recruitment and managed launch remain
+R1.1 work. R1 assumes administrator-provisioned hosts and a trusted transport.
 
 ## Status
 
-DDP is an **R1 walking-skeleton primitive**. It is **not exposed through the
-`mixlab` CLI** — there is no `-mode`, `-distributed`, `-hostfile`, or `-backend`
-flag, and `-mode arch` always constructs the trainer with a `nil` distributed
-context (`train/gpu_trainer_mlx.go`). The DDP trainer is reachable **only from
-Go test entrypoints launched under `mlx.launch`**. `-mode smoke` merely *probes*
-that a backend is available; it does not train.
+`training.distributed` now selects DDP through the ordinary `-mode arch`
+entrypoint. There is no separate DDP mode or Mixlab hostfile flag: `mlx.launch`
+(or an equivalent administrator-operated launcher) supplies MLX rendezvous.
+`-mode smoke` only probes backend availability; it does not train.
 
-CLI wiring (a `-mode arch` path that builds a `DistributedTrainerContext` from a
-hostfile/backend selection instead of `nil`) is planned for a later release.
-Until then, the only runnable distributed job is the R1 hardware-acceptance
-worker — see [`distributed-r1-hardware-acceptance.md`](distributed-r1-hardware-acceptance.md).
+The production path includes rank-disjoint data, accumulated optimizer attempts,
+rank-zero control, and direct checkpoint resume. Release acceptance is tracked
+separately in the [hardware record](distributed-r1-hardware-acceptance.md).
+Earlier core-worker passes do not substitute for the executable gates.
+
+The 2026-09-25 executable gates passed on M1/M4 Metal and two A40 CUDA GPUs,
+including midpoint checkpoint restart. These are acceptance results for the
+closeout worktree, not a claim that a new release has been published.
+
+## Launch The Trainer
+
+Start with [`examples/distributed_causal.json`](../examples/distributed_causal.json).
+Use identical config and shard contents on every rank; local dataset directories
+may differ. Each host needs a compatible native MLX build.
+
+```bash
+mlx.launch --hostfile hosts.json -- \
+  env /path/to/mixlab -mode arch -config model.json -train 'data/train_*.bin' \
+  -checkpoint-dir checkpoints -checkpoint-every 100 -safetensors final.safetensors
+```
+
+The `env` command is intentional: it prevents launcher versions which default
+to Python from treating the native executable as a Python script. See the
+[hardware procedure](distributed-r1-hardware-acceptance.md) for ring hostfiles
+and the equivalent two-GPU NCCL environment. Some MLX launcher versions return
+zero even when a child fails; inspect every rank's status and the expected
+checkpoint/summary, not just the launcher's exit code.
+
+`batch_tokens` is the **local microbatch** size. Global batch size is
+`batch_tokens * gradient_accumulation_steps * world_size`. `steps`, warmup, and
+checkpoint cadence count optimizer attempts, including globally skipped updates.
+Learning rates are not automatically multiplied by world size. Lookahead is off.
+
+Resume with the same launch and `-resume checkpoints` (or a specific distributed
+resume manifest). Copy the complete checkpoint bundle to each host first.
+Exact resume checks ordered host/rank identity, backend, model/program, optimizer,
+batch/accumulation topology, and content-stable dataset identity. The sampler
+cursor is restored directly; no earlier batches are replayed. A new launch gets
+a new attempt ID, not a new membership. `-safetensors-load` is weights-only warm
+start, not exact resume. Only rank zero publishes artifacts or opens telemetry.
+
+Continuous token shards partition aligned shuffle chunks; sequence shards with
+`one_record_per_row` partition whole records, reuse BOS/EOS/PAD framing, and
+normalize by valid target count. Packed-segment and classification datasets are
+not exposed. Shards must remain immutable. Short shard tails and fewer-than-world
+remaining samples are dropped deterministically each epoch. Dataset identity
+uses the canonical manifest, logical shard basenames, sizes, and content hashes;
+paths and modification times are excluded.
 
 ## Backends
 
@@ -49,9 +91,12 @@ not by any mixlab Go code. mixlab only reads it back.
   (`train/distributed_trainer.go`) takes a `DistributedTrainerContext`
   (`train/distributed_context.go`): `GroupRuntime`, `LocalView`,
   `GradientBucketBytes`, `AccumulationSteps`, `DatasetHash`, `ScheduledPhase`.
-  **Only test files build a non-nil context.**
-- **No JSON config fields** exist for `accumulation_steps`, gradient bucketing,
-  or the loss normalizer — they are set programmatically
+- **Production bootstrap**: `gpu.BootstrapGroupRuntime` strictly initializes MLX,
+  reads authoritative rank/world, agrees ordered member descriptors, and verifies
+  fresh/resumed membership before building the trainer or sampler. Size one is
+  rejected. `train/distributed_train_mlx.go` orchestrates optimizer attempts.
+- **JSON config**: `training.distributed` selects mode, backend, accumulation,
+  and gradient bucketing. Prepared batches provide the loss normalizer
   (`gpu/group_runtime_mlx.go`: `mlxTrainerSetDistributedOptions`,
   `mlxTrainerSetNextLossNormalizer`). The one public knob is per-rank
   `batch_tokens`; the global batch is
@@ -60,16 +105,18 @@ not by any mixlab Go code. mixlab only reads it back.
 
 ### R1 constraints
 
-The DDP path validates (`train/distributed_trainer.go`) and currently rejects
-anything outside the walking-skeleton envelope:
+Public config validation (`arch/distributed.go`) intentionally exposes less than
+the internal numerical test envelope:
 
-- objective must be **causal, mlm, or mntp**;
+- objective must be **causal** (MLM/MNTP remain internal parity tests);
 - optimizer must be **adamw**;
 - **no** `seq_len_schedule`;
 - **no** distillation / data2vec / MTP / first-byte-mask / example-framing /
-  attention-segment-mask auxiliary losses.
+  attention-segment-mask auxiliary losses;
+- no BatchNorm mutable buffers, canonical Mamba-3, MoE/custom blocks, recurrence,
+  dynamic shapes, QAT, SWA, TTT validation updates, or `arch_race`.
 
-## How to run it today
+## Run The Core Tests
 
 Everything below is the **test-binary + `mlx.launch`** flow. `mlx.launch` is the
 console script from the Python `mlx` package; it SSHes to each host, assigns
@@ -116,19 +163,12 @@ ad-hoc- or self-signed listeners — which the Go test binary and a Homebrew-bui
 (`ECONNRESET`/`EPIPE` on the peer, `ENOTCONN` on the listener), surfacing as
 `[ring] Too many send/recv errors` and `context deadline exceeded` before step 1.
 
-**Code-signing does not fix this** — a self-signed cert satisfies
-`codesign --verify` but not the ALF trust decision, and Homebrew ad-hoc re-signs
-binaries on install (arm64 relocation) so a Developer ID signature would not even
-survive `brew install`. On a trusted, isolated training LAN, disable the ALF on
-**every** host for the run:
-
-```bash
-sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off   # re-enable with 'on' after
-```
-
-`socketfilterfw --add/--unblockapp` is unreliable on current macOS for
-non-Apple-signed binaries; the alternatives are the GUI "Allow" prompt (keeps the
-firewall on) or disabling the ALF. Full detail: the "Metal TCP Ring" section of
+The previous acceptance run found self-signing and command-line app exceptions
+insufficient on its particular hosts. Do not automatically disable host security.
+Have an administrator allow the exact executable's inbound connections on every
+Mac and verify the exception after rebuilding or replacing it. R1.1's signed
+distribution and separate cluster-agent plan addresses the packaging problem.
+Full historical detail: the "Metal TCP Ring" section of
 [`distributed-r1-hardware-acceptance.md`](distributed-r1-hardware-acceptance.md).
 
 ### macOS: Little Snitch DPI closes connect-then-wait flows
@@ -169,14 +209,18 @@ ranks directly with the NCCL env contract (`NCCL_HOST_IP`, `NCCL_PORT`,
 `MLX_WORLD_SIZE`, `MLX_RANK`, one `CUDA_VISIBLE_DEVICES` per rank) — the exact
 form is in the CUDA NCCL section of the acceptance doc.
 
-## Where the CLI wiring will go
+## Executable Regression Gate
 
-When DDP is exposed through the CLI, the extension point is `-mode arch`: build a
-`DistributedTrainerContext` from a hostfile/backend selection and pass it to
-`initGPUTrainerWithDistributedContext` instead of the current `nil`. The trainer,
-group runtime, gradient bucketing, accumulation, and weighted loss reduction
-already exist and are exercised by `train/distributed_*_mlx_test.go`; the missing
-piece is CLI surface + config plumbing, within the R1 constraints above.
+```bash
+CGO_ENABLED=1 go build -tags mlx -o /tmp/mixlab-ddp ./cmd/mixlab
+MIXLAB_DDP_CLI=/tmp/mixlab-ddp go test -tags mlx ./train \
+  -run TestDistributedCLITrainingAndResume -count=1 -v
+```
+
+On Metal this launches two local native processes and checks fresh training,
+rank-zero validation/early stop, flat/record data, copied-path checkpoint resume,
+weights and moments, telemetry counters, and incompatible-accumulation rejection.
+It is a regression gate, not a replacement for two physical Macs.
 
 ## Reference
 
@@ -184,12 +228,12 @@ piece is CLI surface + config plumbing, within the R1 constraints above.
 |-------|------------------|
 | Training mode (single-process) | `-mode arch` (`cmd/mixlab/main.go`) |
 | Backend readiness probe | `-mode smoke` → `RequireDistributedBackend` (`train/smoke.go`) |
-| DDP CLI flags | none exist yet |
+| DDP selection | `training.distributed`, ordinary `-mode arch` |
 | Backends | `ring` (macOS), `nccl` (Linux) (`gpu/runtime_capabilities.go`) |
 | Launcher | `mlx.launch` (Python `mlx` package) |
 | MLX init | `mx::distributed::init(strict, backend)` (`gpu/group_runtime.cpp`) |
 | Go runtime entry | `gpu.NewGroupRuntime` / `NewSingletonGroupRuntime` (`gpu/group_runtime.go`) |
-| DDP trainer entry | `initGPUTrainerWithDistributedContext` (`train/distributed_trainer.go`) — test callers only |
+| DDP trainer entry | `runDistributedTrain` -> `initGPUTrainerWithDistributedContext` |
 | Distributed context | `DistributedTrainerContext` (`train/distributed_context.go`) |
 | Launcher/MLX env vars | `MLX_RANK`, `MLX_WORLD_SIZE`, `NCCL_HOST_IP`, `NCCL_PORT`, `NCCL_P2P_DISABLE`, `CUDA_VISIBLE_DEVICES` |
 | Per-rank batch (public) | `batch_tokens` (`docs/config-training.md`) |

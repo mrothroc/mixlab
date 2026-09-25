@@ -1,5 +1,44 @@
 # mixlab JSON Config Reference
 
+## Fixed-World Distributed Training
+
+Optional `training.distributed` (`distributed`) enables fixed-world DDP under
+the MLX launcher. Omission preserves ordinary single-process training.
+
+```json
+"distributed": {
+  "mode": "ddp",
+  "backend": "auto",
+  "gradient_accumulation_steps": 1,
+  "gradient_bucket_bytes": 33554432
+}
+```
+
+`mode` must be `ddp`. `backend` is `auto` (default), `ring` (Metal/macOS), or
+`nccl` (CUDA/Linux); auto resolves explicitly before strict MLX initialization.
+`gradient_accumulation_steps` defaults to 1 and `gradient_bucket_bytes` to
+32 MiB. Both must be positive; unknown nested fields are rejected. An MLX
+world of size one is an error, not a single-process fallback.
+
+R1 exposes causal AdamW with fixed sequence length, equal local microbatches,
+and continuous token shards or `one_record_per_row` sequence shards.
+Record rows retain BOS/EOS/PAD framing and valid-target normalization.
+`batch_tokens` remains local microbatch tokens;
+`steps` counts optimizer attempts, including globally skipped attempts. Global
+batch tokens are `batch_tokens * gradient_accumulation_steps * world_size`;
+learning rates are not automatically scaled. Chunk shuffling is deterministic
+and rank-disjoint; `shuffle_chunk_tokens`, when set, must be a multiple of
+`seq_len`. Ragged shard tails and fewer-than-world remaining chunks are dropped.
+
+Masked/classification/combined objectives, auxiliary losses, BatchNorm buffers,
+Mamba-3 canonical, custom blocks, MoE, dynamic shapes, QAT, SWA, recurrence,
+TTT validation, and `arch_race` are not exposed in R1. Unsupported combinations
+fail rather than silently training independent replicas. Exact resume requires
+the same ordered hosts/ranks, backend, local batch size, and accumulation.
+See [Distributed Training](distributed-training.md) for the launch procedure and
+[R1 DDP hardware acceptance](distributed-r1-hardware-acceptance.md) for current
+acceptance status.
+
 This reference covers the current JSON schema used by `mixlab`, based on:
 
 - `arch/config.go` for top-level and training fields

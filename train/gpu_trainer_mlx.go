@@ -180,7 +180,7 @@ func initMLXGPUTrainerWithDistributedContext(
 		weightData = loadedWeights
 	} else {
 		weightData = initWeightData(shapes, cfg.Training.Seed, cfg.Training.WeightInit, cfg.Training.WeightInitStd)
-		if coverage := weightInitCoverage(shapes, cfg.Training.WeightInit); coverage != "" {
+		if coverage := weightInitCoverage(shapes, cfg.Training.WeightInit); coverage != "" && (distributedContext == nil || distributedContext.LocalView.LocalRank == 0) {
 			fmt.Println(coverage)
 		}
 	}
@@ -238,7 +238,9 @@ func initMLXGPUTrainerWithDistributedContext(
 		gpu.FreeHandles(handles)
 		return nil, err
 	}
-	fmt.Println(report.summary())
+	if distributedContext == nil || distributedContext.LocalView.LocalRank == 0 {
+		fmt.Println(report.summary())
+	}
 	computeDType, err := gpuComputeDTypeForTraining(cfg)
 	if err != nil {
 		gpuProg.Destroy()

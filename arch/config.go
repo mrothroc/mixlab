@@ -340,6 +340,7 @@ func (e *ExampleFramingSpec) UnmarshalJSON(data []byte) error {
 
 // TrainingSpec holds training hyperparameters.
 type TrainingSpec struct {
+	Distributed                       *DistributedSpec             `json:"distributed,omitempty"`
 	Steps                             int                          `json:"steps"`
 	LRScheduleSteps                   int                          `json:"lr_schedule_steps,omitempty"`
 	LR                                float64                      `json:"lr"`
@@ -924,6 +925,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	}
 	if err := validateEvalSpec(cfg, source); err != nil {
 		return nil, err
+	}
+	if err := ValidateDistributedConfig(cfg); err != nil {
+		return nil, fmt.Errorf("config %q: %w", source, err)
 	}
 
 	return cfg, nil

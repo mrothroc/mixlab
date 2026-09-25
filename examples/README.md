@@ -9,10 +9,19 @@ support JSONC comments (`//`) for inline documentation.
 # Build mixlab with MLX backend
 make build
 
-# Run any config
+# Run a single-process config
 ./mixlab -mode arch -config examples/<config>.json \
   -train "data/example/train_*.bin"
 ```
+
+## Distributed Training
+
+[`distributed_causal.json`](distributed_causal.json) is a small causal AdamW
+DDP example with two accumulated microbatches per optimizer attempt. Launch it
+with at least two MLX ranks, not as a standalone process. Backend `auto` selects
+Metal ring on macOS and NCCL on CUDA/Linux. See the
+[distributed guide](../docs/distributed-training.md) for launch, data ownership,
+checkpoint/resume, support limits, and firewall requirements.
 
 ## Hugging Face export
 

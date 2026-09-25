@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/mrothroc/mixlab/arch"
+	"github.com/mrothroc/mixlab/data"
 	"github.com/mrothroc/mixlab/distributed"
 	"github.com/mrothroc/mixlab/gpu"
 )
@@ -376,7 +377,11 @@ func buildDistributedResumeManifest(
 	}
 	datasetHash := ctx.DatasetHash
 	if ctx.TrainPattern != "" {
-		calculatedHash, hashErr := trainingDatasetHash(ctx.TrainPattern)
+		hashDataset := trainingDatasetHash
+		if ctx.Sampler.Counter != nil {
+			hashDataset = data.DistributedDatasetIdentity
+		}
+		calculatedHash, hashErr := hashDataset(ctx.TrainPattern)
 		if hashErr != nil {
 			return distributedResumeManifest{}, nil, fmt.Errorf(
 				"hash training dataset: %w",

@@ -1,0 +1,30 @@
+{
+  "name": "distributed_causal",
+  "model_dim": 64,
+  "vocab_size": 64,
+  "seq_len": 8,
+  "dropout": 0.1,
+  "blocks": [
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"},
+    {"type": "plain", "heads": 4},
+    {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "causal",
+    "optimizer": "adamw",
+    "steps": 8,
+    "lr": 0.001,
+    "warmup_steps": 0,
+    "seed": 97,
+    "batch_tokens": 128,
+    "grad_clip": 1.0,
+    "weight_decay": 0.0,
+    "distributed": {
+      "mode": "ddp",
+      "backend": "auto",
+      "gradient_accumulation_steps": 2,
+      "gradient_bucket_bytes": 33554432
+    }
+  }
+}

@@ -5,9 +5,7 @@ import (
 )
 
 func RunArch(configPath, trainPattern string, opts TrainOptions) error {
-	return withTelemetryRuntime(opts, func(opts TrainOptions) error {
-		return runArch(configPath, trainPattern, opts)
-	})
+	return runArch(configPath, trainPattern, opts)
 }
 
 func runArch(configPath, trainPattern string, opts TrainOptions) error {
@@ -16,6 +14,10 @@ func runArch(configPath, trainPattern string, opts TrainOptions) error {
 	}
 	cfg, err := LoadArchConfig(configPath)
 	if err != nil {
+		return err
+	}
+	if cfg.Training.Distributed != nil {
+		_, err := runTrain(cfg, trainPattern, opts)
 		return err
 	}
 	fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
@@ -38,7 +40,12 @@ func runArch(configPath, trainPattern string, opts TrainOptions) error {
 		return fmt.Errorf("-train is required for arch mode; pass a glob pattern for data shards, e.g.: -train 'data/train_*.bin'")
 	}
 
-	result, err := runTrain(cfg, trainPattern, opts)
+	var result TrainResult
+	err = withTelemetryRuntime(opts, func(options TrainOptions) error {
+		var runErr error
+		result, runErr = runTrain(cfg, trainPattern, options)
+		return runErr
+	})
 	if err != nil {
 		return err
 	}

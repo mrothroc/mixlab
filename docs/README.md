@@ -13,6 +13,7 @@ Use this page to choose the shortest path for the task at hand. The root
 | Count parameters and estimated compute | `mixlab -mode count -config model.json` | [Count and eval CLI](cli-eval.md) |
 | Audit optimizer coverage, rates, and decay | `mixlab -mode optimizer-report -config model.json` | [Optimizer report](cli.md#optimizer-report) |
 | Train, compare, or resume runs | [Training CLI](cli-train.md) | [Performance](performance.md) |
+| Train across a fixed group of Macs or CUDA GPUs | [Distributed training](distributed-training.md) | [Hardware acceptance](distributed-r1-hardware-acceptance.md) |
 | Evaluate or score checkpoints | [Count and eval CLI](cli-eval.md) | [Feature matrix](feature-matrix.md) |
 | Generate causal or diffusion samples | [Generation CLI](cli-generate.md) | [Grammar constraints](grammar-constrained-generation.md) |
 | Export to Hugging Face | [HF export workflow](hf-export.md) | [HF support matrix](hf-export-support-matrix.md) |
