@@ -92,11 +92,18 @@ func TestEnrollmentHTTPBoundFlow(t *testing.T) {
 		res, err := c.Do(r)
 		check(t, err)
 		defer func() { _ = res.Body.Close() }()
+		// Drain to EOF before decoding. The enrollment transport permits exactly
+		// one dial, so every request after the first depends on this connection
+		// going back to the idle pool, and it only does that once the body is
+		// fully read. json.Decode stops at the end of the first JSON value and
+		// can leave the terminating bytes unread, which re-dials and fails with
+		// "enrollment connection cannot reconnect". That made this test flaky
+		// rather than wrong. The production client already reads to EOF; see
+		// enrollmentJSON in provisioned_client.go.
+		payload, err := io.ReadAll(io.LimitReader(res.Body, 64<<10))
+		check(t, err)
 		if res.StatusCode == 200 && dst != nil {
-			check(t, json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(dst))
-		} else {
-			_, err = io.Copy(io.Discard, res.Body)
-			check(t, err)
+			check(t, json.Unmarshal(payload, dst))
 		}
 		return res.StatusCode
 	}
