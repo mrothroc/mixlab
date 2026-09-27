@@ -24,6 +24,7 @@ type TrainOptions struct {
 	SWADecayOverride    *float32 // If set, overrides training.swa_decay
 	SWAIntervalOverride *int     // If set, overrides training.swa_interval
 	telemetry           *telemetryRuntime
+	managed             *managedTraining // authenticated local assignment; never public config
 
 	// OptimizerOverride lets callers customize the optimizer plan that RunArch
 	// builds before the GPU trainer is created.

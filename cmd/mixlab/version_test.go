@@ -4,6 +4,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+
+	"github.com/mrothroc/mixlab/internal/buildinfo"
 )
 
 // buildInfoFixture builds the debug.BuildInfo shapes the linker actually
@@ -94,7 +96,7 @@ func TestVersionStringReflectsRealBuildInfo(t *testing.T) {
 	if !ok {
 		t.Skip("build info unavailable")
 	}
-	if want := formatVersion(info); got != want {
+	if want := formatVersion(info) + "\nworker_protocol " + buildinfo.WorkerProtocol; got != want {
 		t.Fatalf("versionString() = %q, want %q from this binary's build info", got, want)
 	}
 	for _, hardcoded := range []string{"0.115.1", "0.115.0", "0.114.0"} {

@@ -1,4 +1,5 @@
 BIN ?= mixlab
+CLUSTER_BIN ?= mixlab-cluster
 CGO_ENABLED ?= 1
 TAGS ?= mlx
 
@@ -22,7 +23,7 @@ export CGO_LDFLAGS  += -L$(MLX_PREFIX)/lib -Wl,-rpath,$(MLX_PREFIX)/lib
 endif
 endif
 
-.PHONY: build test vet lint setup clean help check-mlx benchmark benchmark-all
+.PHONY: build cluster test vet lint setup clean help check-mlx benchmark benchmark-all
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
@@ -41,6 +42,9 @@ check-mlx: ## Show detected MLX path and CGO flags
 
 build: ## Build mixlab binary
 	CGO_ENABLED=$(CGO_ENABLED) go build $(if $(TAGS),-tags $(TAGS),) -o $(BIN) ./cmd/mixlab
+
+cluster: ## Build the development-only cluster scaffold (no MLX or cgo)
+	CGO_ENABLED=0 go build -o $(CLUSTER_BIN) ./cmd/mixlab-cluster
 
 test: ## Run all tests
 	go test ./... -count=1 -timeout 120s

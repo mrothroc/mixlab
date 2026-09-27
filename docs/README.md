@@ -64,6 +64,11 @@ primary user contract:
 - [Reference parity audit](reference-parity-audit-2026-06.md)
 - [CUDA long-run hang investigation](mamba3-cuda-hang-investigation.md)
 - [Release process](releasing.md)
+- [Experimental signed macOS distribution candidates](macos-distribution.md)
+- [Experimental cluster trust setup](cluster-initialization.md)
+- [Experimental cluster enrollment](cluster-enrollment.md)
+- [Cluster rekey and reenrollment](cluster-rekey.md)
+- [Experimental node hosting](cluster-agent.md)
 
 Public config fields and CLI flags are checked against the documentation by the
 Go test suite. Prefer updating the canonical references instead of adding a

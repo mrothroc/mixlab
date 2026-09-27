@@ -8,7 +8,7 @@ CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab/   # MLX-tagged build (p
 go build ./...                                              # stub build (no MLX)
 make lint                                                   # golangci-lint (pinned to CI's Go) + 1000-line file cap
 go test -tags mlx ./arch/... ./gpu ./train -count=1         # full MLX suite (needs Metal/CUDA)
-CGO_ENABLED=0 go test ./arch/... ./cmd/mixlab ./data/... ./train/... -count=1   # CI command (no MLX)
+CGO_ENABLED=0 go test ./... -count=1                        # portable regression (no MLX); same command CI runs
 ```
 `mixlab -mode validate -config model.json` builds the IR from a config without touching data or the GPU — the fastest correctness check.
 

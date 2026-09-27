@@ -14,6 +14,7 @@ import (
 	"github.com/mrothroc/mixlab/data"
 	"github.com/mrothroc/mixlab/distributed"
 	"github.com/mrothroc/mixlab/gpu"
+	"github.com/mrothroc/mixlab/workerjob"
 )
 
 // runDistributedTrain owns optimizer attempts, not gradient synchronization.
@@ -55,9 +56,21 @@ func runDistributedTrain(cfg *ArchConfig, pattern string, opts TrainOptions) (Tr
 	if err != nil {
 		return TrainResult{}, err
 	}
-	group, err := gpu.BootstrapGroupRuntime(context.Background(), backend, func(rank int) (string, error) {
+	bootstrapCtx := context.Background()
+	memberID := func(rank int) (string, error) {
 		return fmt.Sprintf("%s/rank/%d", host, rank), nil
-	}, expected)
+	}
+	if managed := opts.managed; managed != nil {
+		bootstrapCtx = managed.ctx
+		expected = &managed.assignment.View.Membership
+		memberID = func(rank int) (string, error) {
+			if rank != managed.assignment.View.LocalRank {
+				return "", fmt.Errorf("actual MLX rank differs from managed assignment")
+			}
+			return managed.assignment.View.LocalMemberID, nil
+		}
+	}
+	group, err := gpu.BootstrapGroupRuntime(bootstrapCtx, backend, memberID, expected)
 	if err != nil {
 		return TrainResult{}, err
 	}
@@ -65,6 +78,9 @@ func runDistributedTrain(cfg *ArchConfig, pattern string, opts TrainOptions) (Tr
 	loader, err := data.NewDistributedLoader(pattern, cfg.Training.Seed, group.WorldSize(), group.Rank(), cfg.SeqLen, effectiveShuffleChunkTokens(cfg), cfg.VocabSize, group.LocalView().Membership.MembersHash)
 	if err != nil {
 		return TrainResult{}, err
+	}
+	if opts.managed != nil && loader.State().DatasetID != opts.managed.assignment.DatasetSHA256 {
+		return TrainResult{}, fmt.Errorf("managed dataset changed after admission")
 	}
 	manifest, _, err := validateDatasetManifestForConfig(cfg, pattern)
 	if err != nil {
@@ -84,6 +100,12 @@ func runDistributedTrain(cfg *ArchConfig, pattern string, opts TrainOptions) (Tr
 	prog, err := BuildIRProgramFromConfig(cfg)
 	if err != nil {
 		return TrainResult{}, err
+	}
+	if opts.managed != nil {
+		digest, err := workerjob.Digest(prog)
+		if err != nil || digest != opts.managed.assignment.ProgramSHA256 {
+			return TrainResult{}, fmt.Errorf("managed program changed after admission")
+		}
 	}
 	for _, op := range prog.Ops {
 		if op.Code == arch.OpRandomNormal {
@@ -107,6 +129,11 @@ func runDistributedTrain(cfg *ArchConfig, pattern string, opts TrainOptions) (Tr
 	spec.ComputeDType, err = gpuComputeDTypeForTraining(cfg)
 	if err != nil {
 		return TrainResult{}, err
+	}
+	if opts.managed != nil {
+		if err := checkManagedLayout(opts.managed.assignment, shapes, spec); err != nil {
+			return TrainResult{}, err
+		}
 	}
 	sched, steps := buildTrainingScheduler(cfg.Training)
 	start := 0
@@ -147,10 +174,15 @@ func runDistributedTrain(cfg *ArchConfig, pattern string, opts TrainOptions) (Tr
 		}
 	}
 	// Control flow must agree even when per-host artifact paths differ.
+	checkpointStop, err := managedCheckpointStop(opts, start, steps)
+	if err != nil {
+		return TrainResult{}, err
+	}
 	controlHash, err := hashJSON64(struct {
 		Start, Steps, CheckpointEvery, LogEvery, ValEvery int
+		CheckpointStop                                    int
 		Resume, Export                                    bool
-	}{start, steps, opts.CheckpointEvery, opts.LogEvery, opts.ValEvery, resume != nil, opts.SafetensorsPath != ""})
+	}{start, steps, opts.CheckpointEvery, opts.LogEvery, opts.ValEvery, checkpointStop, resume != nil, opts.SafetensorsPath != ""})
 	if err != nil {
 		return TrainResult{}, err
 	}
@@ -169,6 +201,11 @@ func runDistributedTrain(cfg *ArchConfig, pattern string, opts TrainOptions) (Tr
 	}
 	if err = trainer.(gpuTrainingStepSetter).SetTrainingStepGPU(start * ctx.AccumulationSteps); err != nil {
 		return TrainResult{}, err
+	}
+	if opts.managed != nil {
+		if err := opts.managed.ready(); err != nil {
+			return TrainResult{}, err
+		}
 	}
 	var telemetry *telemetryRuntime
 	var val *data.ValSet
@@ -214,7 +251,16 @@ func runDDPAttempts(cfg *ArchConfig, pattern string, opts TrainOptions, trainer 
 		}
 		globalTokens, globalExamples = m.EffectiveGlobalTokens, m.EffectiveGlobalExamples
 	}
+	checkpointStop, err := managedCheckpointStop(opts, start, steps)
+	if err != nil {
+		return result, err
+	}
 	for step := start; step < steps; step++ {
+		if opts.managed != nil {
+			if err := opts.managed.ctx.Err(); err != nil {
+				return result, err
+			}
+		}
 		lr := sched.At(step)
 		numerator, denominator := 0.0, 0.0
 		for micro := 0; micro < ctx.AccumulationSteps; micro++ {
@@ -279,6 +325,11 @@ func runDDPAttempts(cfg *ArchConfig, pattern string, opts TrainOptions, trainer 
 			}
 		}
 		logStep := step == start || step == steps-1 || stop || (logEvery > 0 && (step+1)%logEvery == 0)
+		if opts.managed != nil && logStep {
+			if err := opts.managed.progress(workerjob.Event{Step: step + 1, Committed: stats.CommittedSteps, Loss: loss}); err != nil {
+				return result, err
+			}
+		}
 		if root && rootErr == nil {
 			rootErr = progress.update(step+1, stats.CommittedSteps)
 			if logStep && rootErr == nil {
@@ -301,6 +352,7 @@ func runDDPAttempts(cfg *ArchConfig, pattern string, opts TrainOptions, trainer 
 				}
 			}
 		}
+		stop = stop || (checkpointStop > 0 && step+1 == checkpointStop)
 		stop, err = distributedRootDecision(group, stop, rootErr)
 		if err != nil {
 			return result, err

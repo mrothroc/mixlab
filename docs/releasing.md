@@ -1,5 +1,9 @@
 # Releasing a new version of mixlab
 
+For experimental signed/notarized macOS candidates, see
+[macOS distribution](macos-distribution.md). That workflow is independent of
+the existing source-based Homebrew release and does not publish a release.
+
 ## Version scheme
 
 Semantic versioning: `vMAJOR.MINOR.PATCH`

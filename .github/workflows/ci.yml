@@ -20,10 +20,11 @@ jobs:
         with:
           python-version: '3.12'
 
-      # GPU package requires MLX headers (Metal/CUDA) — skip on CI.
-      # Pure-Go packages (arch, data, train) compile and test without CGO.
+      # ./... is safe without MLX: the gpu package ships CGO_ENABLED=0 stubs.
+      # Enumerating packages here drifted -- artifact/ and recruitment/ were
+      # added with tests that never ran. Deriving the list cannot drift.
       - name: Vet
-        run: CGO_ENABLED=0 go vet ./arch/... ./cmd/mixlab ./data/... ./train/...
+        run: CGO_ENABLED=0 go vet ./...
 
       - name: Install prepare test dependencies
         run: |
@@ -31,7 +32,7 @@ jobs:
           python -c "import numpy, tokenizers"
 
       - name: Test
-        run: CGO_ENABLED=0 go test ./arch/... ./cmd/mixlab ./data/... ./train/... -count=1 -timeout 120s
+        run: CGO_ENABLED=0 go test ./... -count=1 -timeout 600s
 
       # scripts/ ships in the RunPod image; its tests otherwise only ran by hand.
       - name: Test Python scripts
@@ -78,7 +79,7 @@ jobs:
           CGO_ENABLED: "0"
         with:
           version: v2.1.6
-          args: ./arch/... ./cmd/mixlab ./data/... ./train/...
+          args: ./...
 
       - name: Check file sizes (max 1000 lines per .go file)
         run: |

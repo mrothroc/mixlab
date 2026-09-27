@@ -31,6 +31,16 @@ mode-specific flags.
 
 ## Common Conventions
 
+The internal `worker-probe` mode emits a bounded JSON executable/device report
+for an administrator-approved cluster hosting adapter. It accepts no training
+arguments, starts no distributed group, and reports an unavailable GPU explicitly.
+It is not a training workflow. The agent invokes the separate trainer executable
+for this probe rather than linking MLX into its control process.
+The internal `worker-plan` mode reads one bounded config object from stdin and
+emits executable, config, IR, weight-layout and optimizer identities. It accepts
+no other flags and initializes no GPU, data loader or distributed group. It is
+used by the cluster controller before recruiting a fixed cohort.
+
 - `-config` points to the JSON architecture config for single-config modes.
 - `-train` is a shard glob. It is used for training, eval, parity sampling,
   and hidden-state export.
@@ -53,6 +63,7 @@ before any GPU probing, so it still answers on a machine where MLX is broken:
 ```bash
 $ mixlab -version
 mixlab v0.115.1 (e00e54f2efe2, 2026-09-18T13:28:21Z)
+worker_protocol mixlab_worker_control_v1
 ```
 
 The version, commit, and build time come from the information the Go linker
@@ -60,6 +71,22 @@ stamps into the binary, so they describe the binary in hand rather than
 whatever a package manager last recorded. A binary built from a modified tree
 marks its commit `-dirty`, and a build without VCS stamping prints the module
 version alone. An untagged build reports `(devel)` as its version.
+
+The first line retains the existing version format. The additive
+`worker_protocol` line identifies the shared local worker-control envelope
+contract, independently of context-owned payload versions. It does not imply
+that managed worker launch or enrollment is available.
+
+The experimental `mixlab-cluster` binary supports `init`, `invite`, `enroll`,
+`enrollment serve`, `authority serve`, `revoke`, `nodes`, `submit`, and foreground `agent`
+with explicit `agent init` setup, plus `-version` and
+`-help`. Its version report uses the same build metadata and worker protocol,
+followed by the experimental trusted-host support notice. See
+[cluster initialization](cluster-initialization.md) for protected setup and
+recovery, and [enrollment](cluster-enrollment.md) for explicit-address workflows
+and their current limitations, and [node hosting](cluster-agent.md) for the
+experimental foreground agent. Initialization opens no listener; the explicit
+serving commands do. No command changes firewall settings.
 
 This is the identity to quote in a bug report. Container images carry the same
 value in their `org.opencontainers.image.version` label, but that label
@@ -129,3 +156,17 @@ mixlab -mode smoke
 
 `smoke` has no required flags. It reports whether the MLX backend is available
 and runs lightweight diagnostics.
+
+## Internal Managed Worker Connection
+
+`-mode managed-worker` is an experimental internal hosting entry point, not a
+standalone user training command. It accepts only `-worker-control-socket` and
+`-worker-session-fd` (an inherited anonymous-pipe descriptor, normally 3).
+It rejects config, data, profiling, output and resume flags before opening
+files or initializing MLX. Training inputs arrive only through authenticated
+local IPC. Never put the session capability in argv or environment variables.
+The experimental cluster controller supplies fresh or exact-resume assignments;
+users submit through `mixlab-cluster`, never this internal entry point. See
+[node hosting](cluster-agent.md) for enrollment, encrypted transport,
+checkpoint/resume and the trusted-host support boundary.
+See the [hosting contract](../workerhost/README.md) for limits and lifecycle.

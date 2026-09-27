@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -16,6 +17,8 @@ import (
 func main() {
 	mode := flag.String("mode", "arch", "run mode: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
+	workerSocket := flag.String("worker-control-socket", "", "private hosting socket (internal managed-worker mode only)")
+	workerFD := flag.Int("worker-session-fd", -1, "inherited one-use session descriptor (internal managed-worker mode only)")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
 	trainPattern := flag.String("train", "", "glob pattern for training data shards")
 	valPattern := flag.String("val", "", "explicit evaluation shard glob; eval mode only, overrides legacy -train-derived validation glob")
@@ -151,6 +154,24 @@ func main() {
 		return
 	}
 	providedFlags := providedFlagSet()
+	if *mode == "worker-probe" {
+		must(validateProbeFlags(providedFlags, flag.Args()))
+		must(train.RunWorkerProbe(os.Stdout))
+		return
+	}
+	if *mode == "worker-plan" {
+		must(validateProbeFlags(providedFlags, flag.Args()))
+		must(train.RunWorkerPlan(os.Stdin, os.Stdout))
+		return
+	}
+	if *mode == "managed-worker" {
+		must(validateManagedFlags(providedFlags, flag.Args()))
+		must(train.RunManagedWorker(context.Background(), *workerSocket, *workerFD))
+		return
+	}
+	if providedFlags["worker-control-socket"] || providedFlags["worker-session-fd"] {
+		must(fmt.Errorf("worker connection flags require -mode managed-worker"))
+	}
 	effectiveParityThreshold := *parityThreshold
 	if providedFlags["parity-loss-threshold"] {
 		effectiveParityThreshold = *parityLossThreshold
@@ -449,6 +470,11 @@ type flagGroup struct {
 var supportedModes = []string{"smoke", "validate", "arch", "arch_race", "prepare", "prepare-pairs", "count", "optimizer-report", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "export-hf", "parity"}
 
 var modeFlagGroups = map[string][]flagGroup{
+	"worker-probe": {{"Internal read-only device probe (no training arguments)", []string{}}},
+	"worker-plan":  {{"Internal read-only numerical plan from bounded stdin config", []string{}}},
+	"managed-worker": {
+		{"Internal hosting connection (not a standalone training mode)", []string{"worker-control-socket", "worker-session-fd"}},
+	},
 	"arch": {
 		{"Required", []string{"config", "train"}},
 		{"Checkpointing", []string{"safetensors", "safetensors-load", "resume", "checkpoint-dir", "checkpoint-every"}},

@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,15 @@ import (
 // DistributedDatasetIdentity uses logical names and content, not host paths,
 // timestamps or inode numbers. Files must be immutable during a run.
 func DistributedDatasetIdentity(pattern string) (string, error) {
+	return DistributedDatasetIdentityContext(context.Background(), pattern)
+}
+
+// DistributedDatasetIdentityContext permits bounded managed preparation while
+// retaining the exact dataset identity used by existing distributed runs.
+func DistributedDatasetIdentityContext(ctx context.Context, pattern string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	files, err := filepath.Glob(pattern)
 	if err != nil {
 		return "", err
@@ -34,6 +44,9 @@ func DistributedDatasetIdentity(pattern string) (string, error) {
 	entries := make([]entry, 0, len(files))
 	seen := map[string]bool{}
 	for _, path := range files {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		name := filepath.Base(path)
 		if seen[name] {
 			return "", fmt.Errorf("duplicate logical shard name %q", name)
@@ -44,7 +57,7 @@ func DistributedDatasetIdentity(pattern string) (string, error) {
 			return "", err
 		}
 		h := sha256.New()
-		n, err := io.Copy(h, f)
+		n, err := io.Copy(h, datasetIdentityReader{ctx, f})
 		closeErr := f.Close()
 		if err != nil {
 			return "", err
@@ -65,6 +78,18 @@ func DistributedDatasetIdentity(pattern string) (string, error) {
 	}
 	h := sha256.Sum256(blob)
 	return hex.EncodeToString(h[:]), nil
+}
+
+type datasetIdentityReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (r datasetIdentityReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.r.Read(p)
 }
 
 // DistributedSamplerState is rank-neutral so the rank-zero checkpoint can
