@@ -1,0 +1,32 @@
+# Weekly version updates, grouped per ecosystem so each week is at most one pull
+# request per ecosystem. Security updates for known vulnerabilities are separate
+# and immediate (repository setting), not limited by this schedule.
+#
+# Dockerfiles are deliberately absent: the CUDA base tag pins the CUDA, cuDNN and
+# NCCL versions MLX is built against, and moving it means rebuilding the base
+# images and a GPU smoke (see docs/mlx-0.32-upgrade.md), not a routine bump.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      go-modules:
+        patterns: ["*"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]

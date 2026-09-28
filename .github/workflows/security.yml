@@ -45,3 +45,29 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  workflows:
+    name: Workflow lint and security audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the workflows
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: actionlint
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+
+      # Unpinned actions, template injection, credential persistence and token
+      # scope. The auditor persona also reports low-confidence findings, so a
+      # clean result here means the workflows had nothing left to fix.
+      - name: zizmor
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: pipx run --spec zizmor==1.30.1 zizmor --persona=auditor --format=github .github/workflows
