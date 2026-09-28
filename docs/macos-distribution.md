@@ -1,7 +1,11 @@
 # macOS Distribution Candidates
 
-This is an **experimental maintainer acceptance workflow**, not a released
-installation channel. `mixlab-cluster` implements experimental enrollment,
+`scripts/package_macos.py` builds two kinds of disk image. By default it builds a
+private **acceptance candidate**, the maintainer workflow described below. With
+`--release vX.Y.Z`, the Release workflow builds the **tagged release** for each `v*`
+tag (see [Releasing](releasing.md)). Tagged images are not yet an announced install
+channel: the Homebrew cask that will point at them does not exist, and the
+acceptance checks below still apply. `mixlab-cluster` implements experimental enrollment,
 node hosting and fixed-cohort submission, including managed checkpoint/resume.
 The R1.1 candidate passed signed-package M1/M4 acceptance. Each published build
 still requires release approval; signing alone is not functional or security
@@ -20,6 +24,12 @@ python3 scripts/package_macos.py \
   --identity 'Developer ID Application: Your Name (TEAMID)' \
   --notarize --notary-profile mixlab-notary
 ```
+
+Every build, candidate or release, refuses an MLX outside the range recorded in
+`Formula/mixlab.rb` (`MLX_TESTED_MINIMUM` up to but excluding `MLX_TESTED_BELOW`). The
+version is read from the MLX headers being bundled. The formula stays the one record
+of which MLX was tested, so a Homebrew MLX bump fails the build before anything is
+signed. It also fails loudly if either the header or the formula cannot be read.
 
 The output directory must not exist and must be outside the source repository.
 Dirty source is rejected unless
@@ -45,6 +55,27 @@ This workflow uses a DMG so the notarization ticket can be stapled without a
 Developer ID Installer certificate. A future signed PKG would require that
 additional identity. Apple Distribution and Mac Installer Distribution are
 not substitutes for the Developer ID identities used outside the App Store.
+
+## Release Builds
+
+`--release vX.Y.Z` differs from a candidate build in five ways:
+
+- It requires `--notarize`. A release is never shipped unnotarized.
+- It refuses `--allow-dirty` and a dirty tree.
+- Both binaries must report exactly `vX.Y.Z` from `-version`, so building the wrong
+  commit, or a modified one, fails before anything is packaged or sent to Apple.
+- The image is `mixlab-vX.Y.Z-macos-arm64.dmg` with volume name `Mixlab vX.Y.Z`, and
+  its `INSTALL.txt` describes a release rather than a private candidate.
+- The receipt records format `mixlab_macos_release_v1`, the release version, and the
+  bundled MLX version.
+
+In CI the certificate lives in a temporary keychain. `codesign --keychain` alone does
+not find an identity there, so the workflow adds that keychain to the search list and
+makes it the default, then checks the identity's SHA-1 against
+`MACOS_SIGNING_IDENTITY_SHA1` before signing anything. After notarization it copies the
+image contents out the way a user would, uninstalls Homebrew MLX, and runs `-version`
+and `-mode smoke` on Metal. That proves the packaged binaries run only on the libraries
+they carry.
 
 ## Acceptance
 

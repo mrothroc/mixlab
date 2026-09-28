@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Build a private, relocatable, signed macOS distribution candidate.
+"""Build a relocatable, signed macOS distribution of mixlab and mixlab-cluster.
 
-Notarization is opt-in. This never publishes a release or changes the source
-Homebrew installation. Managed cluster operation is experimental and limited
-to trusted, administrator-controlled hosts.
+By default this builds a private acceptance candidate and notarization is
+opt-in. --release vX.Y.Z builds the tagged release instead: it must be
+notarized, built from a clean tree, and the binaries must report that version.
+Either way this never publishes a release or changes the source Homebrew
+installation. Managed cluster operation is experimental and limited to
+trusted, administrator-controlled hosts.
 """
 
 import argparse
@@ -21,6 +24,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parent.parent
 SYSTEM_PREFIXES = ("/usr/lib/", "/System/Library/")
 LIBRARIES = ("libmlx.dylib", "libjaccl.dylib")
+RELEASE_VERSION = re.compile(r"v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?")
 
 
 def run(*args, **kwargs):
@@ -94,6 +98,49 @@ def matched_identity(trainer, cluster):
         raise ValueError("trainer and cluster worker protocols differ")
 
 
+def mlx_version(prefix):
+    header = prefix / "include/mlx/version.h"
+    if not header.is_file():
+        raise ValueError(f"cannot read MLX version: missing {header}")
+    text = header.read_text()
+    parts = []
+    for name in ("MAJOR", "MINOR", "PATCH"):
+        found = re.search(rf"^#define MLX_VERSION_{name} (\d+)\s*$", text, re.MULTILINE)
+        if not found:
+            raise ValueError(f"cannot read MLX_VERSION_{name} from {header}")
+        parts.append(int(found.group(1)))
+    return tuple(parts)
+
+
+def tested_mlx_range(root):
+    """The formula is the single record of which MLX releases were tested."""
+    formula = root / "Formula" / "mixlab.rb"
+    text = formula.read_text() if formula.is_file() else ""
+    bounds = []
+    for name in ("MLX_TESTED_MINIMUM", "MLX_TESTED_BELOW"):
+        found = re.search(rf'^\s*{name}\s*=\s*"(\d+)\.(\d+)\.(\d+)"', text, re.MULTILINE)
+        if not found:
+            raise ValueError(f"cannot read {name} from {formula}")
+        bounds.append(tuple(int(x) for x in found.groups()))
+    return bounds[0], bounds[1]
+
+
+def check_mlx(prefix, root):
+    version = mlx_version(prefix)
+    low, high = tested_mlx_range(root)
+    dotted = lambda v: ".".join(map(str, v))
+    if not low <= version < high:
+        raise ValueError(f"MLX {dotted(version)} is outside the tested range >={dotted(low)} <{dotted(high)} "
+                         "recorded in Formula/mixlab.rb; run the -tags mlx suite before widening it")
+    return dotted(version)
+
+
+def check_release_version(release, trainer):
+    first = trainer.splitlines()[0]
+    if first != f"mixlab {release}" and not first.startswith(f"mixlab {release} ("):
+        raise ValueError(f"built trainer reports {first!r}, not release {release}; build the tagged, clean commit")
+
+
 def build(args):
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise ValueError("this candidate packager currently requires Apple Silicon macOS")
@@ -101,6 +148,14 @@ def build(args):
         raise ValueError("--notarize requires --notary-profile (Keychain name, not a password)")
     if not args.identity.startswith("Developer ID Application:"):
         raise ValueError("--identity must be a Developer ID Application identity")
+    release = args.release
+    if release is not None:
+        if not RELEASE_VERSION.fullmatch(release):
+            raise ValueError("--release must look like vX.Y.Z or vX.Y.Z-suffix")
+        if not args.notarize:
+            raise ValueError("--release requires --notarize; a release is never shipped unnotarized")
+        if args.allow_dirty:
+            raise ValueError("--release cannot use --allow-dirty; a release is built from its clean tag")
     dirty = bool(run("git", "status", "--porcelain", cwd=ROOT))
     if dirty and not args.allow_dirty:
         raise ValueError("working tree is dirty; use --allow-dirty only for private acceptance candidates")
@@ -113,6 +168,7 @@ def build(args):
     for file in ("include/mlx/mlx.h", "lib/libmlx.dylib", "lib/mlx.metallib", "LICENSE"):
         if not (prefix / file).is_file():
             raise ValueError(f"missing MLX build input: {prefix / file}")
+    bundled_mlx = check_mlx(prefix, ROOT)
     output.mkdir(parents=True, mode=0o700)
     # Only our private staging area is automatically deleted. Failed notary
     # receipts/artifacts remain in the explicit output for diagnosis.
@@ -134,9 +190,12 @@ def build(args):
         shutil.copyfile(ROOT / "LICENSE", stage / "LICENSE-mixlab")
         shutil.copyfile(ROOT / "THIRD_PARTY_NOTICES.md", stage / "THIRD_PARTY_NOTICES.md")
         shutil.copyfile(prefix / "LICENSE", stage / "LICENSE-mlx")
-        receipt = {"format": "mixlab_macos_candidate_v1", "revision": run("git", "rev-parse", "HEAD", cwd=ROOT),
+        receipt = {"format": "mixlab_macos_release_v1" if release else "mixlab_macos_candidate_v1",
+                   "revision": run("git", "rev-parse", "HEAD", cwd=ROOT),
                    "dirty": dirty, "architecture": "arm64", "experimental_managed_cluster": True,
-                   "mlx_source_sha256": digest(prefix / "lib/libmlx.dylib")}
+                   "mlx_version": bundled_mlx, "mlx_source_sha256": digest(prefix / "lib/libmlx.dylib")}
+        if release:
+            receipt["release"] = release
         for name in sorted(packaged) + ["mixlab", "mixlab-cluster"]:
             path = stage / name
             path.chmod(0o755)
@@ -145,20 +204,27 @@ def build(args):
         trainer = run(stage / "mixlab", "-version")
         cluster = run(stage / "mixlab-cluster", "-version")
         matched_identity(trainer, cluster)
+        if release:
+            check_release_version(release, trainer)
         receipt["trainer_version"] = trainer
         receipt["cluster_version"] = cluster
         receipt["files"] = {p.name: digest(p) for p in sorted(stage.iterdir())}
         (stage / "build-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        if release:
+            install = (f"mixlab {release} for macOS on Apple Silicon.\n"
+                       "Copy this entire directory to a stable installation path.\n")
+        else:
+            install = ("PRIVATE R1.1 ACCEPTANCE CANDIDATE; NOT A RELEASE.\n"
+                       "Copy this entire directory to a private, stable installation path.\n")
         (stage / "INSTALL.txt").write_text(
-            "PRIVATE R1.1 ACCEPTANCE CANDIDATE; NOT A RELEASE.\n"
-            "Copy this entire directory to a private, stable installation path.\n"
+            install +
             "Keep the executables, dylibs and mlx.metallib together. Do not re-sign or strip them.\n"
             "mixlab-cluster provides experimental managed training on trusted hosts.\n"
             "Signing/notarization is not cluster authentication or a firewall exemption.\n"
             "R1.1 assumes trusted, administrator-controlled hosts.\n")
-        image = output / "mixlab-macos-arm64.dmg"
-        run("hdiutil", "create", "-srcfolder", stage.parent, "-volname", "Mixlab Candidate",
-            "-format", "UDZO", image)
+        image = output / (f"mixlab-{release}-macos-arm64.dmg" if release else "mixlab-macos-arm64.dmg")
+        run("hdiutil", "create", "-srcfolder", stage.parent, "-volname",
+            f"Mixlab {release}" if release else "Mixlab Candidate", "-format", "UDZO", image)
         sign(image, args.identity)
     if args.notarize:
         print("Submitting candidate disk image to Apple for notarization", flush=True)
@@ -182,6 +248,9 @@ def main():
     parser.add_argument("--allow-dirty", action="store_true")
     parser.add_argument("--notarize", action="store_true")
     parser.add_argument("--notary-profile")
+    parser.add_argument("--release", metavar="vX.Y.Z",
+                        help="build this tagged release instead of a private candidate; "
+                             "requires --notarize and a clean tree")
     args = parser.parse_args()
     try:
         build(args)
