@@ -193,10 +193,12 @@ func generationPromptTokensWithVocabulary(prompt string, vocabSize int, rng *ran
 	parts := strings.Split(body, ",")
 	tokens := make([]int, 0, len(parts))
 	for _, part := range parts {
-		v, err := strconv.Atoi(strings.TrimSpace(part))
+		// Token IDs are int32 on the GPU; parse them as such so none can wrap.
+		parsed, err := strconv.ParseInt(strings.TrimSpace(part), 10, 32)
 		if err != nil {
 			return nil, fmt.Errorf("parse prompt token %q: %w", part, err)
 		}
+		v := int(parsed)
 		if v < 0 || v >= vocabSize {
 			return nil, fmt.Errorf("prompt token %d out of range [0,%d)", v, vocabSize)
 		}

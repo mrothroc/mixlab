@@ -528,8 +528,9 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.EffectiveInputAdapterKind() == InputAdapterTokenEmbedding && cfg.VocabSize <= 0 {
 		return nil, fmt.Errorf("config %q missing/invalid vocab_size", source)
 	}
-	if cfg.VocabSize < 0 {
-		return nil, fmt.Errorf("config %q has invalid vocab_size=%d", source, cfg.VocabSize)
+	// Token IDs are int32 in the IR and on the GPU.
+	if cfg.VocabSize < 0 || cfg.VocabSize > math.MaxInt32 {
+		return nil, fmt.Errorf("config %q has invalid vocab_size=%d (must be in [0,%d])", source, cfg.VocabSize, math.MaxInt32)
 	}
 	if cfg.SeqLen <= 0 {
 		cfg.SeqLen = 128

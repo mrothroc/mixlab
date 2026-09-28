@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -31,6 +32,19 @@ func TestGenerationPromptTokens_ExplicitIDs(t *testing.T) {
 	want := []int{0, 2, 5}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("generationPromptTokens = %v, want %v", got, want)
+	}
+}
+
+// Token IDs reach the GPU as int32. A prompt ID past that range used to parse
+// as a 64-bit int and wrap silently when narrowed, whenever vocab_size allowed it.
+func TestPromptTokenIDsMustFitInt32(t *testing.T) {
+	_, err := generationPromptTokens("token_ids:2147483648", math.MaxInt, rand.New(rand.NewSource(1)))
+	if err == nil || !strings.Contains(err.Error(), "prompt token") {
+		t.Fatalf("token 2^31 accepted or wrong error: %v", err)
+	}
+	got, err := generationPromptTokens("token_ids:2147483646", math.MaxInt32, rand.New(rand.NewSource(1)))
+	if err != nil || len(got) != 1 || got[0] != math.MaxInt32-1 {
+		t.Fatalf("largest valid int32 token: got %v, %v", got, err)
 	}
 }
 
