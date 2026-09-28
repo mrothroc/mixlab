@@ -1,9 +1,11 @@
 # scripts/ — data preparation and the RunPod handler
 
-Two unrelated concerns share this directory. Both ship inside the RunPod image
+Three unrelated concerns share this directory: data preparation, the RunPod
+handler, and release packaging. The first two ship inside the RunPod image
 (`docker/runpod.Dockerfile` copies `scripts/` and runs `handler.py` as the
-container `CMD`), so a change here reaches production only through an image
-rebuild and a new pinned digest — never through a Go rebuild.
+container `CMD`), so a change to them reaches production only through an image
+rebuild and a new pinned digest — never through a Go rebuild. Release packaging
+runs in GitHub Actions and on maintainers' Macs, never in the image.
 
 ## Data preparation
 `prepare.py` and `prepare_records.py` turn text/JSONL/FASTA/npz into shards plus
@@ -36,6 +38,22 @@ Job-input fields and their semantics are documented in
 Validation that can be decided from the job input alone runs **before** setup
 commands, so a job that cannot succeed does not first download data and write to
 the volume.
+
+## Release packaging
+- `package_macos.py` builds the signed, notarized macOS disk image: a private
+  acceptance candidate by default, or the tagged release with `--release vX.Y.Z`,
+  which `.github/workflows/release.yml` runs. It refuses to bundle an MLX outside
+  the tested range recorded in `../packaging/homebrew/mixlab.rb`.
+- `homebrew_formula.py` renders that formula source for one final release.
+  `.github/workflows/publish-homebrew.yml` audits, installs, and tests the result,
+  then pushes it to `mrothroc/homebrew-tap`, the only place users install from.
+  It refuses prereleases and missing or leftover placeholders rather than emit a
+  broken formula.
+
+Both fail rather than degrade on bad input, because their output is signed or
+published where a mistake reaches users. See
+[`../docs/macos-distribution.md`](../docs/macos-distribution.md) and
+[`../docs/releasing.md`](../docs/releasing.md).
 
 ## Conventions
 - Tests are plain `unittest` and run in CI (`python -m unittest discover -s
