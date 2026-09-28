@@ -58,7 +58,7 @@ Two dependencies are installed outside the repo and have each silently broken a
 check after a routine `brew upgrade`. If something fails in a way that looks
 unrelated to your change, suspect these before the code.
 
-**MLX.** The Homebrew formula (`packaging/homebrew/mixlab.rb`) asserts a tested range at install time, but that only
+**MLX.** The Homebrew formula checks the range in `packaging/mlx-tested-range.txt` at install time, but that only
 guards installs — upgrading MLX under an already-installed mixlab swaps the library
 without rebuilding anything. MLX has changed autodiff behavior in a patch release
 (0.32.1 broke MoE and bf16 training), so run the MLX-tagged suite after any MLX

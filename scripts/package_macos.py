@@ -113,15 +113,17 @@ def mlx_version(prefix):
 
 
 def tested_mlx_range(root):
-    """The formula source is the single record of which MLX releases were tested."""
-    formula = root / "packaging" / "homebrew" / "mixlab.rb"
-    text = formula.read_text() if formula.is_file() else ""
+    """packaging/mlx-tested-range.txt is the single record of which MLX was tested."""
+    path = root / "packaging" / "mlx-tested-range.txt"
+    text = path.read_text() if path.is_file() else ""
     bounds = []
-    for name in ("MLX_TESTED_MINIMUM", "MLX_TESTED_BELOW"):
-        found = re.search(rf'^\s*{name}\s*=\s*"(\d+)\.(\d+)\.(\d+)"', text, re.MULTILINE)
-        if not found:
-            raise ValueError(f"cannot read {name} from {formula}")
-        bounds.append(tuple(int(x) for x in found.groups()))
+    for name in ("minimum", "below"):
+        found = re.findall(rf"^\s*{name}\s*=\s*(\d+)\.(\d+)\.(\d+)\s*$", text, re.MULTILINE)
+        if len(found) != 1:
+            raise ValueError(f"cannot read {name} from {path}: expected exactly one '{name} = X.Y.Z' line")
+        bounds.append(tuple(int(x) for x in found[0]))
+    if bounds[0] >= bounds[1]:
+        raise ValueError(f"cannot read a usable range from {path}: minimum must be below 'below'")
     return bounds[0], bounds[1]
 
 
@@ -131,7 +133,7 @@ def check_mlx(prefix, root):
     dotted = lambda v: ".".join(map(str, v))
     if not low <= version < high:
         raise ValueError(f"MLX {dotted(version)} is outside the tested range >={dotted(low)} <{dotted(high)} "
-                         "recorded in packaging/homebrew/mixlab.rb; run the -tags mlx suite before widening it")
+                         "recorded in packaging/mlx-tested-range.txt; run the -tags mlx suite before widening it")
     return dotted(version)
 
 

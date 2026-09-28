@@ -4,9 +4,8 @@ Pushing a `v*` tag starts the **Release** workflow
 (`.github/workflows/release.yml`). After you approve its `release` environment, it
 builds the signed, notarized macOS disk image and the Linux `mixlab-cluster`
 tarballs and attaches them to a draft release. It never publishes anything; step 3
-below does. Publishing then updates the Homebrew tap automatically (step 4); the
-formula builds from source on the user's Mac. RunPod container images still come
-from Cloud Build (step 6). For private, locally signed
+below does. Publishing a release then lets the Homebrew tap bump itself (step 4).
+RunPod container images still come from Cloud Build (step 6). For private, locally signed
 candidates, see [macOS distribution](macos-distribution.md).
 
 ## Version scheme
@@ -92,32 +91,45 @@ EOF
 
 ### 4. Homebrew
 
-Publishing a final release starts the **Publish to Homebrew** workflow
-(`.github/workflows/publish-homebrew.yml`). Nothing is edited or copied by hand.
+The formula lives in `mrothroc/homebrew-tap`, which maintains itself with Homebrew's
+standard workflows. This repository holds no Homebrew credentials.
 
-It renders `packaging/homebrew/mixlab.rb` for the tag, then proves the result with
-Homebrew's own checks on macOS: `brew style`, `brew audit --strict --online`, a
-from-source install, and `brew test`. Only then does it push those exact bytes to
-`mrothroc/homebrew-tap`, using a deploy key that can write to nothing else.
-Prereleases are never published, and it will not replace a newer version in the tap
-with an older one. Watch it finish before verifying:
+1. **Bump.** The tap's autobump workflow checks daily for a new published release and
+   opens a version-bump pull request. The formula's livecheck follows GitHub's latest
+   release, so prereleases are never bumped. To bump now rather than wait:
 
-```bash
-gh run list --workflow publish-homebrew.yml --limit 1
-gh run watch <run-id>
-```
+   ```bash
+   gh workflow run autobump.yml -R mrothroc/homebrew-tap
+   ```
 
-The source lives here and the copy is automated because of two past failures. A
-hand-copied tap formula drifted for five months while an archived tap kept serving
-it. Later this repository was made tappable itself, so machines that tapped both saw
-"Formulae found in multiple taps" for a plain `brew info mixlab`. The source now sits
-in `packaging/homebrew/`, which Homebrew does not treat as a tap, and the workflow is
-the only writer to the tap. To change the formula, edit that file; a push that touches
-it runs the verify job against the latest release.
+2. **Test.** `brew test-bot` runs on that pull request: `brew audit`, a from-source
+   build, `brew test`, and bottles for macOS 15 and 26.
+3. **Publish.** When the checks pass, publish it with its bottles:
 
-If publishing fails, the tap is left unchanged. The formula is rendered from the
-release's own commit, so a fault in the formula source itself needs a patch release;
-anything else can be fixed and the failed job re-run from the run page.
+   ```bash
+   gh pr list -R mrothroc/homebrew-tap
+   gh workflow run publish.yml -R mrothroc/homebrew-tap -f pull_request=<number>
+   ```
+
+   `brew pr-pull` uploads the bottles, adds them to the formula, and pushes to `main`,
+   which closes the pull request. Do not merge it with GitHub's merge button: that
+   ships the formula without bottles, so every user compiles.
+
+Autobump opens its pull requests with the tap's `HOMEBREW_BUMP_TOKEN` secret, a
+fine-grained token limited to that repository's contents and pull requests. Pull
+requests opened with a workflow's default token do not trigger other workflows, so
+without it the bump would arrive untested. When the token expires, autobump fails
+visibly in the tap's Actions; replace the secret.
+
+To change the formula itself, open a pull request against the tap; the same checks
+run. If you widen `packaging/mlx-tested-range.txt` here, change `MLX_TESTED_MINIMUM` and
+`MLX_TESTED_BELOW` in the formula in that release's bump pull request so they match.
+
+The formula lives in the tap because of two past failures. A hand-copied tap formula
+drifted for five months while an archived tap kept serving it. Later this repository
+was made tappable itself, so machines that tapped both saw "Formulae found in multiple
+taps" for a plain `brew info mixlab`. Keeping the one formula in the tap, maintained by
+Homebrew's own tooling, removes both.
 
 ### 5. Verify
 
@@ -208,8 +220,8 @@ version/revision labels and digest before updating the RunPod endpoint. See
 
 - **MLX API drift between Homebrew and the local MLX install.** Mixlab requires
   MLX 0.32.0 or newer. Homebrew may ship a newer version than the currently
-  tested runtime. The publish workflow installs the formula from source and runs
-  `brew test` before anything reaches the tap; if it fails, nothing is published.
+  tested runtime. The tap's `brew test-bot` builds each bump pull request from source
+  and runs `brew test` on macOS 15 and 26 before `brew pr-pull` can publish it.
   CUDA upgrades must rebuild `docker/base.Dockerfile`; rebuilding only the
   add-architecture or app layers retains the old MLX source. See
   `docs/mlx-0.32-upgrade.md` for the dependency and NCCL acceptance contract.
@@ -222,9 +234,9 @@ version/revision labels and digest before updating the RunPod endpoint. See
   training path (the router's `argsort` indices trace back to the
   differentiable probabilities). Fixed by wrapping every `take_along_axis`
   index argument in `mx::stop_gradient`; indices are discrete, so this is
-  numerically a no-op on 0.32.0 and restores 0.32.1. The formula
-  (`packaging/homebrew/mixlab.rb`) declares `depends_on "mlx"` unpinned and refuses
-  an out-of-range MLX only at install time, so `brew upgrade mlx` under an installed
+  numerically a no-op on 0.32.0 and restores 0.32.1. The formula in
+  `mrothroc/homebrew-tap` declares `depends_on "mlx"` unpinned and checks the tested
+  range only when mixlab is installed, so `brew upgrade mlx` under an installed
   mixlab still reaches users before any test. The main CI cannot see it either,
   because it builds with `CGO_ENABLED=0` and never links MLX. After any Homebrew MLX upgrade, run the
   `-tags mlx` suite locally before releasing.

@@ -26,10 +26,10 @@ python3 scripts/package_macos.py \
 ```
 
 Every build, candidate or release, refuses an MLX outside the range recorded in
-`packaging/homebrew/mixlab.rb` (`MLX_TESTED_MINIMUM` up to but excluding `MLX_TESTED_BELOW`). The
-version is read from the MLX headers being bundled. The formula stays the one record
-of which MLX was tested, so a Homebrew MLX bump fails the build before anything is
-signed. It also fails loudly if either the header or the formula cannot be read.
+`packaging/mlx-tested-range.txt`, reading the version from the MLX headers being
+bundled. The Homebrew formula enforces the same range, so a Homebrew MLX bump fails
+the build before anything is signed. The build also fails loudly if the header or the
+range file cannot be read, or if the range is empty.
 
 The output directory must not exist and must be outside the source repository.
 Dirty source is rejected unless

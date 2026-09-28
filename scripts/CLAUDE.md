@@ -5,7 +5,7 @@ handler, and release packaging. The first two ship inside the RunPod image
 (`docker/runpod.Dockerfile` copies `scripts/` and runs `handler.py` as the
 container `CMD`), so a change to them reaches production only through an image
 rebuild and a new pinned digest — never through a Go rebuild. The release
-packaging scripts are copied into the image too, but only ever run in GitHub
+packaging script is copied into the image too, but only ever runs in GitHub
 Actions and on maintainers' Macs.
 
 ## Data preparation
@@ -41,20 +41,14 @@ commands, so a job that cannot succeed does not first download data and write to
 the volume.
 
 ## Release packaging
-- `package_macos.py` builds the signed, notarized macOS disk image: a private
-  acceptance candidate by default, or the tagged release with `--release vX.Y.Z`,
-  which `.github/workflows/release.yml` runs. It refuses to bundle an MLX outside
-  the tested range recorded in `../packaging/homebrew/mixlab.rb`.
-- `homebrew_formula.py` renders that formula source for one final release.
-  `.github/workflows/publish-homebrew.yml` audits, installs, and tests the result,
-  then pushes it to `mrothroc/homebrew-tap`, the only place users install from.
-  It refuses prereleases and missing or leftover placeholders rather than emit a
-  broken formula.
-
-Both fail rather than degrade on bad input, because their output is signed or
-published where a mistake reaches users. See
+`package_macos.py` builds the signed, notarized macOS disk image: a private
+acceptance candidate by default, or the tagged release with `--release vX.Y.Z`,
+which `.github/workflows/release.yml` runs. It refuses to bundle an MLX outside the
+range in `../packaging/mlx-tested-range.txt`, and it fails rather than degrade on bad
+input, because its output is signed and published. See
 [`../docs/macos-distribution.md`](../docs/macos-distribution.md) and
-[`../docs/releasing.md`](../docs/releasing.md).
+[`../docs/releasing.md`](../docs/releasing.md). The Homebrew formula lives in
+`mrothroc/homebrew-tap`, not in this repository.
 
 ## Conventions
 - Tests are plain `unittest` and run in CI (`python -m unittest discover -s

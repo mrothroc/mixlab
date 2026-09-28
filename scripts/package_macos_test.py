@@ -17,12 +17,11 @@ def make_fixture(temp, mlx_version=(0, 32, 1), tested=("0.32.0", "0.33.0")):
     root.mkdir()
     (root / 'LICENSE').write_text('Mixlab license')
     (root / 'THIRD_PARTY_NOTICES.md').write_text('Third-party notices fixture')
-    (root / 'packaging' / 'homebrew').mkdir(parents=True)
-    (root / 'packaging' / 'homebrew' / 'mixlab.rb').write_text(
-        'class Mixlab < Formula\n'
-        f'  MLX_TESTED_MINIMUM = "{tested[0]}".freeze\n'
-        f'  MLX_TESTED_BELOW = "{tested[1]}".freeze\n'
-        'end\n')
+    (root / 'packaging').mkdir()
+    (root / 'packaging' / 'mlx-tested-range.txt').write_text(
+        '# MLX versions mixlab is tested against.\n'
+        f'minimum = {tested[0]}\n'
+        f'below = {tested[1]}\n')
     for name in ['LICENSE', 'include/mlx/mlx.h', 'lib/libmlx.dylib', 'lib/mlx.metallib']:
         path = prefix / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -210,13 +209,22 @@ Load command 11
             header.write_text(header.read_text().replace('#define MLX_VERSION_PATCH 1\n', ''))
 
         def drop_upper_bound(root, prefix):
-            formula = root / 'packaging' / 'homebrew' / 'mixlab.rb'
-            formula.write_text(formula.read_text().replace('MLX_TESTED_BELOW', 'SOMETHING_ELSE'))
+            tested = root / 'packaging' / 'mlx-tested-range.txt'
+            tested.write_text(tested.read_text().replace('below =', 'ceiling ='))
+
+        def duplicate_minimum(root, prefix):
+            # Two conflicting lines must not resolve to whichever is read first.
+            tested = root / 'packaging' / 'mlx-tested-range.txt'
+            tested.write_text(tested.read_text() + 'minimum = 0.31.0\n')
+
+        def empty_range(root, prefix):
+            tested = root / 'packaging' / 'mlx-tested-range.txt'
+            tested.write_text(tested.read_text().replace('below = 0.33.0', 'below = 0.32.0'))
 
         def delete_header(root, prefix):
             (prefix / 'include/mlx/version.h').unlink()
 
-        for breakage in (drop_patch_macro, drop_upper_bound, delete_header):
+        for breakage in (drop_patch_macro, drop_upper_bound, delete_header, duplicate_minimum, empty_range):
             with self.subTest(breakage=breakage.__name__), tempfile.TemporaryDirectory() as temp:
                 root, prefix = make_fixture(temp)
                 breakage(root, prefix)
@@ -299,8 +307,8 @@ Load command 11
                 self.assertFalse(any(c[:2] == ['hdiutil', 'create'] for c in calls))
                 self.assertFalse(any(c[:3] == ['xcrun', 'notarytool', 'submit'] for c in calls))
 
-    def test_tested_range_is_read_from_the_real_formula_source(self):
-        # Pins the packager to the file the formula is actually rendered from.
+    def test_tested_range_is_read_from_the_real_range_file(self):
+        # Pins the packager to the one file that records the tested MLX range.
         low, high = package.tested_mlx_range(package.ROOT)
         self.assertLess(low, high)
 

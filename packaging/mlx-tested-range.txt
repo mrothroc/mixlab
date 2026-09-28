@@ -1,0 +1,9 @@
+# MLX versions mixlab is tested against: minimum inclusive, below exclusive.
+#
+# The Homebrew formula in mrothroc/homebrew-tap refuses to install mixlab against
+# an MLX outside this range, and scripts/package_macos.py refuses to bundle one.
+# MLX has changed autodiff behavior in a patch release (0.32.1 broke MoE and bf16
+# training), so widen this only after the MLX-tagged suite passes on the new MLX:
+#   CGO_ENABLED=1 go test -tags mlx ./arch/... ./gpu ./train -count=1
+minimum = 0.32.0
+below = 0.33.0

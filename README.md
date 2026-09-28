@@ -69,8 +69,9 @@ brew install mrothroc/tap/mixlab
 brew trust mrothroc/tap
 ```
 
-The first command builds mixlab from source and installs MLX as a dependency. The
-second lets a plain `brew upgrade` include mixlab: Homebrew 7 loads formulae from a
+The first command installs mixlab and MLX. On macOS 15 and 26 it pours a prebuilt
+bottle; elsewhere, or when Homebrew's MLX is outside the range mixlab was tested
+against, it builds from source. The second lets a plain `brew upgrade` include mixlab: Homebrew 7 loads formulae from a
 third-party tap you have not trusted only when a command names them in full, so
 without it, upgrade with `brew upgrade mrothroc/tap/mixlab`. The binary embeds the scripts
 used by `mixlab -mode prepare`, so no source checkout is needed. For the Python
