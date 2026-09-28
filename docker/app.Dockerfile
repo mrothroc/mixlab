@@ -55,12 +55,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcudnn9-cuda-12 python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
+# Ubuntu security updates (OpenSSL, GnuPG, ...). NVIDIA's apt sources are left
+# out, so the CUDA, cuDNN and NCCL packages MLX was built against cannot move.
+RUN apt-get -o Dir::Etc::SourceParts=/dev/null update \
+    && apt-get -o Dir::Etc::SourceParts=/dev/null upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
+# Go builds mixlab in the builder stage and is never used at runtime. MLX
+# JIT-compiles CUDA kernels at runtime, so the CUDA development stack stays.
+RUN rm -rf /usr/local/go
+
 # One dependency contract for local/CI prepare and both runtime images. A venv
 # avoids changing distro packages and remains readable by arbitrary --user UIDs.
+# The venv seeds Ubuntu 22.04's pip 22.0.2 and setuptools 59.6.0, both with
+# published vulnerabilities; the floors are the first fixed releases.
 COPY requirements-prepare.txt /opt/mixlab/requirements-prepare.txt
 RUN python3 -m venv /opt/mixlab/venv
 ENV PATH="/opt/mixlab/venv/bin:${PATH}"
-RUN python3 -m pip install --no-cache-dir -r /opt/mixlab/requirements-prepare.txt
+RUN python3 -m pip install --no-cache-dir --upgrade 'pip>=26.2' 'setuptools>=83' \
+    && python3 -m pip install --no-cache-dir -r /opt/mixlab/requirements-prepare.txt
 
 # Binary
 COPY --from=builder /mixlab /usr/local/bin/mixlab
