@@ -56,7 +56,7 @@ docker pull michaelrothrock/mixlab:latest
 docker run --gpus all michaelrothrock/mixlab:latest -mode smoke
 
 # Train (mount your data directory)
-docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
+docker run --gpus all --user "$(id -u):$(id -g)" -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
     -mode arch -config /examples/plain_3L.json -train '/data/*.bin'
 ```
 

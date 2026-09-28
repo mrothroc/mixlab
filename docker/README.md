@@ -15,7 +15,7 @@ docker pull michaelrothrock/mixlab:latest
 docker run --gpus all michaelrothrock/mixlab -mode smoke
 
 # Train with your data
-docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab \
+docker run --gpus all --user "$(id -u):$(id -g)" -v $(pwd)/data:/data michaelrothrock/mixlab \
     -mode arch -config /examples/plain_3L.json -train '/data/*.bin'
 ```
 
@@ -290,10 +290,10 @@ processing data that is already split and should be kept in full.
 
 ```bash
 # Tokenize a text corpus
-docker run --gpus all -v $(pwd)/corpus:/corpus -v $(pwd)/data:/data mixlab \
+docker run --gpus all --user "$(id -u):$(id -g)" -v $(pwd)/corpus:/corpus -v $(pwd)/data:/data mixlab \
     -mode prepare -input /corpus/text.txt -output /data -vocab-size 1024
 
 # Then train
-docker run --gpus all -v $(pwd)/data:/data mixlab \
+docker run --gpus all --user "$(id -u):$(id -g)" -v $(pwd)/data:/data mixlab \
     -mode arch -config /examples/plain_3L.json -train '/data/train_*.bin'
 ```

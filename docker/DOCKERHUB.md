@@ -32,7 +32,7 @@ docker run --gpus all michaelrothrock/mixlab:latest \
 Train on your own data by mounting it. `WORKDIR` is `/data`:
 
 ```bash
-docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
+docker run --gpus all --user "$(id -u):$(id -g)" -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
     -mode arch -config /examples/plain_3L.json -train '/data/*.bin'
 ```
 

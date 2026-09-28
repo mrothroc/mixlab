@@ -10,6 +10,11 @@
 ARG APP_IMAGE
 FROM ${APP_IMAGE}
 
+# The CLI image runs as uid 10001. A RunPod worker is single-tenant and its
+# jobs run their own setup commands and write to the network volume, so this
+# image stays root.
+USER root
+
 # Override entrypoint from CLI image so we can install packages
 ENTRYPOINT []
 

@@ -108,3 +108,10 @@ RUN python3 /tmp/prepare_smoke.py /tmp/mixlab-prepare-check --stamp /tmp/prepare
 
 FROM runtime AS final
 COPY --from=prepare-check /tmp/prepare-check.passed /opt/mixlab/prepare-check.passed
+
+# Run as an unprivileged user. /data, the working directory, is owned by it so
+# the image works without a mount; for a host mount, pass
+# --user "$(id -u):$(id -g)" so files land with the caller's ownership. The
+# RunPod image builds on this one and switches back to root.
+RUN chown 10001:10001 /data
+USER 10001:10001
