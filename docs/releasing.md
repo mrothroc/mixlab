@@ -118,8 +118,9 @@ standard workflows. This repository holds no Homebrew credentials.
 Autobump opens its pull requests with the tap's `HOMEBREW_BUMP_TOKEN` secret, a
 fine-grained token limited to that repository's contents and pull requests. Pull
 requests opened with a workflow's default token do not trigger other workflows, so
-without it the bump would arrive untested. When the token expires, autobump fails
-visibly in the tap's Actions; replace the secret.
+without it the bump would arrive untested. The tap's weekly `bump-token-expiry` workflow
+reads the token's expiry from GitHub and opens an issue there, with the rotation steps,
+once 30 days or fewer remain; it closes the issue when it sees the replacement.
 
 To change the formula itself, open a pull request against the tap; the same checks
 run. If you widen `packaging/mlx-tested-range.txt` here, change `MLX_TESTED_MINIMUM` and
