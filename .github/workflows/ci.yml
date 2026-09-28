@@ -76,6 +76,27 @@ jobs:
           git -C "$ROOT" apply "$GITHUB_WORKSPACE/docker/patches/mlx-cuda-worker-wait.patch"
           python3 docker/test_mlx_worker.py --source "$SOURCE"
 
+  image-python:
+    name: Image Python dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The images install these with the base image's system Python (Ubuntu
+      # 22.04's 3.10), not the 3.12 the tests use. TestImageDependenciesAre-
+      # ResolvedOnTheImagePython keeps this version tied to the base image.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.10'
+
+      - name: Resolve the image dependency set
+        run: |
+          python -m pip install --quiet --upgrade 'pip>=26.2'
+          python -m pip install --dry-run --quiet \
+            -c requirements-prepare.txt -r requirements-prepare.txt -r requirements-runpod.txt
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

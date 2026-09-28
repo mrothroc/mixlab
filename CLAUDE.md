@@ -33,7 +33,7 @@ CGO_ENABLED=0 go test ./... -count=1                        # portable regressio
 - Deep dives: [`docs/data.md`](docs/data.md), [`docs/hf-export.md`](docs/hf-export.md), [`docs/grammar-constrained-generation.md`](docs/grammar-constrained-generation.md), [`docs/ttt-mlp-stateful-inference.md`](docs/ttt-mlp-stateful-inference.md)
 
 ## Conventions
-- Run `gh run list --limit 1 --branch main` after every push to verify CI green. CI runs `CGO_ENABLED=0`, covers `./cmd/mixlab`, and skips MLX-tagged tests.
+- After every push, check **every** check on the pushed commit, not just Actions runs: `gh api repos/mrothroc/mixlab/commits/<sha>/check-runs --jq '.check_runs[] | "\(.name): \(.conclusion)"'`. The Cloud Build image build reports there as `build-mixlab-images`; `gh run list` omits it, which is how a broken image build once went unnoticed. CI runs `CGO_ENABLED=0`, covers `./cmd/mixlab`, and skips MLX-tagged tests.
 - **Docs are CI-enforced.** Doc-guard tests fail the build if a public CLI flag or JSON config field is undocumented, or a doc index has a dead local link. Add the doc entry in the same change as the flag/field.
 - Tests with optional resources (data shards, GPU) must `t.Skip` not `t.Fatal` when the resource is missing.
 - Keep each `.go` file ≤ 1000 lines (pre-commit hook enforces it). Split by extracting cohesive siblings.

@@ -23,8 +23,14 @@ updates:
       github-actions:
         patterns: ["*"]
 
+  # The requirements files state the oldest versions mixlab supports. The
+  # default strategy raised those floors to the newest releases; numpy 2.5.3
+  # needs Python 3.12 and broke the Python 3.10 images. Only change a
+  # requirement when a new release falls outside its range. Security updates
+  # still raise a floor past a vulnerable version.
   - package-ecosystem: pip
     directory: /
+    versioning-strategy: increase-if-necessary
     schedule:
       interval: weekly
     groups:
