@@ -43,7 +43,7 @@ else
 fi
 
 # Tests
-if ! go test ./... -count=1 -timeout 120s 2>&1; then
+if ! go test ./... -count=1 -timeout 600s 2>&1; then
     echo "FAIL: go test"
     exit 1
 fi

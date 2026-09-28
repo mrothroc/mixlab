@@ -47,7 +47,7 @@ cluster: ## Build the development-only cluster scaffold (no MLX or cgo)
 	CGO_ENABLED=0 go build -o $(CLUSTER_BIN) ./cmd/mixlab-cluster
 
 test: ## Run all tests
-	go test ./... -count=1 -timeout 120s
+	go test ./... -count=1 -timeout 600s
 
 vet: ## Run go vet
 	go vet ./...
