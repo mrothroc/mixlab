@@ -1,8 +1,12 @@
 # Releasing a new version of mixlab
 
-For experimental signed/notarized macOS candidates, see
-[macOS distribution](macos-distribution.md). That workflow is independent of
-the existing source-based Homebrew release and does not publish a release.
+Pushing a `v*` tag starts the **Release** workflow
+(`.github/workflows/release.yml`). After you approve its `release` environment, it
+builds the signed, notarized macOS disk image and the Linux `mixlab-cluster`
+tarballs and attaches them to a draft release. It never publishes anything; step 3
+below does. The Homebrew formula still builds from source, and RunPod container
+images still come from Cloud Build (step 6). For private, locally signed
+candidates, see [macOS distribution](macos-distribution.md).
 
 ## Version scheme
 
@@ -30,13 +34,37 @@ vX.Y.Z
 - fix: ...
 EOF
 )"
-git push --tags
+git push origin vX.Y.Z
 ```
+
+Push the one tag, not `git push --tags`: every `v*` tag starts a signing run, so a
+stray local tag would too. The `release tags` ruleset stops `v*` tags from being
+moved or deleted except by repository admins.
+
+The push starts the Release workflow. Its macOS job waits for your approval of the
+`release` environment, which holds the signing and notarization secrets. Approve it
+from the run page:
+
+```bash
+gh run list --workflow release.yml --limit 1
+gh run watch <run-id>
+```
+
+A tag with a suffix, such as `vX.Y.Z-rc.1`, produces a draft **prerelease**, which
+is how to rehearse the workflow without cutting a release.
 
 ### 3. GitHub Release
 
+When every Release job has passed, confirm the draft carries all five assets, then
+write the notes and publish it:
+
 ```bash
-gh release create vX.Y.Z --title "vX.Y.Z: Title" --notes "$(cat <<'EOF'
+gh release view vX.Y.Z --json assets --jq '.assets[].name'
+# mixlab-vX.Y.Z-macos-arm64.dmg, SHA256SUMS-macos-arm64,
+# mixlab-cluster-vX.Y.Z-linux-amd64.tar.gz, mixlab-cluster-vX.Y.Z-linux-arm64.tar.gz,
+# SHA256SUMS-linux
+
+gh release edit vX.Y.Z --draft=false --title "vX.Y.Z: Title" --notes "$(cat <<'EOF'
 ### Feature Name
 
 Description.

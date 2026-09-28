@@ -1,0 +1,251 @@
+name: Release
+
+# Builds the signed, notarized macOS disk image and the Linux mixlab-cluster
+# tarballs for a pushed v* tag and attaches them to a draft release. Nothing is
+# signed until the maintainer approves the `release` environment, and nothing
+# is published: the maintainer writes the notes and publishes the draft. See
+# docs/releasing.md. RunPod container images are built by Cloud Build instead.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  draft:
+    name: Draft release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # create the draft release
+    env:
+      TAG: ${{ github.ref_name }}
+      REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Every later job needs this one, so a malformed tag stops the run before
+      # anything is built or signed.
+      - name: Validate the tag and create a draft release if none exists
+        run: |
+          set -u
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::tag '$TAG' is not a release version (vX.Y.Z or vX.Y.Z-suffix)"
+            exit 1
+          fi
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "release $TAG already exists; assets will be attached to it"
+            exit 0
+          fi
+          flags=(--draft --verify-tag --title "$TAG"
+                 --notes "Draft created by the release workflow. Replace these notes before publishing.")
+          if [[ "$TAG" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" --repo "$REPO" "${flags[@]}"
+
+  macos:
+    name: Sign and notarize macOS (arm64)
+    needs: draft
+    runs-on: macos-26
+    environment: release
+    timeout-minutes: 90
+    permissions:
+      contents: write  # upload the disk image to the draft release
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      # First, so the always() cleanup step knows the path even if a later
+      # step fails. The runner context is not available in job-level env.
+      - name: Choose the temporary keychain path
+        run: echo "KEYCHAIN=$RUNNER_TEMP/release-signing.keychain-db" >> "$GITHUB_ENV"
+
+      # Full history so Go stamps the tag into the binaries' -version output.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      # The packaging script refuses an MLX outside the range recorded in
+      # Formula/mixlab.rb, so a Homebrew MLX bump fails here, unsigned.
+      - name: Install MLX
+        run: brew install mlx
+
+      - name: Import the signing identity into a temporary keychain
+        env:
+          MACOS_CERT_P12_BASE64: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          MACOS_CERT_P12_PASSWORD: ${{ secrets.MACOS_CERT_P12_PASSWORD }}
+          EXPECTED_SHA1: ${{ vars.MACOS_SIGNING_IDENTITY_SHA1 }}
+        run: |
+          set -u
+          if ! [[ "$EXPECTED_SHA1" =~ ^[0-9A-F]{40}$ ]]; then
+            echo "::error::MACOS_SIGNING_IDENTITY_SHA1 must be a 40-character uppercase SHA-1"
+            exit 1
+          fi
+          password="$(openssl rand -base64 24)"
+          echo "::add-mask::$password"
+          security create-keychain -p "$password" "$KEYCHAIN"
+          security set-keychain-settings "$KEYCHAIN"
+          security unlock-keychain -p "$password" "$KEYCHAIN"
+          bundle="$RUNNER_TEMP/signing.p12"
+          (umask 077; printf '%s' "$MACOS_CERT_P12_BASE64" | base64 --decode > "$bundle")
+          # security import has no stdin option for the passphrase. This runner
+          # is ephemeral and single-tenant, and the value is masked in logs.
+          security import "$bundle" -k "$KEYCHAIN" -P "$MACOS_CERT_P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$bundle"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$KEYCHAIN" >/dev/null
+          # codesign --keychain alone reports "no identity found"; the keychain
+          # must be in the search list. Making it the default also lets
+          # notarytool find the credential profile stored below.
+          existing=()
+          while IFS= read -r entry; do
+            entry="${entry#"${entry%%[![:space:]]*}"}"
+            entry="${entry#\"}"
+            existing+=("${entry%\"}")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$KEYCHAIN" ${existing[@]+"${existing[@]}"}
+          security default-keychain -d user -s "$KEYCHAIN"
+          identities="$(security find-identity -v -p codesigning "$KEYCHAIN")"
+          count="$(printf '%s\n' "$identities" | grep -c 'Developer ID Application' || true)"
+          if [ "$count" != 1 ]; then
+            echo "::error::expected exactly one Developer ID Application identity, found $count"
+            exit 1
+          fi
+          if ! printf '%s\n' "$identities" | grep -q " $EXPECTED_SHA1 "; then
+            echo "::error::the signing identity is not the certificate pinned by MACOS_SIGNING_IDENTITY_SHA1"
+            exit 1
+          fi
+          name="$(printf '%s\n' "$identities" | sed -n 's/^.*"\(Developer ID Application: .*\)"$/\1/p')"
+          if [ -z "$name" ]; then
+            echo "::error::could not read the signing identity name"
+            exit 1
+          fi
+          echo "SIGNING_IDENTITY=$name" >> "$GITHUB_ENV"
+
+      - name: Store and check notarization credentials
+        env:
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          NOTARY_API_KEY_ID: ${{ vars.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ vars.NOTARY_API_ISSUER_ID }}
+        run: |
+          set -u
+          key="$RUNNER_TEMP/notary.p8"
+          (umask 077; printf '%s\n' "$NOTARY_API_KEY_P8" > "$key")
+          xcrun notarytool store-credentials mixlab-notary --key "$key" \
+            --key-id "$NOTARY_API_KEY_ID" --issuer "$NOTARY_API_ISSUER_ID" --keychain "$KEYCHAIN"
+          rm -f "$key"
+          # Resolve the profile exactly as the packaging script will, without
+          # --keychain, and prove Apple accepts the key before building.
+          xcrun notarytool history --keychain-profile mixlab-notary >/dev/null
+
+      - name: Build, sign and notarize
+        run: |
+          python3 scripts/package_macos.py --output "$RUNNER_TEMP/dist" \
+            --identity "$SIGNING_IDENTITY" --notarize --notary-profile mixlab-notary --release "$TAG"
+
+      # Installs the image the way a user would, then removes Homebrew MLX so
+      # the packaged binaries can only run on the libraries they carry.
+      - name: Smoke-test the packaged build on Metal without Homebrew MLX
+        run: |
+          set -u
+          image="$RUNNER_TEMP/dist/mixlab-$TAG-macos-arm64.dmg"
+          mount="$RUNNER_TEMP/mount"
+          install="$RUNNER_TEMP/install"
+          xcrun stapler validate "$image"
+          mkdir "$mount"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "$image"
+          cp -R "$mount/mixlab-macos-arm64" "$install"
+          hdiutil detach "$mount"
+          brew uninstall --ignore-dependencies mlx
+          for binary in mixlab mixlab-cluster; do
+            codesign --verify --strict --check-notarization "$install/$binary"
+            report="$("$install/$binary" -version)"
+            first="${report%%$'\n'*}"
+            case "$first" in
+              "$binary $TAG ("*|"$binary $TAG") ;;
+              *) echo "::error::packaged $binary reports '$first', not $TAG"; exit 1 ;;
+            esac
+          done
+          "$install/mixlab" -mode smoke 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+          grep -q 'SMOKE: All checks passed' "$RUNNER_TEMP/smoke.log"
+
+      - name: Attach to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          cd "$RUNNER_TEMP/dist"
+          mv SHA256SUMS SHA256SUMS-macos-arm64
+          gh release upload "$TAG" "mixlab-$TAG-macos-arm64.dmg" SHA256SUMS-macos-arm64 \
+            --clobber --repo "$REPO"
+
+      - name: Remove signing material
+        if: always()
+        run: |
+          security delete-keychain "$KEYCHAIN" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/signing.p12" "$RUNNER_TEMP/notary.p8"
+
+  linux:
+    name: Build Linux mixlab-cluster
+    needs: draft
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write  # upload the tarballs to the draft release
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.24'
+          cache: false
+
+      # mixlab-cluster is pure Go on Linux and needs no signing. The Linux
+      # trainer needs MLX with CUDA and ships in the RunPod container instead.
+      - name: Build static binaries
+        run: |
+          set -u
+          dist="$RUNNER_TEMP/dist"
+          mkdir "$dist"
+          for arch in amd64 arm64; do
+            name="mixlab-cluster-$TAG-linux-$arch"
+            mkdir "$RUNNER_TEMP/$name"
+            GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
+              go build -trimpath -o "$RUNNER_TEMP/$name/mixlab-cluster" ./cmd/mixlab-cluster
+            cp LICENSE "$RUNNER_TEMP/$name/LICENSE-mixlab"
+            cp THIRD_PARTY_NOTICES.md "$RUNNER_TEMP/$name/"
+            tar -C "$RUNNER_TEMP" -czf "$dist/$name.tar.gz" "$name"
+          done
+          report="$("$RUNNER_TEMP/mixlab-cluster-$TAG-linux-amd64/mixlab-cluster" -version)"
+          first="${report%%$'\n'*}"
+          case "$first" in
+            "mixlab-cluster $TAG ("*|"mixlab-cluster $TAG") ;;
+            *) echo "::error::built mixlab-cluster reports '$first', not $TAG"; exit 1 ;;
+          esac
+          (cd "$dist" && sha256sum ./*.tar.gz > SHA256SUMS-linux)
+
+      - name: Attach to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -u
+          gh release upload "$TAG" "$RUNNER_TEMP"/dist/*.tar.gz "$RUNNER_TEMP/dist/SHA256SUMS-linux" \
+            --clobber --repo "$REPO"
