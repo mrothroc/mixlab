@@ -1,11 +1,12 @@
-# scripts/ — data preparation and the RunPod handler
+# scripts/ — data preparation, the RunPod handler, and release packaging
 
 Three unrelated concerns share this directory: data preparation, the RunPod
 handler, and release packaging. The first two ship inside the RunPod image
 (`docker/runpod.Dockerfile` copies `scripts/` and runs `handler.py` as the
 container `CMD`), so a change to them reaches production only through an image
-rebuild and a new pinned digest — never through a Go rebuild. Release packaging
-runs in GitHub Actions and on maintainers' Macs, never in the image.
+rebuild and a new pinned digest — never through a Go rebuild. The release
+packaging scripts are copied into the image too, but only ever run in GitHub
+Actions and on maintainers' Macs.
 
 ## Data preparation
 `prepare.py` and `prepare_records.py` turn text/JSONL/FASTA/npz into shards plus
