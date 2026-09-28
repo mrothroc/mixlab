@@ -20,7 +20,7 @@ Generate causal next-token samples:
 | `-safetensors-load` | Required. Checkpoint to load. |
 | `-prompt` | Prompt token IDs in `token_ids:0,1,2` form. |
 | `-max-tokens` | Maximum generated tokens. Default: `256`. |
-| `-temperature` | Sampling temperature. Default: `0.8`. |
+| `-temperature` | Sampling temperature. `0` selects greedy decoding: the highest-probability token at each step, ignoring `-top-k`. Without `-prompt` the seed still picks the random start token, so pass `-prompt` for output that is identical across seeds. Default: `0.8`. |
 | `-top-k` | Top-k sampling cutoff. `0` disables the cutoff. |
 | `-num-samples` | Number of independent sequences generated while reusing one initialized trainer. Default: `1`. |
 | `-gen-batch` | Number of sequences evaluated concurrently. Default: `1`, which preserves the sequential v0.69.1 path. |

@@ -93,7 +93,7 @@ func TestBuildGenerationPlanDefaultsEOSAndValidation(t *testing.T) {
 		"negative samples":         {Temperature: 1, NumSamples: -1},
 		"negative batch":           {Temperature: 1, GenerationBatch: -1},
 		"negative max":             {Temperature: 1, MaxTokens: -1},
-		"zero temperature":         {},
+		"negative temperature":     {Temperature: -1},
 		"negative top-k":           {Temperature: 1, TopK: -1},
 		"unknown incomplete mode":  {Temperature: 1, GrammarOnIncomplete: "truncate"},
 		"attempt cap without skip": {Temperature: 1, GrammarMaxAttempts: 4},

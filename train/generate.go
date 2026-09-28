@@ -220,12 +220,18 @@ func generationBatch(context []int, seqLen int) ([]int, []int, int) {
 	return xTok, yTok, lastPos
 }
 
+// sampleNextToken draws from softmax(logits/temperature) restricted to the topK
+// highest logits. Temperature 0 is greedy decoding: the highest finite logit,
+// ties to the lowest token id, ignoring topK and drawing nothing from rng.
 func sampleNextToken(logits []float32, temperature float32, topK int, rng *rand.Rand) (int, error) {
 	if len(logits) == 0 {
 		return 0, fmt.Errorf("empty logits")
 	}
-	if temperature <= 0 || math.IsNaN(float64(temperature)) || math.IsInf(float64(temperature), 0) {
-		return 0, fmt.Errorf("sampling temperature must be finite and > 0, got %g", temperature)
+	if temperature < 0 || math.IsNaN(float64(temperature)) || math.IsInf(float64(temperature), 0) {
+		return 0, fmt.Errorf("sampling temperature must be finite and >= 0 (0 is greedy), got %g", temperature)
+	}
+	if temperature == 0 {
+		return greedyNextToken(logits)
 	}
 	if topK < 0 {
 		return 0, fmt.Errorf("top-k must be >= 0, got %d", topK)
@@ -285,6 +291,26 @@ func sampleNextToken(logits []float32, temperature float32, topK int, rng *rand.
 		}
 	}
 	return candidates[len(candidates)-1].token, nil
+}
+
+func greedyNextToken(logits []float32) (int, error) {
+	best := -1
+	for i, logit := range logits {
+		value := float64(logit)
+		switch {
+		case math.IsInf(value, -1):
+			continue
+		case math.IsNaN(value), math.IsInf(value, 1):
+			return 0, fmt.Errorf("logit for token %d is non-finite", i)
+		}
+		if best < 0 || logit > logits[best] {
+			best = i
+		}
+	}
+	if best < 0 {
+		return 0, errNoFiniteLogits
+	}
+	return best, nil
 }
 
 func formatTokenIDs(tokens []int) string {

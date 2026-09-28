@@ -145,7 +145,7 @@ curl https://api.runpod.ai/v2/YOUR_ENDPOINT/status/JOB_ID \
 | `checkpoint_dir` | Directory for periodic safetensors checkpoints |
 | `checkpoint_every` | Save a checkpoint every N training steps |
 | `max_tokens` | Maximum generated tokens for `generate` mode |
-| `temperature` | Sampling temperature for `generate` mode. `0` selects deterministic greedy decoding |
+| `temperature` | Sampling temperature for `generate` mode. `0` selects greedy decoding; without a prompt the seed still picks the start token |
 | `env` | Environment variables for the mixlab process and all `setup`/`post` commands, e.g. `{"MIXLAB_TTT_MLP_DISABLE_CUDA_PRIMITIVE": "1"}`. Scoped to the job — it does not leak to later jobs on a warm worker |
 | `timeout` | Positive finite wall-clock seconds per command (default 3600): applies independently to each setup command, the main process, and each post command. Not an idle-output timeout or a total-job budget |
 | `timing` | Boolean; `true` forwards `-timing` (not a separate `true` argument) |

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"math/rand"
 	"os"
 
@@ -76,8 +77,8 @@ func buildGenerationPlan(opts GenerateOptions, cfg *ArchConfig, vocab *data.Nucl
 	if opts.MaxTokens < 0 {
 		return generationPlan{}, fmt.Errorf("-max-tokens must be >= 0")
 	}
-	if opts.Temperature <= 0 {
-		return generationPlan{}, fmt.Errorf("-temperature must be > 0")
+	if opts.Temperature < 0 || math.IsNaN(float64(opts.Temperature)) || math.IsInf(float64(opts.Temperature), 0) {
+		return generationPlan{}, fmt.Errorf("-temperature must be finite and >= 0 (0 selects greedy decoding)")
 	}
 	if opts.TopK < 0 {
 		return generationPlan{}, fmt.Errorf("-top-k must be >= 0")

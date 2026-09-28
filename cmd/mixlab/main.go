@@ -41,7 +41,7 @@ func main() {
 	swaInterval := flag.Int("swa-interval", 10, "override training.swa_interval: update cadence for SWA/EMA accumulation")
 	timing := flag.Bool("timing", false, "print per-step timing breakdown")
 	maxTokens := flag.Int("max-tokens", 256, "maximum number of tokens to generate (generate mode)")
-	temperature := flag.Float64("temperature", 0.8, "sampling temperature (generate mode)")
+	temperature := flag.Float64("temperature", 0.8, "sampling temperature (generate mode); 0 selects greedy decoding")
 	topK := flag.Int("top-k", 40, "top-k sampling cutoff (generate mode)")
 	numSamples := flag.Int("num-samples", 1, "number of causal sequences to generate in one process")
 	genBatch := flag.Int("gen-batch", 1, "causal sequences evaluated concurrently; 1 preserves sequential generation")
