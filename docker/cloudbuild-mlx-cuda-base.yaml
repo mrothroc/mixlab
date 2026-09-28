@@ -3,13 +3,30 @@
 # Run this before cloudbuild-golf-mlx-cuda.yaml whenever MLX changes. The
 # add-architecture build deliberately refuses a base with a different MLX
 # version or commit.
+#
+# Usage:
+#   gcloud builds submit \
+#     --config=docker/cloudbuild-mlx-cuda-base.yaml \
+#     --substitutions=_REGISTRY_PREFIX=us-central1-docker.pkg.dev/my-project/my-repo \
+#     --timeout=14400s \
+#     .
 
 substitutions:
-  _REGISTRY_PREFIX: "us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf"
+  _REGISTRY_PREFIX: ""
   _MLX_VERSION: "v0.32.0"
   _MLX_COMMIT: "7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247"
 
 steps:
+  # The registry has no default: this repository is public, so the project
+  # lives in the trigger or the submit command. Fail before a four-hour build.
+  - name: 'bash'
+    args:
+      - '-c'
+      - |
+        for pair in "_REGISTRY_PREFIX=${_REGISTRY_PREFIX}"; do
+          [ -n "$${pair#*=}" ] || { echo "substitution $${pair%%=*} is required"; exit 1; }
+        done
+
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'

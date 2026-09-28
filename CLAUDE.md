@@ -39,4 +39,5 @@ CGO_ENABLED=0 go test ./... -count=1                        # portable regressio
 - Keep each `.go` file ≤ 1000 lines (pre-commit hook enforces it). Split by extracting cohesive siblings.
 - Don't push CUDA-kernel changes without smoke-testing on a CUDA host — GitHub CI has no nvcc, so kernels aren't compiled there.
 - A custom GPU primitive needs a differential test against its fallback covering gradients, and proof the primitive was actually live in the fast run — see [`gpu/CLAUDE.md`](gpu/CLAUDE.md).
+- This repository is public. Operator steps that name private infrastructure (cloud project, registry, accounts, the production endpoint, private repositories) live in the maintainer's private runbook; docs here describe the procedure with `my-project`-style placeholders. `TestPublicRepositoryNamesNoPrivateInfrastructure` catches registry, project and account shapes.
 - Roll a release only when asked; follow `docs/releasing.md` and verify each remote step (tag, release, formula) actually landed.

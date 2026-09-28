@@ -53,14 +53,18 @@ docker build -f docker/app.Dockerfile \
   -t mixlab:mlx-0.32.0 .
 ```
 
-Cloud Build must run the base build before the architecture build:
+Cloud Build must run the base build before the architecture build. Neither config
+has a registry default; pass your own:
 
 ```bash
+REG=us-central1-docker.pkg.dev/my-project/my-repo
 gcloud builds submit \
   --config=docker/cloudbuild-mlx-cuda-base.yaml \
+  --substitutions=_REGISTRY_PREFIX=$REG \
   --timeout=14400s .
 gcloud builds submit \
   --config=docker/cloudbuild-golf-mlx-cuda.yaml \
+  --substitutions=_REGISTRY_PREFIX=$REG,_BASE_IMAGE=$REG/golf-mlx-cuda-base:mlx-0.32.0 \
   --timeout=14400s .
 ```
 
@@ -69,7 +73,7 @@ For pre-promotion validation, build the application with versioned tags:
 ```bash
 gcloud builds submit \
   --config=docker/cloudbuild-ci.yaml \
-  --substitutions='_REGISTRY_PREFIX=us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf,_MLX_BASE_IMAGE=us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf/golf-mlx-cuda:mlx-0.32.0,_IMAGE_TAG=mlx-0.32.0-r0,_RUNPOD_TAG=mlx-0.32.0-r0-runpod' \
+  --substitutions="_REGISTRY_PREFIX=$REG,_MLX_BASE_IMAGE=$REG/golf-mlx-cuda:mlx-0.32.0,_IMAGE_TAG=mlx-0.32.0-r0,_RUNPOD_TAG=mlx-0.32.0-r0-runpod" \
   .
 ```
 

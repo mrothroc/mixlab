@@ -72,11 +72,9 @@ compiles.
 ## RunPod Serverless
 
 mixlab ships with a separate RunPod serverless image that adds handler dependencies
-and `scripts/handler.py` on top of the CLI image. Cloud Build publishes it to two
-registries on every push to main:
-
-- Artifact Registry: `us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf/mixlab:runpod`
-- Docker Hub: `michaelrothrock/mixlab:runpod`
+and `scripts/handler.py` on top of the CLI image. Cloud Build publishes it on every
+push to main, to Docker Hub as `michaelrothrock/mixlab:runpod` and to the maintainer's
+Artifact Registry.
 
 To deploy a new endpoint:
 
@@ -84,21 +82,13 @@ To deploy a new endpoint:
 2. Set the container image to `michaelrothrock/mixlab:runpod`
 3. The handler starts automatically — it accepts JSON jobs via the RunPod API
 
-### Updating the existing `mixlab` endpoint
+### Pinning an endpoint's image
 
-The production `mixlab` endpoint pins the **Artifact Registry image by digest**, not
-by tag, so a rebuild alone does not change what workers run. After Cloud Build
-finishes, point the template at the new digest — workers then pull it on next start:
-
-```bash
-DIGEST=$(gcloud artifacts docker images describe \
-    us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf/mixlab:runpod \
-    --format='value(image_summary.digest)')
-```
-
-Then update the template's `imageName` to `...parameter-golf/mixlab@${DIGEST}` and
-cycle `workersMax` to force fresh workers. Because the reference is a digest, a
-stale cached image cannot silently be served.
+`runpod` is a mutable tag that every push to main moves, and workers keep whichever
+image they cached. For an endpoint whose results must be reproducible, pin the template
+to an immutable `vX.Y.Z-runpod` tag or to the image **digest**, then cycle the endpoint's
+workers so they pull it. With a digest reference, a stale cached image cannot silently
+be served.
 
 ### Sending jobs
 

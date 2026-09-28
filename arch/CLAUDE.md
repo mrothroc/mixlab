@@ -22,7 +22,7 @@ declares a `dropout_keys` input + per-op ordinal so masks are deterministic from
 `(seed, step, ordinal)` — the prerequisite for reproducible resume.
 
 ## Public registry-delegation API (v0.19.1+)
-For downstream packages (mixlab-jazz) that compose registered blocks inside custom containers:
+For downstream packages that compose registered blocks inside custom containers:
 ```go
 arch.EmitBlock(prog, spec, stream, wi, D, T, B, V, idx, opts) (int, error)
 arch.BlockWeightCount(spec, blockScales, residMix) (int, error)

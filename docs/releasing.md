@@ -154,67 +154,32 @@ printf '>a\nACGT\n>b\nTGCA\n>c\nAAAA\n>d\nCCCC\n' > "$tmpdir/input.fasta"
   -prepare-output-dir prepared -val-split 0.25)
 ```
 
-### 6. Downstream (if applicable)
+### 6. Container images
 
-- Update `go.mod` in mixlab-jazz: `go get github.com/mrothroc/mixlab@vX.Y.Z`
-- Rebuild and push RunPod Docker image if GPU-side changes
+The CLI and RunPod images are built by Cloud Build from `docker/cloudbuild-ci.yaml`.
+The maintainer's operator runbook holds the exact commands, since they name private
+infrastructure; this section is the part that holds for anyone running the build.
 
-For CLI/container packaging changes, rebuild both app and RunPod images. The
-app build must pass its non-root embedded preparation check, not just the
-optional GPU smoke. Supply `_RELEASE_VERSION=vX.Y.Z` and
-`_SOURCE_REVISION=<release commit>` for manual Cloud Build submissions.
+- **Rebuild both images** for CLI or container packaging changes, and for any GPU-side
+  change. The app build must pass its non-root embedded preparation check, not just the
+  optional GPU smoke.
+- **There is no tag trigger.** Automatic builds run on pushes to main and stamp the
+  images `version=dev`, so a release image is submitted by hand, from a worktree pinned
+  at the tag, with `_RELEASE_VERSION=vX.Y.Z` and `_SOURCE_REVISION=<release commit>`.
+- **Submit it last, after every branch build has drained.** The build publishes only the
+  mutable tags `latest` and `runpod`, so whichever build finishes last owns them. If a
+  branch build lands after the release build, the release labels are silently replaced.
+  This happened when each release pushed a formula commit to main; releases no longer
+  do, but any other push to main has the same effect. When checking the queue, name the
+  build region: the global region reports no builds while regional ones are running.
+- **Then tag the release digests immutably** as `vX.Y.Z` and `vX.Y.Z-runpod`. Even a
+  release that wins the race keeps correct labels on `latest` only until the next push
+  to main; v0.117.0's lasted two days.
 
-**There is no tag trigger.** The only trigger, `build-mixlab-images`, fires on
-`push.branch: ^main$`, so `${TAG_NAME:-dev}` always resolves to `dev` for
-automatic builds. Every release image must be submitted by hand:
-
-```bash
-gcloud builds submit --region=us-central1 \
-  --project=zapbox-cloud --account=michael.rothrock@gmail.com \
-  --config=docker/cloudbuild-ci.yaml \
-  --substitutions=_REGISTRY_PREFIX=us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf,\
-_MLX_BASE_IMAGE=us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf/golf-mlx-cuda:latest,\
-_DOCKERHUB_USER=michaelrothrock,_RELEASE_VERSION=vX.Y.Z,_SOURCE_REVISION=<release commit>
-```
-
-**Submit it last, after every branch build has drained.** The build publishes
-only the mutable tags `latest` and `runpod`, so whichever build finishes last
-owns those tags. Every push to main starts a branch build stamped
-`version=dev`; if one lands after the release build, the release labels are
-silently replaced. This happened when each release pushed a formula commit to
-main. Releases no longer do, but any other push to main has the same effect.
-Wait for the queue to empty first:
-
-```bash
-gcloud builds list --ongoing --region=us-central1 \
-  --project=zapbox-cloud --account=michael.rothrock@gmail.com
-```
-
-`--region=us-central1` is not optional. Omitting it queries the global region,
-which reports `Listed 0 items.` while builds are running in us-central1 — it
-reads as a drained queue at exactly the moment the check matters.
-
-Because both published tags are mutable, the labels on `latest` are only
-correct until the next push to main. This is not hypothetical: v0.117.0's
-labels survived two days before the next feature push re-stamped `latest` with
-`version=dev`.
-
-So after verifying the build, tag the release digests immutably. This is a
-registry-side operation; it copies nothing and rebuilds nothing:
-
-```bash
-REG=us-central1-docker.pkg.dev/zapbox-cloud/parameter-golf
-gcloud artifacts docker tags add $REG/mixlab:latest $REG/mixlab:vX.Y.Z \
-  --project=zapbox-cloud --account=michael.rothrock@gmail.com
-gcloud artifacts docker tags add $REG/mixlab:runpod $REG/mixlab:vX.Y.Z-runpod \
-  --project=zapbox-cloud --account=michael.rothrock@gmail.com
-```
-
-Pin RunPod templates and any reproducibility-sensitive consumer to `vX.Y.Z-runpod`
-or to the digest, never to `runpod`. Record the image **digest** as well; it is
-the one identifier nothing can move. Docker Hub still publishes only the mutable
-tags. Inspect the published image's OCI
-version/revision labels and digest before updating the RunPod endpoint. See
+Pin RunPod templates and any reproducibility-sensitive consumer to `vX.Y.Z-runpod` or to
+the digest, never to `runpod`. The digest is the one identifier nothing can move. Docker
+Hub publishes only the mutable tags. Inspect the published image's OCI version/revision
+labels and digest before pointing an endpoint at it; see
 [image provenance](../docker/README.md#image-provenance).
 
 ## Known gotchas
@@ -243,16 +208,14 @@ version/revision labels and digest before updating the RunPod endpoint. See
   `-tags mlx` suite locally before releasing.
 - **Cloud Build can fail Step 13 with `libcuda.so.1 not found`.** The CUDA driver lib is runtime-provided by NVIDIA Container Toolkit on the GPU host, not present at Cloud Build time. The Dockerfile's `ldd` check excludes it; if you add new ldd-sensitive logic, preserve the `grep -qv 'libcuda\.so\.1'` filter.
 - **A failed Docker Hub push also strands Artifact Registry.** `docker/cloudbuild-ci.yaml`
-  builds both images, then pushes to Docker Hub as its last step; the `images:` block
-  that publishes to Artifact Registry only runs after *every* step succeeds. So an
-  expired `dockerhub-token` fails the build after the images are already built, and AR
-  silently keeps serving the previous digest. This went unnoticed for 14 builds across
-  four releases. If `gcloud builds list` shows repeated FAILUREs, check step 2 for
-  `denied: requested access to the resource is denied` before suspecting the code, and
-  rotate the secret with `gcloud secrets versions add dockerhub-token`. To publish to AR
-  alone while that is broken, submit the build manually with an empty `_DOCKERHUB_USER`,
-  which the config already treats as "skip the Docker Hub step".
-- **GitHub CI doesn't have nvcc.** It builds the binary without CUDA kernels (empty registry) and skips MLX-tagged tests (`CGO_ENABLED=0`). CI green only confirms the Go/C++ wiring compiles. CUDA kernel correctness has to be verified by smoke-testing on RunPod after the new image lands. After Cloud Build, autonomously update the RunPod template image SHA (see `docker/README.md`) and cycle workersMax to force fresh worker pulls.
+  pushes to Docker Hub as its last step, and the `images:` block that publishes to
+  Artifact Registry runs only after *every* step succeeds. An expired Docker Hub token
+  therefore fails the build after the images are built, and Artifact Registry silently
+  keeps serving the previous digest. This went unnoticed for 14 builds across four
+  releases. Repeated build failures with `denied: requested access to the resource is
+  denied` mean the token, not the code. An empty `_DOCKERHUB_USER` skips the Docker Hub
+  step, which publishes to Artifact Registry alone while the token is replaced.
+- **GitHub CI doesn't have nvcc.** It builds the binary without CUDA kernels (empty registry) and skips MLX-tagged tests (`CGO_ENABLED=0`). CI green only confirms the Go/C++ wiring compiles. CUDA kernel correctness has to be verified on RunPod after the new image lands; see below.
 
 ## Verifying a CUDA kernel on RunPod
 
