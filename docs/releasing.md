@@ -166,9 +166,11 @@ _DOCKERHUB_USER=michaelrothrock,_RELEASE_VERSION=vX.Y.Z,_SOURCE_REVISION=<releas
 
 **Submit it last, after every branch build has drained.** The build publishes
 only the mutable tags `latest` and `runpod`, so whichever build finishes last
-owns those tags. Pushing the formula commit starts a branch build stamped
-`version=dev`; if it lands after the release build, the release labels are
-silently replaced. This has happened. Wait for the queue to empty first:
+owns those tags. Every push to main starts a branch build stamped
+`version=dev`; if one lands after the release build, the release labels are
+silently replaced. This happened when each release pushed a formula commit to
+main. Releases no longer do, but any other push to main has the same effect.
+Wait for the queue to empty first:
 
 ```bash
 gcloud builds list --ongoing --region=us-central1 \
