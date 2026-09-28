@@ -1,0 +1,6 @@
+# RunPod serverless handler dependencies, installed on top of the CLI image by
+# docker/runpod.Dockerfile under requirements-prepare.txt as constraints. Kept
+# in a file so pip-audit (Security workflow) and Dependabot can see them.
+tiktoken
+huggingface_hub
+runpod

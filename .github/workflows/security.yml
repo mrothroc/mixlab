@@ -46,6 +46,28 @@ jobs:
           CGO_ENABLED: "0"
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
+  python:
+    name: Python dependency vulnerabilities
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the requirements files
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The requirements files hold ranges, so this resolves them to what an
+      # install gets today, which is what the next image build installs.
+      # --strict also fails when a dependency cannot be resolved or audited.
+      - name: pip-audit
+        run: |
+          set -u
+          for requirements in requirements-*.txt; do
+            echo "::group::$requirements"
+            pipx run --spec pip-audit==2.10.1 pip-audit --strict --desc on -r "$requirements"
+            echo "::endgroup::"
+          done
+
   workflows:
     name: Workflow lint and security audit
     runs-on: ubuntu-latest

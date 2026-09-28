@@ -18,9 +18,10 @@ USER root
 # Override entrypoint from CLI image so we can install packages
 ENTRYPOINT []
 
+COPY requirements-runpod.txt /opt/mixlab/requirements-runpod.txt
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip curl wget gdb procps \
-    && python3 -m pip install --no-cache-dir -c /opt/mixlab/requirements-prepare.txt tiktoken huggingface_hub runpod \
+    && python3 -m pip install --no-cache-dir -c /opt/mixlab/requirements-prepare.txt -r /opt/mixlab/requirements-runpod.txt \
     && rm -rf /var/lib/apt/lists/*
 
 # RunPod handler + data scripts
