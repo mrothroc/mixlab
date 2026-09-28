@@ -5,8 +5,8 @@ go 1.26.0
 toolchain go1.27.1
 
 require (
-	github.com/cloudflare/circl v1.6.4
-	github.com/hashicorp/mdns v1.0.6
+	github.com/cloudflare/circl v1.6.5
+	github.com/hashicorp/mdns v1.0.7
 	golang.org/x/sys v0.48.0
 )
 
