@@ -480,3 +480,29 @@ func TestLaunchRejectsChangedRunningTransport(t *testing.T) {
 		t.Fatal("changed running transport accepted")
 	}
 }
+
+// The worker can finish and release its lease between the monitor's reads. The
+// monitor used to read the job, then the lease, so a job read just before exit
+// paired with a lease read just after release looked like a released lease
+// without a successful worker, and failed a run that had succeeded. This
+// flaked TestRecruitment* in internal/clusterapp under CI load.
+func TestLaunchToleratesWorkerFinishingBetweenMonitorReads(t *testing.T) {
+	x := newLaunchFixture(t)
+	finished := map[string]bool{}
+	x.ports.Status = func(ctx context.Context, c Candidate, id string) (nodeagent.Job, error) {
+		node := c.Capabilities.Node
+		if finished[node] {
+			return x.status(ctx, c, id)
+		}
+		finished[node] = true
+		stale := x.jobs[node]
+		// The worker exits and its lease is released as this read returns.
+		if _, err := x.status(ctx, c, id); err != nil {
+			return stale, err
+		}
+		return stale, nil
+	}
+	if err := x.launch.Run(context.Background(), x.ports); err != nil {
+		t.Fatalf("successful cohort reported failure: %v", err)
+	}
+}

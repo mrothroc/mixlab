@@ -304,6 +304,17 @@ func (s *Launch) monitor(ctx context.Context, p LaunchPorts, old *[]byte, r *lau
 		complete := true
 		for i := range r.Nodes {
 			n := &r.Nodes[i]
+			// Lease first, then job. A node records the job's terminal state
+			// before it releases the lease, so a job read after a Released
+			// lease is always terminal. In the other order a worker finishing
+			// between the reads pairs a stale running job with a released lease.
+			l, err := p.LeaseStatus(ctx, n.Candidate, n.Lease.ID)
+			if err != nil {
+				return err
+			}
+			if !leaseMatches(r.Plan, *n, l) || l.ID != n.Lease.ID || l.Version < n.Lease.Version {
+				return fmt.Errorf("terminal lease identity mismatch")
+			}
 			j, err := p.Status(ctx, n.Candidate, n.Manifest.Manifest.Job)
 			if err != nil {
 				return err
@@ -317,13 +328,6 @@ func (s *Launch) monitor(ctx context.Context, p LaunchPorts, old *[]byte, r *lau
 				complete = false
 			default:
 				return fmt.Errorf("managed rank terminated without success: %s", j.State)
-			}
-			l, err := p.LeaseStatus(ctx, n.Candidate, n.Lease.ID)
-			if err != nil {
-				return err
-			}
-			if !leaseMatches(r.Plan, *n, l) || l.ID != n.Lease.ID || l.Version < n.Lease.Version {
-				return fmt.Errorf("terminal lease identity mismatch")
 			}
 			if l.State != nodeagent.Released {
 				complete = false
