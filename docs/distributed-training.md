@@ -185,8 +185,8 @@ after the filter is toggled off; a reboot flushes it.
 
 ### CUDA: the right image is in the private registry, not Docker Hub
 
-Only the private Artifact Registry images tagged `mlx-0.32.0`
-(`golf-mlx-cuda-base:mlx-0.32.0` = Go + MLX 0.32.0 + CUDA + NCCL + nvcc, and no
+Only the private Artifact Registry images tagged `mlx-0.32.0-go<version>`
+(`golf-mlx-cuda-base:mlx-0.32.0-go<version>` = Go + MLX 0.32.0 + CUDA + NCCL + nvcc, and no
 `mixlab` entrypoint — use this to build) carry the MLX commit current `main`
 requires. The Docker Hub `mixlab-cuda:latest`, `mixlab:latest`, and
 `mixlab:runpod` tags are **stale MLX** (an older `get_jit_module(core::Device)`

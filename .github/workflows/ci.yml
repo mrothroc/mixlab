@@ -12,9 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
 
       - uses: actions/setup-python@v5
         with:
@@ -70,15 +70,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.24'
+          go-version-file: go.mod
 
       - uses: golangci/golangci-lint-action@v7
         env:
           CGO_ENABLED: "0"
         with:
-          version: v2.1.6
+          version: v2.13.2
           args: ./...
 
       - name: Check file sizes (max 1000 lines per .go file)

@@ -78,9 +78,9 @@ Build *and* load the same version: the dylib's install name resolves through
 **Go and golangci-lint.** golangci-lint typechecks against the standard library of
 whichever Go it runs under, and a newer Go can emit export data it cannot decode —
 producing phantom `typecheck` errors on every import that drown out real findings.
-`make lint` and the pre-commit hook both pin lint to CI's Go version for this
-reason. Override either with `LINT_GOTOOLCHAIN`, and drop the pin once
-golangci-lint supports your local toolchain:
+`make lint` and the pre-commit hook both run lint on the toolchain named by the
+`toolchain` line in `go.mod`, which CI builds with too. Override either with
+`LINT_GOTOOLCHAIN`:
 
 ```bash
 LINT_GOTOOLCHAIN=local make lint

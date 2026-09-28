@@ -64,7 +64,7 @@ gcloud builds submit \
   --timeout=14400s .
 gcloud builds submit \
   --config=docker/cloudbuild-golf-mlx-cuda.yaml \
-  --substitutions=_REGISTRY_PREFIX=$REG,_BASE_IMAGE=$REG/golf-mlx-cuda-base:mlx-0.32.0 \
+  --substitutions=_REGISTRY_PREFIX=$REG,_BASE_IMAGE=$REG/golf-mlx-cuda-base:mlx-0.32.0-go1.27.1 \
   --timeout=14400s .
 ```
 
@@ -73,12 +73,14 @@ For pre-promotion validation, build the application with versioned tags:
 ```bash
 gcloud builds submit \
   --config=docker/cloudbuild-ci.yaml \
-  --substitutions="_REGISTRY_PREFIX=$REG,_MLX_BASE_IMAGE=$REG/golf-mlx-cuda:mlx-0.32.0,_IMAGE_TAG=mlx-0.32.0-r0,_RUNPOD_TAG=mlx-0.32.0-r0-runpod" \
+  --substitutions="_REGISTRY_PREFIX=$REG,_MLX_BASE_IMAGE=$REG/golf-mlx-cuda:mlx-0.32.0-go1.27.1,_IMAGE_TAG=mlx-0.32.0-r0,_RUNPOD_TAG=mlx-0.32.0-r0-runpod" \
   .
 ```
 
 The normal application trigger can promote the dependency by pointing
-`_MLX_BASE_IMAGE` at the versioned `golf-mlx-cuda:mlx-0.32.0` image. Its
+`_MLX_BASE_IMAGE` at the versioned `golf-mlx-cuda:mlx-0.32.0-go1.27.1` image. Base-image
+tags carry the Go version from `go.mod`'s `toolchain` line, so a toolchain upgrade builds
+new tags rather than replacing the ones the trigger uses. Its
 default `latest` and `runpod` output tags are unchanged.
 
 ## Acceptance

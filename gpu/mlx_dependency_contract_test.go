@@ -52,7 +52,8 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 
 	archBuild := readRepositoryFile(t, "../docker/cloudbuild-golf-mlx-cuda.yaml")
 	for _, required := range []string{
-		`_IMAGE_TAG: "mlx-0.32.0"`,
+		// The tag also carries the Go version; cmd/mixlab's toolchain test owns that part.
+		`_IMAGE_TAG: "mlx-0.32.0-go`,
 		"${_REGISTRY_PREFIX}/golf-mlx-cuda:${_IMAGE_TAG}",
 	} {
 		if !strings.Contains(archBuild, required) {

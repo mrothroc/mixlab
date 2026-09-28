@@ -37,11 +37,11 @@ steps:
       - '--build-arg'
       - 'MLX_COMMIT=${_MLX_COMMIT}'
       - '-t'
-      - '${_REGISTRY_PREFIX}/golf-mlx-cuda-base:mlx-0.32.0'
+      - '${_REGISTRY_PREFIX}/golf-mlx-cuda-base:mlx-0.32.0-go1.27.1'
       - '.'
 
 images:
-  - '${_REGISTRY_PREFIX}/golf-mlx-cuda-base:mlx-0.32.0'
+  - '${_REGISTRY_PREFIX}/golf-mlx-cuda-base:mlx-0.32.0-go1.27.1'
 
 options:
   machineType: 'E2_HIGHCPU_32'

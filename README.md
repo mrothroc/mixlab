@@ -22,7 +22,7 @@ through the MLX backend.
 Prerequisites:
 
 - Apple Silicon Mac (M1 or later)
-- Go 1.24+ ([go.dev/dl](https://go.dev/dl/))
+- Go 1.26+ ([go.dev/dl](https://go.dev/dl/))
 - Python 3.10+ for data preparation
 - Xcode Command Line Tools (`xcode-select --install`)
 
@@ -84,7 +84,7 @@ pip install numpy tokenizers datasets
 
 ### Build from source
 
-Requires Go 1.24+ and MLX 0.32.0+ (`brew install mlx` or `pip install mlx`).
+Requires Go 1.26+ and MLX 0.32.0+ (`brew install mlx` or `pip install mlx`).
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate

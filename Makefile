@@ -54,10 +54,10 @@ vet: ## Run go vet
 
 # golangci-lint typechecks against the stdlib of whichever Go it runs under, and
 # a newer local Go can emit export data it cannot decode -- which surfaces as
-# phantom typecheck errors on every import rather than a clear failure. Pin to
-# the toolchain CI builds with, matching .githooks/pre-commit. Override with
-# LINT_GOTOOLCHAIN=local once golangci-lint supports the local toolchain.
-LINT_GOTOOLCHAIN ?= go1.24.0
+# phantom typecheck errors on every import rather than a clear failure. Lint on
+# the toolchain go.mod names, which CI builds with too, matching
+# .githooks/pre-commit. Override with LINT_GOTOOLCHAIN=local.
+LINT_GOTOOLCHAIN ?= $(shell sed -n 's/^toolchain //p' go.mod)
 
 lint: ## Run all lint checks (golangci-lint + file size)
 	GOTOOLCHAIN=$(LINT_GOTOOLCHAIN) golangci-lint run ./...

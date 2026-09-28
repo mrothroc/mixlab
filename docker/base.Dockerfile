@@ -21,15 +21,20 @@ RUN apt-get update && apt-get install -y \
 RUN test -f /usr/include/nccl.h \
     && ldconfig -p | grep -q 'libnccl\.so'
 
-# CMake 3.25+ required by MLX
+# CMake 3.25+ required by MLX. The checksum is Kitware's published SHA-256.
 RUN wget -q https://github.com/Kitware/CMake/releases/download/v3.29.3/cmake-3.29.3-linux-x86_64.tar.gz \
+    && echo "90b543a30220401db0e08347af067545be158ce89ffb09b7df1516cda8617329  cmake-3.29.3-linux-x86_64.tar.gz" | sha256sum -c - \
     && tar -C /usr/local --strip-components=1 -xzf cmake-3.29.3-linux-x86_64.tar.gz \
     && rm cmake-3.29.3-linux-x86_64.tar.gz
 
-# Go
-RUN wget -q https://go.dev/dl/go1.24.4.linux-amd64.tar.gz \
-    && tar -C /usr/local -xzf go1.24.4.linux-amd64.tar.gz \
-    && rm go1.24.4.linux-amd64.tar.gz
+# Go. GO_VERSION must equal the toolchain line in go.mod (TestGoToolchainHasOneSource
+# enforces it); GO_SHA256 is the archive checksum published at go.dev/dl.
+ARG GO_VERSION=1.27.1
+ARG GO_SHA256=63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445
+RUN wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz \
+    && echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c - \
+    && tar -C /usr/local -xzf /tmp/go.tar.gz \
+    && rm /tmp/go.tar.gz
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Pin MLX to an immutable release commit. The tag check catches accidental
