@@ -31,8 +31,15 @@ jobs:
       REPO: ${{ github.repository }}
       GH_TOKEN: ${{ github.token }}
     steps:
-      # Every later job needs this one, so a malformed tag stops the run before
-      # anything is built or signed.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      # Every later job needs this one, so an unsupported Go toolchain or a
+      # malformed tag stops the run before anything is built or signed.
+      - name: Refuse a Go toolchain that is out of support
+        run: python3 scripts/check_go_support.py
+
       - name: Validate the tag and create a draft release if none exists
         run: |
           set -u
@@ -181,6 +188,15 @@ jobs:
           "$install/mixlab" -mode smoke 2>&1 | tee "$RUNNER_TEMP/smoke.log"
           grep -q 'SMOKE: All checks passed' "$RUNNER_TEMP/smoke.log"
 
+      # Scans the binaries that ship, with the standard library they were
+      # actually linked against, before anything is attached to the release.
+      - name: Refuse reachable known vulnerabilities in the packaged binaries
+        run: |
+          set -u
+          for binary in mixlab mixlab-cluster; do
+            go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary "$RUNNER_TEMP/install/$binary"
+          done
+
       - name: Attach to the draft release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -240,6 +256,14 @@ jobs:
             *) echo "::error::built mixlab-cluster reports '$first', not $TAG"; exit 1 ;;
           esac
           (cd "$dist" && sha256sum ./*.tar.gz > SHA256SUMS-linux)
+
+      - name: Refuse reachable known vulnerabilities in the built binaries
+        run: |
+          set -u
+          for arch in amd64 arm64; do
+            go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 -mode binary \
+              "$RUNNER_TEMP/mixlab-cluster-$TAG-linux-$arch/mixlab-cluster"
+          done
 
       - name: Attach to the draft release
         env:

@@ -53,6 +53,13 @@ gh run watch <run-id>
 A tag with a suffix, such as `vX.Y.Z-rc.1`, produces a draft **prerelease**, which
 is how to rehearse the workflow without cutting a release.
 
+The workflow refuses to start when `go.mod`'s `toolchain` line names a Go release that
+is out of support, and refuses to attach any binary in which govulncheck finds a
+reachable known vulnerability. The `Security` workflow runs the same two checks on
+every push, pull request and weekly, so a Go release going out of support fails the
+build before a release is attempted. To fix either, move the `toolchain` line to a
+supported release; `TestGoToolchainHasOneSource` lists every file that must follow.
+
 ### 3. GitHub Release
 
 When every Release job has passed, confirm the draft carries all five assets, then

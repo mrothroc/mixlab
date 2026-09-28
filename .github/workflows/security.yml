@@ -1,0 +1,47 @@
+name: Security
+
+# Runs on a schedule as well as on changes: a Go release goes out of support and
+# new vulnerabilities are published without anything in this repository changing.
+# mixlab built on unsupported Go 1.24 for seven months while every push was green.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays at 06:17 UTC
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go toolchain support and vulnerabilities
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # check out the source
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Fail if go.mod's toolchain is out of support
+        run: python3 scripts/check_go_support.py
+
+      # Reachable vulnerabilities only: govulncheck exits non-zero when mixlab
+      # calls affected code, under the toolchain go.mod names. The -tags mlx
+      # build needs MLX headers and is covered by the release workflow's binary
+      # scan.
+      - name: govulncheck
+        env:
+          CGO_ENABLED: "0"
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
