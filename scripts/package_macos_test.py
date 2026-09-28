@@ -17,11 +17,11 @@ def make_fixture(temp, mlx_version=(0, 32, 1), tested=("0.32.0", "0.33.0")):
     root.mkdir()
     (root / 'LICENSE').write_text('Mixlab license')
     (root / 'THIRD_PARTY_NOTICES.md').write_text('Third-party notices fixture')
-    (root / 'Formula').mkdir()
-    (root / 'Formula' / 'mixlab.rb').write_text(
+    (root / 'packaging' / 'homebrew').mkdir(parents=True)
+    (root / 'packaging' / 'homebrew' / 'mixlab.rb').write_text(
         'class Mixlab < Formula\n'
-        f'  MLX_TESTED_MINIMUM = "{tested[0]}"\n'
-        f'  MLX_TESTED_BELOW = "{tested[1]}"\n'
+        f'  MLX_TESTED_MINIMUM = "{tested[0]}".freeze\n'
+        f'  MLX_TESTED_BELOW = "{tested[1]}".freeze\n'
         'end\n')
     for name in ['LICENSE', 'include/mlx/mlx.h', 'lib/libmlx.dylib', 'lib/mlx.metallib']:
         path = prefix / name
@@ -210,7 +210,7 @@ Load command 11
             header.write_text(header.read_text().replace('#define MLX_VERSION_PATCH 1\n', ''))
 
         def drop_upper_bound(root, prefix):
-            formula = root / 'Formula' / 'mixlab.rb'
+            formula = root / 'packaging' / 'homebrew' / 'mixlab.rb'
             formula.write_text(formula.read_text().replace('MLX_TESTED_BELOW', 'SOMETHING_ELSE'))
 
         def delete_header(root, prefix):
@@ -298,6 +298,11 @@ Load command 11
                         package.build(namespace(Path(temp) / 'output', prefix, release='v0.119.0', notarize=True))
                 self.assertFalse(any(c[:2] == ['hdiutil', 'create'] for c in calls))
                 self.assertFalse(any(c[:3] == ['xcrun', 'notarytool', 'submit'] for c in calls))
+
+    def test_tested_range_is_read_from_the_real_formula_source(self):
+        # Pins the packager to the file the formula is actually rendered from.
+        low, high = package.tested_mlx_range(package.ROOT)
+        self.assertLess(low, high)
 
 
 if __name__ == "__main__":

@@ -66,9 +66,13 @@ docker run --gpus all -v $(pwd)/data:/data michaelrothrock/mixlab:latest \
 
 ```bash
 brew install mrothroc/tap/mixlab
+brew trust mrothroc/tap
 ```
 
-This installs MLX automatically as a dependency. The binary embeds the scripts
+The first command builds mixlab from source and installs MLX as a dependency. The
+second lets a plain `brew upgrade` include mixlab: Homebrew 7 loads formulae from a
+third-party tap you have not trusted only when a command names them in full, so
+without it, upgrade with `brew upgrade mrothroc/tap/mixlab`. The binary embeds the scripts
 used by `mixlab -mode prepare`, so no source checkout is needed. For the Python
 runtime dependencies used by data preparation and FineWeb downloads:
 

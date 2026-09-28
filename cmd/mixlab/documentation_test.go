@@ -157,31 +157,76 @@ func TestPublishedDocumentationIndexesHaveValidLocalLinks(t *testing.T) {
 
 var markdownLinkPattern = regexp.MustCompile(`\[[^\]]+\]\(([^)]+)\)`)
 
-// Homebrew's user/tap/formula form requires a repository named homebrew-tap,
-// so the formula is necessarily copied out of this repository. That copy once
-// drifted for five months without failing: an archived repo stays publicly
-// tappable, so the stale formula kept installing instead of erroring. These
-// guard the two halves that made it invisible -- the documented install path,
-// and a release step that refreshes the copy.
+// The formula users install lives in mrothroc/homebrew-tap and is rendered
+// from packaging/homebrew/mixlab.rb by the publish-homebrew workflow. Two past
+// failures shape these checks. A hand-copied tap formula drifted for five
+// months while an archived tap kept serving it. Then this repository was made
+// tappable itself, so machines that tapped both saw "Formulae found in
+// multiple taps" for a plain `brew info mixlab`.
 func TestHomebrewInstructionsUseThePublishedTap(t *testing.T) {
 	root := filepath.Join("..", "..")
-	readme, err := os.ReadFile(filepath.Join(root, "README.md"))
-	if err != nil {
-		t.Fatalf("read README.md: %v", err)
+	read := func(relative string) string {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(root, relative))
+		if err != nil {
+			t.Fatalf("read %s: %v", relative, err)
+		}
+		return string(data)
 	}
-	if !strings.Contains(string(readme), "brew install mrothroc/tap/mixlab") {
-		t.Error("README.md no longer documents the tap users install from")
+
+	readme := read("README.md")
+	for _, required := range []string{"brew install mrothroc/tap/mixlab", "brew trust mrothroc/tap"} {
+		if !strings.Contains(readme, required) {
+			t.Errorf("README.md no longer documents %q", required)
+		}
 	}
-	releasing, err := os.ReadFile(filepath.Join(root, "docs", "releasing.md"))
-	if err != nil {
-		t.Fatalf("read docs/releasing.md: %v", err)
+	if !strings.Contains(read("docs/releasing.md"), "brew upgrade mrothroc/tap/mixlab") {
+		t.Error("docs/releasing.md no longer verifies the documented install path")
 	}
+
+	// Homebrew treats any of these as formulae or casks, which would make this
+	// repository a second, competing tap.
+	for _, tapLayout := range []string{"Formula", "HomebrewFormula", "Casks"} {
+		if _, err := os.Stat(filepath.Join(root, tapLayout)); err == nil {
+			t.Errorf("%s/ makes this repository tappable; the formula source belongs in packaging/homebrew", tapLayout)
+		}
+	}
+	if rootFormulae, _ := filepath.Glob(filepath.Join(root, "*.rb")); len(rootFormulae) > 0 {
+		t.Errorf("root-level Ruby files make this repository tappable: %v", rootFormulae)
+	}
+	if !strings.Contains(read("packaging/homebrew/mixlab.rb"), "@RELEASE_TAG@") {
+		t.Error("packaging/homebrew/mixlab.rb is no longer the formula template")
+	}
+
+	// The copy into the tap is automated; these are the steps that make it safe.
+	workflow := read(".github/workflows/publish-homebrew.yml")
 	for _, required := range []string{
-		"repos/mrothroc/homebrew-tap/contents/Formula/mixlab.rb",
-		"brew upgrade mrothroc/tap/mixlab",
+		"brew audit --strict --online",
+		"brew install --build-from-source",
+		"brew test",
+		"git@github.com:mrothroc/homebrew-tap.git",
 	} {
-		if !strings.Contains(string(releasing), required) {
-			t.Errorf("docs/releasing.md no longer covers %q, so the tap copy can go stale unnoticed", required)
+		if !strings.Contains(workflow, required) {
+			t.Errorf("publish-homebrew.yml no longer runs %q", required)
+		}
+	}
+
+	// Stale install paths must not creep back into user-facing docs.
+	docs, err := filepath.Glob(filepath.Join(root, "docs", "*.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	docs = append(docs, filepath.Join(root, "README.md"), filepath.Join(root, "CONTRIBUTING.md"),
+		filepath.Join(root, "docker", "DOCKERHUB.md"))
+	for _, path := range docs {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		for _, stale := range []string{"Formula/mixlab.rb", "mrothroc/mixlab/mixlab", "brew tap mrothroc/mixlab"} {
+			if strings.Contains(string(data), stale) {
+				t.Errorf("%s still references %q", path, stale)
+			}
 		}
 	}
 }

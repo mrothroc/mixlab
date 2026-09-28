@@ -79,7 +79,7 @@ jobs:
           cache: false
 
       # The packaging script refuses an MLX outside the range recorded in
-      # Formula/mixlab.rb, so a Homebrew MLX bump fails here, unsigned.
+      # packaging/homebrew/mixlab.rb, so a Homebrew MLX bump fails here, unsigned.
       - name: Install MLX
         run: brew install mlx
 

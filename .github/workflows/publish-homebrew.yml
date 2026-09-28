@@ -1,0 +1,166 @@
+name: Publish to Homebrew
+
+# The formula users install lives in mrothroc/homebrew-tap; its source is
+# packaging/homebrew/mixlab.rb here. `verify` renders that source for a final
+# release tag and proves it with Homebrew's own checks: brew style, a strict
+# online audit, a from-source install and brew test. `publish` then pushes
+# exactly those bytes to the tap. Publishing a final GitHub release is the
+# maintainer's gate; prereleases are never published. Pushes that touch the
+# formula source, its renderer or this workflow run `verify` alone against the
+# latest final release, so a broken formula is caught before a release needs it.
+
+on:
+  release:
+    types: [published]
+  push:
+    paths:
+      - packaging/homebrew/**
+      - scripts/homebrew_formula.py
+      - .github/workflows/publish-homebrew.yml
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Final release tag to verify (vX.Y.Z). Nothing is pushed.
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: homebrew-${{ github.event_name == 'release' && 'tap' || github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  verify:
+    name: Verify the formula
+    if: github.event_name != 'release' || !github.event.release.prerelease
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      sha256: ${{ steps.render.outputs.sha256 }}
+    steps:
+      # Full history so the tag and its commit can be resolved.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Choose the release tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -u
+          tag="${RELEASE_TAG:-$INPUT_TAG}"
+          if [ -z "$tag" ]; then
+            tag="$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1)"
+          fi
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::'$tag' is not a final release tag (vX.Y.Z)"
+            exit 1
+          fi
+          echo "verifying the formula for $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Render the formula
+        id: render
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -u
+          revision="$(git rev-parse "$TAG^{commit}")"
+          python3 scripts/homebrew_formula.py --tag "$TAG" --revision "$revision" --output "$RUNNER_TEMP/mixlab.rb"
+          echo "sha256=$(shasum -a 256 "$RUNNER_TEMP/mixlab.rb" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # A scratch tap gives brew the context to audit, install and test the
+      # rendered file the way users will get it, without touching the real tap.
+      # Every command names the formula in full, which Homebrew requires for an
+      # untrusted tap.
+      - name: Audit, install from source, and test
+        run: |
+          set -u
+          brew tap-new --no-git mixlab/verify
+          cp "$RUNNER_TEMP/mixlab.rb" "$(brew --repository mixlab/verify)/Formula/mixlab.rb"
+          brew style mixlab/verify/mixlab
+          brew audit --strict --online mixlab/verify/mixlab
+          brew install --build-from-source mixlab/verify/mixlab
+          brew test mixlab/verify/mixlab
+          "$(brew --prefix)/bin/mixlab" -version
+
+  publish:
+    name: Push to mrothroc/homebrew-tap
+    needs: verify
+    if: github.event_name == 'release'
+    runs-on: ubuntu-24.04
+    environment: homebrew-tap
+    permissions:
+      contents: read  # read this repository to re-render the formula
+    env:
+      TAG: ${{ needs.verify.outputs.tag }}
+      VERIFIED_SHA256: ${{ needs.verify.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Render again and require the verified bytes
+        run: |
+          set -u
+          revision="$(git rev-parse "$TAG^{commit}")"
+          python3 scripts/homebrew_formula.py --tag "$TAG" --revision "$revision" --output "$RUNNER_TEMP/mixlab.rb"
+          actual="$(sha256sum "$RUNNER_TEMP/mixlab.rb" | cut -d' ' -f1)"
+          if [ "$actual" != "$VERIFIED_SHA256" ]; then
+            echo "::error::the formula to publish differs from the one verify installed and tested"
+            exit 1
+          fi
+
+      - name: Push to the tap
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          key="$RUNNER_TEMP/tap_deploy_key"
+          hosts="$RUNNER_TEMP/known_hosts"
+          (umask 077; printf '%s\n' "$DEPLOY_KEY" > "$key")
+          # GitHub's published SSH host keys, fetched over HTTPS, rather than
+          # trusting whatever answers on first use.
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$hosts -o StrictHostKeyChecking=yes"
+          git clone --depth 1 git@github.com:mrothroc/homebrew-tap.git "$RUNNER_TEMP/tap"
+          cd "$RUNNER_TEMP/tap"
+          current="$(sed -n 's/^ *tag: *"\(v[0-9.]*\)",$/\1/p' Formula/mixlab.rb)"
+          if [ -z "$current" ]; then
+            echo "::error::could not read the version the tap currently serves"
+            exit 1
+          fi
+          newest="$(printf '%s\n%s\n' "$current" "$TAG" | sort -V | tail -n 1)"
+          if [ "$newest" != "$TAG" ]; then
+            echo "::notice::the tap serves $current, newer than $TAG; not downgrading it"
+            exit 0
+          fi
+          cp "$RUNNER_TEMP/mixlab.rb" Formula/mixlab.rb
+          if git diff --quiet; then
+            echo "the tap already serves this formula; nothing to push"
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -am "mixlab $TAG" \
+              -m "Rendered from mrothroc/mixlab packaging/homebrew/mixlab.rb at $TAG by the publish-homebrew workflow."
+          git push origin HEAD:main
+
+      - name: Remove the deploy key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/tap_deploy_key"

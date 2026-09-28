@@ -26,7 +26,7 @@ python3 scripts/package_macos.py \
 ```
 
 Every build, candidate or release, refuses an MLX outside the range recorded in
-`Formula/mixlab.rb` (`MLX_TESTED_MINIMUM` up to but excluding `MLX_TESTED_BELOW`). The
+`packaging/homebrew/mixlab.rb` (`MLX_TESTED_MINIMUM` up to but excluding `MLX_TESTED_BELOW`). The
 version is read from the MLX headers being bundled. The formula stays the one record
 of which MLX was tested, so a Homebrew MLX bump fails the build before anything is
 signed. It also fails loudly if either the header or the formula cannot be read.

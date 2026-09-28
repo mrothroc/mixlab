@@ -113,8 +113,8 @@ def mlx_version(prefix):
 
 
 def tested_mlx_range(root):
-    """The formula is the single record of which MLX releases were tested."""
-    formula = root / "Formula" / "mixlab.rb"
+    """The formula source is the single record of which MLX releases were tested."""
+    formula = root / "packaging" / "homebrew" / "mixlab.rb"
     text = formula.read_text() if formula.is_file() else ""
     bounds = []
     for name in ("MLX_TESTED_MINIMUM", "MLX_TESTED_BELOW"):
@@ -131,7 +131,7 @@ def check_mlx(prefix, root):
     dotted = lambda v: ".".join(map(str, v))
     if not low <= version < high:
         raise ValueError(f"MLX {dotted(version)} is outside the tested range >={dotted(low)} <{dotted(high)} "
-                         "recorded in Formula/mixlab.rb; run the -tags mlx suite before widening it")
+                         "recorded in packaging/homebrew/mixlab.rb; run the -tags mlx suite before widening it")
     return dotted(version)
 
 

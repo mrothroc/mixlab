@@ -1,7 +1,8 @@
 # MLX 0.32 Upgrade
 
-Mixlab is tested against MLX `>=0.32.0 <0.33.0`, the range `Formula/mixlab.rb`
-asserts at install time. Treat "or newer" as unverified rather than safe: MLX has
+This upgrade set mixlab's tested MLX range to `>=0.32.0 <0.33.0`. The current range
+is recorded in `packaging/homebrew/mixlab.rb`, which the formula asserts at install
+time and the macOS packager enforces. Treat "or newer" as unverified rather than safe: MLX has
 changed autodiff behavior in a patch release (0.32.1 made `take_along_axis` reject a
 VJP with respect to its indices, breaking MoE and bf16 training until those indices
 were wrapped in `stop_gradient`). Run the `-tags mlx` suite before widening the range. The CUDA images pin the exact upstream

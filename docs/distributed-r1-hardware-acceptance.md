@@ -49,9 +49,9 @@ both are. When it blocks, the ring connections establish and are then killed
 mid-handshake (peer sees `ECONNRESET`/`EPIPE`, listener sees `ENOTCONN`),
 surfacing as `[ring] Too many send/recv errors` and a `context deadline
 exceeded` before step 1. Code-signing does not fix this: a self-signed cert
-satisfies `codesign --verify` but not the ALF trust decision, and Homebrew
-ad-hoc re-signs binaries on install (arm64 relocation) so a Developer ID
-signature would not survive `brew install` anyway. On the trusted, isolated
+satisfies `codesign --verify` but not the ALF trust decision, and a Homebrew
+formula install ad-hoc signs the binary (it builds from source, or re-signs a
+relocated bottle), so a Developer ID signature would not survive it. On the trusted, isolated
 training LAN, disable the ALF on both hosts for the run:
 
 ```bash

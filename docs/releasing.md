@@ -4,8 +4,9 @@ Pushing a `v*` tag starts the **Release** workflow
 (`.github/workflows/release.yml`). After you approve its `release` environment, it
 builds the signed, notarized macOS disk image and the Linux `mixlab-cluster`
 tarballs and attaches them to a draft release. It never publishes anything; step 3
-below does. The Homebrew formula still builds from source, and RunPod container
-images still come from Cloud Build (step 6). For private, locally signed
+below does. Publishing then updates the Homebrew tap automatically (step 4); the
+formula builds from source on the user's Mac. RunPod container images still come
+from Cloud Build (step 6). For private, locally signed
 candidates, see [macOS distribution](macos-distribution.md).
 
 ## Version scheme
@@ -89,40 +90,34 @@ EOF
 )"
 ```
 
-### 4. Homebrew Formula
+### 4. Homebrew
 
-Update `Formula/mixlab.rb`:
-```ruby
-url "https://github.com/mrothroc/mixlab.git",
-    tag:      "vX.Y.Z",
-    revision: "<full commit hash from git rev-parse vX.Y.Z^{commit}>"
-```
+Publishing a final release starts the **Publish to Homebrew** workflow
+(`.github/workflows/publish-homebrew.yml`). Nothing is edited or copied by hand.
 
-Commit and push:
-```bash
-git add Formula/mixlab.rb
-git commit -m "chore: update formula to vX.Y.Z"
-git push
-```
-
-Then mirror it into the tap users actually install from. `Formula/mixlab.rb`
-here is the source of truth; `mrothroc/homebrew-tap` is a copy, because
-Homebrew's `user/tap/formula` form requires a repository named
-`homebrew-tap` and has no way to reference a formula in another repo:
+It renders `packaging/homebrew/mixlab.rb` for the tag, then proves the result with
+Homebrew's own checks on macOS: `brew style`, `brew audit --strict --online`, a
+from-source install, and `brew test`. Only then does it push those exact bytes to
+`mrothroc/homebrew-tap`, using a deploy key that can write to nothing else.
+Prereleases are never published, and it will not replace a newer version in the tap
+with an older one. Watch it finish before verifying:
 
 ```bash
-SHA=$(gh api repos/mrothroc/homebrew-tap/contents/Formula/mixlab.rb --jq .sha)
-gh api -X PUT repos/mrothroc/homebrew-tap/contents/Formula/mixlab.rb \
-  -f message="chore: sync formula to vX.Y.Z from mrothroc/mixlab" \
-  -f content="$(base64 -i Formula/mixlab.rb | tr -d '\n')" \
-  -f sha="$SHA"
+gh run list --workflow publish-homebrew.yml --limit 1
+gh run watch <run-id>
 ```
 
-This copy drifted unnoticed for five months once, because an archived
-repository stays publicly tappable and kept serving a stale formula instead
-of failing. The verify step below therefore installs by the **documented**
-path rather than the local checkout's tap, so skipping the sync breaks the
-release instead of shipping silently.
+The source lives here and the copy is automated because of two past failures. A
+hand-copied tap formula drifted for five months while an archived tap kept serving
+it. Later this repository was made tappable itself, so machines that tapped both saw
+"Formulae found in multiple taps" for a plain `brew info mixlab`. The source now sits
+in `packaging/homebrew/`, which Homebrew does not treat as a tap, and the workflow is
+the only writer to the tap. To change the formula, edit that file; a push that touches
+it runs the verify job against the latest release.
+
+If publishing fails, the tap is left unchanged. The formula is rendered from the
+release's own commit, so a fault in the formula source itself needs a patch release;
+anything else can be fixed and the failed job re-run from the run page.
 
 ### 5. Verify
 
@@ -131,6 +126,10 @@ brew update && brew upgrade mrothroc/tap/mixlab   # the path README documents
 brew info mrothroc/tap/mixlab                     # must report vX.Y.Z
 mixlab -mode smoke
 ```
+
+Upgrade by the full name, as above. Homebrew 7 loads formulae from a tap you have not
+trusted only when the command names them in full, so a plain `brew upgrade` would skip
+mixlab on a machine that has not run `brew trust mrothroc/tap`.
 
 Verify that the installed binary can prepare data outside a source checkout:
 
@@ -207,23 +206,25 @@ version/revision labels and digest before updating the RunPod endpoint. See
 
 - **MLX API drift between Homebrew and the local MLX install.** Mixlab requires
   MLX 0.32.0 or newer. Homebrew may ship a newer version than the currently
-  tested runtime. Verify the formula install (`brew test
-  mrothroc/mixlab/mixlab` on arm64 Homebrew) before declaring the release done.
+  tested runtime. The publish workflow installs the formula from source and runs
+  `brew test` before anything reaches the tap; if it fails, nothing is published.
   CUDA upgrades must rebuild `docker/base.Dockerfile`; rebuilding only the
   add-architecture or app layers retains the old MLX source. See
   `docs/mlx-0.32-upgrade.md` for the dependency and NCCL acceptance contract.
-  If verification fails, patch the source for compatibility, force-update the
-  tag, refresh the GitHub release notes, and re-verify.
+  If verification fails, fix the source and cut a patch release. Do not move the
+  tag: the `release tags` ruleset blocks it for everyone but admins, and the signed
+  assets and the tap formula already point at the original commit.
 - **MLX 0.32.1 tightened gather VJP.** `take_along_axis` now raises
   `[gather_axis] Cannot calculate VJP with respect to indices` instead of
   silently ignoring the indices operand, which broke every MoE and bf16
   training path (the router's `argsort` indices trace back to the
   differentiable probabilities). Fixed by wrapping every `take_along_axis`
   index argument in `mx::stop_gradient`; indices are discrete, so this is
-  numerically a no-op on 0.32.0 and restores 0.32.1. `Formula/mixlab.rb`
-  declares `depends_on "mlx"` unpinned, so a Homebrew MLX bump reaches users
-  before it reaches any test — and CI cannot see it, because CI builds with
-  `CGO_ENABLED=0` and never links MLX. After any Homebrew MLX upgrade, run the
+  numerically a no-op on 0.32.0 and restores 0.32.1. The formula
+  (`packaging/homebrew/mixlab.rb`) declares `depends_on "mlx"` unpinned and refuses
+  an out-of-range MLX only at install time, so `brew upgrade mlx` under an installed
+  mixlab still reaches users before any test. The main CI cannot see it either,
+  because it builds with `CGO_ENABLED=0` and never links MLX. After any Homebrew MLX upgrade, run the
   `-tags mlx` suite locally before releasing.
 - **Cloud Build can fail Step 13 with `libcuda.so.1 not found`.** The CUDA driver lib is runtime-provided by NVIDIA Container Toolkit on the GPU host, not present at Cloud Build time. The Dockerfile's `ldd` check excludes it; if you add new ldd-sensitive logic, preserve the `grep -qv 'libcuda\.so\.1'` filter.
 - **A failed Docker Hub push also strands Artifact Registry.** `docker/cloudbuild-ci.yaml`
