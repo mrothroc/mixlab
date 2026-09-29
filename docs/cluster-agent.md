@@ -1,8 +1,9 @@
 # Experimental Node Hosting
 
-R1.1 provides experimental managed training on trusted, administrator-controlled
-hosts. Foreground node hosting, authenticated `nodes`, and fixed-world
-`submit` are available. Final weights stream to verified private node-local
+`mixlab-cluster` provides experimental managed training on trusted,
+administrator-controlled hosts: node hosting (as a background service, see
+[background services](cluster-services.md), or in the foreground), authenticated
+`nodes`, and fixed-world `submit`. Final weights stream to verified private node-local
 storage and download to the controller after successful cleanup. Managed exact
 checkpoint/resume is available for successful checkpoint stops. Signed-package
 M1/M4 acceptance covers encrypted training, exact resume, enrollment, peer
@@ -88,7 +89,7 @@ manifests, and resolves dataset selectors through its local catalog. The
 encrypted ring binds only the configured address. Workload keys stay in the
 agent's protected state; children receive only local assignments and opaque
 loopback collective traffic. Additional application credential envelopes and
-credential-use requests are rejected in R1.1.
+credential-use requests are rejected.
 
 Trust refresh and principal renewal use only root-signed authority endpoints.
 Startup first attempts a bounded public trust refresh using the existing pin,

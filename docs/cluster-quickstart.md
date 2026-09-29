@@ -1,9 +1,8 @@
 # Managed Clusters: Getting Started (Experimental)
 
-> **Unreleased.** This page describes `main` after v0.119.0: per-user service
-> installation (`agent install`, `authority install`), `agent reapprove` and
-> `doctor` are not in any release yet. For v0.119.0, follow the
-> [v0.119.0 guide](https://github.com/mrothroc/mixlab/blob/v0.119.0/docs/cluster-quickstart.md).
+> **Is it worth it?** On a LAN, distributed training is usually *slower* per
+> token than the fastest Mac alone. Read
+> [When distributed training helps](distributed-when.md) before you start.
 
 > **Experimental.** `mixlab-cluster` trains one model across several Macs on a
 > trusted LAN. Use the signed package for macOS background services and complete
@@ -50,17 +49,27 @@ runs `mixlab` directly on each machine with `mlx.launch` and needs no enrollment
   is not isolation from other users of the same machine.
 - **Fixed membership.** A job uses exactly the nodes you name; there is no
   automatic recovery or elastic membership.
-- **Apple Silicon Macs.** The managed path is tested on macOS with Metal.
+- **Apple Silicon Macs on macOS 26.** The signed package, which background
+  services require, is built for macOS 26. On macOS 15, use the Homebrew formula
+  and run the authority and agents in the foreground.
 
 ## Before you start
 
 - Two or more Apple Silicon Macs on the same network, each with a fixed LAN
   address for the duration.
-- `mixlab` and `mixlab-cluster` on every machine, the **same version** everywhere.
-  Use the signed disk image from the [release](https://github.com/mrothroc/mixlab/releases)
-  or its `mixlab-signed` cask when published. Copy the entire package to a stable
-  path. The source formula remains suitable for foreground/development use, not
-  macOS background services. See [service installation](cluster-services.md).
+- `mixlab` and `mixlab-cluster` on every machine, the **same version** everywhere,
+  from the signed package:
+
+  ```bash
+  brew unlink mixlab 2>/dev/null   # only if the source-built formula is installed
+  brew install --cask mrothroc/tap/mixlab-signed
+  ```
+
+  Or copy the whole directory from the signed disk image on the
+  [release](https://github.com/mrothroc/mixlab/releases) to a stable path. The
+  source-built formula (`brew install mrothroc/tap/mixlab`) is for foreground and
+  development use: macOS background services require the signed package, and the
+  macOS firewall can silently block an unsigned node.
 - A prepared dataset. Follow the [README quickstart](../README.md#quickstart) once,
   then copy the **identical** shard files to the same kind of location on every
   node. The examples below use `~/mixlab-data/train_*.bin`.
@@ -247,18 +256,48 @@ See [upgrade and key-storage details](cluster-services.md#upgrade-without-reenro
 | `approved executable changed; explicit local reapproval required` | `mixlab` or `mixlab-cluster` was upgraded. Follow [Upgrading](#upgrading). |
 | `unsafe state path: not a real directory` | A state directory path passes through a symbolic link, such as `/tmp` or `/var` on macOS. Use a real path under your home directory. |
 | `training.distributed: optimizer must be adamw` | Add `"optimizer": "adamw"` to `training`. |
+| A node reports `timeout` although `nc -z <node> 7445` connects, and the node shows connections to port 7445 in `CLOSE_WAIT` (`netstat -an -p tcp`) | The macOS Application Firewall is withholding connections from an unsigned `mixlab-cluster`. Use the signed package on that node; it is allowed with the firewall on. Do not disable the firewall. |
 | `enroll` cannot reach the authority | `init` used `127.0.0.1`, or the controller's `-trust-listen` address is not its LAN address. Create the cluster again with the LAN address. |
 
-## Removing a test cluster
+## Uninstalling
 
-Finish jobs, uninstall each agent with `mixlab-cluster agent uninstall`, and
-uninstall the authority with `mixlab-cluster authority uninstall`. Preserve any
-needed checkpoints and remove only this test cluster's state, not other clusters
-under `~/.mixlab`. On a Mac that used the
-default storage, use Keychain Access to remove only the `org.mixlab.signing.v1`
-items belonging to this test cluster's recorded identities. Do not delete every
-item with that prefix: other clusters may use it too. When unsure which items
-belong to the test, retain them rather than deleting unrelated credentials.
+Remove a cluster in this order on **every** machine: services first, then
+Keychain items, then state, while the state still records which keys are yours.
+
+1. Finish or abort jobs (`mixlab-cluster submit -abort -principal-state-dir "$CONTROLLER" -attempt-state-dir DIR`) and
+   copy any `model.safetensors` or `checkpoint.mixlab` you want to keep.
+2. Remove the services:
+
+   ```bash
+   mixlab-cluster agent uninstall        # on each node
+   mixlab-cluster authority uninstall    # on the authority host
+   ```
+
+3. Remove this cluster's Keychain items. Each key set records its Keychain scope
+   in a `key-context.json` beside it, so this deletes only keys belonging to the
+   state under `~/.mixlab`:
+
+   ```bash
+   find ~/.mixlab -name key-context.json \
+     -exec jq -r 'select(.backend=="keychain") | .scope' {} \; | sort -u |
+   while read -r scope; do
+     while security delete-generic-password -s "org.mixlab.signing.v1.$scope" >/dev/null 2>&1; do :; done
+   done
+   ```
+
+   If other clusters you want to keep also live under `~/.mixlab`, limit `find` to
+   this cluster's directories instead.
+4. Remove the state: `rm -rf ~/.mixlab`, or only this cluster's directories, plus
+   any `-attempt-state-dir` directories and `~/mixlab-invitations`.
+5. Remove the software:
+
+   ```bash
+   brew uninstall --cask mrothroc/tap/mixlab-signed   # or: brew uninstall mrothroc/tap/mixlab
+   brew untrust mrothroc/tap && brew untap mrothroc/tap   # only if nothing else uses the tap
+   ```
+
+6. Optionally, switch `mixlab-cluster` off in System Settings → Privacy &
+   Security → Local Network. macOS keeps the entry but it no longer grants access.
 
 ## Reference
 

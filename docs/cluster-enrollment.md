@@ -1,8 +1,8 @@
 # Experimental Cluster Enrollment
 
 These commands establish managed identities for the experimental `agent`,
-`nodes`, and `submit` workflows, including managed checkpoint/resume. R1.1
-supports trusted, administrator-controlled hosts only. See
+`nodes`, and `submit` workflows, including managed checkpoint/resume. Managed clusters
+support trusted, administrator-controlled hosts only. See
 [cluster initialization](cluster-initialization.md) first, then
 [node hosting and submission](cluster-agent.md). The
 [existing unmanaged distributed workflow](distributed-training.md) is unchanged.

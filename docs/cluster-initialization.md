@@ -83,7 +83,7 @@ not rerunning initialization. A running authority refreshes snapshots and
 renews its own still-valid principal before expiry. Offline, expired identities
 require explicit approved reenrollment; restarting a command does not reset trust.
 
-R1.1 assumes trusted, administrator-controlled hosts. Owner-only directories,
+Managed clusters assume trusted, administrator-controlled hosts. Owner-only directories,
 link/ACL checks, and protected key storage do not isolate against a malicious
 administrator or another process running as the same account. Initialization
 does not install system trust, modify the firewall, advertise a service, or

@@ -82,6 +82,11 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install numpy tokenizers datasets
 ```
 
+The formula also installs `mixlab-cluster` for foreground use. For managed-cluster
+nodes on macOS 26, which need background services, install the signed package
+instead: `brew install --cask mrothroc/tap/mixlab-signed`, after `brew unlink mixlab`
+if the formula is installed. See [managed clusters](docs/cluster-quickstart.md).
+
 ### Build from source
 
 Requires Go 1.26+ and MLX 0.32.0+ (`brew install mlx` or `pip install mlx`).
@@ -100,6 +105,19 @@ For Linux with an NVIDIA GPU. The pre-built images support A100, A30, A40,
 A6000, RTX 3090, RTX 4090, L4, L40, L40S, and H100 (`sm_80`, `sm_86`, `sm_89`,
 `sm_90`). For other GPUs, see
 [docker/README.md](docker/README.md) to build with your architecture.
+
+## Uninstall
+
+```bash
+brew uninstall mrothroc/tap/mixlab                  # or: brew uninstall --cask mrothroc/tap/mixlab-signed
+brew untrust mrothroc/tap && brew untap mrothroc/tap
+```
+
+A source build is only the `mixlab` binary you built; delete it. For Docker,
+remove the images with `docker rmi`. mixlab keeps no hidden state for training:
+prepared data, checkpoints and exports stay in the paths you chose. A managed
+cluster also has services, keys and state to remove first; follow
+[uninstalling a cluster](docs/cluster-quickstart.md#uninstalling).
 
 ## Features
 
@@ -127,7 +145,9 @@ Not the right tool for:
 
 - Production distributed training across many GPUs. mixlab can train one model
   across a few trusted machines, either directly with `mlx.launch` or, experimentally,
-  as a managed cluster; see [managed clusters](docs/cluster-quickstart.md).
+  as a managed cluster; see [managed clusters](docs/cluster-quickstart.md). On a
+  LAN this is usually slower per token than one Mac; see
+  [when distributed training helps](docs/distributed-when.md).
 - Custom CUDA kernel development.
 - Replacing a full training framework such as PyTorch or JAX.
 
@@ -138,6 +158,7 @@ framework. It trades generality for speed of iteration.
 
 - [Docs index](docs/README.md)
 - [Managed clusters: getting started (experimental)](docs/cluster-quickstart.md)
+- [When distributed training helps](docs/distributed-when.md)
 - [CLI usage](docs/cli.md)
 - [Data preparation](docs/data.md)
 - [Architecture guide](docs/architecture.md)

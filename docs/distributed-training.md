@@ -1,11 +1,12 @@
 # Distributed (DDP) training — current state and contributor guide
 
-Later releases add a cluster manager, enrollment, LAN recruitment, and DiLoCo.
-Those are not part of this release and are not documented here.
-
-This guide covers explicitly launched fixed-world data-parallel training and
-the lower-level contributor tests. Host recruitment and managed launch remain
-R1.1 work. R1 assumes administrator-provisioned hosts and a trusted transport.
+This guide covers **unmanaged**, explicitly launched fixed-world data-parallel
+training (`mlx.launch` or manual ranks) and the lower-level contributor tests. It
+assumes administrator-provisioned hosts and a trusted transport. For enrollment,
+background services and managed launch, see
+[managed clusters](cluster-quickstart.md). Before either, read
+[when distributed training helps](distributed-when.md): on a LAN it is usually
+slower per token than one Mac.
 
 ## Status
 
@@ -166,8 +167,8 @@ ad-hoc- or self-signed listeners — which the Go test binary and a Homebrew-bui
 The previous acceptance run found self-signing and command-line app exceptions
 insufficient on its particular hosts. Do not automatically disable host security.
 Have an administrator allow the exact executable's inbound connections on every
-Mac and verify the exception after rebuilding or replacing it. R1.1's signed
-distribution and separate cluster-agent plan addresses the packaging problem.
+Mac and verify the exception after rebuilding or replacing it. The signed
+package used by [managed clusters](cluster-quickstart.md) is allowed by default.
 Full historical detail: the "Metal TCP Ring" section of
 [`distributed-r1-hardware-acceptance.md`](distributed-r1-hardware-acceptance.md).
 

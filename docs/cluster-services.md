@@ -1,26 +1,26 @@
 # Background Cluster Services
 
-> **Unreleased.** This page describes `main` after v0.119.0: per-user service
-> installation (`agent install`, `authority install`), `agent reapprove` and
-> `doctor` are not in any release yet. For v0.119.0, follow the
-> [v0.119.0 guide](https://github.com/mrothroc/mixlab/blob/v0.119.0/docs/cluster-quickstart.md).
-
-R1.2 adds per-user service administration for the existing authority and node
-agent. Services do not enroll nodes, change firewall rules, unlock Keychains,
+Per-user service administration for the authority and node agent, added in
+v0.120.0. Services do not enroll nodes, change firewall rules, unlock Keychains,
 grant network permissions, or approve new executables automatically.
 
 ## macOS
 
-Use the Developer ID-signed, notarized package, not the source-built Homebrew
-formula. Keep the whole package at a stable location. The `mixlab-signed` cask
-installs it as `Mixlab` under Homebrew's configured application directory
-(normally `/Applications/Mixlab`) and links both commands into Homebrew's `bin`.
-It does not strip or re-sign the executables. Unlink the source formula before
-installing the cask so the command names do not conflict.
+Use the Developer ID-signed, notarized package (macOS 26), not the source-built
+Homebrew formula:
 
-Until the release and its cask are published, use a maintainer-provided signed
-candidate at a fixed path; do not expect a published cask to contain unreleased
-commands. [Distribution](macos-distribution.md) describes release generation.
+```bash
+brew unlink mixlab 2>/dev/null   # only if the source-built formula is installed
+brew install --cask mrothroc/tap/mixlab-signed
+```
+
+The cask installs the package as `Mixlab` under Homebrew's application directory
+(normally `/Applications/Mixlab`) and links both commands into Homebrew's `bin`,
+without stripping or re-signing them. Alternatively, copy the whole directory
+from the release disk image to a stable location. The macOS Application Firewall
+allows the signed `mixlab-cluster` to accept connections; an unsigned build can
+be silently blocked. [Distribution](macos-distribution.md) describes how the
+package is built.
 
 After enrollment and `agent init`, run these on the appropriate machines:
 
@@ -40,7 +40,7 @@ the node is already ready.
 
 Closing Terminal or SSH does not stop these services. **Logging out does.** They
 restart after the next GUI login, including after a reboot. There is no pre-login
-or headless root daemon in R1.2. An administrator may choose auto-login for a lab
+or headless root daemon. An administrator may choose auto-login for a lab
 machine, but Mixlab never configures it. Locking the screen is not logging out;
 sleep can still make the node unreachable.
 
@@ -158,7 +158,7 @@ disable them or remove quarantine to make a test pass.
 
 ## Release Acceptance
 
-Before declaring R1.2 accepted, verify the published quickstart on two fresh user
+Before releasing a change to service behavior, verify the published quickstart on two fresh user
 installations, both services running without SSH sessions, signed rebuild/upgrade
 without lost identity or Keychain prompts, busy-node reapproval rejection,
 logout/login and reboot/login recovery, authenticated training and checkpoint

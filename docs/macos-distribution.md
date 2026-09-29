@@ -8,7 +8,7 @@ from the final stapled image checksum for maintainer review and publication to
 the Homebrew tap. Generation does not publish the cask, and the
 acceptance checks below still apply. `mixlab-cluster` implements experimental enrollment,
 node hosting and fixed-cohort submission, including managed checkpoint/resume.
-The R1.1 candidate passed signed-package M1/M4 acceptance. Each published build
+Signed packages passed M1/M4 acceptance. Each published build
 still requires release approval; signing alone is not functional or security
 acceptance.
 
@@ -135,7 +135,7 @@ Developer ID signing does not override administrator policy, block-all mode,
 or a specific deny rule. Do not instruct users to disable the firewall; use a
 scoped administrator-approved exception when policy requires it. Signing also
 does not replace cluster enrollment, peer TLS authentication, or authorization.
-R1.1 assumes trusted, administrator-controlled hosts; hostile local processes
+Managed clusters assume trusted, administrator-controlled hosts; hostile local processes
 are outside its threat model.
 
 See [Apple's notarization workflow](https://developer.apple.com/documentation/security/customizing-the-notarization-workflow)
