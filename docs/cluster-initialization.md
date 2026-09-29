@@ -11,8 +11,14 @@ remains available independently.
 ## Initialize
 
 ```bash
-mixlab-cluster init -state-home "$HOME/.mixlab" -trust-listen 127.0.0.1:7443
+mixlab-cluster init -state-home "$HOME/.mixlab" -trust-listen 192.168.1.10:7443
 ```
+
+Use the authority machine's LAN address. The default, `127.0.0.1:7443`, suits a
+single-machine trial only: the address is signed into the cluster identity, and
+no other machine can enroll against a loopback authority. State paths must not
+pass through a symbolic link, such as `/tmp` or `/var` on macOS. For a complete
+walkthrough, see [managed clusters: getting started](cluster-quickstart.md).
 
 The command outputs JSON containing the cluster ID, full root fingerprint,
 eight-word verification phrase, and credential directory locations. These

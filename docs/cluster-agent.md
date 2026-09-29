@@ -9,6 +9,12 @@ M1/M4 acceptance covers encrypted training, exact resume, enrollment, peer
 rejection and fault cleanup. This is not hostile-local-user isolation, and it
 does not make a LAN acceleration claim. Do not expose an agent to untrusted hosts.
 
+Start with [managed clusters: getting started](cluster-quickstart.md) for a
+tested two-machine walkthrough and the current limitations. In particular, the
+agent and the authority must stay in the foreground of a Terminal.app window or
+an open SSH session: on macOS a detached process loses Local Network access, its
+trust goes stale, and it then rejects every controller.
+
 ## Local Setup
 
 Enroll a node using the [enrollment workflow](cluster-enrollment.md). Then
@@ -113,6 +119,11 @@ enables multicast hints; the default is `off`. `-node` is repeatable. The older
 `-controller-state-dir` spelling is an alias for `-principal-state-dir` in
 `nodes`; do not supply both. JSON inventory includes authenticated capabilities
 or a stable rejection reason, not trusted advertisement claims.
+
+The config must set `training.optimizer` to `adamw` and `training.distributed`
+to `{"mode": "ddp", "backend": "ring"}`. The `-dataset-id` value is the `id` of
+the dataset selector in each node's `nodes` inventory; every recruited node must
+report the same one.
 
 Experimental fixed-world submission:
 

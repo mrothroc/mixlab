@@ -125,7 +125,9 @@ Good fit:
 
 Not the right tool for:
 
-- Production distributed training across many GPUs.
+- Production distributed training across many GPUs. mixlab can train one model
+  across a few trusted machines, either directly with `mlx.launch` or, experimentally,
+  as a managed cluster; see [managed clusters](docs/cluster-quickstart.md).
 - Custom CUDA kernel development.
 - Replacing a full training framework such as PyTorch or JAX.
 
@@ -135,6 +137,7 @@ framework. It trades generality for speed of iteration.
 ## Documentation
 
 - [Docs index](docs/README.md)
+- [Managed clusters: getting started (experimental)](docs/cluster-quickstart.md)
 - [CLI usage](docs/cli.md)
 - [Data preparation](docs/data.md)
 - [Architecture guide](docs/architecture.md)

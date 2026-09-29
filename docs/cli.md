@@ -81,7 +81,8 @@ The experimental `mixlab-cluster` binary supports `init`, `invite`, `enroll`,
 `enrollment serve`, `authority serve`, `revoke`, `nodes`, `submit`, and foreground `agent`
 with explicit `agent init` setup, plus `-version` and
 `-help`. Its version report uses the same build metadata and worker protocol,
-followed by the experimental trusted-host support notice. See
+followed by the experimental trusted-host support notice. Start with
+[managed clusters: getting started](cluster-quickstart.md), then see
 [cluster initialization](cluster-initialization.md) for protected setup and
 recovery, and [enrollment](cluster-enrollment.md) for explicit-address workflows
 and their current limitations, and [node hosting](cluster-agent.md) for the
