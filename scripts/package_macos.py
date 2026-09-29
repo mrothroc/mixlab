@@ -184,7 +184,9 @@ def build(args):
         env["CGO_LDFLAGS"] = f"-L{prefix}/lib " + env.get("CGO_LDFLAGS", "")
         print("Building matched trainer and cluster candidate", flush=True)
         run("go", "build", "-trimpath", "-tags", "mlx", "-o", stage / "mixlab", "./cmd/mixlab", cwd=ROOT, env=env)
-        env["CGO_ENABLED"] = "0"
+        # The signed service needs the macOS Keychain backend. No MLX imports
+        # enter the cluster executable; cgo here links Security.framework only.
+        env["CGO_ENABLED"] = "1"
         run("go", "build", "-trimpath", "-o", stage / "mixlab-cluster", "./cmd/mixlab-cluster", cwd=ROOT, env=env)
         packaged = {name for name in LIBRARIES if (prefix / "lib" / name).is_file()}
         for name in sorted(packaged) + ["mlx.metallib"]:
@@ -216,14 +218,14 @@ def build(args):
             install = (f"mixlab {release} for macOS on Apple Silicon.\n"
                        "Copy this entire directory to a stable installation path.\n")
         else:
-            install = ("PRIVATE R1.1 ACCEPTANCE CANDIDATE; NOT A RELEASE.\n"
+            install = ("PRIVATE ACCEPTANCE CANDIDATE; NOT A RELEASE.\n"
                        "Copy this entire directory to a private, stable installation path.\n")
         (stage / "INSTALL.txt").write_text(
             install +
             "Keep the executables, dylibs and mlx.metallib together. Do not re-sign or strip them.\n"
             "mixlab-cluster provides experimental managed training on trusted hosts.\n"
             "Signing/notarization is not cluster authentication or a firewall exemption.\n"
-            "R1.1 assumes trusted, administrator-controlled hosts.\n")
+            "Managed clusters require trusted, administrator-controlled hosts.\n")
         image = output / (f"mixlab-{release}-macos-arm64.dmg" if release else "mixlab-macos-arm64.dmg")
         run("hdiutil", "create", "-srcfolder", stage.parent, "-volname",
             f"Mixlab {release}" if release else "Mixlab Candidate", "-format", "UDZO", image)

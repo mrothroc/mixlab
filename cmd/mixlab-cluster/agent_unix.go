@@ -34,10 +34,19 @@ func runAgent(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 && args[0] == "init" {
 		return runAgentInit(ctx, args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "reapprove" {
+		return runAgentReapprove(ctx, args[1:], stdout, stderr)
+	}
 	return runAgentContext(ctx, args, stdout, stderr)
 }
 
 func runAgentContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return runAgentSupervised(ctx, args, stdout, stderr, func(attempt func() int) int { return attempt() })
+}
+
+// The supervisor remains inside the installation lock across failed starts and
+// retry delays. Reapproval cannot bless new bytes while an old image is alive.
+func runAgentSupervised(ctx context.Context, args []string, stdout, stderr io.Writer, supervise func(func() int) int) int {
 	f := flag.NewFlagSet("mixlab-cluster agent", flag.ContinueOnError)
 	f.SetOutput(stderr)
 	home := f.String("state-home", "", "Mixlab state root")
@@ -65,6 +74,19 @@ func runAgentContext(ctx context.Context, args []string, stdout, stderr io.Write
 	if err != nil {
 		return fail(err)
 	}
+	code := 1
+	err = path.WithProcessLock(ctx, clusterapp.NodeServiceLock, func() error {
+		code = supervise(func() int { return serveInstalledAgent(ctx, path, *listen, *advertise, stdout, stderr) })
+		return nil
+	})
+	if err != nil {
+		return fail(err)
+	}
+	return code
+}
+
+func serveInstalledAgent(ctx context.Context, path statehome.Path, listen, advertise string, stdout, stderr io.Writer) int {
+	fail := func(err error) int { _, _ = fmt.Fprintln(stderr, "agent:", err); return 1 }
 	i, err := clusterapp.OpenNodeInstallation(path)
 	if err != nil {
 		return fail(err)
@@ -135,12 +157,12 @@ func runAgentContext(ctx context.Context, args []string, stdout, stderr io.Write
 	if err != nil {
 		return fail(err)
 	}
-	l, err := net.Listen("tcp", *listen)
+	l, err := net.Listen("tcp", listen)
 	if err != nil {
 		return fail(err)
 	}
 	defer func() { _ = l.Close() }()
-	ad, err := advertiseListener(ctx, *advertise, l, discovery.Node, i.Node, nodeDiscoveryClaims(i.Cluster, i.Node))
+	ad, err := advertiseListener(ctx, advertise, l, discovery.Node, i.Node, nodeDiscoveryClaims(i.Cluster, i.Node))
 	if err != nil {
 		return fail(err)
 	}

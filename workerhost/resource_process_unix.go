@@ -5,10 +5,12 @@ package workerhost
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,13 +27,35 @@ func (p *ownedProcess) sampleUsage(ctx context.Context) ([]processUsage, error) 
 	}
 	cmd := exec.CommandContext(ctx, "/bin/ps", "-axo", "pid=,pgid=,time=,rss=,lstart=")
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LC_ALL=C", "TZ=UTC"}
+	output, err := processSampleOutput(ctx, cmd)
+	if err != nil {
+		return nil, err
+	}
+	return parseProcessUsage(output, p.cmd.Process.Pid)
+}
+
+func processSampleOutput(ctx context.Context, cmd *exec.Cmd) (string, error) {
+	// CommandContext normally returns ExitError after killing a running process.
+	// Retain cancellation identity only when our cancellation actually killed it.
+	var killedByContext atomic.Bool
+	cancel := cmd.Cancel
+	cmd.Cancel = func() error {
+		err := cancel()
+		if err == nil {
+			killedByContext.Store(true)
+		}
+		return err
+	}
 	cmd.WaitDelay = 100 * time.Millisecond
 	out := &sampleBuffer{}
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("process resource sample failed: %w", err)
+		if killedByContext.Load() {
+			err = errors.Join(err, ctx.Err())
+		}
+		return "", fmt.Errorf("process resource sample failed: %w", err)
 	}
-	return parseProcessUsage(out.String(), p.cmd.Process.Pid)
+	return out.String(), nil
 }
 
 type sampleBuffer struct{ buffer bytes.Buffer }

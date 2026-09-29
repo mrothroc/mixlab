@@ -78,15 +78,18 @@ contract, independently of context-owned payload versions. It does not imply
 that managed worker launch or enrollment is available.
 
 The experimental `mixlab-cluster` binary supports `init`, `invite`, `enroll`,
-`enrollment serve`, `authority serve`, `revoke`, `nodes`, `submit`, and foreground `agent`
-with explicit `agent init` setup, plus `-version` and
+`enrollment serve`, `authority serve`, `revoke`, `nodes`, `submit`, `doctor`, and foreground `agent`
+with explicit `agent init` setup. Both `agent` and `authority` support per-user
+`install|uninstall|start|stop|status`; `agent reapprove` approves upgraded binaries
+without resetting node state. It also supports `-version` and
 `-help`. Its version report uses the same build metadata and worker protocol,
 followed by the experimental trusted-host support notice. Start with
 [managed clusters: getting started](cluster-quickstart.md), then see
 [cluster initialization](cluster-initialization.md) for protected setup and
 recovery, and [enrollment](cluster-enrollment.md) for explicit-address workflows
 and their current limitations, and [node hosting](cluster-agent.md) for the
-experimental foreground agent. Initialization opens no listener; the explicit
+agent. See [background services](cluster-services.md) for all service flags,
+`-cluster-binary`, reapproval and diagnostic options. Initialization opens no listener; the explicit
 serving commands do. No command changes firewall settings.
 
 This is the identity to quote in a bug report. Container images carry the same

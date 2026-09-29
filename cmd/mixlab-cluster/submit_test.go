@@ -97,7 +97,7 @@ func TestNodesTransientAuthorityLifecycle(t *testing.T) {
 	if code := run(args, &out, &diagnostic); code != 0 {
 		t.Fatal(code, diagnostic.String())
 	}
-	if !strings.Contains(out.String(), "unavailable_or_unauthenticated") {
+	if !strings.Contains(out.String(), "connection_refused") {
 		t.Fatal(out.String())
 	}
 	l, err = net.Listen("tcp", address)

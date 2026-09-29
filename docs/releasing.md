@@ -62,12 +62,12 @@ supported release; `TestGoToolchainHasOneSource` lists every file that must foll
 
 ### 3. GitHub Release
 
-When every Release job has passed, confirm the draft carries all five assets, then
+When every Release job has passed, confirm the draft carries all six assets, then
 write the notes and publish it:
 
 ```bash
 gh release view vX.Y.Z --json assets --jq '.assets[].name'
-# mixlab-vX.Y.Z-macos-arm64.dmg, SHA256SUMS-macos-arm64,
+# mixlab-vX.Y.Z-macos-arm64.dmg, SHA256SUMS-macos-arm64, mixlab-signed.rb,
 # mixlab-cluster-vX.Y.Z-linux-amd64.tar.gz, mixlab-cluster-vX.Y.Z-linux-arm64.tar.gz,
 # SHA256SUMS-linux
 
@@ -95,6 +95,13 @@ CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab/
 EOF
 )"
 ```
+
+The generated `mixlab-signed.rb` is a reviewed input to the tap, not an automatic
+tap update. After publishing the matching DMG, verify its checksum against the
+cask, publish it under `Casks/mixlab-signed.rb` in the tap, and test installation
+without signature changes. Keep the source-built formula as a separate channel.
+Do not publish R1.2 as accepted until the [service acceptance gates](cluster-services.md#release-acceptance)
+have passed, including signed upgrade/Keychain and login/reboot recovery.
 
 ### 4. Homebrew
 

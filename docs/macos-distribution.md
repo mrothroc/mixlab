@@ -3,8 +3,9 @@
 `scripts/package_macos.py` builds two kinds of disk image. By default it builds a
 private **acceptance candidate**, the maintainer workflow described below. With
 `--release vX.Y.Z`, the Release workflow builds the **tagged release** for each `v*`
-tag (see [Releasing](releasing.md)). Tagged images are not yet an announced install
-channel: the Homebrew cask that will point at them does not exist, and the
+tag (see [Releasing](releasing.md)). The workflow also generates `mixlab-signed.rb`
+from the final stapled image checksum for maintainer review and publication to
+the Homebrew tap. Generation does not publish the cask, and the
 acceptance checks below still apply. `mixlab-cluster` implements experimental enrollment,
 node hosting and fixed-cohort submission, including managed checkpoint/resume.
 The R1.1 candidate passed signed-package M1/M4 acceptance. Each published build
@@ -50,6 +51,30 @@ the hash receipt and signed disk image; it is not a Mach-O dylib. The disk
 image is signed, optionally notarized, stapled,
 and assessed. A receipt records input provenance and signed file hashes; the
 outer image contains that receipt, and `SHA256SUMS` hashes the final image.
+
+The macOS cluster executable is built with cgo for its Security.framework
+Keychain adapter, but still does not import MLX or the training runtime. Both
+executables retain stable signing identifiers across versions.
+
+## Signed Cask
+
+The release workflow attaches the generated cask to the draft release. A
+maintainer reviews it and publishes it to the tap only after the DMG release is
+available. It installs the whole directory at a stable `Mixlab` application path
+and links both executables. No binaries, libraries or signatures are modified.
+The generator requires exactly one matching SHA256 entry and never uses
+`sha256 :no_check`:
+
+```bash
+python3 scripts/generate_macos_cask.py --release vX.Y.Z \
+  --checksums SHA256SUMS-macos-arm64 --output mixlab-signed.rb
+```
+
+Do not replace the source formula: it remains the development/foreground channel.
+Unlink it before installing the cask to avoid conflicting command symlinks. Users
+must finish jobs and stop services before upgrade, then explicitly reapprove the
+new worker. See [service operations](cluster-services.md). Cask removal must not
+delete cluster state or Keychain items.
 
 This workflow uses a DMG so the notarization ticket can be stapled without a
 Developer ID Installer certificate. A future signed PKG would require that

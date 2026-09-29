@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mrothroc/mixlab/discovery"
+	"github.com/mrothroc/mixlab/internal/clusterdiagnostic"
 	"github.com/mrothroc/mixlab/internal/strictjson"
 	"github.com/mrothroc/mixlab/nodeagent"
 	"github.com/mrothroc/mixlab/recruitment"
@@ -115,7 +116,7 @@ func NodeLookup(p *principal.Store, clock func() time.Time) (recruitment.Lookup,
 	return func(ctx context.Context, endpoint string) (recruitment.Observation, error) {
 		s, _, err := p.Active(clock())
 		if err != nil {
-			return recruitment.Observation{}, err
+			return recruitment.Observation{}, fmt.Errorf("%w: %w", clusterdiagnostic.ErrLocalIdentity, err)
 		}
 		if s.Role != trust.Controller {
 			return recruitment.Observation{}, fmt.Errorf("controller principal required")

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mrothroc/mixlab/discovery"
+	"github.com/mrothroc/mixlab/internal/clusterdiagnostic"
 	"github.com/mrothroc/mixlab/nodeagent"
 	"github.com/mrothroc/mixlab/trust"
 )
@@ -16,6 +17,7 @@ import (
 type NodeStatus struct {
 	Endpoint     string                  `json:"endpoint"`
 	Reason       string                  `json:"reason"`
+	Hint         string                  `json:"hint,omitempty"`
 	Capabilities *nodeagent.Capabilities `json:"capabilities,omitempty"`
 }
 
@@ -47,6 +49,13 @@ func Inventory(ctx context.Context, hints []discovery.Hint, cluster string, look
 		queryErr := query.Err()
 		stop()
 		s := NodeStatus{Endpoint: h.Endpoint, Reason: "unavailable_or_unauthenticated"}
+		if err != nil || queryErr != nil {
+			if queryErr != nil {
+				err = queryErr
+			}
+			failure := clusterdiagnostic.Classify(err)
+			s.Reason, s.Hint = failure.Reason, failure.Hint
+		}
 		if err == nil && queryErr == nil {
 			p, c, now := o.Peer, o.Capabilities, clock()
 			switch {
@@ -61,6 +70,9 @@ func Inventory(ctx context.Context, hints []discovery.Hint, cluster string, look
 					s.Reason = "stale_capabilities"
 				case !c.Recruitable:
 					s.Reason = "not_recruitable"
+					if !c.Availability.Available {
+						s.Reason = "busy"
+					}
 				default:
 					s.Reason = "available"
 				}

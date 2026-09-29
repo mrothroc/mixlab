@@ -94,6 +94,7 @@ class MacOSPackageTests(unittest.TestCase):
                     if command[:2] == ['git', 'rev-parse']:
                         return 'revision'
                     if command[:2] == ['go', 'build']:
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1', 'signed services require Keychain support')
                         Path(command[command.index('-o') + 1]).write_bytes(b'binary')
                     if command[0] == 'otool':
                         return 'binary:' if command[1] == '-L' else ''

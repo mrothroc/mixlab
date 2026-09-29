@@ -23,6 +23,10 @@ import (
 func runAuthorityServe(args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	return runAuthorityServeContext(ctx, args, stdout, stderr)
+}
+
+func runAuthorityServeContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	f := flag.NewFlagSet("mixlab-cluster authority serve", flag.ContinueOnError)
 	f.SetOutput(stderr)
 	home := f.String("state-home", "", "state root for unambiguous authority lookup")

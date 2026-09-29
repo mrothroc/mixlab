@@ -18,6 +18,10 @@ func main() {
 func run(args []string, stdout, stderr io.Writer) int {
 	if len(args) > 0 {
 		switch args[0] {
+		case "doctor":
+			return runDoctor(args[1:], stdout, stderr)
+		case "service-run":
+			return runServiceProcess(args[1:], stderr)
 		case "internal-worker-host":
 			return runInternalWorkerHost(args[1:], stderr)
 		case "init":
@@ -31,12 +35,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 				return runEnrollmentServe(args[2:], stdout, stderr)
 			}
 		case "authority":
+			if len(args) > 1 && isServiceAction(args[1]) {
+				return runService("authority", args[1], args[2:], stdout, stderr)
+			}
 			if len(args) > 1 && args[1] == "serve" {
 				return runAuthorityServe(args[2:], stdout, stderr)
 			}
 		case "revoke":
 			return runRevoke(args[1:], stdout, stderr)
 		case "agent":
+			if len(args) > 1 && isServiceAction(args[1]) {
+				return runService("agent", args[1], args[2:], stdout, stderr)
+			}
 			return runAgent(args[1:], stdout, stderr)
 		case "nodes":
 			return runNodes(args[1:], stdout, stderr)
@@ -54,7 +64,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster enrollment serve -help")
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster authority serve -help | revoke -help")
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster agent init -help | agent -help")
+		_, _ = fmt.Fprintln(w, "       mixlab-cluster agent reapprove -help")
+		_, _ = fmt.Fprintln(w, "       mixlab-cluster agent|authority install|uninstall|start|stop|status -help")
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster nodes -help")
+		_, _ = fmt.Fprintln(w, "       mixlab-cluster doctor -help")
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster submit -help")
 		_, _ = fmt.Fprintln(w, developmentNotice)
 		flags.SetOutput(w)

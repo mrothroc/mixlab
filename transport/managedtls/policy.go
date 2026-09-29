@@ -6,6 +6,7 @@ package managedtls
 import (
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"time"
 
@@ -14,6 +15,10 @@ import (
 )
 
 const Protocol = "http/1.1"
+
+// ErrPeerRejected identifies a local pinned-peer verification failure without
+// requiring callers to classify or disclose the verifier's detailed error text.
+var ErrPeerRejected = errors.New("managed TLS peer rejected")
 
 // Verify must use the owning context's current pinned trust and required peer
 // identity. A successful result proves identity, never application authority.
@@ -96,7 +101,13 @@ func (p *Policy) base() *tls.Config {
 		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 		Certificates: []tls.Certificate{c}, NextProtos: []string{Protocol},
 		SessionTicketsDisabled: true, Time: p.clock,
-		VerifyConnection: func(s tls.ConnectionState) error { _, err := p.peer(s); return err },
+		VerifyConnection: func(s tls.ConnectionState) error {
+			_, err := p.peer(s)
+			if err != nil {
+				return fmt.Errorf("%w: %w", ErrPeerRejected, err)
+			}
+			return nil
+		},
 	}
 }
 

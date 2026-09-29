@@ -10,10 +10,11 @@ rejection and fault cleanup. This is not hostile-local-user isolation, and it
 does not make a LAN acceleration claim. Do not expose an agent to untrusted hosts.
 
 Start with [managed clusters: getting started](cluster-quickstart.md) for a
-tested two-machine walkthrough and the current limitations. In particular, the
-agent and the authority must stay in the foreground of a Terminal.app window or
-an open SSH session: on macOS a detached process loses Local Network access, its
-trust goes stale, and it then rejects every controller.
+service-first walkthrough. [Background services](cluster-services.md) covers
+installation, logs, diagnosis and explicit post-upgrade reapproval. The direct
+foreground commands below remain available for development. Do not use a detached
+SSH process as a substitute for the signed LaunchAgent: it can lose Local Network
+access, fail trust refresh and eventually reject controllers.
 
 ## Local Setup
 
@@ -60,6 +61,12 @@ CPU, memory and disk limits use monitored termination, not hard OS quotas.
 Sampling can overshoot; short-lived processes can escape accounting. These
 limits are for trusted workloads on administrator-controlled hosts, not hostile
 process isolation. Local datasets must remain immutable during a job.
+
+Resource sampling fails closed: an unreadable sample or a sampling deadline
+stops the worker and cancels its cohort, even if no budget overage was observed.
+For `worker resource monitor` errors, inspect the reported cause and host load;
+raising the worker's memory or CPU budget does not fix a stalled sampler.
+Normal shutdown cancellation is not itself a resource-monitor failure.
 
 ## Foreground Agent
 

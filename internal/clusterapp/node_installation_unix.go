@@ -36,6 +36,19 @@ type NodeInstallation struct {
 }
 
 func (i NodeInstallation) validate() error {
+	if err := i.validateMetadata(); err != nil {
+		return err
+	}
+	for _, exe := range []struct{ path, hash string }{{i.WorkerBinary, i.WorkerBuild}, {i.GuardianBinary, i.GuardianBuild}} {
+		got, err := workerjob.FileDigest(exe.path)
+		if err != nil || got != exe.hash {
+			return fmt.Errorf("approved executable changed; explicit local reapproval required")
+		}
+	}
+	return nil
+}
+
+func (i NodeInstallation) validateMetadata() error {
 	if i.Version != nodeInstallationVersion || !nodeRouteID(i.Cluster) || !nodeRouteID(i.Node) {
 		return fmt.Errorf("invalid node installation identity")
 	}
@@ -44,17 +57,20 @@ func (i NodeInstallation) validate() error {
 			return fmt.Errorf("installation requires canonical absolute local paths")
 		}
 	}
-	for _, exe := range []struct{ path, hash string }{{i.WorkerBinary, i.WorkerBuild}, {i.GuardianBinary, i.GuardianBuild}} {
-		got, err := workerjob.FileDigest(exe.path)
-		if err != nil || got != exe.hash {
-			return fmt.Errorf("approved executable changed; explicit local reapproval required")
-		}
-	}
 	return nodeagent.ValidateTransportEndpoint(i.RelayAddress)
 }
 
 func nodeSubdirectory(path statehome.Path, name string, kind statehome.Kind) (statehome.Path, error) {
 	return statehome.Resolve(statehome.Options{ExactDir: filepath.Join(path.Dir(), name)}, statehome.Context{Kind: kind})
+}
+
+func (i NodeInstallation) validateLocation(path statehome.Path) error {
+	for _, p := range []string{i.PrincipalDirectory, i.WorkerBinary, i.GuardianBinary} {
+		if p == path.Dir() || strings.HasPrefix(p, path.Dir()+string(filepath.Separator)) || strings.HasPrefix(path.Dir(), p+string(filepath.Separator)) {
+			return fmt.Errorf("installation and approved identity/executables must be separate")
+		}
+	}
+	return nil
 }
 
 // InitializeNodeInstallation publishes node, runtime-allocation and empty
@@ -73,10 +89,8 @@ func InitializeNodeInstallation(ctx context.Context, path statehome.Path, i Node
 	if err := profile.Validate(); err != nil {
 		return err
 	}
-	for _, p := range []string{i.PrincipalDirectory, i.WorkerBinary, i.GuardianBinary} {
-		if p == path.Dir() || strings.HasPrefix(p, path.Dir()+string(filepath.Separator)) || strings.HasPrefix(path.Dir(), p+string(filepath.Separator)) {
-			return fmt.Errorf("installation and approved identity/executables must be separate")
-		}
+	if err := i.validateLocation(path); err != nil {
+		return err
 	}
 	b, err := json.Marshal(i)
 	if err != nil {
@@ -116,22 +130,37 @@ func InitializeNodeInstallation(ctx context.Context, path statehome.Path, i Node
 }
 
 func OpenNodeInstallation(path statehome.Path) (NodeInstallation, error) {
+	i, _, err := readNodeInstallation(path)
+	if err != nil {
+		return i, err
+	}
+	return i, i.validate()
+}
+
+// InspectNodeInstallation reads local metadata for diagnostics only. It does not
+// approve changed binaries or establish that the node is ready to run.
+func InspectNodeInstallation(path statehome.Path) (NodeInstallation, error) {
+	i, _, err := readNodeInstallation(path)
+	return i, err
+}
+
+func readNodeInstallation(path statehome.Path) (NodeInstallation, []byte, error) {
 	if path.Kind() != statehome.Agent {
-		return NodeInstallation{}, fmt.Errorf("agent state required")
+		return NodeInstallation{}, nil, fmt.Errorf("agent state required")
 	}
 	b, err := path.ReadFileLimit(nodeInstallationFile, 16384)
 	if err != nil {
-		return NodeInstallation{}, err
+		return NodeInstallation{}, nil, err
 	}
 	var i NodeInstallation
 	if err := json.Unmarshal(b, &i); err != nil {
-		return i, err
+		return i, nil, err
 	}
 	canonical, _ := json.Marshal(i)
 	if !bytes.Equal(b, canonical) {
-		return i, fmt.Errorf("noncanonical node installation")
+		return i, nil, fmt.Errorf("noncanonical node installation")
 	}
-	return i, i.validate()
+	return i, b, i.validateMetadata()
 }
 
 // OpenNodeRuntime validates all durable contexts; missing state cannot turn a
@@ -142,6 +171,9 @@ func OpenNodeRuntime(path statehome.Path, i NodeInstallation, anchor trust.Ancho
 	}
 	store, err := nodeagent.Open(path, i.Cluster, i.Node)
 	if err != nil {
+		return nil, nil, statehome.Path{}, err
+	}
+	if err := store.CheckApprovedWorker(i.WorkerBuild); err != nil {
 		return nil, nil, statehome.Path{}, err
 	}
 	root, err := nodeSubdirectory(path, "runtime", statehome.Worker)

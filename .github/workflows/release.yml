@@ -185,6 +185,8 @@ jobs:
               *) echo "::error::packaged $binary reports '$first', not $TAG"; exit 1 ;;
             esac
           done
+          MIXLAB_SIGNED_SERVICE_TEST_BINARY="$install/mixlab-cluster" \
+            go test ./cmd/mixlab-cluster -run '^TestSignedServiceRequirement$' -count=1
           "$install/mixlab" -mode smoke 2>&1 | tee "$RUNNER_TEMP/smoke.log"
           grep -q 'SMOKE: All checks passed' "$RUNNER_TEMP/smoke.log"
 
@@ -203,9 +205,11 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -u
+          python3 scripts/generate_macos_cask.py --release "$TAG" \
+            --checksums "$RUNNER_TEMP/dist/SHA256SUMS" --output "$RUNNER_TEMP/dist/mixlab-signed.rb"
           cd "$RUNNER_TEMP/dist"
           mv SHA256SUMS SHA256SUMS-macos-arm64
-          gh release upload "$TAG" "mixlab-$TAG-macos-arm64.dmg" SHA256SUMS-macos-arm64 \
+          gh release upload "$TAG" "mixlab-$TAG-macos-arm64.dmg" SHA256SUMS-macos-arm64 mixlab-signed.rb \
             --clobber --repo "$REPO"
 
       - name: Remove signing material
