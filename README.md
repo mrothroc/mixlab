@@ -82,7 +82,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install numpy tokenizers datasets
 ```
 
-The formula also installs `mixlab-cluster` for foreground use. For managed-cluster
+The formula also installs the experimental `mixlab-cluster` for foreground use. For managed-cluster
 nodes on macOS 26, which need background services, install the signed package
 instead: `brew install --cask mrothroc/tap/mixlab-signed`, after `brew unlink mixlab`
 if the formula is installed. See [managed clusters](docs/cluster-quickstart.md).

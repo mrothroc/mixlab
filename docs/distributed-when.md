@@ -1,5 +1,10 @@
 # When Distributed Training Helps
 
+> **Experimental.** Training across several machines works and is tested, but it
+> is not yet optimized for speed. On a LAN, expect it to be slower per token than
+> your fastest machine alone unless each optimizer step carries a very large
+> batch, as measured below.
+
 Distributed data parallelism (DDP) runs a full copy of the model on every
 worker, splits each batch between them, and averages gradients after every
 optimizer step. It adds machines' throughput only when that averaging is cheap
@@ -33,8 +38,11 @@ shared machine under other load, and slower than the M1.
 
 Each optimizer step waits for the slowest worker's compute and then for the
 gradient average. On this pair the average cost about **0.2 s plus the gradient
-size at about 30 MB/s** (fp32 gradients: 4 bytes per parameter). Encryption and
-relaying keep this well below gigabit's raw ~110 MB/s.
+size at about 30 MB/s** (fp32 gradients: 4 bytes per parameter). A plain TCP
+stream over the same wired link carried 76 MB/s (Wi-Fi: 18.6 MB/s), so gradient
+averaging used well under half the link. Why is not yet established: the
+earlier unencrypted ring measured about the same rate, so encryption alone does
+not explain it. Faster synchronization is planned.
 
 A useful estimate for two workers:
 
@@ -49,9 +57,14 @@ where `k` is `gradient_accumulation_steps`. For the 19M-parameter model,
 breaks even with the M1 alone at about 15 accumulation steps, and can never be
 more than about 1.6× faster, because the slower M4 paces every step.
 
+Because both the compute per step and the gradient size grow with the number of
+parameters, what decides the outcome is **tokens per worker per optimizer step**
+(`batch_tokens × gradient_accumulation_steps`). On this pair the break-even was
+about **100,000 tokens per worker per step**, and good scaling needs around a
+million. Small models are worse, because of the fixed 0.2 s per average.
+
 So distributed training on a LAN pays off when each optimizer step carries many
-seconds of compute: larger models per microbatch, larger `batch_tokens`, or
-more accumulation. Accumulation changes the optimization (a larger global batch
+seconds of compute: larger `batch_tokens` or more accumulation. Accumulation changes the optimization (a larger global batch
 is `batch_tokens × gradient_accumulation_steps × workers`), so tune the
 learning rate for it rather than treating it as free speed. Use wired Ethernet;
 Wi-Fi is slower and less stable.

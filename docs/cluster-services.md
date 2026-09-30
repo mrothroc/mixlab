@@ -1,5 +1,9 @@
 # Background Cluster Services
 
+> **Experimental.** Managed clusters work on trusted, administrator-controlled
+> Macs, but are not yet optimized for speed: on a LAN, training is usually slower
+> per token than one Mac. See [when distributed training helps](distributed-when.md).
+
 Per-user service administration for the authority and node agent, added in
 v0.120.0. Services do not enroll nodes, change firewall rules, unlock Keychains,
 grant network permissions, or approve new executables automatically.
