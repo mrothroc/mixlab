@@ -11,6 +11,9 @@ func validateHFExportConfig(cfg *ArchConfig) error {
 	if cfg == nil {
 		return fmt.Errorf("unsupported HF export: nil config")
 	}
+	if cfg.GridEnabled() {
+		return unsupportedHFExport("dense_regression", "grid models use native predict-grid; HF export is not supported")
+	}
 	if cfg.DiscreteCodebooksEnabled() {
 		return unsupportedHFExport("input_adapter.kind", "discrete_codebooks uses a native multi-codebook input contract that HF export does not support in v1")
 	}

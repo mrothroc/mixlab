@@ -90,6 +90,7 @@ func submitPreparedStepGPU(trainer GPUTrainer, batch objectiveBatch, batchSize, 
 		batchSize = batch.batchSizeOverride
 	}
 	if !batch.lossNormalizerSet &&
+		batch.grid == nil &&
 		batch.lossMask == nil &&
 		batch.tttInnerLRScale == nil &&
 		batch.classificationLabels == nil {

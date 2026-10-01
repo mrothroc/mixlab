@@ -19,6 +19,12 @@ type namedFloatTensor struct {
 }
 
 func writeNamedFloatSafetensorsAtomic(path string, tensors []namedFloatTensor, metadata map[string]string) error {
+	return writeFloatSafetensorsAtomic(path, tensors, metadata, true)
+}
+
+// Native checkpoints retain their historical alignment. External safetensors
+// consumers require contiguous payloads, including after odd-length F32 tensors.
+func writeFloatSafetensorsAtomic(path string, tensors []namedFloatTensor, metadata map[string]string, nativeAligned bool) error {
 	if len(tensors) == 0 {
 		return fmt.Errorf("cannot write empty training state")
 	}
@@ -30,6 +36,9 @@ func writeNamedFloatSafetensorsAtomic(path string, tensors []namedFloatTensor, m
 			return fmt.Errorf("invalid state tensor %q shape=%v data=%d", tensor.Name, tensor.Shape, len(tensor.Data))
 		}
 		addSafetensorHeaderEntry(header, &offset, tensor.Name, "F32", tensor.Shape, uint64(len(tensor.Data)*4))
+		if !nativeAligned {
+			offset = header[tensor.Name].DataOffsets[1]
+		}
 	}
 	headerMap := make(map[string]json.RawMessage, len(header)+1)
 	for name, entry := range header {
@@ -56,7 +65,14 @@ func writeNamedFloatSafetensorsAtomic(path string, tensors []namedFloatTensor, m
 			return err
 		}
 		for _, tensor := range tensors {
-			if err := writeSafetensorPayloadBytes(f, tensor.Name, encodeFloat32Data(tensor.Data)); err != nil {
+			payload := encodeFloat32Data(tensor.Data)
+			var err error
+			if nativeAligned {
+				err = writeSafetensorPayloadBytes(f, tensor.Name, payload)
+			} else {
+				_, err = f.Write(payload)
+			}
+			if err != nil {
 				return err
 			}
 		}

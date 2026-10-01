@@ -20,6 +20,10 @@ type safetensorHeaderEntry struct {
 // exportSafetensors writes trained weights to the safetensors format.
 // Weights are stored as F32 (little-endian float32).
 func exportSafetensors(path string, cfg *ArchConfig, shapes []WeightShape, weights [][]float32) error {
+	return exportSafetensorsWithMetadata(path, cfg, shapes, weights, nil)
+}
+
+func exportSafetensorsWithMetadata(path string, cfg *ArchConfig, shapes []WeightShape, weights [][]float32, extra map[string]string) error {
 	if path == "" {
 		return nil
 	}
@@ -52,6 +56,24 @@ func exportSafetensors(path string, cfg *ArchConfig, shapes []WeightShape, weigh
 		"seq_len":    fmt.Sprintf("%d", cfg.SeqLen),
 		"steps":      fmt.Sprintf("%d", cfg.Training.TotalSteps()),
 		"format":     "mixlab_v1",
+	}
+	if cfg.GridEnabled() {
+		identities := map[string]string{}
+		for j, s := range shapes {
+			identities[s.Name] = names[j]
+		}
+		b, err := json.Marshal(identities)
+		if err != nil {
+			return err
+		}
+		meta["logical_weights"] = string(b)
+		meta["task"] = "dense_regression"
+	}
+	for key, value := range extra {
+		if _, exists := meta[key]; exists {
+			return fmt.Errorf("reserved safetensors metadata key %q", key)
+		}
+		meta[key] = value
 	}
 	metaBytes, _ := json.Marshal(meta)
 	// Re-build header with metadata as a raw field

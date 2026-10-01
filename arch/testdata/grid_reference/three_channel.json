@@ -1,0 +1,2424 @@
+{
+  "name": "grid_reference",
+  "input_adapter": {
+    "kind": "grid",
+    "channels": 3,
+    "height": 256,
+    "width": 256
+  },
+  "dense_regression": {
+    "output": "network.conv_up000_2",
+    "target_channels": 1
+  },
+  "blocks": [
+    {
+      "type": "custom",
+      "name": "network",
+      "weights": [
+        {
+          "name": "layer00.0.weight",
+          "shape": [
+            "6",
+            "3",
+            "3",
+            "3"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "layer00.0.bias",
+          "shape": [
+            "6"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "layer00.0.weight"
+          }
+        },
+        {
+          "name": "layer0.0.weight",
+          "shape": [
+            "40",
+            "5",
+            "5",
+            "6"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "layer0.0.bias",
+          "shape": [
+            "40"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "layer0.0.weight"
+          }
+        },
+        {
+          "name": "layer1.0.weight",
+          "shape": [
+            "50",
+            "5",
+            "5",
+            "40"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "layer1.0.bias",
+          "shape": [
+            "50"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "layer1.0.weight"
+          }
+        },
+        {
+          "name": "layer10.0.weight",
+          "shape": [
+            "60",
+            "5",
+            "5",
+            "50"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "layer10.0.bias",
+          "shape": [
+            "60"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "layer10.0.weight"
+          }
+        },
+        {
+          "name": "layer2.0.weight",
+          "shape": [
+            "100",
+            "5",
+            "5",
+            "60"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "layer2.0.bias",
+          "shape": [
+            "100"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "layer2.0.weight"
+          }
+        },
+        {
+          "name": "layer20.0.weight",
+          "shape": [
+            "100",
+            "3",
+            "3",
+            "100"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "layer20.0.bias",
+          "shape": [
+            "100"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "layer20.0.weight"
+          }
+        },
+        {
+          "name": "layer3.0.weight",
+          "shape": [
+            "150",
+            "5",
+            "5",
+            "100"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "layer3.0.bias",
+          "shape": [
+            "150"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "layer3.0.weight"
+          }
+        },
+        {
+          "name": "layer4.0.weight",
+          "shape": [
+            "300",
+            "5",
+            "5",
+            "150"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "layer4.0.bias",
+          "shape": [
+            "300"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "layer4.0.weight"
+          }
+        },
+        {
+          "name": "layer5.0.weight",
+          "shape": [
+            "500",
+            "5",
+            "5",
+            "300"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "layer5.0.bias",
+          "shape": [
+            "500"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "layer5.0.weight"
+          }
+        },
+        {
+          "name": "conv_up5.0.weight",
+          "shape": [
+            "500",
+            "4",
+            "4",
+            "300"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "conv_up5.0.bias",
+          "shape": [
+            "300"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "conv_up5.0.weight"
+          }
+        },
+        {
+          "name": "conv_up4.0.weight",
+          "shape": [
+            "600",
+            "4",
+            "4",
+            "150"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "conv_up4.0.bias",
+          "shape": [
+            "150"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "conv_up4.0.weight"
+          }
+        },
+        {
+          "name": "conv_up3.0.weight",
+          "shape": [
+            "300",
+            "4",
+            "4",
+            "100"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "conv_up3.0.bias",
+          "shape": [
+            "100"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "conv_up3.0.weight"
+          }
+        },
+        {
+          "name": "conv_up20.0.weight",
+          "shape": [
+            "100",
+            "3",
+            "3",
+            "200"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "conv_up20.0.bias",
+          "shape": [
+            "100"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "conv_up20.0.weight"
+          }
+        },
+        {
+          "name": "conv_up2.0.weight",
+          "shape": [
+            "200",
+            "6",
+            "6",
+            "60"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "conv_up2.0.bias",
+          "shape": [
+            "60"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "conv_up2.0.weight"
+          }
+        },
+        {
+          "name": "conv_up10.0.weight",
+          "shape": [
+            "50",
+            "5",
+            "5",
+            "120"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "conv_up10.0.bias",
+          "shape": [
+            "50"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "conv_up10.0.weight"
+          }
+        },
+        {
+          "name": "conv_up1.0.weight",
+          "shape": [
+            "100",
+            "6",
+            "6",
+            "40"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "conv_up1.0.bias",
+          "shape": [
+            "40"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "conv_up1.0.weight"
+          }
+        },
+        {
+          "name": "conv_up0.0.weight",
+          "shape": [
+            "80",
+            "6",
+            "6",
+            "20"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "conv_up0.0.bias",
+          "shape": [
+            "20"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "conv_up0.0.weight"
+          }
+        },
+        {
+          "name": "conv_up00.0.weight",
+          "shape": [
+            "20",
+            "5",
+            "5",
+            "29"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "conv_up00.0.bias",
+          "shape": [
+            "20"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "conv_up00.0.weight"
+          }
+        },
+        {
+          "name": "conv_up000.0.weight",
+          "shape": [
+            "1",
+            "5",
+            "5",
+            "23"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "conv_up000.0.bias",
+          "shape": [
+            "1"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "conv_up000.0.weight"
+          }
+        },
+        {
+          "name": "Wlayer00.0.weight",
+          "shape": [
+            "20",
+            "3",
+            "3",
+            "4"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wlayer00.0.bias",
+          "shape": [
+            "20"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wlayer00.0.weight"
+          }
+        },
+        {
+          "name": "Wlayer0.0.weight",
+          "shape": [
+            "30",
+            "5",
+            "5",
+            "20"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wlayer0.0.bias",
+          "shape": [
+            "30"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wlayer0.0.weight"
+          }
+        },
+        {
+          "name": "Wlayer1.0.weight",
+          "shape": [
+            "40",
+            "5",
+            "5",
+            "30"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wlayer1.0.bias",
+          "shape": [
+            "40"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wlayer1.0.weight"
+          }
+        },
+        {
+          "name": "Wlayer10.0.weight",
+          "shape": [
+            "50",
+            "5",
+            "5",
+            "40"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wlayer10.0.bias",
+          "shape": [
+            "50"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wlayer10.0.weight"
+          }
+        },
+        {
+          "name": "Wlayer2.0.weight",
+          "shape": [
+            "60",
+            "5",
+            "5",
+            "50"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wlayer2.0.bias",
+          "shape": [
+            "60"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wlayer2.0.weight"
+          }
+        },
+        {
+          "name": "Wlayer20.0.weight",
+          "shape": [
+            "70",
+            "3",
+            "3",
+            "60"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wlayer20.0.bias",
+          "shape": [
+            "70"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wlayer20.0.weight"
+          }
+        },
+        {
+          "name": "Wlayer3.0.weight",
+          "shape": [
+            "90",
+            "5",
+            "5",
+            "70"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wlayer3.0.bias",
+          "shape": [
+            "90"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wlayer3.0.weight"
+          }
+        },
+        {
+          "name": "Wlayer4.0.weight",
+          "shape": [
+            "110",
+            "5",
+            "5",
+            "90"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wlayer4.0.bias",
+          "shape": [
+            "110"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wlayer4.0.weight"
+          }
+        },
+        {
+          "name": "Wlayer5.0.weight",
+          "shape": [
+            "150",
+            "5",
+            "5",
+            "110"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wlayer5.0.bias",
+          "shape": [
+            "150"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wlayer5.0.weight"
+          }
+        },
+        {
+          "name": "Wconv_up5.0.weight",
+          "shape": [
+            "150",
+            "4",
+            "4",
+            "110"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wconv_up5.0.bias",
+          "shape": [
+            "110"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wconv_up5.0.weight"
+          }
+        },
+        {
+          "name": "Wconv_up4.0.weight",
+          "shape": [
+            "220",
+            "4",
+            "4",
+            "90"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wconv_up4.0.bias",
+          "shape": [
+            "90"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wconv_up4.0.weight"
+          }
+        },
+        {
+          "name": "Wconv_up3.0.weight",
+          "shape": [
+            "180",
+            "4",
+            "4",
+            "70"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wconv_up3.0.bias",
+          "shape": [
+            "70"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wconv_up3.0.weight"
+          }
+        },
+        {
+          "name": "Wconv_up20.0.weight",
+          "shape": [
+            "60",
+            "3",
+            "3",
+            "140"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wconv_up20.0.bias",
+          "shape": [
+            "60"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wconv_up20.0.weight"
+          }
+        },
+        {
+          "name": "Wconv_up2.0.weight",
+          "shape": [
+            "120",
+            "6",
+            "6",
+            "50"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wconv_up2.0.bias",
+          "shape": [
+            "50"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wconv_up2.0.weight"
+          }
+        },
+        {
+          "name": "Wconv_up10.0.weight",
+          "shape": [
+            "40",
+            "5",
+            "5",
+            "100"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wconv_up10.0.bias",
+          "shape": [
+            "40"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wconv_up10.0.weight"
+          }
+        },
+        {
+          "name": "Wconv_up1.0.weight",
+          "shape": [
+            "80",
+            "6",
+            "6",
+            "30"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wconv_up1.0.bias",
+          "shape": [
+            "30"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wconv_up1.0.weight"
+          }
+        },
+        {
+          "name": "Wconv_up0.0.weight",
+          "shape": [
+            "60",
+            "6",
+            "6",
+            "20"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wconv_up0.0.bias",
+          "shape": [
+            "20"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wconv_up0.0.weight"
+          }
+        },
+        {
+          "name": "Wconv_up00.0.weight",
+          "shape": [
+            "20",
+            "5",
+            "5",
+            "44"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wconv_up00.0.bias",
+          "shape": [
+            "20"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wconv_up00.0.weight"
+          }
+        },
+        {
+          "name": "Wconv_up000.0.weight",
+          "shape": [
+            "1",
+            "5",
+            "5",
+            "24"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform"
+          }
+        },
+        {
+          "name": "Wconv_up000.0.bias",
+          "shape": [
+            "1"
+          ],
+          "init": {
+            "kind": "pytorch_conv_uniform",
+            "weight": "Wconv_up000.0.weight"
+          }
+        }
+      ],
+      "ops": [
+        {
+          "op": "conv2d",
+          "inputs": [
+            "x",
+            "layer00.0.weight",
+            "layer00.0.bias"
+          ],
+          "output": "layer00_0",
+          "params": {
+            "kernel": 3,
+            "stride": 1,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "layer00_0"
+          ],
+          "output": "layer00_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "layer00_1"
+          ],
+          "output": "layer00_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "layer00_2",
+            "layer0.0.weight",
+            "layer0.0.bias"
+          ],
+          "output": "layer0_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "layer0_0"
+          ],
+          "output": "layer0_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "layer0_1"
+          ],
+          "output": "layer0_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "layer0_2",
+            "layer1.0.weight",
+            "layer1.0.bias"
+          ],
+          "output": "layer1_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "layer1_0"
+          ],
+          "output": "layer1_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "layer1_1"
+          ],
+          "output": "layer1_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "layer1_2",
+            "layer10.0.weight",
+            "layer10.0.bias"
+          ],
+          "output": "layer10_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "layer10_0"
+          ],
+          "output": "layer10_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "layer10_1"
+          ],
+          "output": "layer10_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "layer10_2",
+            "layer2.0.weight",
+            "layer2.0.bias"
+          ],
+          "output": "layer2_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "layer2_0"
+          ],
+          "output": "layer2_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "layer2_1"
+          ],
+          "output": "layer2_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "layer2_2",
+            "layer20.0.weight",
+            "layer20.0.bias"
+          ],
+          "output": "layer20_0",
+          "params": {
+            "kernel": 3,
+            "stride": 1,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "layer20_0"
+          ],
+          "output": "layer20_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "layer20_1"
+          ],
+          "output": "layer20_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "layer20_2",
+            "layer3.0.weight",
+            "layer3.0.bias"
+          ],
+          "output": "layer3_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "layer3_0"
+          ],
+          "output": "layer3_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "layer3_1"
+          ],
+          "output": "layer3_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "layer3_2",
+            "layer4.0.weight",
+            "layer4.0.bias"
+          ],
+          "output": "layer4_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "layer4_0"
+          ],
+          "output": "layer4_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "layer4_1"
+          ],
+          "output": "layer4_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "layer4_2",
+            "layer5.0.weight",
+            "layer5.0.bias"
+          ],
+          "output": "layer5_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "layer5_0"
+          ],
+          "output": "layer5_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "layer5_1"
+          ],
+          "output": "layer5_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "layer5_2",
+            "conv_up5.0.weight",
+            "conv_up5.0.bias"
+          ],
+          "output": "conv_up5_0",
+          "params": {
+            "kernel": 4,
+            "stride": 2,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "conv_up5_0"
+          ],
+          "output": "conv_up5_1"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "conv_up5_1",
+            "layer4_2"
+          ],
+          "output": "cat",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "cat",
+            "conv_up4.0.weight",
+            "conv_up4.0.bias"
+          ],
+          "output": "conv_up4_0",
+          "params": {
+            "kernel": 4,
+            "stride": 2,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "conv_up4_0"
+          ],
+          "output": "conv_up4_1"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "conv_up4_1",
+            "layer3_2"
+          ],
+          "output": "cat_1",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "cat_1",
+            "conv_up3.0.weight",
+            "conv_up3.0.bias"
+          ],
+          "output": "conv_up3_0",
+          "params": {
+            "kernel": 4,
+            "stride": 2,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "conv_up3_0"
+          ],
+          "output": "conv_up3_1"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "conv_up3_1",
+            "layer20_2"
+          ],
+          "output": "cat_2",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "cat_2",
+            "conv_up20.0.weight",
+            "conv_up20.0.bias"
+          ],
+          "output": "conv_up20_0",
+          "params": {
+            "kernel": 3,
+            "stride": 1,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "conv_up20_0"
+          ],
+          "output": "conv_up20_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "conv_up20_1"
+          ],
+          "output": "conv_up20_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "conv_up20_2",
+            "layer2_2"
+          ],
+          "output": "cat_3",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "cat_3",
+            "conv_up2.0.weight",
+            "conv_up2.0.bias"
+          ],
+          "output": "conv_up2_0",
+          "params": {
+            "kernel": 6,
+            "stride": 2,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "conv_up2_0"
+          ],
+          "output": "conv_up2_1"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "conv_up2_1",
+            "layer10_2"
+          ],
+          "output": "cat_4",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "cat_4",
+            "conv_up10.0.weight",
+            "conv_up10.0.bias"
+          ],
+          "output": "conv_up10_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "conv_up10_0"
+          ],
+          "output": "conv_up10_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "conv_up10_1"
+          ],
+          "output": "conv_up10_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "conv_up10_2",
+            "layer1_2"
+          ],
+          "output": "cat_5",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "cat_5",
+            "conv_up1.0.weight",
+            "conv_up1.0.bias"
+          ],
+          "output": "conv_up1_0",
+          "params": {
+            "kernel": 6,
+            "stride": 2,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "conv_up1_0"
+          ],
+          "output": "conv_up1_1"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "conv_up1_1",
+            "layer0_2"
+          ],
+          "output": "cat_6",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "cat_6",
+            "conv_up0.0.weight",
+            "conv_up0.0.bias"
+          ],
+          "output": "conv_up0_0",
+          "params": {
+            "kernel": 6,
+            "stride": 2,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "conv_up0_0"
+          ],
+          "output": "conv_up0_1"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "conv_up0_1",
+            "layer00_2"
+          ],
+          "output": "cat_7",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "cat_7",
+            "x"
+          ],
+          "output": "cat_8",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "cat_8",
+            "conv_up00.0.weight",
+            "conv_up00.0.bias"
+          ],
+          "output": "conv_up00_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "conv_up00_0"
+          ],
+          "output": "conv_up00_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "conv_up00_1"
+          ],
+          "output": "conv_up00_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "conv_up00_2",
+            "x"
+          ],
+          "output": "cat_9",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "cat_9",
+            "conv_up000.0.weight",
+            "conv_up000.0.bias"
+          ],
+          "output": "conv_up000_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "conv_up000_0"
+          ],
+          "output": "conv_up000_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "conv_up000_1"
+          ],
+          "output": "conv_up000_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "conv_up000_2",
+            "x"
+          ],
+          "output": "cat_10",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_10"
+          ],
+          "output": "detach"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach",
+            "Wlayer00.0.weight",
+            "Wlayer00.0.bias"
+          ],
+          "output": "wlayer00_0",
+          "params": {
+            "kernel": 3,
+            "stride": 1,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wlayer00_0"
+          ],
+          "output": "wlayer00_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wlayer00_1"
+          ],
+          "output": "wlayer00_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wlayer00_2"
+          ],
+          "output": "detach_1"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_1",
+            "Wlayer0.0.weight",
+            "Wlayer0.0.bias"
+          ],
+          "output": "wlayer0_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wlayer0_0"
+          ],
+          "output": "wlayer0_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wlayer0_1"
+          ],
+          "output": "wlayer0_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wlayer0_2"
+          ],
+          "output": "detach_2"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_2",
+            "Wlayer1.0.weight",
+            "Wlayer1.0.bias"
+          ],
+          "output": "wlayer1_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wlayer1_0"
+          ],
+          "output": "wlayer1_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wlayer1_1"
+          ],
+          "output": "wlayer1_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wlayer1_2"
+          ],
+          "output": "detach_3"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_3",
+            "Wlayer10.0.weight",
+            "Wlayer10.0.bias"
+          ],
+          "output": "wlayer10_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wlayer10_0"
+          ],
+          "output": "wlayer10_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wlayer10_1"
+          ],
+          "output": "wlayer10_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wlayer10_2"
+          ],
+          "output": "detach_4"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_4",
+            "Wlayer2.0.weight",
+            "Wlayer2.0.bias"
+          ],
+          "output": "wlayer2_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wlayer2_0"
+          ],
+          "output": "wlayer2_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wlayer2_1"
+          ],
+          "output": "wlayer2_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wlayer2_2"
+          ],
+          "output": "detach_5"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_5",
+            "Wlayer20.0.weight",
+            "Wlayer20.0.bias"
+          ],
+          "output": "wlayer20_0",
+          "params": {
+            "kernel": 3,
+            "stride": 1,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wlayer20_0"
+          ],
+          "output": "wlayer20_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wlayer20_1"
+          ],
+          "output": "wlayer20_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wlayer20_2"
+          ],
+          "output": "detach_6"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_6",
+            "Wlayer3.0.weight",
+            "Wlayer3.0.bias"
+          ],
+          "output": "wlayer3_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wlayer3_0"
+          ],
+          "output": "wlayer3_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wlayer3_1"
+          ],
+          "output": "wlayer3_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wlayer3_2"
+          ],
+          "output": "detach_7"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_7",
+            "Wlayer4.0.weight",
+            "Wlayer4.0.bias"
+          ],
+          "output": "wlayer4_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wlayer4_0"
+          ],
+          "output": "wlayer4_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wlayer4_1"
+          ],
+          "output": "wlayer4_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wlayer4_2"
+          ],
+          "output": "detach_8"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_8",
+            "Wlayer5.0.weight",
+            "Wlayer5.0.bias"
+          ],
+          "output": "wlayer5_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wlayer5_0"
+          ],
+          "output": "wlayer5_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wlayer5_1"
+          ],
+          "output": "wlayer5_2",
+          "params": {
+            "kernel": 2,
+            "stride": 2,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wlayer5_2"
+          ],
+          "output": "detach_9"
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "detach_9",
+            "Wconv_up5.0.weight",
+            "Wconv_up5.0.bias"
+          ],
+          "output": "wconv_up5_0",
+          "params": {
+            "kernel": 4,
+            "stride": 2,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wconv_up5_0"
+          ],
+          "output": "wconv_up5_1"
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wconv_up5_1"
+          ],
+          "output": "detach_10"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "detach_10",
+            "detach_8"
+          ],
+          "output": "cat_11",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_11"
+          ],
+          "output": "detach_11"
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "detach_11",
+            "Wconv_up4.0.weight",
+            "Wconv_up4.0.bias"
+          ],
+          "output": "wconv_up4_0",
+          "params": {
+            "kernel": 4,
+            "stride": 2,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wconv_up4_0"
+          ],
+          "output": "wconv_up4_1"
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wconv_up4_1"
+          ],
+          "output": "detach_12"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "detach_12",
+            "detach_7"
+          ],
+          "output": "cat_12",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_12"
+          ],
+          "output": "detach_13"
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "detach_13",
+            "Wconv_up3.0.weight",
+            "Wconv_up3.0.bias"
+          ],
+          "output": "wconv_up3_0",
+          "params": {
+            "kernel": 4,
+            "stride": 2,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wconv_up3_0"
+          ],
+          "output": "wconv_up3_1"
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wconv_up3_1"
+          ],
+          "output": "detach_14"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "detach_14",
+            "detach_6"
+          ],
+          "output": "cat_13",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_13"
+          ],
+          "output": "detach_15"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_15",
+            "Wconv_up20.0.weight",
+            "Wconv_up20.0.bias"
+          ],
+          "output": "wconv_up20_0",
+          "params": {
+            "kernel": 3,
+            "stride": 1,
+            "padding": 1
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wconv_up20_0"
+          ],
+          "output": "wconv_up20_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wconv_up20_1"
+          ],
+          "output": "wconv_up20_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wconv_up20_2"
+          ],
+          "output": "detach_16"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "detach_16",
+            "detach_5"
+          ],
+          "output": "cat_14",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_14"
+          ],
+          "output": "detach_17"
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "detach_17",
+            "Wconv_up2.0.weight",
+            "Wconv_up2.0.bias"
+          ],
+          "output": "wconv_up2_0",
+          "params": {
+            "kernel": 6,
+            "stride": 2,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wconv_up2_0"
+          ],
+          "output": "wconv_up2_1"
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wconv_up2_1"
+          ],
+          "output": "detach_18"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "detach_18",
+            "detach_4"
+          ],
+          "output": "cat_15",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_15"
+          ],
+          "output": "detach_19"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_19",
+            "Wconv_up10.0.weight",
+            "Wconv_up10.0.bias"
+          ],
+          "output": "wconv_up10_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wconv_up10_0"
+          ],
+          "output": "wconv_up10_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wconv_up10_1"
+          ],
+          "output": "wconv_up10_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wconv_up10_2"
+          ],
+          "output": "detach_20"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "detach_20",
+            "detach_3"
+          ],
+          "output": "cat_16",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_16"
+          ],
+          "output": "detach_21"
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "detach_21",
+            "Wconv_up1.0.weight",
+            "Wconv_up1.0.bias"
+          ],
+          "output": "wconv_up1_0",
+          "params": {
+            "kernel": 6,
+            "stride": 2,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wconv_up1_0"
+          ],
+          "output": "wconv_up1_1"
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wconv_up1_1"
+          ],
+          "output": "detach_22"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "detach_22",
+            "detach_2"
+          ],
+          "output": "cat_17",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_17"
+          ],
+          "output": "detach_23"
+        },
+        {
+          "op": "conv_transpose2d",
+          "inputs": [
+            "detach_23",
+            "Wconv_up0.0.weight",
+            "Wconv_up0.0.bias"
+          ],
+          "output": "wconv_up0_0",
+          "params": {
+            "kernel": 6,
+            "stride": 2,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wconv_up0_0"
+          ],
+          "output": "wconv_up0_1"
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wconv_up0_1"
+          ],
+          "output": "detach_24"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "detach_24",
+            "detach_1"
+          ],
+          "output": "cat_18",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_18"
+          ],
+          "output": "detach_25"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "detach_25",
+            "detach"
+          ],
+          "output": "cat_19",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_19"
+          ],
+          "output": "detach_26"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_26",
+            "Wconv_up00.0.weight",
+            "Wconv_up00.0.bias"
+          ],
+          "output": "wconv_up00_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wconv_up00_0"
+          ],
+          "output": "wconv_up00_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wconv_up00_1"
+          ],
+          "output": "wconv_up00_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wconv_up00_2"
+          ],
+          "output": "detach_27"
+        },
+        {
+          "op": "concat",
+          "inputs": [
+            "detach_27",
+            "detach"
+          ],
+          "output": "cat_20",
+          "params": {
+            "axis": 3
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "cat_20"
+          ],
+          "output": "detach_28"
+        },
+        {
+          "op": "conv2d",
+          "inputs": [
+            "detach_28",
+            "Wconv_up000.0.weight",
+            "Wconv_up000.0.bias"
+          ],
+          "output": "wconv_up000_0",
+          "params": {
+            "kernel": 5,
+            "stride": 1,
+            "padding": 2
+          }
+        },
+        {
+          "op": "relu",
+          "inputs": [
+            "wconv_up000_0"
+          ],
+          "output": "wconv_up000_1"
+        },
+        {
+          "op": "max_pool2d",
+          "inputs": [
+            "wconv_up000_1"
+          ],
+          "output": "wconv_up000_2",
+          "params": {
+            "kernel": 1,
+            "stride": 1,
+            "padding": 0
+          }
+        },
+        {
+          "op": "stop_gradient",
+          "inputs": [
+            "wconv_up000_2"
+          ],
+          "output": "detach_29"
+        }
+      ]
+    }
+  ],
+  "training": {
+    "objective": "dense_regression",
+    "batch_size": 1,
+    "steps": 2,
+    "optimizer": "adamw",
+    "lr": 0.0001,
+    "beta1": 0.9,
+    "beta2": 0.999,
+    "epsilon": 1e-08,
+    "weight_decay": 0.0,
+    "warmup_steps": 0,
+    "hold_steps": 0,
+    "seed": 42
+  }
+}

@@ -10,6 +10,12 @@ func preparePatchArgs(path, format string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if cfg.GridEnabled() {
+		if format != "grid" {
+			return nil, fmt.Errorf("grid prepare config requires -input-format=grid")
+		}
+		return nil, nil
+	}
 	if !cfg.LinearPatchesEnabled() {
 		return nil, fmt.Errorf("prepare -config currently requires input_adapter.kind=linear_patches")
 	}

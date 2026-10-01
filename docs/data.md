@@ -4,6 +4,11 @@ mixlab trains on binary sequence shards. These can contain discrete token IDs,
 multi-codebook codec IDs, or fixed-shape continuous feature frames. Use `prepare` for your own data, or
 the provided scripts for example and FineWeb-Edu text data.
 
+For spatial input/target arrays, use the separate `grid` representation and
+`mixlab_grid_shard_v1` format. See [Dense grid regression](dense-grid.md) for
+the source manifest, validity masks, normalization metadata, storage layout,
+and native prediction workflow. Grid batches count records, not tokens.
+
 ## Example data
 
 The root README quickstart uses `scripts/download_example_data.sh` to download

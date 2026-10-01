@@ -11,6 +11,8 @@ type resumableCheckpointContext struct {
 	SWA          [][]float32
 	Data2Vec     *data2VecTeacher
 	EarlyStop    *earlyStopState
+	Grid         *gridResumeState
+	DatasetHash  string
 }
 
 func writeResumableCheckpoint(
@@ -48,9 +50,12 @@ func writeResumableCheckpoint(
 	if err != nil {
 		return safetensorsArtifacts{}, "", fmt.Errorf("hash optimizer plan: %w", err)
 	}
-	datasetHash, err := trainingDatasetHash(ctx.TrainPattern)
-	if err != nil {
-		return safetensorsArtifacts{}, "", fmt.Errorf("hash training dataset: %w", err)
+	datasetHash := ctx.DatasetHash
+	if datasetHash == "" {
+		datasetHash, err = resumeTrainingDatasetHash(cfg, ctx.TrainPattern)
+		if err != nil {
+			return safetensorsArtifacts{}, "", fmt.Errorf("hash training dataset: %w", err)
+		}
 	}
 
 	artifacts, err := writeCheckpoint(cfg, trainer, shapes, dir, step, ctx.SWA)
@@ -71,6 +76,7 @@ func writeResumableCheckpoint(
 		Schedule:      ctx.Schedule,
 		Optimizer:     snapshot.Optimizer,
 		EarlyStop:     ctx.EarlyStop.resumeSnapshot(),
+		Grid:          ctx.Grid,
 	}
 	if artifacts.SWAPath != "" {
 		manifest.SWAFile = filepath.Base(artifacts.SWAPath)

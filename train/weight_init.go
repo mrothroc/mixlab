@@ -264,6 +264,20 @@ func applySpecialWeightInit(data []float32, ws WeightShape, rng *rand.Rand) bool
 		return true
 	}
 	switch ws.InitMode {
+	case "custom_one":
+		for j := range data {
+			data[j] = 1
+		}
+		return true
+	case "custom_normal", "custom_uniform":
+		for i := range data {
+			if ws.InitMode == "custom_normal" {
+				data[i] = float32(rng.NormFloat64() * ws.InitScale)
+			} else {
+				data[i] = float32((2*rng.Float64() - 1) * ws.InitScale)
+			}
+		}
+		return true
 	case "torch_embedding_normal_1":
 		for i := range data {
 			data[i] = float32(rng.NormFloat64())

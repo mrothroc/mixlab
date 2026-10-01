@@ -13,6 +13,9 @@ import (
 
 // runTrain executes one configured training run end to end.
 func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainResult, error) {
+	if cfg.GridEnabled() {
+		return runGridTrain(cfg, trainPattern, opts)
+	}
 	if cfg.Training.Distributed != nil {
 		return runDistributedTrain(cfg, trainPattern, opts)
 	}

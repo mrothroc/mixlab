@@ -15,7 +15,11 @@ checkout and `MIXLAB_SCRIPTS` are not required. The scripts run through
 Python **3.10 or newer** via `python3` from `PATH`. An older system interpreter
 (such as Python 3.9 on some Macs) must be replaced on `PATH` with a supported one.
 Text preparation requires `numpy` and `tokenizers`;
-FASTA, continuous-array, and codebook-array preparation require `numpy`.
+FASTA, continuous-array, codebook-array, and grid preparation require `numpy`.
+
+`-input-format grid` accepts a JSON manifest of aligned NCHW `.npy` arrays
+and explicit splits. Optional `-config` validates the grid geometry. See
+[Dense grid regression](dense-grid.md) for the complete manifest contract.
 
 ```bash
 python3 -m pip install numpy tokenizers

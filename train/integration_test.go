@@ -72,6 +72,9 @@ func attachSyntheticCharFeaturesForTest(cfg *arch.ArchConfig) {
 // RTD, requires a generator forward pass) that the synthetic harness cannot
 // supply; it is exercised by dedicated multihead/RTD tests instead.
 func syntheticBatchUnsupportedReason(cfg *arch.ArchConfig) string {
+	if cfg.GridEnabled() {
+		return "dense grids require spatial inputs/targets/masks; covered by TestGridTrainingValidationPrediction and spatial gradient parity tests"
+	}
 	if cfg.Training.InvarianceActive() {
 		return "structured invariance requires annotated A/B pair artifacts; covered by dedicated invariance pair and MLX training tests"
 	}

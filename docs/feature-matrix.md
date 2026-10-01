@@ -10,6 +10,7 @@ the [HF support matrix](hf-export-support-matrix.md).
 
 | Workflow | Native support | Main command | Notes |
 |----------|----------------|--------------|-------|
+| Dense grid regression | Native training and PyTorch state export | `prepare -input-format grid`, `arch`, `eval`, `predict-grid`, `export-torch-state` | Fixed NHWC convolution graphs, masked MSE, full-split RMSE, D4 augmentation, named warm starts/freezing, exact resume, explicit weight/layout mapping. No HF model export or distributed grid training. See [grid guide](dense-grid.md). |
 | Config validation | Yes, no GPU required | `mixlab -mode validate -config model.json` | Parses defaults, validates combinations, and builds IR. |
 | Parameter/compute inspection | Yes, no GPU required | `mixlab -mode count -config model.json` | Reports unique/active parameters, memory, IR ops, and estimated FLOPs. |
 | Text/JSONL preparation | Yes | `mixlab -mode prepare` | Produces tokenizer, shards, and a dataset manifest. |

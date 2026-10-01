@@ -20,6 +20,7 @@ mode-specific flags.
 | `count` | Print parameter, size, block, FLOP, and IR op counts for a config. | [cli-eval.md](cli-eval.md) |
 | `optimizer-report` | Write resolved optimizer groups and per-tensor assignments as JSON without a GPU. | This page |
 | `eval` | Load safetensors and evaluate validation loss or per-token exports. | [cli-eval.md](cli-eval.md) |
+| `predict-grid` | Native dense predictions from a grid manifest. | [dense-grid.md](dense-grid.md#prediction) |
 | `hiddenstats` | Export one batch of hidden states as float32 binary. | [cli-eval.md](cli-eval.md) |
 | `generate` | Generate token IDs from a causal checkpoint. | [cli-generate.md](cli-generate.md) |
 | `generate-diffusion` | Generate token IDs from a block-diffusion checkpoint. | [cli-generate.md](cli-generate.md) |
@@ -27,6 +28,7 @@ mode-specific flags.
 | `score-electra` | Score token-id sequences with a native RTD detector head. | [cli-eval.md](cli-eval.md) |
 | `score-ebm` | Score token-id sequences or pairs with native energy or scorer span-PLL ranking. | [cli-eval.md](cli-eval.md) |
 | `export-hf` | Export supported safetensors checkpoints to Hugging Face directories. | [cli-export.md](cli-export.md) |
+| `export-torch-state` | Export dense grid weights through a strict declarative map, without a GPU. | [dense-grid.md](dense-grid.md#pytorch-state-export) |
 | `parity` | Compare native Mixlab inference against a Hugging Face export. | [cli-export.md](cli-export.md) |
 
 ## Common Conventions

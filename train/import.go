@@ -18,6 +18,10 @@ type safeTensorBlob struct {
 // loadSafetensors parses a safetensors file and returns all tensors keyed by name.
 // The safetensors format is: 8-byte LE header length + JSON header + binary payload.
 func loadSafetensors(path string) (map[string]safeTensorBlob, error) {
+	return loadSafetensorsWithMetadata(path, nil)
+}
+
+func loadSafetensorsWithMetadata(path string, metadata *map[string]string) (map[string]safeTensorBlob, error) {
 	blob, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read safetensors %q: %w", path, err)
@@ -42,6 +46,11 @@ func loadSafetensors(path string) (map[string]safeTensorBlob, error) {
 	out := make(map[string]safeTensorBlob, len(raw))
 	for name, msg := range raw {
 		if name == "__metadata__" {
+			if metadata != nil {
+				if err := json.Unmarshal(msg, metadata); err != nil {
+					return nil, fmt.Errorf("parse safetensors metadata: %w", err)
+				}
+			}
 			continue
 		}
 		var ent safetensorHeaderEntry

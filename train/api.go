@@ -20,9 +20,16 @@ func runArch(configPath, trainPattern string, opts TrainOptions) error {
 		_, err := runTrain(cfg, trainPattern, opts)
 		return err
 	}
-	fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
-		cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
+	if cfg.GridEnabled() {
+		fmt.Printf("loaded grid config %q: channels=%d height=%d width=%d\n", cfg.Name, cfg.InputAdapter.Channels, cfg.InputAdapter.Height, cfg.InputAdapter.Width)
+	} else {
+		fmt.Printf("loaded config %q: model_dim=%d vocab_size=%d seq_len=%d blocks=%d\n",
+			cfg.Name, cfg.ModelDim, cfg.VocabSize, cfg.SeqLen, len(cfg.Blocks))
+	}
 	batchSummary := fmt.Sprintf("batch_tokens=%d", cfg.Training.BatchTokens)
+	if cfg.GridEnabled() {
+		batchSummary = fmt.Sprintf("batch_size=%d", cfg.Training.BatchSize)
+	}
 	if fixed := cfg.Training.FixedLengthBucketBatchSize(); fixed > 0 {
 		batchSummary = fmt.Sprintf("batch_size=%d max_batch_tokens=%d", fixed, cfg.Training.BatchTokens)
 	}

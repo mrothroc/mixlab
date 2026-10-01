@@ -3,6 +3,21 @@
 Example architecture configs from simplest to most advanced. All configs
 support JSONC comments (`//`) for inline documentation.
 
+## Dense Grids
+
+[`grid_regression_tiny.json`](grid_regression_tiny.json) is a native convolutional
+dense-regression example. It uses record batches and grid manifests, not token
+shards. See [the prepare/train/eval/predict workflow](../docs/dense-grid.md).
+[`grid_two_stage_1.json`](grid_two_stage_1.json) and
+[`grid_two_stage_2.json`](grid_two_stage_2.json) demonstrate joint augmentation,
+stable stage inventories, frozen-backbone warm starts, and resumable training.
+See [staged grid training](../docs/dense-grid.md#augmentation-and-staged-training).
+
+Full-resolution two-/three-channel [reference U-Net recipes](grid_unet_reference/README.md)
+include both stages, exact intermediate shapes, PyTorch state export maps and
+upstream licenses. They are architecture/parity fixtures, not claimed benchmark
+results; the README records intentional training-protocol differences.
+
 ## Quick start
 
 ```bash

@@ -1,0 +1,961 @@
+{
+  "format": "mixlab.torch_state_map.v1",
+  "provenance": {
+    "source_url": "https://raw.githubusercontent.com/anderspearson206/lunar-radiomap-challenge/fa3ef9b89f964556753a18be102a5aadeb723377/RadioUNet/modules.py",
+    "source_sha256": "60ee896f812710f6710cc0f3fc2f573844c0ebaabb4c331b452ed259bfd24235",
+    "commit": "fa3ef9b89f964556753a18be102a5aadeb723377",
+    "license": "MIT; see bundled reference license notices"
+  },
+  "mappings": [
+    {
+      "source": "network.layer00.0.weight",
+      "target": "layer00.0.weight",
+      "shape": [
+        6,
+        2,
+        3,
+        3
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.layer00.0.bias",
+      "target": "layer00.0.bias",
+      "shape": [
+        6
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.layer0.0.weight",
+      "target": "layer0.0.weight",
+      "shape": [
+        40,
+        6,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.layer0.0.bias",
+      "target": "layer0.0.bias",
+      "shape": [
+        40
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.layer1.0.weight",
+      "target": "layer1.0.weight",
+      "shape": [
+        50,
+        40,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.layer1.0.bias",
+      "target": "layer1.0.bias",
+      "shape": [
+        50
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.layer10.0.weight",
+      "target": "layer10.0.weight",
+      "shape": [
+        60,
+        50,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.layer10.0.bias",
+      "target": "layer10.0.bias",
+      "shape": [
+        60
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.layer2.0.weight",
+      "target": "layer2.0.weight",
+      "shape": [
+        100,
+        60,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.layer2.0.bias",
+      "target": "layer2.0.bias",
+      "shape": [
+        100
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.layer20.0.weight",
+      "target": "layer20.0.weight",
+      "shape": [
+        100,
+        100,
+        3,
+        3
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.layer20.0.bias",
+      "target": "layer20.0.bias",
+      "shape": [
+        100
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.layer3.0.weight",
+      "target": "layer3.0.weight",
+      "shape": [
+        150,
+        100,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.layer3.0.bias",
+      "target": "layer3.0.bias",
+      "shape": [
+        150
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.layer4.0.weight",
+      "target": "layer4.0.weight",
+      "shape": [
+        300,
+        150,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.layer4.0.bias",
+      "target": "layer4.0.bias",
+      "shape": [
+        300
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.layer5.0.weight",
+      "target": "layer5.0.weight",
+      "shape": [
+        500,
+        300,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.layer5.0.bias",
+      "target": "layer5.0.bias",
+      "shape": [
+        500
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.conv_up5.0.weight",
+      "target": "conv_up5.0.weight",
+      "shape": [
+        500,
+        300,
+        4,
+        4
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.conv_up5.0.bias",
+      "target": "conv_up5.0.bias",
+      "shape": [
+        300
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.conv_up4.0.weight",
+      "target": "conv_up4.0.weight",
+      "shape": [
+        600,
+        150,
+        4,
+        4
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.conv_up4.0.bias",
+      "target": "conv_up4.0.bias",
+      "shape": [
+        150
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.conv_up3.0.weight",
+      "target": "conv_up3.0.weight",
+      "shape": [
+        300,
+        100,
+        4,
+        4
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.conv_up3.0.bias",
+      "target": "conv_up3.0.bias",
+      "shape": [
+        100
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.conv_up20.0.weight",
+      "target": "conv_up20.0.weight",
+      "shape": [
+        100,
+        200,
+        3,
+        3
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.conv_up20.0.bias",
+      "target": "conv_up20.0.bias",
+      "shape": [
+        100
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.conv_up2.0.weight",
+      "target": "conv_up2.0.weight",
+      "shape": [
+        200,
+        60,
+        6,
+        6
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.conv_up2.0.bias",
+      "target": "conv_up2.0.bias",
+      "shape": [
+        60
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.conv_up10.0.weight",
+      "target": "conv_up10.0.weight",
+      "shape": [
+        50,
+        120,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.conv_up10.0.bias",
+      "target": "conv_up10.0.bias",
+      "shape": [
+        50
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.conv_up1.0.weight",
+      "target": "conv_up1.0.weight",
+      "shape": [
+        100,
+        40,
+        6,
+        6
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.conv_up1.0.bias",
+      "target": "conv_up1.0.bias",
+      "shape": [
+        40
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.conv_up0.0.weight",
+      "target": "conv_up0.0.weight",
+      "shape": [
+        80,
+        20,
+        6,
+        6
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.conv_up0.0.bias",
+      "target": "conv_up0.0.bias",
+      "shape": [
+        20
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.conv_up00.0.weight",
+      "target": "conv_up00.0.weight",
+      "shape": [
+        20,
+        28,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.conv_up00.0.bias",
+      "target": "conv_up00.0.bias",
+      "shape": [
+        20
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.conv_up000.0.weight",
+      "target": "conv_up000.0.weight",
+      "shape": [
+        1,
+        22,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.conv_up000.0.bias",
+      "target": "conv_up000.0.bias",
+      "shape": [
+        1
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wlayer00.0.weight",
+      "target": "Wlayer00.0.weight",
+      "shape": [
+        20,
+        3,
+        3,
+        3
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wlayer00.0.bias",
+      "target": "Wlayer00.0.bias",
+      "shape": [
+        20
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wlayer0.0.weight",
+      "target": "Wlayer0.0.weight",
+      "shape": [
+        30,
+        20,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wlayer0.0.bias",
+      "target": "Wlayer0.0.bias",
+      "shape": [
+        30
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wlayer1.0.weight",
+      "target": "Wlayer1.0.weight",
+      "shape": [
+        40,
+        30,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wlayer1.0.bias",
+      "target": "Wlayer1.0.bias",
+      "shape": [
+        40
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wlayer10.0.weight",
+      "target": "Wlayer10.0.weight",
+      "shape": [
+        50,
+        40,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wlayer10.0.bias",
+      "target": "Wlayer10.0.bias",
+      "shape": [
+        50
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wlayer2.0.weight",
+      "target": "Wlayer2.0.weight",
+      "shape": [
+        60,
+        50,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wlayer2.0.bias",
+      "target": "Wlayer2.0.bias",
+      "shape": [
+        60
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wlayer20.0.weight",
+      "target": "Wlayer20.0.weight",
+      "shape": [
+        70,
+        60,
+        3,
+        3
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wlayer20.0.bias",
+      "target": "Wlayer20.0.bias",
+      "shape": [
+        70
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wlayer3.0.weight",
+      "target": "Wlayer3.0.weight",
+      "shape": [
+        90,
+        70,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wlayer3.0.bias",
+      "target": "Wlayer3.0.bias",
+      "shape": [
+        90
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wlayer4.0.weight",
+      "target": "Wlayer4.0.weight",
+      "shape": [
+        110,
+        90,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wlayer4.0.bias",
+      "target": "Wlayer4.0.bias",
+      "shape": [
+        110
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wlayer5.0.weight",
+      "target": "Wlayer5.0.weight",
+      "shape": [
+        150,
+        110,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wlayer5.0.bias",
+      "target": "Wlayer5.0.bias",
+      "shape": [
+        150
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wconv_up5.0.weight",
+      "target": "Wconv_up5.0.weight",
+      "shape": [
+        150,
+        110,
+        4,
+        4
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wconv_up5.0.bias",
+      "target": "Wconv_up5.0.bias",
+      "shape": [
+        110
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wconv_up4.0.weight",
+      "target": "Wconv_up4.0.weight",
+      "shape": [
+        220,
+        90,
+        4,
+        4
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wconv_up4.0.bias",
+      "target": "Wconv_up4.0.bias",
+      "shape": [
+        90
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wconv_up3.0.weight",
+      "target": "Wconv_up3.0.weight",
+      "shape": [
+        180,
+        70,
+        4,
+        4
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wconv_up3.0.bias",
+      "target": "Wconv_up3.0.bias",
+      "shape": [
+        70
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wconv_up20.0.weight",
+      "target": "Wconv_up20.0.weight",
+      "shape": [
+        60,
+        140,
+        3,
+        3
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wconv_up20.0.bias",
+      "target": "Wconv_up20.0.bias",
+      "shape": [
+        60
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wconv_up2.0.weight",
+      "target": "Wconv_up2.0.weight",
+      "shape": [
+        120,
+        50,
+        6,
+        6
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wconv_up2.0.bias",
+      "target": "Wconv_up2.0.bias",
+      "shape": [
+        50
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wconv_up10.0.weight",
+      "target": "Wconv_up10.0.weight",
+      "shape": [
+        40,
+        100,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wconv_up10.0.bias",
+      "target": "Wconv_up10.0.bias",
+      "shape": [
+        40
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wconv_up1.0.weight",
+      "target": "Wconv_up1.0.weight",
+      "shape": [
+        80,
+        30,
+        6,
+        6
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wconv_up1.0.bias",
+      "target": "Wconv_up1.0.bias",
+      "shape": [
+        30
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wconv_up0.0.weight",
+      "target": "Wconv_up0.0.weight",
+      "shape": [
+        60,
+        20,
+        6,
+        6
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wconv_up0.0.bias",
+      "target": "Wconv_up0.0.bias",
+      "shape": [
+        20
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wconv_up00.0.weight",
+      "target": "Wconv_up00.0.weight",
+      "shape": [
+        20,
+        43,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wconv_up00.0.bias",
+      "target": "Wconv_up00.0.bias",
+      "shape": [
+        20
+      ],
+      "transform": "identity"
+    },
+    {
+      "source": "network.Wconv_up000.0.weight",
+      "target": "Wconv_up000.0.weight",
+      "shape": [
+        1,
+        23,
+        5,
+        5
+      ],
+      "transform": "transpose",
+      "axes": [
+        0,
+        3,
+        1,
+        2
+      ]
+    },
+    {
+      "source": "network.Wconv_up000.0.bias",
+      "target": "Wconv_up000.0.bias",
+      "shape": [
+        1
+      ],
+      "transform": "identity"
+    }
+  ]
+}

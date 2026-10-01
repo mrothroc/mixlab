@@ -114,6 +114,10 @@ const OpCodebookOffset = 107 // OP_CODEBOOK_OFFSET
 
 const OpReverseValidPrefix = 108 // OP_REVERSE_VALID_PREFIX
 
+const OpConv2D = 109          // OP_CONV2D
+const OpConvTranspose2D = 110 // OP_CONV_TRANSPOSE2D
+const OpMaxPool2D = 111       // OP_MAX_POOL2D
+
 const (
 	SegmentMaskModeNone            = 0
 	SegmentMaskModeCausal          = 1

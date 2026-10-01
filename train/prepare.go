@@ -330,6 +330,30 @@ func runPrepare(opts PrepareOptions) error {
 	}
 
 	// Validate output: check that at least one train shard exists.
+	if inputFormat == "grid" {
+		m, err := data.LoadDatasetManifest(filepath.Join(opts.Output, data.DatasetManifestFilename))
+		if err != nil {
+			return err
+		}
+		if opts.ConfigPath != "" {
+			cfg, e := LoadArchConfigQuiet(opts.ConfigPath)
+			if e != nil {
+				return e
+			}
+			if e = checkGridGeometry(cfg, *m.Grid, m.Grid.TargetChannels > 0); e != nil {
+				return e
+			}
+		}
+		for split := range m.Splits {
+			ds, e := data.OpenGridDataset(filepath.Join(opts.Output, data.DatasetManifestFilename), split)
+			if e != nil {
+				return e
+			}
+			_ = ds.Close()
+		}
+		fmt.Printf("Validation: grid shape=%+v splits=%d dtype=%s\n", m.Grid, len(m.Splits), m.FeatureDType)
+		return nil
+	}
 	trainPattern := filepath.Join(opts.Output, "train_*.bin")
 	matches, _ := filepath.Glob(trainPattern)
 	if len(matches) == 0 {
@@ -438,7 +462,7 @@ func preparePython(inputFormat string) (string, error) {
 
 	modules := []string{"numpy"}
 	install := "numpy"
-	if inputFormat != "fasta" && inputFormat != "continuous" && inputFormat != "codebooks" {
+	if inputFormat != "fasta" && inputFormat != "continuous" && inputFormat != "codebooks" && inputFormat != "grid" {
 		modules = append(modules, "tokenizers")
 		install += " tokenizers"
 	}

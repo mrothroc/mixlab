@@ -7,6 +7,7 @@ Use this page to choose the shortest path for the task at hand. The root
 
 | Task | Start here | Then use |
 |------|------------|----------|
+| Train, predict or export continuous spatial grids | [Dense grid regression](dense-grid.md) | [Staged reference and export maps](../examples/grid_unet_reference/README.md) |
 | Prepare text, JSONL, records, FASTA, continuous arrays, or codec tokens | [Data preparation](data.md) | [Prepare CLI](cli-prepare.md), [continuous input](continuous-input.md), and [discrete codebooks](discrete-codebooks-input.md) |
 | Choose an architecture or objective | [Architecture guide](architecture.md) | [Model](config-model.md), [blocks](config-blocks.md), and [training](config-training.md) guides |
 | Check a config without a GPU | `mixlab -mode validate -config model.json` | [Configuration reference](config-reference.md) |

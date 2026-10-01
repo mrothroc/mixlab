@@ -4160,6 +4160,43 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         set_out(op, 0, mx::concatenate({get(op, 0), get(op, 1)}, axis));
         break;
       }
+      case OP_CONV2D:
+      case OP_CONV_TRANSPOSE2D: {
+        if (op.n_int_params != 3 || (op.n_inputs != 2 && op.n_inputs != 3)) {
+          throw std::runtime_error("spatial convolution requires kernel,stride,padding and input,weight[,bias]");
+        }
+        int kernel = op.int_params[0], stride = op.int_params[1], padding = op.int_params[2];
+        auto x = get(op, 0);
+        auto w = get(op, 1);
+        if (kernel <= 0 || stride <= 0 || padding < 0 || x.ndim() != 4 || w.ndim() != 4 ||
+            w.shape(1) != kernel || w.shape(2) != kernel) {
+          throw std::runtime_error("invalid spatial convolution shape or parameters");
+        }
+        // Canonical transposed weights are I,H,W,O; MLX expects O,H,W,I.
+        if (op.type == OP_CONV_TRANSPOSE2D) w = mx::transpose(w, {3, 1, 2, 0});
+        auto y = op.type == OP_CONV2D
+          ? mx::conv2d(x, w, {stride,stride}, {padding,padding})
+          : mx::conv_transpose2d(x, w, {stride,stride}, {padding,padding});
+        if (op.n_inputs == 3) y = y + get(op, 2);
+        set_out(op, 0, y);
+        break;
+      }
+      case OP_MAX_POOL2D: {
+        if (op.n_int_params != 3 || op.int_params[0] <= 0 ||
+            op.int_params[1] != op.int_params[0] || op.int_params[2] != 0) {
+          throw std::runtime_error("max_pool2d requires stride=kernel and padding=0");
+        }
+        auto x = get(op,0);
+        if (x.ndim() != 4) throw std::runtime_error("max_pool2d requires NHWC");
+        int k=op.int_params[0], b=x.shape(0), h=x.shape(1)/k, w=x.shape(2)/k, c=x.shape(3);
+        if (h == 0 || w == 0) throw std::runtime_error("max_pool2d kernel exceeds input");
+        auto cropped=mx::slice(x,{0,0,0,0},{b,h*k,w*k,c});
+        auto windows=mx::reshape(mx::transpose(mx::reshape(cropped,{b,h,k,w,k,c}),{0,1,3,5,2,4}),{b,h,w,c,k*k});
+        // First maximum wins, matching PyTorch even for repeated ReLU zeros.
+        auto index=mx::stop_gradient(mx::argmax(windows,4,true));
+        set_out(op,0,mx::reshape(mx::take_along_axis(windows,index,4),{b,h,w,c}));
+        break;
+      }
       case OP_CAUSAL_MASK: {
         if (op.n_int_params < 1) {
           throw std::runtime_error("OP_CAUSAL_MASK missing T");

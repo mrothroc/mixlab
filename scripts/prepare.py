@@ -1504,7 +1504,7 @@ def main():
     parser = argparse.ArgumentParser(description="Prepare binary shards for mixlab training")
     parser.add_argument("--input", required=True, help="Input text/JSONL/FASTA path, directory, or continuous/codebook .npy/.npz array")
     parser.add_argument("--output", required=True, help="Output directory for shards")
-    parser.add_argument("--input-format", choices=["text", "fasta", "continuous", "codebooks"], default="text", help="Input representation (default: text)")
+    parser.add_argument("--input-format", choices=["text", "fasta", "continuous", "codebooks", "grid"], default="text", help="Input representation (default: text); grid takes an aligned-array source manifest")
     parser.add_argument("--vocab-size", type=int, default=1024, help="BPE vocabulary size (default: 1024)")
     parser.add_argument("--val-split", type=float, default=0.1, help="Fraction of tokens for validation (default: 0.1)")
     parser.add_argument("--tokenizer-path", default="", help="Path to pre-trained tokenizer.json (skip training)")
@@ -1555,6 +1555,11 @@ def main():
     parser.add_argument("--nucleotide-framing", choices=["record", "stream"], default="record", help="FASTA shard layout: record or continuous token stream")
     parser.add_argument("--nucleotide-stream-separator", choices=["eos", "none"], default="eos", help="Separator inserted between FASTA contigs in stream mode")
     args = parser.parse_args()
+
+    if args.input_format == "grid":
+        from prepare_grid import prepare_grid
+        prepare_grid(args.input, args.output)
+        return
 
     tokens_per_shard = args.tokens_per_shard
 

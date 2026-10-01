@@ -478,19 +478,7 @@ func builtinBlockWeightShapesWithOptions(spec BlockSpec, D, T, B, V int, opts Em
 		}, nil
 
 	case "custom":
-		heads := spec.Heads
-		if heads <= 0 {
-			heads = 1
-		}
-		metas := make([]WeightMeta, len(spec.Weights))
-		for i, ws := range spec.Weights {
-			resolved, err := resolveShapeSymbol(ws.Shape, D, heads, T, B, V)
-			if err != nil {
-				return nil, fmt.Errorf("custom block %q weight %q: %w", spec.Name, ws.Name, err)
-			}
-			metas[i] = WeightMeta{Name: ws.Name, Shape: resolved}
-		}
-		return metas, nil
+		return customWeightShapes(spec, D, T, B, V)
 
 	default:
 		return nil, fmt.Errorf("unsupported block type %q", spec.Type)
@@ -700,6 +688,10 @@ func charWeightShapes(modelDim, charVocabSize, charDim int) []WeightMeta {
 func CollectWeightShapesFromConfig(cfg *ArchConfig) ([]WeightMeta, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
+	}
+	if cfg.GridEnabled() {
+		_, weights, err := buildGridGraph(cfg, false)
+		return weights, err
 	}
 	if cfg.Training.MultiheadEnabled() {
 		return collectMultiheadWeightShapesFromConfig(cfg)

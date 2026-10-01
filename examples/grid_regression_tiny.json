@@ -1,0 +1,20 @@
+{
+  "name": "grid_regression_tiny",
+  "input_adapter": {"kind": "grid", "channels": 2, "height": 8, "width": 8},
+  "dense_regression": {"output": "network.prediction", "target_channels": 1},
+  "blocks": [{
+    "type": "custom", "name": "network",
+    "weights": [
+      {"name": "conv.weight", "shape": ["1", "3", "3", "2"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "conv.bias", "shape": ["1"], "init": {"kind": "pytorch_conv_uniform", "weight": "conv.weight"}}
+    ],
+    "ops": [
+      {"op": "conv2d", "inputs": ["x", "conv.weight", "conv.bias"], "output": "prediction", "params": {"kernel": 3, "stride": 1, "padding": 1}}
+    ]
+  }],
+  "training": {
+    "objective": "dense_regression", "batch_size": 2, "steps": 100,
+    "optimizer": "adamw", "lr": 0.001, "beta1": 0.9, "beta2": 0.999,
+    "epsilon": 1e-8, "weight_decay": 0.0, "seed": 42
+  }
+}

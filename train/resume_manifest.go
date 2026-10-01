@@ -58,6 +58,7 @@ type resumeManifest struct {
 	SWATensors          []resumeTensorRef         `json:"swa_tensors,omitempty"`
 	Data2VecTensors     []resumeTensorRef         `json:"data2vec_tensors,omitempty"`
 	EarlyStop           resumeEarlyStop           `json:"early_stop"`
+	Grid                *gridResumeState          `json:"grid,omitempty"`
 	CheckpointSizeBytes int64                     `json:"checkpoint_size_bytes,omitempty"`
 	ManifestPath        string                    `json:"-"`
 }
@@ -158,6 +159,11 @@ func resumeConfigHash(cfg *ArchConfig) (string, error) {
 	}
 	clone := *cfg
 	clone.Training = cfg.Training
+	if cfg.GridEnabled() {
+		// Warm-start instructions are one-time actions, never resume inputs.
+		clone.Training.InitFrom = ""
+		clone.Training.InitAllowMissing = nil
+	}
 	if len(clone.Training.Phases) == 0 {
 		clone.Training.Steps = 0
 	}

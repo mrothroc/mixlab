@@ -11,6 +11,7 @@ import (
 )
 
 type objectiveBatch struct {
+	grid                  *data.GridBatch
 	x                     []int
 	y                     []int
 	codebooks             []int32

@@ -33,7 +33,7 @@ func prepareResumeRun(cfg *ArchConfig, trainPattern, resumePath string, earlySto
 	if currentConfigHash != manifest.ConfigHash {
 		return resumeRunSetup{}, fmt.Errorf("training config does not match resumable checkpoint (checkpoint=%s current=%s)", manifest.ConfigHash, currentConfigHash)
 	}
-	currentDatasetHash, err := trainingDatasetHash(trainPattern)
+	currentDatasetHash, err := resumeTrainingDatasetHash(cfg, trainPattern)
 	if err != nil {
 		return resumeRunSetup{}, fmt.Errorf("hash current training dataset: %w", err)
 	}

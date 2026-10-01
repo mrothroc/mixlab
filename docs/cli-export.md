@@ -1,4 +1,4 @@
-# CLI: Hugging Face Export And Parity
+# CLI: Model Export And Parity
 
 Use `export-hf` to write a Hugging Face directory, then use `parity` to compare
 that directory against native Mixlab inference on real token shards.
@@ -77,3 +77,12 @@ Compare a Hugging Face export against native Mixlab inference:
 The Python checker needs the packages in `requirements-hf.txt`. Run `parity`
 after changing export templates, weight mapping, tokenizer metadata, or
 supported block features.
+
+## Dense Grid State Export
+
+`-mode export-torch-state -config model.json -safetensors-load weights.st
+-export-map map.json -export-dir new-package` exports a native grid model to
+PyTorch-layout safetensors. It requires no GPU and does not execute Python.
+Unlike `export-hf`, it does not export a model implementation. See
+[dense grid export](dense-grid.md#pytorch-state-export) for the map schema,
+explicit model loader and batch inference. The output directory must be new.

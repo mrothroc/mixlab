@@ -23,6 +23,7 @@ func LoadArchConfigQuiet(path string) (*ArchConfig, error) {
 }
 
 func loadArchConfig(path string, emitWarnings bool) (*ArchConfig, error) {
+	source := path
 	b, err := os.ReadFile(path)
 	if err != nil {
 		if filepath.IsAbs(path) {
@@ -32,8 +33,9 @@ func loadArchConfig(path string, emitWarnings bool) (*ArchConfig, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read config %q: %w", path, err)
 		}
+		path = filepath.Join("..", path)
 	}
-	cfg, warnings, err := parseArchConfig(b, path)
+	cfg, warnings, err := parseArchConfig(b, source)
 	if err != nil {
 		return nil, err
 	}

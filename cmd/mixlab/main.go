@@ -15,8 +15,12 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "arch", "run mode: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
+	mode := flag.String("mode", "arch", "run mode: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, predict-grid, export-torch-state, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
+	gridIn := flag.String("grid-in", "", "grid dataset manifest for predict-grid")
+	gridOut := flag.String("grid-out", "", "new prediction output directory for predict-grid")
+	gridSplit := flag.String("grid-split", "predict", "manifest split for predict-grid")
+	exportMap := flag.String("export-map", "", "declarative logical-weight map for export-torch-state")
 	workerSocket := flag.String("worker-control-socket", "", "private hosting socket (internal managed-worker mode only)")
 	workerFD := flag.Int("worker-session-fd", -1, "inherited one-use session descriptor (internal managed-worker mode only)")
 	configsDir := flag.String("configs", "", "directory of JSON configs (for arch_race mode)")
@@ -98,10 +102,10 @@ func main() {
 
 	// prepare mode flags
 	prepInput := flag.String("input", "", "input text file, JSONL, or directory (prepare mode)")
-	prepInputFormat := flag.String("input-format", "text", "prepare input representation: text, fasta, continuous, or codebooks")
+	prepInputFormat := flag.String("input-format", "text", "prepare input representation: text, fasta, continuous, codebooks, or grid")
 	prepOutput := flag.String("output", "", "legacy output path for prepare, export-hf, or hiddenstats; prefer mode-specific output aliases in new scripts")
 	prepareOutputDir := flag.String("prepare-output-dir", "", "output directory for shards; clearer alias for -output in prepare mode")
-	exportDir := flag.String("export-dir", "", "Hugging Face output directory; clearer alias for -output in export-hf mode")
+	exportDir := flag.String("export-dir", "", "output directory for export-hf or export-torch-state")
 	hiddenstatsOut := flag.String("hiddenstats-out", "", "output file for hiddenstats mode; clearer alias for -output")
 	prepVocabSize := flag.Int("vocab-size", 1024, "BPE vocabulary size (prepare mode)")
 	prepValSplit := flag.Float64("val-split", 0.1, "fraction of tokens for validation (prepare mode)")
@@ -311,6 +315,10 @@ func main() {
 		return
 	}
 
+	if *mode == "export-torch-state" {
+		must(train.RunExportTorchState(train.ExportTorchStateOptions{ConfigPath: *configPath, SafetensorsLoad: *safetensorsLoad, MapPath: *exportMap, OutputDir: *exportDir}))
+		return
+	}
 	if !train.MLXAvailable() {
 		fmt.Fprintln(os.Stderr, "error: MLX backend unavailable\n  rebuild with: CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab\n  macOS: requires Apple Silicon and MLX (brew install mlx)\n  Linux: requires CUDA and MLX built from source (see docker/README.md)")
 		os.Exit(1)
@@ -348,6 +356,8 @@ func main() {
 	}
 
 	switch *mode {
+	case "predict-grid":
+		must(train.RunPredictGrid(train.PredictGridOptions{ConfigPath: *configPath, SafetensorsLoad: *safetensorsLoad, Input: *gridIn, Output: *gridOut, Split: *gridSplit}))
 	case "arch":
 		must(train.RunArch(*configPath, *trainPattern, opts))
 	case "arch_race":
@@ -458,7 +468,7 @@ func main() {
 			LogitTokens:     *parityLogitTokens,
 		}))
 	default:
-		must(fmt.Errorf("unknown mode %q (supported: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, export-hf, parity)", *mode))
+		must(fmt.Errorf("unknown mode %q (supported: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, predict-grid, export-torch-state, export-hf, parity)", *mode))
 	}
 }
 
@@ -467,11 +477,13 @@ type flagGroup struct {
 	Names []string
 }
 
-var supportedModes = []string{"smoke", "validate", "arch", "arch_race", "prepare", "prepare-pairs", "count", "optimizer-report", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "export-hf", "parity"}
+var supportedModes = []string{"smoke", "validate", "arch", "arch_race", "prepare", "prepare-pairs", "count", "optimizer-report", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "predict-grid", "export-torch-state", "export-hf", "parity"}
 
 var modeFlagGroups = map[string][]flagGroup{
-	"worker-probe": {{"Internal read-only device probe (no training arguments)", []string{}}},
-	"worker-plan":  {{"Internal read-only numerical plan from bounded stdin config", []string{}}},
+	"export-torch-state": {{"Required", []string{"config", "safetensors-load", "export-map", "export-dir"}}},
+	"predict-grid":       {{"Required", []string{"config", "safetensors-load", "grid-in", "grid-out"}}, {"Selection", []string{"grid-split"}}},
+	"worker-probe":       {{"Internal read-only device probe (no training arguments)", []string{}}},
+	"worker-plan":        {{"Internal read-only numerical plan from bounded stdin config", []string{}}},
 	"managed-worker": {
 		{"Internal hosting connection (not a standalone training mode)", []string{"worker-control-socket", "worker-session-fd"}},
 	},

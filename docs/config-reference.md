@@ -1,5 +1,19 @@
 # mixlab JSON Config Reference
 
+## Dense Grid Regression
+
+Full two-stage [reference recipes and PyTorch state maps](../examples/grid_unet_reference/README.md)
+are available alongside the tiny examples. Export uses the CLI-only
+`export-torch-state` map contract, not a new model/config parameter.
+
+Optional top-level `dense_regression` selects a native spatial task with
+`output`, `target_channels`, and optional `metric_scale`. Use
+`input_adapter.kind: "grid"` with `channels`, `height`, `width`, and
+`training.objective: "dense_regression"` with record-count `batch_size`.
+No token dimensions are required. Custom weights accept optional typed `init`
+policies. See [Dense Grid Regression](dense-grid.md) for the complete field,
+operator, prepare, loss, validation and prediction contracts.
+
 ## Fixed-World Distributed Training
 
 Optional `training.distributed` (`distributed`) enables fixed-world DDP under
@@ -72,7 +86,7 @@ For Hugging Face directory export, see [Hugging Face Export](hf-export.md). The 
 | `model_dim` | integer | Yes | None | Hidden size `D`. Must be `> 0`. |
 | `vocab_size` | integer | Token inputs only | None | Token vocabulary size `V`. Must be `> 0` and `<= 65535` for `token_embedding`. Omit it for `linear_frames`, `linear_patches`, or `discrete_codebooks`. |
 | `seq_len` | integer | No | `128` | Context length in tokens. Must be `> 0` when set. |
-| `input_adapter` | object | No | `{"kind":"token_embedding"}` | Selects model input representation. `linear_frames` accepts float32 `[B,T,F]`; `linear_patches` adds image geometry and optional XY/crop/flip. `discrete_codebooks` accepts int32 `[B,T,Q]`, requires `num_codebooks >= 1` and `codebook_vocab_size >= 2`, and supports `fusion: "attention_mlp"` (default) or `"mean"`; `fusion_hidden_dim` defaults to `model_dim`. Non-token adapters support `norm: "none"|"layernorm"` and classification only. |
+| `input_adapter` | object | No | `{"kind":"token_embedding"}` | Selects model input representation. `linear_frames` accepts float32 `[B,T,F]`; `linear_patches` adds image geometry and optional XY/crop/flip. `discrete_codebooks` accepts int32 `[B,T,Q]`, requires `num_codebooks >= 1` and `codebook_vocab_size >= 2`, and supports `fusion: "attention_mlp"` (default) or `"mean"`; `fusion_hidden_dim` defaults to `model_dim`. These non-token sequence adapters support `norm: "none"|"layernorm"` and classification only. Separately, `grid` requires `channels`, `height`, `width`, and `dense_regression`; it has no adapter normalization. |
 | `mlp_mult` | number | No | `2.67` | FFN expansion multiplier for `plain`, `swiglu`, `geglu`, `mlp`, `moe` experts, and `cross_attention` FFN tails. Must be `> 0`. |
 | `logit_softcap` | number | No | Disabled | Optional soft cap applied to output logits before loss/export. |
 | `smear_embeddings` | boolean | No | `false` | Enables 1-token-lookback smearing on token embeddings before the first block. |
@@ -1151,6 +1165,13 @@ These symbols are accepted in custom weight shapes and in `params.shape`:
 | `rmsnorm` / `rms_norm` | 2 | 1 | `eps` | Inputs are typically `[x, scale]`. |
 | `layernorm` / `layer_norm` | 1 or 3 | 1 | `eps` | Non-affine LayerNorm with one input, or affine LayerNorm with `[x, scale, bias]`. |
 | `rope` | 2 | 2 | `T`, `head_dim`, `base` | Rotary embedding helper. Outputs are rotated Q and K. |
+| `stop_gradient` | 1 | 1 | None | Identity forward, zero backward. |
+| `conv2d` | 2 or 3 | 1 | `kernel`, `stride`, `padding` | NHWC spatial convolution, optional bias. See [grid contracts](dense-grid.md). |
+| `conv_transpose2d` | 2 or 3 | 1 | `kernel`, `stride`, `padding`, `output_padding:0` | NHWC spatial transposed convolution, optional bias. |
+| `max_pool2d` | 1 | 1 | `kernel`, `stride`, `padding:0` | NHWC pooling; kernel=stride; first-max tie gradient. |
+
+Grid custom graphs support the narrower, shape-checked operation subset listed
+in [Dense Grid Regression](dense-grid.md), not all sequence custom operations.
 
 ### Param keys
 
@@ -1171,6 +1192,7 @@ The custom-op decoder recognizes these `params` keys:
 | `rate` | number | `dropout` |
 | `exponent` | number | one-input `pow` |
 | `min` / `max` | number | `clamp` |
+| `kernel`, `stride`, `padding`, `output_padding` | integer | Spatial convolution/pooling; constraints above |
 
 ### Custom block example with reshape
 
@@ -1207,7 +1229,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 |------|------|----------|---------|-------|
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
 | `lr` | number | No | `3e-4` | Base learning rate. Finite and `>= 0`; explicit `0` freezes groups inheriting this rate. Omission/null uses the default. Explicit group overrides and phase schedules are independent; NewBob requires a positive base LR. |
-| `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, `"hybrid"`, `"block_diffusion"`, `"multihead"`, or `"classification"`. Existing configs default to causal next-token training. |
+| `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, `"hybrid"`, `"block_diffusion"`, `"multihead"`, `"classification"`, or `"dense_regression"` (requires grid input). Existing configs default to causal next-token training. |
 | `lr_schedule` | string | No | `"cosine"` | Outer learning-rate schedule: existing step-driven `"cosine"` behavior or validation-driven `"newbob"`. NewBob is classification-only in v1. |
 | `newbob` | object | Required for `lr_schedule: "newbob"` | Disabled | NewBob controls: `annealing_factor`, `improvement_threshold`, `patient`, and `metric` (`"val_loss"` or `"val_error_rate"`). |
 | `val_every_steps` | integer | Required for NewBob | omitted | Positive completed-optimizer-step cadence for configured full-split classification validation. |
@@ -1281,7 +1303,11 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `lamb_trust_ratio_cap` | number | No | `10.0` | Upper bound for the LAMB trust ratio `||w|| / ||update||`. `0` disables capping for experiments; values must be finite and `>= 0`. |
 | `seed` | integer | No | `42` | RNG seed. `0` is treated as omitted and replaced with `42`. |
 | `batch_tokens` | integer | No | `1024` | Tokens per optimization step. Must be divisible by `seq_len` normally; with `length_buckets`, it is a ceiling used to derive each bucket's row count. Mutually exclusive with `batch_size`. |
-| `batch_size` | integer | No | omitted | Fixed records per step under `length_buckets`. Every bucket uses this row count while tokens per step vary as `batch_size * bucket_width`. Requires `length_buckets` and is mutually exclusive with `batch_tokens`. |
+| `batch_size` | integer | No | omitted | For `dense_regression`, required positive records per physical batch. Otherwise fixed records per step under `length_buckets`, where tokens vary as `batch_size * bucket_width`. Mutually exclusive with `batch_tokens`. |
+| `grid_augmentation` | object | No | omitted | Grid-only joint augmentation: `{"dihedral":true}` uniformly chooses one of eight D4 transforms per record occurrence. Requires square geometry. Omitted or `dihedral:false` does not augment or consume augmentation RNG. Never applied in eval/prediction. |
+| `init_from` | string | No | omitted | Grid-only weights warm start. Relative paths resolve beside the loaded config; `-safetensors-load` stays relative to the working directory. Supplying both, or either with `-resume`, is an error. |
+| `init_allow_missing` | string array | No | omitted | Grid-only explicit allow-missing logical weight patterns for warm starts with logical checkpoint metadata. Every pattern must match a declared target weight. Shape mismatches and unexpected checkpoint tensors always fail. Uses the same full-name glob grammar as `freeze`. |
+| `freeze` | string array | No | omitted | Grid-only full logical weight-name glob patterns (Go `path.Match`: `*`, `?`, character classes, backslash escapes; `*` crosses dots but not `/`). Reject malformed/unmatched patterns and no-trainable selected graphs. Frozen/unreachable weights receive no parameter gradients, optimizer moments, clipping contribution, or decay; the full checkpoint inventory remains. |
 | `length_buckets` | integer array | No | omitted | Optional strictly increasing classification sequence widths. Supported for `linear_frames` and `discrete_codebooks`; each width must be `<= seq_len`. When `batch_tokens` is used, the largest bucket must also be `<= batch_tokens`. |
 | `seq_len_schedule` | array | No | Disabled | Stepwise training sequence-length schedule as `[[step, seq_len], ...]`. The top-level `seq_len` remains the maximum/eval/inference length. Scheduled lengths must start at step `0`, be strictly increasing by step, stay in `[1, seq_len]`, and divide `batch_tokens`. V1 rejects this with distillation or active data2vec. |
 | `shuffle_chunk_tokens` | integer | No | `seq_len` | Token-block shuffle granularity for train/validation loaders. Values `<= 0` inherit `seq_len`; set to `2048` to reproduce the previous fixed-block behavior. |

@@ -30,36 +30,37 @@ type ArchConfig struct {
 	SmearEmbeddings  bool    `json:"smear_embeddings,omitempty"`
 	// SmearEmbeddingsGateShape selects the learned gate used by embedding smearing.
 	// Empty defaults to "pr130" when smear_embeddings is enabled.
-	SmearEmbeddingsGateShape string            `json:"smear_embeddings_gate_shape,omitempty"`
-	CharVocabSize            int               `json:"char_vocab_size,omitempty"`
-	CharDim                  int               `json:"char_dim,omitempty"`
-	CharMaxPerToken          int               `json:"char_max_per_token,omitempty"`
-	PositionalEmbedding      string            `json:"positional_embedding,omitempty"`
-	MaxPositions             int               `json:"max_positions,omitempty"`
-	EmbeddingDropout         float32           `json:"embedding_dropout,omitempty"`
-	InputAdapter             *InputAdapterSpec `json:"input_adapter,omitempty"`
-	HFExportFormat           string            `json:"hf_export_format,omitempty"`
-	BigramVocabSize          int               `json:"bigram_vocab_size,omitempty"`
-	BigramDim                int               `json:"bigram_dim,omitempty"`
-	TrigramVocabSize         int               `json:"trigram_vocab_size,omitempty"`
-	TrigramDim               int               `json:"trigram_dim,omitempty"`
-	LogitSoftcap             float32           `json:"logit_softcap,omitempty"`
-	Dropout                  float32           `json:"dropout,omitempty"`
-	AttnDropout              float32           `json:"attn_dropout,omitempty"`
-	HiddenDropout            float32           `json:"hidden_dropout,omitempty"`
-	TieDropout               bool              `json:"tie_dropout,omitempty"`
-	MLMHead                  string            `json:"mlm_head,omitempty"`
-	NormType                 string            `json:"norm_type,omitempty"`
-	NormEps                  float32           `json:"norm_eps,omitempty"`
-	NormAffine               *bool             `json:"norm_affine,omitempty"`
-	BatchNormMomentum        float32           `json:"batchnorm_momentum,omitempty"`
-	NormPlacement            string            `json:"norm_placement,omitempty"`
-	FinalNorm                *bool             `json:"final_norm,omitempty"`
-	FFNInternalNorm          bool              `json:"ffn_internal_norm,omitempty"`
-	LayerAggregation         string            `json:"layer_aggregation,omitempty"`
-	MTP                      *MTPSpec          `json:"mtp,omitempty"`
-	Backout                  *BackoutSpec      `json:"backout,omitempty"`
-	Data                     DataSpec          `json:"data,omitempty"`
+	SmearEmbeddingsGateShape string               `json:"smear_embeddings_gate_shape,omitempty"`
+	CharVocabSize            int                  `json:"char_vocab_size,omitempty"`
+	CharDim                  int                  `json:"char_dim,omitempty"`
+	CharMaxPerToken          int                  `json:"char_max_per_token,omitempty"`
+	PositionalEmbedding      string               `json:"positional_embedding,omitempty"`
+	MaxPositions             int                  `json:"max_positions,omitempty"`
+	EmbeddingDropout         float32              `json:"embedding_dropout,omitempty"`
+	InputAdapter             *InputAdapterSpec    `json:"input_adapter,omitempty"`
+	DenseRegression          *DenseRegressionSpec `json:"dense_regression,omitempty"`
+	HFExportFormat           string               `json:"hf_export_format,omitempty"`
+	BigramVocabSize          int                  `json:"bigram_vocab_size,omitempty"`
+	BigramDim                int                  `json:"bigram_dim,omitempty"`
+	TrigramVocabSize         int                  `json:"trigram_vocab_size,omitempty"`
+	TrigramDim               int                  `json:"trigram_dim,omitempty"`
+	LogitSoftcap             float32              `json:"logit_softcap,omitempty"`
+	Dropout                  float32              `json:"dropout,omitempty"`
+	AttnDropout              float32              `json:"attn_dropout,omitempty"`
+	HiddenDropout            float32              `json:"hidden_dropout,omitempty"`
+	TieDropout               bool                 `json:"tie_dropout,omitempty"`
+	MLMHead                  string               `json:"mlm_head,omitempty"`
+	NormType                 string               `json:"norm_type,omitempty"`
+	NormEps                  float32              `json:"norm_eps,omitempty"`
+	NormAffine               *bool                `json:"norm_affine,omitempty"`
+	BatchNormMomentum        float32              `json:"batchnorm_momentum,omitempty"`
+	NormPlacement            string               `json:"norm_placement,omitempty"`
+	FinalNorm                *bool                `json:"final_norm,omitempty"`
+	FFNInternalNorm          bool                 `json:"ffn_internal_norm,omitempty"`
+	LayerAggregation         string               `json:"layer_aggregation,omitempty"`
+	MTP                      *MTPSpec             `json:"mtp,omitempty"`
+	Backout                  *BackoutSpec         `json:"backout,omitempty"`
+	Data                     DataSpec             `json:"data,omitempty"`
 
 	Blocks           []BlockSpec           `json:"blocks"`
 	Recurrence       []int                 `json:"recurrence,omitempty"`
@@ -340,6 +341,10 @@ func (e *ExampleFramingSpec) UnmarshalJSON(data []byte) error {
 
 // TrainingSpec holds training hyperparameters.
 type TrainingSpec struct {
+	GridAugmentation                  *GridAugmentationSpec        `json:"grid_augmentation,omitempty"`
+	InitFrom                          string                       `json:"init_from,omitempty"`
+	InitAllowMissing                  []string                     `json:"init_allow_missing,omitempty"`
+	Freeze                            []string                     `json:"freeze,omitempty"`
 	Distributed                       *DistributedSpec             `json:"distributed,omitempty"`
 	Steps                             int                          `json:"steps"`
 	LRScheduleSteps                   int                          `json:"lr_schedule_steps,omitempty"`
@@ -521,6 +526,12 @@ func warnDeprecatedMamba3Blocks(blocks []BlockSpec) {
 func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.Name == "" {
 		cfg.Name = source
+	}
+	if cfg.GridEnabled() || cfg.DenseRegression != nil || cfg.Training.Objective == ObjectiveDenseRegression {
+		return validateGridConfig(cfg, source)
+	}
+	if cfg.Training.GridAugmentation != nil || cfg.Training.InitFrom != "" || len(cfg.Training.InitAllowMissing) > 0 || len(cfg.Training.Freeze) > 0 {
+		return nil, fmt.Errorf("grid_augmentation, init_from, init_allow_missing, and freeze currently require dense_regression")
 	}
 	if cfg.ModelDim <= 0 {
 		return nil, fmt.Errorf("config %q missing/invalid model_dim", source)
@@ -781,155 +792,8 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 			return nil, err
 		}
 	}
-	if cfg.Training.WeightDecay < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.weight_decay=%g (must be >= 0)", source, cfg.Training.WeightDecay)
-	}
-	if cfg.Training.EmbedLR < 0 || cfg.Training.MatrixLR < 0 || cfg.Training.ScalarLR < 0 || cfg.Training.HeadLR < 0 {
-		return nil, fmt.Errorf("config %q has invalid per-group learning rate (must be >= 0)", source)
-	}
-	switch cfg.Training.EffectiveWeightDecayPolicy() {
-	case WeightDecayPolicyMatrixOnly, WeightDecayPolicyAll:
-	default:
-		return nil, fmt.Errorf("config %q has invalid training.weight_decay_policy=%q (must be \"matrix_only\" or \"all\")", source, cfg.Training.WeightDecayPolicy)
-	}
-	if cfg.Training.MuonMomentum < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.muon_momentum=%g (must be >= 0)", source, cfg.Training.MuonMomentum)
-	}
-	switch cfg.Training.Optimizer {
-	case "", "adamw", "muon", "muon_eq_r", "normuon", "lamb":
-	default:
-		return nil, fmt.Errorf("config %q has invalid training.optimizer=%q (must be \"adamw\", \"muon\", \"muon_eq_r\", \"normuon\", or \"lamb\")", source, cfg.Training.Optimizer)
-	}
-	if err := validateWeightInitialization(cfg, source); err != nil {
+	if err := validateCommonTrainingSettings(cfg, source); err != nil {
 		return nil, err
 	}
-	if err := validateTrainingLearningRates(cfg.Training, source); err != nil {
-		return nil, err
-	}
-	switch cfg.Training.EffectiveComputeDType() {
-	case "float32", "bf16":
-	default:
-		return nil, fmt.Errorf("config %q has invalid training.compute_dtype=%q (must be \"float32\" or \"bf16\")", source, cfg.Training.ComputeDType)
-	}
-	if cfg.Training.LAMBBeta1 < 0 || cfg.Training.LAMBBeta1 >= 1 {
-		return nil, fmt.Errorf("config %q has invalid training.lamb_beta1=%g (must be in [0,1))", source, cfg.Training.LAMBBeta1)
-	}
-	if cfg.Training.LAMBBeta2 < 0 || cfg.Training.LAMBBeta2 >= 1 {
-		return nil, fmt.Errorf("config %q has invalid training.lamb_beta2=%g (must be in [0,1))", source, cfg.Training.LAMBBeta2)
-	}
-	if cfg.Training.LAMBEps <= 0 {
-		return nil, fmt.Errorf("config %q has invalid training.lamb_eps=%g (must be > 0)", source, cfg.Training.LAMBEps)
-	}
-	if cfg.Training.LAMBTrustRatioCap < 0 || math.IsNaN(float64(cfg.Training.LAMBTrustRatioCap)) || math.IsInf(float64(cfg.Training.LAMBTrustRatioCap), 0) {
-		return nil, fmt.Errorf("config %q has invalid training.lamb_trust_ratio_cap=%g (must be finite and >= 0; 0 disables capping)", source, cfg.Training.LAMBTrustRatioCap)
-	}
-	switch strings.ToLower(strings.TrimSpace(cfg.Training.NewtonSchulzVariant)) {
-	case "", "fixed":
-		cfg.Training.NewtonSchulzVariant = "fixed"
-	case "polar_express":
-		cfg.Training.NewtonSchulzVariant = "polar_express"
-	default:
-		return nil, fmt.Errorf("config %q has invalid training.newton_schulz_variant=%q (must be \"fixed\" or \"polar_express\")", source, cfg.Training.NewtonSchulzVariant)
-	}
-	if cfg.Training.GradClip < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.grad_clip=%g (must be >= 0)", source, cfg.Training.GradClip)
-	}
-	if cfg.Training.MinLRFraction < 0 || cfg.Training.MinLRFraction >= 1 {
-		return nil, fmt.Errorf("config %q has invalid training.min_lr_fraction=%g (must be in [0,1))", source, cfg.Training.MinLRFraction)
-	}
-	if cfg.Training.EmbedWeightDecay < 0 || cfg.Training.MatrixWeightDecay < 0 ||
-		cfg.Training.ScalarWeightDecay < 0 || cfg.Training.HeadWeightDecay < 0 {
-		return nil, fmt.Errorf("config %q has invalid per-group weight decay (must be >= 0)", source)
-	}
-	if cfg.Training.SWAStart < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.swa_start=%d (must be >= 0)", source, cfg.Training.SWAStart)
-	}
-	if cfg.Training.SWADecay < 0 || cfg.Training.SWADecay >= 1 {
-		return nil, fmt.Errorf("config %q has invalid training.swa_decay=%g (must be in [0,1))", source, cfg.Training.SWADecay)
-	}
-	if cfg.Training.SWAInterval <= 0 {
-		return nil, fmt.Errorf("config %q has invalid training.swa_interval=%d (must be > 0)", source, cfg.Training.SWAInterval)
-	}
-	if cfg.Training.WarmupSteps < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.warmup_steps=%d (must be >= 0)", source, cfg.Training.WarmupSteps)
-	}
-	if cfg.Training.LRScheduleSteps < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.lr_schedule_steps=%d (must be >= 0)", source, cfg.Training.LRScheduleSteps)
-	}
-	if cfg.Training.WarmupRatio < 0 || cfg.Training.WarmupRatio > 1 {
-		return nil, fmt.Errorf("config %q has invalid training.warmup_ratio=%g (must be in [0,1])", source, cfg.Training.WarmupRatio)
-	}
-	if cfg.Training.WarmupStepsConfigured() && cfg.Training.WarmupRatioConfigured() {
-		return nil, fmt.Errorf("config %q cannot set both training.warmup_steps and training.warmup_ratio", source)
-	}
-	if cfg.Training.HoldSteps < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.hold_steps=%d (must be >= 0)", source, cfg.Training.HoldSteps)
-	}
-	if cfg.Training.WarmdownSteps < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.warmdown_steps=%d (must be >= 0)", source, cfg.Training.WarmdownSteps)
-	}
-	if cfg.Training.RecurrenceActivationFrac < 0 || cfg.Training.RecurrenceActivationFrac > 1 {
-		return nil, fmt.Errorf("config %q has invalid training.recurrence_activation_frac=%g (must be in [0,1])", source, cfg.Training.RecurrenceActivationFrac)
-	}
-	if cfg.Training.RecurrenceActivationStep < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.recurrence_activation_step=%d (must be >= 0)", source, cfg.Training.RecurrenceActivationStep)
-	}
-	if cfg.Training.RecurrenceActivationFrac > 0 && cfg.Training.RecurrenceActivationStep > 0 {
-		return nil, fmt.Errorf("config %q cannot set both training.recurrence_activation_frac and training.recurrence_activation_step", source)
-	}
-	if err := validateCautiousWeightDecay(cfg, source); err != nil {
-		return nil, err
-	}
-	for i, phase := range cfg.Training.Phases {
-		if phase.Steps <= 0 {
-			return nil, fmt.Errorf("config %q has invalid training.phases[%d].steps=%d (must be > 0)", source, i, phase.Steps)
-		}
-		if phase.LR <= 0 {
-			return nil, fmt.Errorf("config %q has invalid training.phases[%d].lr=%g (must be > 0)", source, i, phase.LR)
-		}
-	}
-	if len(cfg.Training.Phases) > 0 {
-		if cfg.Training.LRScheduleSteps != 0 {
-			return nil, fmt.Errorf("config %q cannot set training.lr_schedule_steps with training.phases; phase steps define their own schedule", source)
-		}
-		cfg.Training.Steps = cfg.Training.TotalSteps()
-	}
-	if err := validateRecurrencePhases(cfg, source); err != nil {
-		return nil, err
-	}
-	if cfg.Training.TargetValLoss < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.target_val_loss=%g (must be >= 0)", source, cfg.Training.TargetValLoss)
-	}
-	if cfg.Training.HardwareTFLOPs < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.hardware_tflops=%g (must be >= 0)", source, cfg.Training.HardwareTFLOPs)
-	}
-	if cfg.Training.TTTSteps < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.ttt_steps=%d (must be >= 0)", source, cfg.Training.TTTSteps)
-	}
-	if cfg.Training.TTTMode != "full" && cfg.Training.TTTMode != "lora" {
-		return nil, fmt.Errorf("config %q has invalid training.ttt_mode=%q (must be \"full\" or \"lora\")", source, cfg.Training.TTTMode)
-	}
-	if cfg.Training.QAT != "none" && cfg.Training.QAT != "int8" && cfg.Training.QAT != "int6" {
-		return nil, fmt.Errorf("config %q has invalid training.qat=%q (must be \"none\", \"int8\", or \"int6\")", source, cfg.Training.QAT)
-	}
-	if cfg.Training.QATStart < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.qat_start=%d (must be >= 0)", source, cfg.Training.QATStart)
-	}
-	if cfg.Training.QATStart > 0 && cfg.Training.QAT == "none" {
-		return nil, fmt.Errorf("config %q has training.qat_start=%d but training.qat is not set", source, cfg.Training.QATStart)
-	}
-	if cfg.Training.TTTLR < 0 {
-		return nil, fmt.Errorf("config %q has invalid training.ttt_lr=%g (must be >= 0)", source, cfg.Training.TTTLR)
-	}
-	if cfg.Training.TTTRank <= 0 {
-		return nil, fmt.Errorf("config %q has invalid training.ttt_rank=%d (must be > 0)", source, cfg.Training.TTTRank)
-	}
-	if err := validateEvalSpec(cfg, source); err != nil {
-		return nil, err
-	}
-	if err := ValidateDistributedConfig(cfg); err != nil {
-		return nil, fmt.Errorf("config %q: %w", source, err)
-	}
-
 	return cfg, nil
 }

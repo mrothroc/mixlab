@@ -24,6 +24,9 @@ const (
 // InputAdapterSpec selects how model inputs become [B,T,model_dim] hidden
 // states. Omission preserves the historical token embedding path.
 type InputAdapterSpec struct {
+	Channels          int               `json:"channels,omitempty"`
+	Height            int               `json:"height,omitempty"`
+	Width             int               `json:"width,omitempty"`
 	Kind              string            `json:"kind,omitempty"`
 	FeatureDim        int               `json:"feature_dim,omitempty"`
 	Bias              *bool             `json:"bias,omitempty"`

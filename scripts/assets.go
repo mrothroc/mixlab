@@ -13,9 +13,10 @@ const PrepareScriptName = "prepare.py"
 var prepareAssetNames = []string{
 	PrepareScriptName,
 	"prepare_records.py",
+	"prepare_grid.py",
 }
 
-//go:embed prepare.py prepare_records.py
+//go:embed prepare.py prepare_records.py prepare_grid.py
 var prepareAssets embed.FS
 
 // Materialize writes the embedded prepare bundle into dir and returns the

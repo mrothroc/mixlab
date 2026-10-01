@@ -2,6 +2,21 @@ package main
 
 import "testing"
 
+func TestTorchStateHelpGroups(t *testing.T) {
+	groups := modeFlagGroups["export-torch-state"]
+	for _, name := range []string{"config", "safetensors-load", "export-map", "export-dir"} {
+		found := false
+		for _, group := range groups {
+			for _, flag := range group.Names {
+				found = found || flag == name
+			}
+		}
+		if !found {
+			t.Fatalf("missing export flag %s", name)
+		}
+	}
+}
+
 func TestRequestedHelpMode(t *testing.T) {
 	tests := []struct {
 		name string

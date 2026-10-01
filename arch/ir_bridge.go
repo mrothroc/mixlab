@@ -37,6 +37,9 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
 	}
+	if cfg.GridEnabled() {
+		return BuildGridIRProgram(cfg, true)
+	}
 	if cfg.Training.MultiheadEnabled() {
 		return nil, fmt.Errorf("multihead eval IR is not a single-head next-token graph; export the configured scorer head or use native diffusion generation/scoring for the diffusion head")
 	}
@@ -83,6 +86,9 @@ func BuildEvalIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
 // before the vocabulary projection so generation reads back [B,V], not
 // [B*T,V].
 func BuildGenerationIRProgramFromConfig(cfg *ArchConfig) (*Program, error) {
+	if cfg != nil && cfg.GridEnabled() {
+		return nil, fmt.Errorf("grid models use predict-grid, not token generation")
+	}
 	if cfg != nil && cfg.RCEquivarianceEnabled() {
 		return nil, fmt.Errorf("generation is not supported for rc_equivariant checkpoints in v1")
 	}
@@ -191,6 +197,9 @@ type TrainingProgramState struct {
 func BuildTrainingIRProgramFromConfig(cfg *ArchConfig, state TrainingProgramState) (*Program, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("nil config")
+	}
+	if cfg.GridEnabled() {
+		return BuildGridIRProgram(cfg, true)
 	}
 	if cfg.Training.MultiheadEnabled() {
 		return buildMultiheadTrainingIRProgramFromConfig(cfg, state)

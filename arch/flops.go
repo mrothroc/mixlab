@@ -18,6 +18,9 @@ type FLOPsEstimate struct {
 
 // EstimateFLOPs returns an analytical FLOPs estimate for one configured batch.
 func EstimateFLOPs(cfg *ArchConfig) FLOPsEstimate {
+	if cfg.GridEnabled() {
+		return estimateGridFLOPs(cfg)
+	}
 	if cfg == nil || cfg.ModelDim <= 0 || cfg.SeqLen <= 0 || cfg.Training.BatchTokens <= 0 {
 		return FLOPsEstimate{}
 	}
@@ -185,6 +188,11 @@ func estimateFLOPsForOrder(cfg *ArchConfig, order []int, paramCount, expandedPar
 func ParameterCountsFromConfig(cfg *ArchConfig) (int64, int64, error) {
 	if cfg == nil {
 		return 0, 0, fmt.Errorf("nil config")
+	}
+	if cfg.GridEnabled() {
+		weights, err := CollectWeightShapesFromConfig(cfg)
+		n := countWeightMetaElements(weights)
+		return n, n, err
 	}
 
 	uniqueRefs, err := normalizeWeightRefs(cfg.Blocks, cfg.Recurrence)

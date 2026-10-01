@@ -35,12 +35,21 @@ func runEvalModeWithOptions(configPath, trainPattern, safetensorsLoad string, op
 	if safetensorsLoad == "" {
 		return fmt.Errorf("-safetensors-load is required for eval mode")
 	}
-	selection, err := resolveEvalShardPattern(trainPattern, opts.ValPattern)
+	cfg, err := LoadArchConfig(configPath)
 	if err != nil {
 		return err
 	}
-
-	cfg, err := LoadArchConfig(configPath)
+	if cfg.GridEnabled() {
+		if opts.ValBatches != 0 || opts.ClassificationOut != "" {
+			return fmt.Errorf("grid eval requires full-split metrics, not classification options")
+		}
+		manifest := trainPattern
+		if opts.ValPattern != "" {
+			manifest = opts.ValPattern
+		}
+		return runGridEval(cfg, manifest, safetensorsLoad)
+	}
+	selection, err := resolveEvalShardPattern(trainPattern, opts.ValPattern)
 	if err != nil {
 		return err
 	}

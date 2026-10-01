@@ -12,6 +12,7 @@ import (
 
 // mlxGPUTrainer wraps the MLX IR trainer for the training loop.
 type mlxGPUTrainer struct {
+	gridInputs                 []ir.TensorDecl
 	handle                     gpu.TrainerHandle
 	prog                       *gpu.Program
 	activeIRProg               *ir.Program
@@ -198,7 +199,13 @@ func initMLXGPUTrainerWithDistributedContext(
 			rows = shapes[i].Shape[0]
 			cols = shapes[i].Shape[1]
 		}
-		h, err := gpu.FromData(data, rows, cols)
+		var h int64
+		var err error
+		if len(shapes[i].Shape) > 2 {
+			h, err = gpu.FromDataShape(data, shapes[i].Shape)
+		} else {
+			h, err = gpu.FromData(data, rows, cols)
+		}
 		if err != nil {
 			gpu.FreeHandles(handles[:i])
 			return nil, fmt.Errorf("upload weight %d (%s): %w", i, shapes[i].Name, err)
@@ -230,6 +237,15 @@ func initMLXGPUTrainerWithDistributedContext(
 			gpuProg.Destroy()
 			gpu.FreeHandles(handles)
 			return nil, fmt.Errorf("optimizer override returned invalid spec: %w", err)
+		}
+		if cfg.GridEnabled() {
+			for i, s := range shapes {
+				if optimizerSpec.Weights[i].Frozen != s.Frozen {
+					gpuProg.Destroy()
+					gpu.FreeHandles(handles)
+					return nil, fmt.Errorf("optimizer override cannot change the resolved grid trainable set: %s", s.Name)
+				}
+			}
 		}
 	}
 	report, err := resolvedOptimizerReport(optimizerSpec, shapes)
@@ -532,6 +548,7 @@ func initMLXGPUTrainerWithDistributedContext(
 		handles:                     handles,
 		shapes:                      shapes,
 		optimizerSpec:               optimizerSpec,
+		gridInputs:                  gridInputDeclarations(irProg),
 		baseLR:                      optimizerSpec.DefaultBaseLR,
 		evalLossOutputName:          preferredEvalLossOutputName(irProg),
 		componentLossOutputs:        componentLossOutputs,

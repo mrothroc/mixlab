@@ -11,6 +11,7 @@ type OptimizerWeightMetadata struct {
 	IsBuffer     bool
 	Frozen       bool
 	IsNormScale  bool
+	IsConvKernel bool
 	Group        string
 	ForceNoDecay bool
 	ForceDecay   bool
@@ -194,6 +195,12 @@ func optimizerKind(name string) (OptimizerKind, error) {
 }
 
 func classifyWeightOptimizer(ws OptimizerWeightMetadata) (optimizerClass, error) {
+	if ws.IsConvKernel {
+		if len(ws.Shape) != 4 {
+			return 0, fmt.Errorf("convolution kernel %q must be rank 4", ws.Name)
+		}
+		return optimizerClassMatrix, nil
+	}
 	switch {
 	case ws.Name == "embed" || ws.Name == "rtd_generator_embed" || ws.Name == "char_table" || ws.Name == "bigram_table" || ws.Name == "trigram_table":
 		return optimizerClassEmbed, nil

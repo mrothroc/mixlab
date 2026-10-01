@@ -42,6 +42,8 @@ func isContinuousSequenceShardFormat(format string) bool {
 // shards. It is optional for legacy datasets and required for new modality
 // adapters introduced after the discrete-token foundation release.
 type DatasetManifest struct {
+	GridProvenance    *GridProvenance          `json:"grid_provenance,omitempty"`
+	Grid              *GridGeometry            `json:"grid,omitempty"`
 	Format            string                   `json:"format"`
 	Version           int                      `json:"version"`
 	Representation    string                   `json:"representation"`
@@ -152,6 +154,12 @@ func (m *DatasetManifest) Validate() error {
 	}
 	if !validDatasetIdentifier(m.Modality) {
 		return fmt.Errorf("modality=%q must be a lowercase identifier", m.Modality)
+	}
+	if m.Representation == "grid" {
+		return m.validateGrid()
+	}
+	if m.Grid != nil || m.GridProvenance != nil {
+		return fmt.Errorf("grid geometry requires representation=grid")
 	}
 	if m.Representation == DatasetRepresentationContinuousFrames {
 		return m.validateContinuousFrames()

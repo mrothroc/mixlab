@@ -979,7 +979,7 @@ int mlx_ir_trainer_read_grad(int64_t trainer, int weight_idx, float* out, int si
     if (!t) {
       return -1;
     }
-    auto g = mx::astype(t->read_grad(weight_idx), mx::float32);
+    auto g = mx::contiguous(mx::astype(t->read_grad(weight_idx), mx::float32));
     if (g.size() != static_cast<size_t>(size)) {
       return -1;
     }

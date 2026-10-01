@@ -329,3 +329,12 @@ Export one batch of hidden states:
 | `-train` | Required. Shard glob used for the input batch. |
 | `-hiddenstats-out` | Output float32 binary file. Preferred alias for legacy `-output`. |
 | `-output` | Legacy output path. |
+
+## Dense Grid Evaluation
+
+For a dense-grid config, `-mode eval -train <manifest> -safetensors-load <file>`
+evaluates the complete `val` split using pooled masked/unmasked RMSE.
+`-mode predict-grid` writes model-unit arrays without targets or augmentation.
+See [grid validation](dense-grid.md#loss-validation-and-limits),
+[prediction](dense-grid.md#prediction), and the explicit
+[PyTorch state export](dense-grid.md#pytorch-state-export) for external inference.

@@ -150,3 +150,14 @@ Common flags:
 
 For long MLX runs, see [performance.md](performance.md) for cache limits,
 memory logging, profiling, and CUDA graph controls.
+
+## Dense Grid Training
+
+For `input_adapter.kind: "grid"`, `-train` names a grid dataset manifest and
+`training.batch_size` counts records. The same `arch`, checkpoint, warm-start
+and resume flags apply; token/BPB options do not. See the
+[grid workflow](dense-grid.md#augmentation-and-staged-training) for D4,
+two-stage freezing and [native grid resume](dense-grid.md#resume).
+After training, use `predict-grid` or `export-torch-state`; neither applies
+training augmentation. [Full reference recipes](../examples/grid_unet_reference/README.md)
+document their deliberate protocol differences.

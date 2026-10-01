@@ -52,6 +52,20 @@ func runCount(configPath string) error {
 	fmt.Printf("Number of IR ops: %d\n", len(prog.Ops))
 	flops := arch.EstimateFLOPs(cfg)
 	fmt.Printf("Forward FLOPs: %s\n", formatFLOPs(flops.ForwardFLOPs))
+	if cfg.GridEnabled() {
+		shapes, err := computeWeightShapes(cfg)
+		if err != nil {
+			return err
+		}
+		var active int64
+		for _, s := range shapes {
+			if !s.Frozen {
+				active += int64(shapeProduct(s.Shape))
+			}
+		}
+		fmt.Printf("Selected-output trainable parameters: %d\nTraining step FLOPs: unavailable (convolution backward is backend-dependent)\n", active)
+		return nil
+	}
 	if flops.TrainingFLOPsReliable {
 		fmt.Printf("Training step FLOPs: %s\n", formatFLOPs(flops.TrainingFLOPs))
 		fmt.Printf("FLOPs per token: %s\n", formatFLOPs(flops.FLOPsPerToken))

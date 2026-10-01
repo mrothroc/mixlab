@@ -78,3 +78,10 @@ func programDeclaresInput(prog *ir.Program, name string) bool {
 	}
 	return false
 }
+
+func gridInputDeclarations(p *ir.Program) []ir.TensorDecl {
+	if programDeclaresInput(p, "grid") {
+		return p.Inputs
+	}
+	return nil
+}

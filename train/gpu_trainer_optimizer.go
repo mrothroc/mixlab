@@ -82,6 +82,12 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 	}
 	for i, s := range shapes {
 		group := ""
+		if cfg.GridEnabled() && len(s.Shape) == 4 {
+			group = "grid_kernel"
+			settings := groupSettings(cfg.Training.MatrixLR)
+			settings.WeightDecay = cfg.Training.MatrixWeightDecay
+			extraGroups[group] = settings
+		}
 		switch s.OptimizerRole {
 		case "s4d_main":
 			group = "s4d_main"
@@ -104,6 +110,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 			IsBuffer:     s.IsBuffer,
 			Frozen:       s.Frozen,
 			IsNormScale:  s.IsNormScale,
+			IsConvKernel: cfg.GridEnabled() && len(s.Shape) == 4,
 			Group:        group,
 			ForceNoDecay: s.ForceNoDecay,
 			ForceDecay:   s.ForceDecay,

@@ -1,0 +1,14 @@
+{
+  "url": "https://raw.githubusercontent.com/anderspearson206/lunar-radiomap-challenge/fa3ef9b89f964556753a18be102a5aadeb723377/RadioUNet/modules.py",
+  "commit": "fa3ef9b89f964556753a18be102a5aadeb723377",
+  "source_sha256": "60ee896f812710f6710cc0f3fc2f573844c0ebaabb4c331b452ed259bfd24235",
+  "modification": "removed unused torchvision import only",
+  "torch": "2.14.1",
+  "numpy": "2.5.3",
+  "channels": 2,
+  "counts": {
+    "total": 13274031,
+    "first": 10921405,
+    "refinement": 2352626
+  }
+}

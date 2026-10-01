@@ -1,0 +1,26 @@
+{
+  "name": "grid_two_stage",
+  "input_adapter": {"kind": "grid", "channels": 2, "height": 8, "width": 8},
+  "dense_regression": {"output": "network.output1", "target_channels": 1},
+  "blocks": [{
+    "type": "custom", "name": "network",
+    "weights": [
+      {"name": "U1.weight", "shape": ["1", "3", "3", "2"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "U1.bias", "shape": ["1"], "init": {"kind": "pytorch_conv_uniform", "weight": "U1.weight"}},
+      {"name": "W.weight", "shape": ["1", "1", "1", "3"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "W.bias", "shape": ["1"], "init": {"kind": "pytorch_conv_uniform", "weight": "W.weight"}}
+    ],
+    "ops": [
+      {"op": "conv2d", "inputs": ["x", "U1.weight", "U1.bias"], "output": "output1", "params": {"kernel": 3, "padding": 1}},
+      {"op": "stop_gradient", "inputs": ["output1"], "output": "first_stage"},
+      {"op": "concat", "inputs": ["first_stage", "x"], "output": "features", "params": {"axis": 3}},
+      {"op": "conv2d", "inputs": ["features", "W.weight", "W.bias"], "output": "output2", "params": {"kernel": 1}}
+    ]
+  }],
+  "training": {
+    "objective": "dense_regression", "batch_size": 2, "steps": 100,
+    "optimizer": "adamw", "lr": 0.001, "beta1": 0.9, "beta2": 0.999,
+    "epsilon": 1e-8, "weight_decay": 0.0, "seed": 42,
+    "grid_augmentation": {"dihedral": true}
+  }
+}

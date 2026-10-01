@@ -1884,11 +1884,18 @@ bool named_step_metadata_matches(const IRTrainer& trainer, const TensorMap& inpu
 }
 
 void refresh_named_step_metadata(IRTrainer& trainer, const TensorMap& inputs) {
-  trainer.cached_named_step_argnums.resize(trainer.weights.size());
-  std::iota(
-      trainer.cached_named_step_argnums.begin(),
-      trainer.cached_named_step_argnums.end(),
-      0);
+  trainer.cached_named_step_argnums.clear();
+  // The generic path differentiates only the optimizer's trainable set, so
+  // every frozen weight (grid freezes, BatchNorm running statistics, a
+  // non-trainable S4D Sobolev filter) is excluded from gradient clipping and
+  // the non-finite step check. The specialized Mamba-3 chunk/update paths
+  // retain their dense argument layout.
+  const bool dense_grad_layout = program_has_canonical_mamba3(trainer.program);
+  for (size_t i = 0; i < trainer.weights.size(); ++i) {
+    if (dense_grad_layout || !trainer.weight_optimizers[i].frozen) {
+      trainer.cached_named_step_argnums.push_back(static_cast<int>(i));
+    }
+  }
   trainer.cached_named_step_output_names = collect_training_step_output_names(trainer);
   trainer.cached_named_step_input_names = sorted_input_names(inputs);
   trainer.cached_named_step_input_dtypes.clear();
@@ -2883,7 +2890,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     step_out.insert(step_out.end(), result.second.begin(), result.second.end());
   }
 
-  if (step_out.size() != output_names.size() + weights.size()) {
+  if (step_out.size() != output_names.size() + argnums.size()) {
     throw std::runtime_error("IR trainer output count mismatch");
   }
   auto loss = step_out[0];
@@ -2891,10 +2898,11 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   for (size_t i = 0; i < output_names.size(); ++i) {
     outputs.emplace(output_names[i], step_out[i]);
   }
-  std::vector<mx::array> grads;
-  grads.reserve(weights.size());
-  for (size_t i = 0; i < weights.size(); ++i) {
-    grads.push_back(step_out[output_names.size() + i]);
+  // A scalar zero keeps the common optimizer's index layout without allocating
+  // parameter-sized gradient buffers for constants.
+  std::vector<mx::array> grads(weights.size(), mx::array(0.0f, mx::float32));
+  for (size_t i = 0; i < argnums.size(); ++i) {
+    grads[static_cast<size_t>(argnums[i])] = step_out[output_names.size() + i];
   }
   if (distributed_context_active && distributed_accumulation_steps > 1) {
     auto microstep_bad = mx::logical_not(mx::isfinite(loss));

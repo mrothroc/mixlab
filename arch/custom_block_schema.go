@@ -6,8 +6,16 @@ package arch
 
 // WeightSpec declares a named weight for a custom block with symbolic shape.
 type WeightSpec struct {
-	Name  string   `json:"name"`
-	Shape []string `json:"shape"`
+	Name  string            `json:"name"`
+	Shape []string          `json:"shape"`
+	Init  *CustomWeightInit `json:"init,omitempty"`
+}
+
+// CustomWeightInit specifies a distribution independently of global initialization.
+type CustomWeightInit struct {
+	Kind   string  `json:"kind"`
+	Scale  float64 `json:"scale,omitempty"`
+	Weight string  `json:"weight,omitempty"`
 }
 
 // CustomWeightSpec is kept as a source-compatible alias for older tests and callers.
