@@ -70,6 +70,11 @@ runs `mixlab` directly on each machine with `mlx.launch` and needs no enrollment
   source-built formula (`brew install mrothroc/tap/mixlab`) is for foreground and
   development use: macOS background services require the signed package, and the
   macOS firewall can silently block an unsigned node.
+
+  Either way, run `mixlab -version` and `mixlab-cluster -version` once **at the
+  Mac's console**, not over SSH. The first launch of each downloaded executable
+  shows a macOS confirmation dialog; click **Open**. Until someone answers it the
+  command waits, so a first run over SSH appears to hang.
 - A prepared dataset. Follow the [README quickstart](../README.md#quickstart) once,
   then copy the **identical** shard files to the same kind of location on every
   node. The examples below use `~/mixlab-data/train_*.bin`.
