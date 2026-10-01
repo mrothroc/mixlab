@@ -35,6 +35,7 @@ func TestGridSpatialPyTorchForwardBackward(t *testing.T) {
 	if err = json.Unmarshal(encoded, &fixtures); err != nil {
 		t.Fatal(err)
 	}
+	fixtures.Cases = append(fixtures.Cases, gridPoolCPUFixtures()...)
 	for _, f := range fixtures.Cases {
 		t.Run(f.Name, func(t *testing.T) {
 			p := ir.NewProgram(len(f.Weights))

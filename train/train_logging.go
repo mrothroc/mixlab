@@ -22,19 +22,28 @@ func handleMLXMemoryControls(name string, step, logEvery, clearEvery int, teleme
 	if clearEvery > 0 && (step+1)%clearEvery == 0 {
 		gpu.ClearMemoryCache()
 	}
+	if line := mlxMemoryTelemetryLine(step, logEvery, telemetry, sampleGPUUtilPercent); line != "" {
+		fmt.Printf("  [%s] %s\n", name, line)
+	}
+}
+
+// Environment-only logging uses the same gauges as the HTTP telemetry endpoint.
+// Injecting the sampler keeps cadence and unavailable-device tests portable.
+func mlxMemoryTelemetryLine(step, logEvery int, telemetry *telemetryRuntime, sampleGPU func() *float64) string {
 	if logEvery <= 0 {
-		return
+		return ""
 	}
 	if step != 0 && (step+1)%logEvery != 0 {
-		return
+		return ""
 	}
+	state := newTelemetryState()
+	state.s.Step = step
 	if telemetry != nil && telemetry.state != nil {
-		fmt.Printf("  [%s] %s\n", name, formatTelemetryLine(telemetry.state.snapshot(true)))
-		return
+		state = telemetry.state
 	}
-	stats := gpu.MemoryStatsSnapshot()
-	fmt.Printf("  [%s] [telemetry] step %d gpu_util=n/a mlx_active=%s mlx_cache=%s mlx_peak=%s\n",
-		name, step, formatMiB(stats.ActiveBytes), formatMiB(stats.CacheBytes), formatMiB(stats.PeakBytes))
+	snapshot := state.snapshot(false)
+	snapshot.GPUUtilPercent = sampleGPU()
+	return formatTelemetryLine(snapshot)
 }
 
 func formatMiB(bytes uint64) string {

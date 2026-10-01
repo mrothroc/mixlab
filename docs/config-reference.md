@@ -1735,6 +1735,8 @@ group names and dt/A/B selection. There is no automatic reduced state LR.
 
 ### Training phases
 
+Also supported by `dense_regression`; see the [grid phase example](dense-grid.md#piecewise-constant-learning-rates).
+
 Use `training.phases` to run multiple contiguous LR segments in one job. Each
 phase applies its `lr` for its own `steps`, and the total training length is
 the sum of all phase steps.

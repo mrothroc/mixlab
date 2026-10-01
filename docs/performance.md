@@ -59,6 +59,9 @@ MIXLAB_MLX_MEM_LOG_EVERY=100 MIXLAB_MLX_CLEAR_CACHE_EVERY=500 ./mixlab -mode arc
 
 `MIXLAB_MLX_MEM_LOG_EVERY` prints the compact telemetry line at the requested
 cadence, including MLX memory and best-effort GPU utilization when available.
+This also samples utilization without `-pprof-addr` or `-telemetry-out`; neither
+flag is required. Sampling happens only when a memory-log line is emitted.
+Unavailable utilization remains `gpu_util=n/a` and does not fail training.
 The startup memory-limit line reports the selected device, total VRAM, free
 VRAM when available, configured limits, and host RAM. Explicit
 `MIXLAB_MLX_MEMORY_LIMIT_MB` and `MIXLAB_MLX_CACHE_LIMIT_MB` values are passed
@@ -84,6 +87,33 @@ MIXLAB_MLX_MEMORY_LIMIT_MB=16000 MIXLAB_MLX_MEM_LOG_EVERY=100 ./mixlab -mode arc
 
 Treat this as an allocator bound, not a model-memory estimate. Tune it for the
 device while leaving room for runtime and display allocations.
+
+## Dense Grid Pooling
+
+`max_pool2d` keeps first-maximum tie gradients using a detached selection mask
+and reduction, avoiding the scatter backward of an indexed gather. A 1x1 pool
+is an identity. This uses ordinary MLX operations, not a backend-specific kernel.
+The spatial PyTorch fixtures cover forward values and gradients, including ties.
+
+For a repeatable full-resolution training-step benchmark:
+
+```bash
+go test -tags mlx ./train -run '^$' \
+  -bench '^BenchmarkGridReferenceTraining$' -benchtime=40x -count=2
+```
+
+This uses the shipped two-channel stage-one graph at batch 15 with deterministic
+synthetic inputs and real forward/backward/AdamW updates. Three warmup updates
+are excluded; output reports records/s and peak MLX GiB. It needs several GiB
+of GPU memory and excludes data loading, validation and checkpoint I/O. Compare
+the same machine and batch size without overlapping GPU workloads; it is not
+a dataset-quality benchmark or a guarantee of throughput on another device.
+
+Measured on an M1 Max, FP32, batch 15: the original gather path reached
+10.5-10.8 records/s; first-maximum mask reduction plus the 1x1 identity bypass
+reached 25.1-25.4 records/s (about 2.4x). Peak MLX memory was 6.68 versus 6.72 GiB.
+The baseline used 12 timed updates per repetition and the final measurement 40,
+both after three warmup updates and with identical synthetic inputs and optimizer.
 
 ## Gated DeltaNet long sequences
 

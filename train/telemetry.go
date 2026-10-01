@@ -375,8 +375,12 @@ func formatTelemetryLine(s telemetrySnapshot) string {
 	if s.GPUUtilPercent != nil {
 		gpuUtil = fmt.Sprintf("%.0f%%", *s.GPUUtilPercent)
 	}
-	line := fmt.Sprintf("[telemetry] step %d/%d tok/s=%s gpu_util=%s mlx_active=%s mlx_cache=%s mlx_peak=%s rss=%s",
-		s.Step, s.TotalSteps, formatTrainingThroughput(s.TokensPerSec), gpuUtil,
+	progress := fmt.Sprint(s.Step)
+	if s.TotalSteps > 0 {
+		progress += fmt.Sprintf("/%d", s.TotalSteps)
+	}
+	line := fmt.Sprintf("[telemetry] step %s tok/s=%s gpu_util=%s mlx_active=%s mlx_cache=%s mlx_peak=%s rss=%s",
+		progress, formatTrainingThroughput(s.TokensPerSec), gpuUtil,
 		formatMiB(s.MLX.ActiveBytes), formatMiB(s.MLX.CacheBytes), formatMiB(s.MLX.PeakBytes),
 		formatMiB(s.Host.RSSBytes))
 	if s.SkippedOptimizerSteps > 0 {

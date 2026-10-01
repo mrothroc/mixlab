@@ -4190,11 +4190,18 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
         if (x.ndim() != 4) throw std::runtime_error("max_pool2d requires NHWC");
         int k=op.int_params[0], b=x.shape(0), h=x.shape(1)/k, w=x.shape(2)/k, c=x.shape(3);
         if (h == 0 || w == 0) throw std::runtime_error("max_pool2d kernel exceeds input");
+        if (k == 1) {
+          set_out(op, 0, x);
+          break;
+        }
         auto cropped=mx::slice(x,{0,0,0,0},{b,h*k,w*k,c});
         auto windows=mx::reshape(mx::transpose(mx::reshape(cropped,{b,h,k,w,k,c}),{0,1,3,5,2,4}),{b,h,w,c,k*k});
         // First maximum wins, matching PyTorch even for repeated ReLU zeros.
-        auto index=mx::stop_gradient(mx::argmax(windows,4,true));
-        set_out(op,0,mx::reshape(mx::take_along_axis(windows,index,4),{b,h,w,c}));
+        // A detached selection mask avoids gather's expensive scatter VJP.
+        auto maxima = mx::equal(windows, mx::max(windows, 4, true));
+        auto first = mx::stop_gradient(mx::logical_and(
+            maxima, mx::equal(mx::cumsum(mx::astype(maxima, mx::int32), 4), mx::array(1))));
+        set_out(op, 0, mx::sum(windows * mx::astype(first, windows.dtype()), 4));
         break;
       }
       case OP_CAUSAL_MASK: {

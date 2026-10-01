@@ -127,6 +127,37 @@ Use FP32 compute: the existing BF16 custom-block restriction still applies.
 DDP, accumulation, SWA, token objectives, sequence schedules, built-in sequence
 blocks, HF export and token generation are not supported for grid tasks.
 
+## Piecewise-Constant Learning Rates
+
+Grid training supports the shared `training.phases` schedule without restarting
+the optimizer. For example, add these fields to the training object:
+
+```json
+{
+  "phases": [{"steps":6,"lr":0.0001}, {"steps":4,"lr":0.00001}],
+  "warmdown_steps": 0
+}
+```
+
+The grid log numbers completed updates from 1: updates 1 through 6 use `0.0001`,
+and 7 through 10 use `0.00001`. Phase lengths sum to the total number of updates;
+`training.steps` and the scheduled base `training.lr` do not set the phase rates.
+AdamW/LAMB moments and step counters carry across the transition. Full-state
+`-resume` restores them along with the phase position and data sampler; do not
+use a weights-only warm start to continue a schedule.
+
+Omit `warmdown_steps` or set it to zero for strictly constant phases. If positive,
+the common scheduler applies a linear warmdown only within the last phase.
+`warmup_steps`, `warmup_ratio`, and `hold_steps` are ignored for phase schedules;
+`lr_schedule_steps` cannot be combined with phases. All phase lengths and rates
+must be positive. See [training phases](config-reference.md#training-phases).
+
+To reproduce an epoch-based step decay, convert epochs to updates using
+`ceil(training_records / batch_size)`, including the last partial batch. For
+40,080 records at batch 15, a 30-epoch phase is 80,160 updates and a subsequent
+20-epoch phase is 53,440 updates. Shipped recipe budgets are illustrative;
+choose the phase lengths explicitly for your dataset and experiment.
+
 ## Augmentation And Staged Training
 
 `training.grid_augmentation: {"dihedral":true}` chooses uniformly among eight
