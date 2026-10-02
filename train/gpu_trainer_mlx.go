@@ -695,11 +695,7 @@ func copyWeightData(dst []float32, dstShape []int, src []float32, srcShape []int
 
 // makeInputs creates GPU tensor inputs from token arrays, reusing pre-allocated buffers.
 func (t *mlxGPUTrainer) setLRScale(lr float32) {
-	lrScale := float32(1.0)
-	if t.baseLR > 0 {
-		lrScale = lr / t.baseLR
-	}
-	gpu.TrainerSetLRScale(t.handle, lrScale)
+	gpu.TrainerSetLRScale(t.handle, scheduledLRScale(t.baseLR, lr))
 }
 
 // TrainStepGPU runs one training step and returns the loss.

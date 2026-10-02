@@ -202,6 +202,7 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 	}
 	fmt.Printf("  [%s] trainable_weights=%d frozen_or_unreachable=%d names=%v\n", cfg.Name, len(gridTrainableNames(shapes)), len(frozen), frozen)
 	for step := setup.StartStep; step < steps && !stopped; step++ {
+		logPhaseRates(trainer, sched, step, setup.StartStep, cfg.Name)
 		indices, epoch, occurrence, e := sampler.Next(batchSize)
 		if e != nil {
 			return result, e

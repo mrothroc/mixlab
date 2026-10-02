@@ -28,6 +28,11 @@ func TestGridPhasesExactResumeAcrossLRDrop(t *testing.T) {
 					t.Fatal(err)
 				}
 			})
+			if strings.Count(log, "effective optimizer rates") != 2 ||
+				!strings.Contains(log, "update=1 ") || !strings.Contains(log, "update=7 ") ||
+				!strings.Contains(log, "extra:grid_kernel=") {
+				t.Fatalf("missing effective phase rates: %s", log)
+			}
 			for step := 1; step <= 10; step++ {
 				want := float32(1e-4)
 				if step > 6 {

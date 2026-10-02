@@ -141,7 +141,16 @@ the optimizer. For example, add these fields to the training object:
 
 The grid log numbers completed updates from 1: updates 1 through 6 use `0.0001`,
 and 7 through 10 use `0.00001`. Phase lengths sum to the total number of updates;
-`training.steps` and the scheduled base `training.lr` do not set the phase rates.
+`training.steps` is replaced by the phase total. `training.lr` remains the
+reference denominator: effective group LR is
+`group_lr * scheduled_phase_lr / training.lr` when the base is positive.
+Default group rates inherit the base and therefore follow the phase LR exactly.
+Explicit `matrix_lr` (including the `grid_kernel` group), scalar, or per-weight
+overrides are scaled by the same ratio. Set `training.lr` explicitly when using
+overrides; setting it to the first phase LR makes those overrides effective in
+that phase. With base LR zero, inherited rates remain zero and overrides are
+not schedule-scaled. Startup/resume and phase-transition logs show effective
+active-group rates; the optimizer startup summary shows configured rates.
 AdamW/LAMB moments and step counters carry across the transition. Full-state
 `-resume` restores them along with the phase position and data sampler; do not
 use a weights-only warm start to continue a schedule.

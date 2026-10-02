@@ -1228,7 +1228,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | Field | Type | Required | Default | Notes |
 |------|------|----------|---------|-------|
 | `steps` | integer | No | `200` | Total training steps. Must be `> 0`. |
-| `lr` | number | No | `3e-4` | Base learning rate. Finite and `>= 0`; explicit `0` freezes groups inheriting this rate. Omission/null uses the default. Explicit group overrides and phase schedules are independent; NewBob requires a positive base LR. |
+| `lr` | number | No | `3e-4` | Base learning rate and reference denominator for scheduled group rates, including phases. Finite and `>= 0`; explicit `0` freezes groups inheriting this rate and disables schedule scaling of overrides. Omission/null uses the default. NewBob requires a positive base LR. |
 | `objective` | string | No | `"causal"` | Training objective: `"causal"`, `"mlm"`, `"mntp"`, `"hybrid"`, `"block_diffusion"`, `"multihead"`, `"classification"`, or `"dense_regression"` (requires grid input). Existing configs default to causal next-token training. |
 | `lr_schedule` | string | No | `"cosine"` | Outer learning-rate schedule: existing step-driven `"cosine"` behavior or validation-driven `"newbob"`. NewBob is classification-only in v1. |
 | `newbob` | object | Required for `lr_schedule: "newbob"` | Disabled | NewBob controls: `annealing_factor`, `improvement_threshold`, `patient`, and `metric` (`"val_loss"` or `"val_error_rate"`). |
@@ -1264,7 +1264,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `example_framing` | object | No | Disabled | Optional raw-stream example framing. When set, the loader slices each shard into `content_len` chunks, wraps every row as `[bos_id] + content + [eos_id]`, and masks the final row position from causal loss. Requires `seq_len = content_len + 2`. |
 | `distillation` | object | No | Disabled | Optional fixed-teacher ensemble distillation block for causal, MLM, MNTP, or compatible hybrid masked training. |
 | `data2vec` | object | No | Disabled | Optional online EMA representation-distillation auxiliary loss for masked objectives. |
-| `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is computed as the sum of phase `steps` and top-level `steps`/`lr` are ignored by the training loop. Each phase must define `steps > 0` and `lr > 0`. |
+| `phases` | array | No | Disabled | Optional phase schedule. When non-empty, `steps` is the sum of phase `steps`. Phase LR replaces the scheduled rate, but top-level `lr` remains the reference for group scaling (see Training phases). Each phase must define `steps > 0` and `lr > 0`. |
 | `lr_schedule_steps` | integer | No | `steps` | Independent horizon for the standard cosine LR schedule. This is useful when a reference run stops after a fixed epoch count before its configured scheduler horizon. Must be `>= 0`; `0`/omitted uses `steps`. It cannot be combined with `phases`. |
 | `warmup_steps` | integer | No | Legacy default | Absolute warmup length for the standard cosine schedule. Must be `>= 0`; values above the effective LR schedule horizon are clamped. Mutually exclusive with `warmup_ratio`. When both warmup fields are omitted, Mixlab keeps the historical `min(100, lr_schedule_steps)` warmup. |
 | `warmup_ratio` | number | No | Disabled | Fraction of the effective LR schedule horizon to use for warmup, rounded to the nearest step. Must be in `[0,1]`. Mutually exclusive with `warmup_steps`. For example, `0.016` gives about a 1.6% warmup. |
@@ -1743,10 +1743,25 @@ the sum of all phase steps.
 
 When `phases` is present:
 
-- top-level `steps` and `lr` are ignored by the training loop
+- top-level `steps` is replaced by the sum of phase steps
+- top-level `lr` is **not ignored**: for positive `training.lr`, each effective group rate is `group_lr * scheduled_phase_lr / training.lr`
 - `warmup_steps`, `warmup_ratio`, and `hold_steps` are ignored; model phase warmup/cooldown explicitly as phases when needed
 - `warmdown_steps` still applies, but only within the final phase
-- the trainer logs phase transitions using `label` when provided
+- the trainer logs the scheduled rate and effective rates of active optimizer groups at startup/resume and phase transitions, using `label` when provided (update numbers are one-based)
+
+Unspecified group rates inherit `training.lr`, so their effective rate equals
+the scheduled phase rate. Explicit embed/head/scalar/matrix rates and per-weight
+`s4d_state`, `ssm_state`, and `s4d_sobolev` rates are scaled too, not fixed
+absolute rates. For example, `matrix_lr: 0.02` with the default base `lr: 0.0003`
+and phase LR `0.0001` applies approximately `0.00666667`; setting base `lr: 0.0001`
+instead applies `0.02`. A state rate of `0.001` with base `0.0003` and phase
+`0.01` becomes approximately `0.0333333`. Set the base LR explicitly when using
+overrides; choosing the first phase LR as the base makes the configured group
+rates effective in that phase. A base LR of zero retains the existing special
+case: inherited rates stay zero, overrides stay at their configured rates,
+and phase scaling is disabled. Optimizer reports list configured, not scheduled,
+rates. During final-phase warmdown the scheduled multiplier continues to change
+after the transition log; periodic `lr` remains the scheduled reference rate.
 
 Example:
 

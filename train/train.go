@@ -646,18 +646,13 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 
 		for step := startStep; step < steps; step++ {
 			appliedLR := sched.At(step)
+			logPhaseRates(trainer, sched, step, startStep, name)
 			dataDuration := time.Duration(0)
 			if step == startStep {
 				dataDuration = initialDataDuration
 			}
 			if hasPhases {
-				phaseIdx := phaseSched.phaseIndex[step]
-				if phaseIdx != currentPhaseIdx {
-					phase := phaseSched.phases[phaseIdx]
-					fmt.Printf("  [%s] entering %s (%d/%d) steps=%d lr=%.6f\n",
-						name, phaseDisplayLabel(phase, phaseIdx), phaseIdx+1, len(phaseSched.phases), phase.Steps, phase.LR)
-					currentPhaseIdx = phaseIdx
-				}
+				currentPhaseIdx = phaseSched.phaseIndex[step]
 			}
 
 			var nextBatch trainBatch
