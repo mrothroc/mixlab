@@ -1752,12 +1752,18 @@ When `phases` is present:
 Unspecified group rates inherit `training.lr`, so their effective rate equals
 the scheduled phase rate. Explicit embed/head/scalar/matrix rates and per-weight
 `s4d_state`, `ssm_state`, and `s4d_sobolev` rates are scaled too, not fixed
-absolute rates. For example, `matrix_lr: 0.02` with the default base `lr: 0.0003`
-and phase LR `0.0001` applies approximately `0.00666667`; setting base `lr: 0.0001`
-instead applies `0.02`. A state rate of `0.001` with base `0.0003` and phase
-`0.01` becomes approximately `0.0333333`. Set the base LR explicitly when using
-overrides; choosing the first phase LR as the base makes the configured group
-rates effective in that phase. A base LR of zero retains the existing special
+absolute rates. For example, `matrix_lr: 0.02` with base `lr: 0.0003` and phase
+LR `0.0001` applies approximately `0.00666667`; base `lr: 0.0001` instead applies
+`0.02`. A state rate of `0.001` with base `0.0003` and phase `0.01` becomes
+approximately `0.0333333`.
+
+A config with `phases` and any nonzero explicit group or per-weight rate
+(`embed_lr`, `matrix_lr`, `scalar_lr`, `head_lr`, a block `state_lr`, or a
+trainable S4D `sobolev_filter`, whose learning rate has a default) must set
+`training.lr` explicitly; validation rejects it otherwise, because the 0.0003
+default would silently rescale those rates. Setting `training.lr` to the first
+phase's LR makes the configured rates apply as written in that phase. A base LR
+of zero retains the existing special
 case: inherited rates stay zero, overrides stay at their configured rates,
 and phase scaling is disabled. Optimizer reports list configured, not scheduled,
 rates. During final-phase warmdown the scheduled multiplier continues to change

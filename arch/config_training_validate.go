@@ -115,6 +115,9 @@ func validateCommonTrainingSettings(cfg *ArchConfig, source string) error {
 			return fmt.Errorf("config %q has invalid training.phases[%d].lr=%g (must be > 0)", source, i, phase.LR)
 		}
 	}
+	if err := validatePhaseBaseLR(cfg, source); err != nil {
+		return err
+	}
 	if len(cfg.Training.Phases) > 0 {
 		if cfg.Training.LRScheduleSteps != 0 {
 			return fmt.Errorf("config %q cannot set training.lr_schedule_steps with training.phases; phase steps define their own schedule", source)

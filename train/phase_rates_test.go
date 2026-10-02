@@ -15,7 +15,8 @@ func TestPhaseEffectiveGroupRates(t *testing.T) {
 		phase, matrix, state float64
 	}{
 		{"inherited", "", 1e-4, 1e-4, 1e-3 / 3},
-		{"matrix_override", `,"matrix_lr":0.02`, 1e-4, 0.02 / 3, 1e-3 / 3},
+		// Overrides need an explicit base with phases; arch rejects an implicit one.
+		{"matrix_override", `,"lr":0.0003,"matrix_lr":0.02`, 1e-4, 0.02 / 3, 1e-3 / 3},
 		{"explicit_base", `,"lr":0.0001,"matrix_lr":0.02`, 1e-4, 0.02, 1e-3},
 		{"state_override", "", 0.01, 0.01, 1e-3 * 100 / 3},
 		{"zero_base", `,"lr":0,"matrix_lr":0.02`, 1e-4, 0.02, 1e-3},

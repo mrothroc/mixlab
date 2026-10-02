@@ -146,9 +146,10 @@ reference denominator: effective group LR is
 `group_lr * scheduled_phase_lr / training.lr` when the base is positive.
 Default group rates inherit the base and therefore follow the phase LR exactly.
 Explicit `matrix_lr` (including the `grid_kernel` group), scalar, or per-weight
-overrides are scaled by the same ratio. Set `training.lr` explicitly when using
-overrides; setting it to the first phase LR makes those overrides effective in
-that phase. With base LR zero, inherited rates remain zero and overrides are
+overrides are scaled by the same ratio, so a config with phases and a nonzero
+override must set `training.lr` explicitly (validation rejects it otherwise).
+Setting it to the first phase LR makes those overrides apply as written in that
+phase. With base LR zero, inherited rates remain zero and overrides are
 not schedule-scaled. Startup/resume and phase-transition logs show effective
 active-group rates; the optimizer startup summary shows configured rates.
 AdamW/LAMB moments and step counters carry across the transition. Full-state
