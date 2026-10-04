@@ -1,9 +1,9 @@
 {
   "format": "mixlab.torch_state_map.v1",
   "provenance": {
-    "source_url": "https://raw.githubusercontent.com/anderspearson206/lunar-radiomap-challenge/fa3ef9b89f964556753a18be102a5aadeb723377/RadioUNet/modules.py",
+    "source_url": "https://raw.githubusercontent.com/RonLevie/RadioUNet/36ab70663443af615c37051ce97da14d04925c7a/lib/modules.py",
     "source_sha256": "60ee896f812710f6710cc0f3fc2f573844c0ebaabb4c331b452ed259bfd24235",
-    "commit": "fa3ef9b89f964556753a18be102a5aadeb723377",
+    "commit": "36ab70663443af615c37051ce97da14d04925c7a",
     "license": "MIT; see bundled reference license notices"
   },
   "mappings": [

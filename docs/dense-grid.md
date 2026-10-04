@@ -383,7 +383,7 @@ tests additionally compare interrupted/resumed AdamW and LAMB training exactly,
 including augmentation, partial batches, weights, moments, and schedule state.
 
 The small architecture/count fixtures in `arch/testdata/grid_reference` derive
-from the pinned RadioWNet implementation and retain both MIT license notices.
+from the pinned RadioWNet implementation and retain its MIT license notice.
 Generate `grid-source.json`, prepare it with `-input-format grid`, then use
 `GRID_BENCH_MANIFEST=<manifest> go test ./data -run '^$' -bench GridShardIO
 -benchmem` to measure shard reads/layout conversion separately from GPU work.

@@ -17,8 +17,8 @@ import torch
 from torch import nn
 from torch.fx import symbolic_trace
 
-COMMIT = "fa3ef9b89f964556753a18be102a5aadeb723377"
-URL = f"https://raw.githubusercontent.com/anderspearson206/lunar-radiomap-challenge/{COMMIT}/RadioUNet/modules.py"
+COMMIT = "36ab70663443af615c37051ce97da14d04925c7a"
+URL = f"https://raw.githubusercontent.com/RonLevie/RadioUNet/{COMMIT}/lib/modules.py"
 SOURCE_SHA256 = "60ee896f812710f6710cc0f3fc2f573844c0ebaabb4c331b452ed259bfd24235"
 
 

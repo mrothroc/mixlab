@@ -23,7 +23,7 @@ def generate(fixtures, output):
         for source, target in (("export-map.json", f"{label}_export_map.json"), ("provenance.json", f"{label}_provenance.json")):
             shutil.copyfile(directory / source, output / target)
     licenses = Path(__file__).resolve().parent.parent / "arch/testdata/grid_reference"
-    for name in ("LICENSE", "RadioUNet-LICENSE"):
+    for name in ("RadioUNet-LICENSE",):
         shutil.copyfile(licenses / name, output / name)
 
 

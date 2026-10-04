@@ -7,8 +7,8 @@ weight inventory in each stage. `*_shapes.json` records every intermediate NHWC
 shape from the actual reference. `*_export_map.json` maps all tensors, including
 frozen ones, to strict PyTorch state_dict names and layouts.
 
-The source URL, revision and SHA256 are in the provenance and map files. Both
-upstream MIT notices are included. No upstream Python module, trained weights,
+The source URL, revision and SHA256 are in the provenance and map files. The
+upstream MIT notice is included. No upstream Python module, trained weights,
 dataset, or benchmark-specific preparation logic is bundled.
 
 ```bash
