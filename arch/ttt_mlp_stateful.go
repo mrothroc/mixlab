@@ -110,6 +110,9 @@ func BuildTTTMLPStatefulInferenceIRProgram(cfg *ArchConfig, tokenCount int, offs
 	}
 	_ = logits
 	prog.DeclareOutput("logits", TensorFloat32, []int{tokenCount, cfg.VocabSize})
+	if err := attachTTTStatefulContract(prog, cfg, layouts, metas, tokenCount); err != nil {
+		return nil, nil, err
+	}
 	return prog, layouts, nil
 }
 
@@ -150,32 +153,15 @@ func validateTTTMLPStatefulInferenceConfig(cfg *ArchConfig) error {
 }
 
 func emitTTTMLPStatefulInferenceBlock(prog *Program, spec BlockSpec, wi, modelDim, tokenCount, blockIndex, ordinal, offset int, blockScales bool) (TTTMLPStateLayout, int, error) {
-	headDim := modelDim / spec.Heads
-	hidden, err := effectiveTTTMLPInnerHiddenDim(spec, modelDim)
+	layout, err := tttStateLayout(spec, wi, modelDim, blockIndex, ordinal)
 	if err != nil {
 		return TTTMLPStateLayout{}, wi, err
 	}
-	chunk := effectiveTTTMLPChunkSize(spec)
+	headDim, hidden, chunk := layout.HeadDim, layout.HiddenDim, layout.ChunkSize
 	if offset < 0 || offset >= chunk || offset+tokenCount > chunk {
 		return TTTMLPStateLayout{}, wi, fmt.Errorf("blocks[%d] state offset=%d plus tokenCount=%d crosses chunk_size=%d", blockIndex, offset, tokenCount, chunk)
 	}
-	stateSize := spec.Heads * (2*headDim*hidden + hidden + headDim)
-	prefix := fmt.Sprintf("ttt_state_%d", ordinal)
-	layout := TTTMLPStateLayout{
-		BlockIndex:           blockIndex,
-		Heads:                spec.Heads,
-		HeadDim:              headDim,
-		HiddenDim:            hidden,
-		ChunkSize:            chunk,
-		StateSize:            stateSize,
-		InitialWeightIndices: [4]int{wi + 10, wi + 11, wi + 12, wi + 13},
-		StateInput:           prefix + "_mlp",
-		GradientInput:        prefix + "_grad",
-		ConvInput:            prefix + "_conv",
-		StateOutput:          prefix + "_mlp_next",
-		GradientOutput:       prefix + "_grad_next",
-		ConvOutput:           prefix + "_conv_next",
-	}
+	stateSize := layout.StateSize
 	prog.DeclareInput(layout.StateInput, TensorFloat32, []int{1, stateSize})
 	prog.DeclareInput(layout.GradientInput, TensorFloat32, []int{1, stateSize})
 	prog.DeclareInput(layout.ConvInput, TensorFloat32, []int{1, 2, 3, modelDim})

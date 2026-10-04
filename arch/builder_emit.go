@@ -69,7 +69,7 @@ func emitBlockIRWithDropoutOptions(prog *Program, spec BlockSpec, stream string,
 	if reg.Emitter == nil {
 		return wi, fmt.Errorf("block type %q has no emitter", spec.Type)
 	}
-	return reg.Emitter(prog, spec, stream, wi, D, T, B, V, idx, EmitOptions{
+	return EmitBlock(prog, spec, stream, wi, D, T, B, V, idx, EmitOptions{
 		StreamSeqLens:       streamSeqLens,
 		MLPMult:             mlpMult,
 		BlockScales:         blockScales,

@@ -28,6 +28,7 @@ type tttMLPProgramCacheEntry struct {
 // adaptation state.
 type TTTMLPInferenceSession struct {
 	cfg              *ArchConfig
+	contract         *arch.ModelContract
 	weightHandles    []int64
 	initialStateData [][]float32
 	baseLayouts      []arch.TTTMLPStateLayout
@@ -85,6 +86,14 @@ func NewTTTMLPInferenceSession(configPath, safetensorsLoad string) (*TTTMLPInfer
 	if err != nil {
 		return fail(fmt.Errorf("compute weight shapes: %w", err))
 	}
+	metas, err := arch.CollectWeightShapesFromConfig(cfg)
+	if err != nil {
+		return fail(err)
+	}
+	contract, err := arch.DescribeProgramContract(cfg, arch.NativeTTTStateful, baseProgram, metas)
+	if err != nil {
+		return fail(fmt.Errorf("validate TTT-MLP contract: %w", err))
+	}
 	weights, err := loadSafetensorsWeights(safetensorsLoad, shapes)
 	if err != nil {
 		return fail(fmt.Errorf("load safetensors %q: %w", safetensorsLoad, err))
@@ -106,6 +115,7 @@ func NewTTTMLPInferenceSession(configPath, safetensorsLoad string) (*TTTMLPInfer
 	}
 	s := &TTTMLPInferenceSession{
 		cfg:              cfg,
+		contract:         contract,
 		weightHandles:    handles,
 		initialStateData: initial,
 		baseLayouts:      layouts,
@@ -130,19 +140,29 @@ func countTTTMLPBlocks(blocks []BlockSpec) int {
 func buildTTTMLPInitialStateData(layouts []arch.TTTMLPStateLayout, weights [][]float32) ([][]float32, error) {
 	out := make([][]float32, len(layouts))
 	for i, layout := range layouts {
-		packed := make([]float32, 0, layout.StateSize)
-		for _, weightIndex := range layout.InitialWeightIndices {
+		packed := make([]float32, layout.StateSize)
+		for j, part := range layout.InitialStateSlices() {
+			weightIndex := layout.InitialWeightIndices[j]
 			if weightIndex < 0 || weightIndex >= len(weights) {
 				return nil, fmt.Errorf("TTT block %d initial weight index %d out of range", layout.BlockIndex, weightIndex)
 			}
-			packed = append(packed, weights[weightIndex]...)
-		}
-		if len(packed) != layout.StateSize {
-			return nil, fmt.Errorf("TTT block %d packed state size=%d, want %d", layout.BlockIndex, len(packed), layout.StateSize)
+			if len(weights[weightIndex]) != part.Length || part.DestinationStart < 0 || part.DestinationStart > len(packed)-part.Length {
+				return nil, fmt.Errorf("TTT block %d initial slice %d shape mismatch", layout.BlockIndex, j)
+			}
+			copy(packed[part.DestinationStart:part.DestinationStart+part.Length], weights[weightIndex][part.SourceStart:part.SourceStart+part.Length])
 		}
 		out[i] = packed
 	}
 	return out, nil
+}
+
+// Contract returns an independent host-only snapshot. It reads no device state
+// and does not change offsets, counters, program caches, or request ownership.
+func (s *TTTMLPInferenceSession) Contract() *arch.ModelContract {
+	if s == nil {
+		return nil
+	}
+	return s.contract.Clone()
 }
 
 // Config returns the loaded config. Treat it as read-only.

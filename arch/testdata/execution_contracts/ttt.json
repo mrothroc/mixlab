@@ -1,0 +1,5 @@
+{
+  "model_dim": 8, "vocab_size": 16, "seq_len": 4,
+  "blocks": [{"type": "ttt_mlp", "heads": 2, "chunk_size": 4}, {"type": "swiglu"}],
+  "training": {"objective": "causal", "batch_tokens": 4, "steps": 1, "lr": 0.001}
+}

@@ -1,0 +1,8 @@
+{
+  "fixture_revision": 1,
+  "provenance": "Hand-derived boundary invariants; no generated model predictions",
+  "ttt": {"state_size": 296, "packed_tensor_bytes": 2368, "convolution_tensor_bytes": 192, "persistent_tensor_bytes": 2560, "offset_max_exclusive": 4},
+  "recurrent": {"input": [1,2,4], "raw_decay": 0, "carry": [0.5,1.25,2.625], "reset": "evaluation"},
+  "grid": {"config": "examples/grid_two_stage_2.json", "input": [2,8,8,2], "output": [2,8,8,1], "axes": ["batch","height","width","channel"]},
+  "tolerances": {"shapes_ownership_digests": "exact", "scan_absolute": 0.000001, "scan_relative": 0.000001, "ttt_replay_absolute": 0.0002, "ttt_reset_isolation_absolute": 0.000001}
+}

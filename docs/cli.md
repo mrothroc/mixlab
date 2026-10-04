@@ -19,6 +19,7 @@ mode-specific flags.
 | `prepare-pairs` | Validate minimal-pair, invariance-pair, or annotated PLL-margin JSONL and optionally compile it to a compact pair shard. | [cli-prepare.md](cli-prepare.md) |
 | `count` | Print parameter, size, block, FLOP, and IR op counts for a config. | [cli-eval.md](cli-eval.md) |
 | `optimizer-report` | Write resolved optimizer groups and per-tensor assignments as JSON without a GPU. | This page |
+| `inspect-contract` | Inspect native state, representation, ownership and execution capabilities without a GPU. | [State contracts](state-execution-contracts.md) |
 | `eval` | Load safetensors and evaluate validation loss or per-token exports. | [cli-eval.md](cli-eval.md) |
 | `predict-grid` | Native dense predictions from a grid manifest. | [dense-grid.md](dense-grid.md#prediction) |
 | `hiddenstats` | Export one batch of hidden states as float32 binary. | [cli-eval.md](cli-eval.md) |
@@ -111,6 +112,12 @@ native IR. A successful command exits zero and prints one summary line. Use
 `count` when you also want parameter, memory, op, and FLOP estimates.
 
 ## Optimizer Report
+
+For execution-state inspection instead of optimizer policy, use
+`mixlab -mode inspect-contract -config model.json`. `-contract-profile` selects
+`native-full` (default) or `native-ttt-stateful`; optional `-contract-require`
+checks `complete`, `streaming`, `refinement`, `save-restore`, or `clone`.
+See [state and execution contracts](state-execution-contracts.md) for JSON and exit semantics.
 
 Inspect the optimizer coverage before starting a run:
 

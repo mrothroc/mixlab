@@ -40,6 +40,7 @@ defer state.Close()
 logits, err := session.PrefillLast(state, promptTokens)
 logits, err = session.Decode(state, nextToken)
 stats := session.Stats()
+contract := session.Contract() // independent host-only snapshot
 ```
 
 `Prefill` returns logits for every input token. `PrefillLast` processes the
@@ -50,8 +51,12 @@ checkpoint's initial inner MLP and clears convolution history.
 
 Every request must own a distinct `TTTMLPInferenceState`. Passing a state to a
 different session, using it after close, or continuing after its session is
-closed returns an error. State replacement is transactional: failed forwards
-leave the previous handles active.
+closed returns an error. State replacement is transactional per successful
+fragment, after evaluation and output readback. A later failed fragment does
+not roll back earlier fragments of a prefill. Reset frees previous handles before
+allocating replacements; failed allocation has no rollback guarantee.
+See [state and execution contracts](state-execution-contracts.md) for CPU
+inspection, ownership, payload estimates and unsupported capabilities.
 
 ## Hugging Face Cache
 

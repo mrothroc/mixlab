@@ -149,6 +149,10 @@ type Program struct {
 	Inputs     []TensorDecl
 	Outputs    []TensorDecl
 	Ops        []Op
+	// Host-only metadata; never changes lowering or serialized IR operations.
+	Contract       *ProgramContract `json:"-"`
+	BlockContracts []BlockContract  `json:"-"`
+	contractSites  int
 }
 
 // NewProgram creates an empty IR program expecting nWeights trainable weight tensors.

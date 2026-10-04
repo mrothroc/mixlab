@@ -13,6 +13,7 @@ Use this page to choose the shortest path for the task at hand. The root
 | Check a config without a GPU | `mixlab -mode validate -config model.json` | [Configuration reference](config-reference.md) |
 | Count parameters and estimated compute | `mixlab -mode count -config model.json` | [Count and eval CLI](cli-eval.md) |
 | Audit optimizer coverage, rates, and decay | `mixlab -mode optimizer-report -config model.json` | [Optimizer report](cli.md#optimizer-report) |
+| Inspect state ownership and execution capabilities | `mixlab -mode inspect-contract -config model.json` | [State and execution contracts](state-execution-contracts.md) |
 | Train, compare, or resume runs | [Training CLI](cli-train.md) | [Performance](performance.md) |
 | Train across a fixed group of Macs or CUDA GPUs | [Distributed training](distributed-training.md) | [Hardware acceptance](distributed-r1-hardware-acceptance.md) |
 | Decide whether training across several machines will be faster | [When distributed training helps](distributed-when.md) | [Managed clusters](cluster-quickstart.md) |

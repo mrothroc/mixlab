@@ -41,6 +41,16 @@ func TestTTTMLPInferenceSessionReplayContinuationResetAndIsolation(t *testing.T)
 		t.Fatalf("NewTTTMLPInferenceSession: %v", err)
 	}
 	defer session.Close()
+	beforeStats := session.Stats()
+	contract := session.Contract()
+	if contract == nil {
+		t.Fatal("missing session contract")
+	}
+	contract.Blocks[0].OwnerID = "mutated snapshot"
+	contract.Program.States[0].Tensor.Shape[0] = 999
+	if session.Contract().Blocks[0].OwnerID == "mutated snapshot" || session.Contract().Program.States[0].Tensor.Shape[0] == 999 || session.Stats() != beforeStats {
+		t.Fatal("contract inspection changed session")
+	}
 	oneShot, err := session.NewState()
 	if err != nil {
 		t.Fatal(err)
@@ -53,6 +63,7 @@ func TestTTTMLPInferenceSessionReplayContinuationResetAndIsolation(t *testing.T)
 	if diff := maxAbsDiffTTTStateful(replayLogits, statefulLogits); diff > 2e-4 {
 		t.Fatalf("full-prefix replay vs stateful L_inf=%g want <=2e-4", diff)
 	}
+	t.Logf("replay/stateful max_absolute_error=%g", maxAbsDiffTTTStateful(replayLogits, statefulLogits))
 
 	split, err := session.NewState()
 	if err != nil {

@@ -45,9 +45,10 @@ type blockWeightShaperWithOptions func(spec BlockSpec, D, T, B, V int, opts Emit
 
 // BlockRegistration describes how a block type participates in IR construction.
 type BlockRegistration struct {
-	Emitter      BlockEmitter
-	WeightCount  BlockWeightCounter
-	WeightShapes BlockWeightShaper
+	DescribeContract BlockContractProvider
+	Emitter          BlockEmitter
+	WeightCount      BlockWeightCounter
+	WeightShapes     BlockWeightShaper
 
 	weightShapesWithOptions blockWeightShaperWithOptions
 }
@@ -88,7 +89,14 @@ func EmitBlock(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx
 	if reg.Emitter == nil {
 		return wi, fmt.Errorf("block type %q has no registered emitter", spec.Type)
 	}
-	return reg.Emitter(prog, spec, stream, wi, D, T, B, V, idx, opts)
+	start := len(prog.Ops)
+	next, err := reg.Emitter(prog, spec, stream, wi, D, T, B, V, idx, opts)
+	if err != nil {
+		return next, err
+	}
+	err = recordBlockContract(prog, reg.DescribeContract, spec, ContractContext{ModelDim: D, SeqLen: T, BatchSize: B, VocabSize: V, BlockIndex: opts.BlockIndex, SiteIndex: prog.contractSites, WeightIndex: wi, Stream: stream, Profile: NativeFull}, start, next)
+	prog.contractSites++
+	return next, err
 }
 
 // BlockWeightShapes returns the weight metadata for a block via the registry's
@@ -120,6 +128,7 @@ func init() {
 		weightShapesWithOptions: builtinBlockWeightShapesWithOptions,
 	})
 	RegisterBlock("swiglu", blockRegistration{
+		DescribeContract: pointwiseContract,
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
 			return emitGatedGLUIRWithDropoutNorm(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, "swiglu", "sigmoid", opts.Norm, opts.NormPlacement, opts.FFNInternalNorm, opts.layerAgg, opts.adaLN, opts.BlockIndex, B, T)
 		},
@@ -130,6 +139,7 @@ func init() {
 		weightShapesWithOptions: builtinBlockWeightShapesWithOptions,
 	})
 	RegisterBlock("geglu", blockRegistration{
+		DescribeContract: pointwiseContract,
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
 			return emitGatedGLUIRWithDropoutNorm(prog, stream, wi, idx, opts.MLPMult, opts.BlockScales, opts.Dropout, "geglu", "gelu", opts.Norm, opts.NormPlacement, opts.FFNInternalNorm, opts.layerAgg, opts.adaLN, opts.BlockIndex, B, T)
 		},
@@ -140,6 +150,7 @@ func init() {
 		weightShapesWithOptions: builtinBlockWeightShapesWithOptions,
 	})
 	RegisterBlock("mlp", blockRegistration{
+		DescribeContract: pointwiseContract,
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
 			return emitMLPIRNorm(prog, stream, wi, idx, spec.Activation, spec.LeakySlope, opts.MLPMult, opts.Norm, opts.NormPlacement, opts.FFNInternalNorm, opts.layerAgg, opts.adaLN, opts.BlockIndex, B, T)
 		},
@@ -199,6 +210,7 @@ func init() {
 		},
 	})
 	RegisterBlock("ttt_mlp", blockRegistration{
+		DescribeContract: tttFullContract,
 		Emitter: func(prog *Program, spec BlockSpec, stream string, wi, D, T, B, V, idx int, opts EmitOptions) (int, error) {
 			return emitTTTMLPIR(prog, spec, stream, wi, D, T, B, idx, opts)
 		},
@@ -209,9 +221,14 @@ func init() {
 		},
 	})
 	for _, name := range []string{"legacy_mamba", "gated_linear_ssm", "mamba3", "mamba3-canonical", "rwkv", "perceiver", "bottleneck", "retnet", "cross_attention", "token_blend", "custom"} {
+		var provider BlockContractProvider
+		if blockTypeName(name) == "gated_linear_ssm" {
+			provider = recurrentContract
+		}
 		RegisterBlock(name, blockRegistration{
-			Emitter:     builtinBlockEmitter,
-			WeightCount: builtinBlockWeightCount,
+			DescribeContract: provider,
+			Emitter:          builtinBlockEmitter,
+			WeightCount:      builtinBlockWeightCount,
 			WeightShapes: func(spec BlockSpec, D, T, B, V int) ([]WeightMeta, error) {
 				return builtinBlockWeightShapes(spec, D, T, B, V, DefaultFFNMultiplier, false, false)
 			},

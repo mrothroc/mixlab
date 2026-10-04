@@ -13,6 +13,7 @@ surfaces to Hugging Face.
 - [CLI modes](docs/cli.md)
 - [Configuration reference](docs/config-reference.md)
 - [Feature compatibility matrix](docs/feature-matrix.md)
+- [State ownership and execution inspection](docs/state-execution-contracts.md)
 - [Hugging Face support matrix](docs/hf-export-support-matrix.md)
 - [Example configs](examples/README.md)
 

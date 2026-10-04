@@ -15,8 +15,10 @@ import (
 )
 
 func main() {
-	mode := flag.String("mode", "arch", "run mode: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, predict-grid, export-torch-state, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
+	mode := flag.String("mode", "arch", "run mode: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, inspect-contract, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, predict-grid, export-torch-state, export-hf, parity (training configs may set training.target_val_loss for early stopping)")
 	configPath := flag.String("config", "", "path to architecture JSON config")
+	contractProfile := flag.String("contract-profile", "native-full", "inspection profile: native-full or native-ttt-stateful (batch one, token one, offset zero)")
+	contractRequire := flag.String("contract-require", "", "optional contract requirement: complete, streaming, refinement, save-restore, or clone")
 	gridIn := flag.String("grid-in", "", "grid dataset manifest for predict-grid")
 	gridOut := flag.String("grid-out", "", "new prediction output directory for predict-grid")
 	gridSplit := flag.String("grid-split", "predict", "manifest split for predict-grid")
@@ -300,6 +302,13 @@ func main() {
 		must(train.RunOptimizerReport(*configPath, os.Stdout))
 		return
 	}
+	if *mode == "inspect-contract" {
+		if err := train.RunInspectContract(*configPath, *contractProfile, *contractRequire, os.Stdout); err != nil {
+			_ = train.WriteContractDiagnostic(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if *mode == "export-hf" {
 		exportOutput, err := aliasedStringFlagValue(*prepOutput, "export-dir", *exportDir, providedFlags)
 		must(err)
@@ -468,7 +477,7 @@ func main() {
 			LogitTokens:     *parityLogitTokens,
 		}))
 	default:
-		must(fmt.Errorf("unknown mode %q (supported: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, predict-grid, export-torch-state, export-hf, parity)", *mode))
+		must(fmt.Errorf("unknown mode %q (supported: smoke, validate, arch, arch_race, prepare, prepare-pairs, count, optimizer-report, inspect-contract, eval, hiddenstats, generate, generate-diffusion, score-diffusion, score-electra, score-ebm, predict-grid, export-torch-state, export-hf, parity)", *mode))
 	}
 }
 
@@ -477,9 +486,10 @@ type flagGroup struct {
 	Names []string
 }
 
-var supportedModes = []string{"smoke", "validate", "arch", "arch_race", "prepare", "prepare-pairs", "count", "optimizer-report", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "predict-grid", "export-torch-state", "export-hf", "parity"}
+var supportedModes = []string{"smoke", "validate", "arch", "arch_race", "prepare", "prepare-pairs", "count", "optimizer-report", "inspect-contract", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "predict-grid", "export-torch-state", "export-hf", "parity"}
 
 var modeFlagGroups = map[string][]flagGroup{
+	"inspect-contract":   {{"Required", []string{"config"}}, {"Contract inspection", []string{"contract-profile", "contract-require"}}},
 	"export-torch-state": {{"Required", []string{"config", "safetensors-load", "export-map", "export-dir"}}},
 	"predict-grid":       {{"Required", []string{"config", "safetensors-load", "grid-in", "grid-out"}}, {"Selection", []string{"grid-split"}}},
 	"worker-probe":       {{"Internal read-only device probe (no training arguments)", []string{}}},

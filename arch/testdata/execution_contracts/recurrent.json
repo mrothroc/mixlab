@@ -1,0 +1,5 @@
+{
+  "model_dim": 4, "vocab_size": 16, "seq_len": 3,
+  "blocks": [{"type": "gated_linear_ssm"}, {"type": "geglu"}],
+  "training": {"objective": "causal", "batch_tokens": 6, "steps": 1, "lr": 0.001}
+}

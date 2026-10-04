@@ -214,6 +214,9 @@ func buildGridGraph(cfg *ArchConfig, supervised bool) (*Program, []WeightMeta, e
 		p.Div("grid_error_mean", "grid_denominator", "loss")
 		p.DeclareOutput("loss", TensorFloat32, []int{1})
 	}
+	if err := attachGridContract(p, cfg, metas, shapes, needed, prefix, selected); err != nil {
+		return nil, nil, err
+	}
 	return p, metas, nil
 }
 
