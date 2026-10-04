@@ -31,7 +31,7 @@ func groupHasLiveMembers(pid int) (bool, error) {
 			continue
 		}
 		b, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "stat"))
-		if errors.Is(err, os.ErrNotExist) {
+		if processStatGone(err) {
 			continue
 		}
 		if err != nil {
@@ -56,4 +56,10 @@ func groupHasLiveMembers(pid int) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// processStatGone reports whether a /proc stat read failed because the process
+// exited after the directory listing: ENOENT once reaped, ESRCH while exiting.
+func processStatGone(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, unix.ESRCH)
 }
