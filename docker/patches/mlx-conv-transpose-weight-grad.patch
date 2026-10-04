@@ -1,0 +1,30 @@
+diff --git a/mlx/primitives.cpp b/mlx/primitives.cpp
+index 6ac88ee..70ec817 100644
+--- a/mlx/primitives.cpp
++++ b/mlx/primitives.cpp
+@@ -1514,7 +1514,24 @@ std::vector<array> Convolution::vjp(
+         no_dilation &= (input_dilation_[i] == 1) && (kernel_dilation_[i] == 1);
+       }
+ 
+-      if (no_dilation && !flip_ && groups_ == 1) {
++      bool transpose_patches = flip_ && groups_ == 1;
++      auto transpose_padding_lo = padding_lo_;
++      auto transpose_padding_hi = padding_hi_;
++      for (int i = 0; i < input_dilation_.size(); ++i) {
++        transpose_padding_lo[i] = wt.shape(i + 1) - 1 - padding_lo_[i];
++        transpose_padding_hi[i] = wt.shape(i + 1) - 1 - padding_hi_[i];
++        transpose_patches &= kernel_strides_[i] == 1 && kernel_dilation_[i] == 1 &&
++            transpose_padding_lo[i] >= 0 && transpose_padding_hi[i] >= 0;
++      }
++      if (transpose_patches) {
++        // A transposed convolution is the input adjoint of an ordinary
++        // convolution. Swap input/cotangent to compute its weight gradient
++        // without unfolding a spatially dilated, channel-transposed input.
++        auto grad = conv_weight_backward_patches(
++            cotan, swapaxes(wt, 0, -1, stream()), in, input_dilation_,
++            transpose_padding_lo, transpose_padding_hi, stream());
++        grads.push_back(swapaxes(grad, 0, -1, stream()));
++      } else if (no_dilation && !flip_ && groups_ == 1) {
+         auto grad = conv_weight_backward_patches(
+             in, wt, cotan, kernel_strides_, padding_lo_, padding_hi_, stream());
+         grads.push_back(grad);

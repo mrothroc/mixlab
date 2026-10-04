@@ -70,7 +70,12 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 	if err != nil {
 		return result, err
 	}
-	if _, err = configureMLXMemoryLimits(cfg.Name); err != nil {
+	memoryPlan, err := configureMLXMemoryLimits(cfg.Name)
+	if err != nil {
+		return result, err
+	}
+	preflight, err := gridMemoryPreflightEnabled(memoryPlan.DedicatedDevice)
+	if err != nil {
 		return result, err
 	}
 	stopper := newEarlyStopState(cfg.Training.EarlyStop)
@@ -94,7 +99,7 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 	}
 	trainer, err := initGPUTrainer(prog, cfg, weights, opts.OptimizerOverride)
 	if err != nil {
-		return result, err
+		return result, annotateGridMemoryError(err, "initialization", cfg, memoryPlan)
 	}
 	defer trainer.CloseTrainer()
 	if setup.Loaded != nil {
@@ -133,6 +138,21 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 			return result, err
 		}
 	}
+	if preflight && !stopped && setup.StartStep < steps {
+		ids := make([]int, min(batchSize, ds.Len()))
+		for i := range ids {
+			ids[i] = i
+		}
+		b, e := ds.ReadBatch(ids, batchSize)
+		if e != nil {
+			return result, e
+		}
+		fmt.Printf("  [%s] %s\n", cfg.Name, gridMemoryDiagnostic("preflight-start", memoryPlan))
+		if e = preflightGridTraining(trainer, shapes, b, setup.StartStep, sched.At(setup.StartStep)); e != nil {
+			return result, annotateGridMemoryError(e, "preflight before full validation", cfg, memoryPlan)
+		}
+		fmt.Printf("  [%s] %s (model and optimizer restored)\n", cfg.Name, gridMemoryDiagnostic("preflight-complete", memoryPlan))
+	}
 	var datasetHash string
 	if opts.CheckpointDir != "" {
 		if setup.Loaded != nil {
@@ -165,7 +185,10 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 		start := time.Now()
 		metrics, e := evaluateGridDataset(cfg, trainer, val)
 		if e != nil {
-			return false, e
+			return false, annotateGridMemoryError(e, "validation", cfg, memoryPlan)
+		}
+		if memLogEvery > 0 {
+			fmt.Printf("  [%s] %s\n", cfg.Name, gridMemoryDiagnostic("validation", memoryPlan))
 		}
 		result.HasValLoss = true
 		result.LastValLoss = metrics.MaskedMSE()
@@ -182,7 +205,7 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 		}
 		return stop || (cfg.Training.TargetValLoss > 0 && metrics.MaskedRMSE() <= cfg.Training.TargetValLoss), nil
 	}
-	// Validate the whole split before any update or best-checkpoint selection.
+	// Validate the whole split before any committed update or best selection.
 	if setup.Loaded == nil {
 		stopped, err = validate(0)
 		if err != nil {
@@ -218,11 +241,11 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 		}
 		tick := time.Now()
 		if e = submitPreparedStepGPU(trainer, objectiveBatch{grid: &b}, batchSize, 0, sched.At(step)); e != nil {
-			return result, e
+			return result, annotateGridMemoryError(e, "training submit", cfg, memoryPlan)
 		}
 		loss, e := trainer.CollectLossGPU()
 		if e != nil {
-			return result, fmt.Errorf("grid step %d: %w", step, e)
+			return result, fmt.Errorf("grid step %d: %w", step, annotateGridMemoryError(e, "training collect", cfg, memoryPlan))
 		}
 		if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
 			return result, fmt.Errorf("grid step %d: non-finite loss", step)

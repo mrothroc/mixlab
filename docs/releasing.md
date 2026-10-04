@@ -205,6 +205,10 @@ labels and digest before pointing an endpoint at it; see
   CUDA upgrades must rebuild `docker/base.Dockerfile`; rebuilding only the
   add-architecture or app layers retains the old MLX source. See
   `docs/mlx-0.32-upgrade.md` for the dependency and NCCL acceptance contract.
+  The same rebuild order applies to `docker/patches`, including the grid
+  transposed-convolution gradient memory fix. Downstream images require
+  `MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1`; see
+  [dense grid memory checks](performance.md#dense-grid-memory-checks).
   If verification fails, fix the source and cut a patch release. Do not move the
   tag: the `release tags` ruleset blocks it for everyone but admins, and the signed
   assets and the tap formula already point at the original commit.

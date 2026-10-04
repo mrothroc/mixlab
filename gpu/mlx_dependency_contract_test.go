@@ -17,6 +17,9 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		"libnccl\\.so",
 		"NCCL_LIBRARIES:FILEPATH",
 		"MIXLAB_MLX_CUDA_WORKER_FIX=1",
+		"MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1",
+		"git -C /opt/mlx apply --check /tmp/mlx-conv-transpose-weight-grad.patch",
+		"git -C /opt/mlx apply /tmp/mlx-conv-transpose-weight-grad.patch",
 		"--expect-spin",
 		"git -C /opt/mlx apply --check /tmp/mlx-cuda-worker-wait.patch",
 		"python3 /tmp/test_mlx_worker.py --source /opt/mlx/mlx/backend/cuda/worker.cpp",
@@ -32,6 +35,7 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		"ARG MLX_COMMIT=" + pinnedMLXCommit,
 		"MIXLAB_MLX_BUILD_VERSION",
 		"MIXLAB_MLX_CUDA_WORKER_FIX",
+		"MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX",
 		"NCCL_LIBRARIES:FILEPATH",
 	} {
 		if !strings.Contains(addarch, required) {
@@ -73,6 +77,9 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		}
 	}
 	app := readRepositoryFile(t, "../docker/app.Dockerfile")
+	if !strings.Contains(app, `test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1"`) {
+		t.Fatal("app image must reject an MLX CUDA base without the convolution gradient fix")
+	}
 	if !strings.Contains(app, `test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1"`) {
 		t.Fatal("app image must reject an unpatched MLX CUDA base")
 	}

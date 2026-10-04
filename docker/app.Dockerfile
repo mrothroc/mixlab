@@ -13,6 +13,8 @@ FROM ${BASE_IMAGE} AS builder
 # Refuse an old cached MLX base: rebuilding only the app cannot fix libmlx.
 RUN test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1" \
     || { echo "Rebuild the MLX CUDA base and architecture tiers with the worker fix" >&2; exit 1; }
+RUN test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1" \
+    || { echo "Rebuild the MLX CUDA base and architecture tiers with the convolution gradient fix" >&2; exit 1; }
 
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \

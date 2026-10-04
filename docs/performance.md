@@ -88,6 +88,99 @@ MIXLAB_MLX_MEMORY_LIMIT_MB=16000 MIXLAB_MLX_MEM_LOG_EVERY=100 ./mixlab -mode arc
 Treat this as an allocator bound, not a model-memory estimate. Tune it for the
 device while leaving room for runtime and display allocations.
 
+## Dense Grid Memory Checks
+
+The pinned CUDA MLX build includes
+`docker/patches/mlx-conv-transpose-weight-grad.patch`. For an ungrouped,
+unit-kernel-dilation transposed convolution, its weight derivative is the
+ordinary-convolution weight derivative with the input and output cotangent
+exchanged. The patch uses that identity and MLX's existing patch-matmul path.
+Other convolution cases retain the original fallback. Metal is unchanged.
+
+Before this fix, decoder weight backward used generic input-dilated convolution,
+which CUDA could not route to cuDNN. Its GEMM fallback materialized a large
+unfolded tensor. On the reference two-channel graph at batch 16, the leading
+decoder weight-gradient intermediates were:
+
+| Decoder input | Kernel / output channels | Old unfolded scratch | New patch matrix |
+|---|---|---:|---:|
+| `[16,128,128,80]` | 6x6 / 20 | 11.25 GiB | 0.703 GiB |
+| `[16,64,64,100]` | 6x6 / 40 | 3.516 GiB | 0.352 GiB |
+| `[16,32,32,200]` | 6x6 / 60 | 1.758 GiB | 0.132 GiB |
+
+These are individual tensor sizes, not simultaneous peaks. Tracing the chosen
+cuDNN plans showed workspaces below 0.2 GiB; those were not the multi-GiB culprit.
+Model weights, optimizer state, live activations, ordinary-convolution patches,
+and CUDA graph/pool retention still consume memory. MLX active/cache counters
+do not account for all memory reserved by the CUDA runtime; device-free memory
+is therefore reported separately. Smaller graph buffers alone still OOMed.
+
+Delivering the fix requires rebuilding the CUDA base and architecture tiers
+before the app image. The app build rejects a base without
+`MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1`; a binary-only update is insufficient.
+
+CUDA dense-regression training probes three full-batch training updates before
+the initial full validation pass. These exercise cold compilation and cached
+steps with initialized optimizer state. Model weights, optimizer moments, counters and training
+step are restored afterward; the data sampler is not advanced. This uses a
+temporary CPU copy of model and optimizer state, not a second GPU model. It does
+not change batch size, precision, gradient normalization or the training recipe.
+
+`MIXLAB_GRID_MEMORY_PREFLIGHT=0` disables this check; `=1` also enables it on
+Metal for debugging. CUDA enables it by default, Metal does not. The check logs
+MLX active/cache/peak allocations, available device memory when reported, and
+the configured limit. `MIXLAB_MLX_MEM_LOG_EVERY` additionally enables grid
+validation-phase memory lines. Peaks are process-wide high-water marks, not
+per-phase allocation sums. An OOM names initialization, preflight, validation,
+or training and includes grid geometry and batch size.
+
+This is a measured startup check, not an exact static memory estimate or a
+guarantee against later pressure from other processes. A failed allocation's
+observed peak is only the memory successfully allocated before failure, not the
+total the run would have required. No automatic lower batch size or mixed
+precision fallback is applied.
+
+The explicit synthetic full-resolution acceptance probe runs the shipped graph
+at batch 16 and preserves stage-2 freezing and detach boundaries:
+
+```bash
+GRID_MEMORY_PROBE=1 GRID_MEMORY_STAGE=1 GRID_MEMORY_STEPS=200 \
+  go test -tags mlx ./train -run '^TestGridMemoryProbe$' -count=1 -v
+```
+
+Repeat with `GRID_MEMORY_STAGE=2`. Run stages in separate processes so peak and
+cache counters are independent. The probe reports validation and training
+memory, the first ten losses, and steady-state records/s; it is not a dataset
+quality benchmark. It requires a GPU and several GiB of memory and is skipped
+in ordinary test runs.
+
+On an otherwise idle 24 GiB CUDA test GPU, add
+`GRID_MEMORY_EXPECT_OOM=1` to exercise an intentionally oversized batch of 128.
+This separate-process negative test passes only when preflight reports OOM
+before validation. Do not run it alongside another GPU workload.
+
+### Reference Acceptance
+
+The FP32 synthetic probe above completed 200 updates per stage on an RTX 4090
+(24,564 MiB reported VRAM), including restored preflight and validation at
+initialization, step 100 and step 200. No graph-buffer overrides, gradient
+accumulation, or reduced precision were used.
+
+| Stage | CUDA MLX peak | Minimum logged device-free | Steady records/s | First-10 loss max abs difference vs Metal |
+|---|---:|---:|---:|---:|
+| 1 | 10.68 GiB | 6.32 GiB | 129.2 | 6.49e-7 |
+| 2 | 12.50 GiB | 2.17 GiB | 100.4 | 8.62e-6 |
+
+The comparison used an M1 Max with MLX 0.32.1 and CUDA MLX 0.32.0 plus the
+pinned patch, identical seeded initialization and synthetic inputs. Both stages
+pass the spatial oracle tolerance `1e-5 + 1e-4 * abs(reference)`. Ten-step Metal
+runs peaked at 8.17/9.21 GiB, respectively. The unpatched CUDA stage-1 run peaked
+at 16.51 GiB and failed on its second update with device memory exhausted.
+Device-free samples are not a continuous minimum, and throughput is a synthetic
+kernel/trainer measurement excluding startup and validation, not dataset I/O.
+CUDA graph/cache retention varies between runs; these numbers are evidence for
+this workload, not a universal memory requirement.
+
 ## Dense Grid Pooling
 
 `max_pool2d` keeps first-maximum tie gradients using a detached selection mask

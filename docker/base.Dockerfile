@@ -57,6 +57,13 @@ RUN python3 /tmp/test_mlx_worker.py --source /opt/mlx/mlx/backend/cuda/worker.cp
     && python3 /tmp/test_mlx_worker.py --source /opt/mlx/mlx/backend/cuda/worker.cpp
 ENV MIXLAB_MLX_CUDA_WORKER_FIX=1
 
+# Exact transposed-convolution weight VJP via ordinary-convolution patches.
+# Avoid the CUDA fallback's enormous input-dilated unfold in decoder training.
+COPY docker/patches/mlx-conv-transpose-weight-grad.patch /tmp/mlx-conv-transpose-weight-grad.patch
+RUN git -C /opt/mlx apply --check /tmp/mlx-conv-transpose-weight-grad.patch \
+    && git -C /opt/mlx apply /tmp/mlx-conv-transpose-weight-grad.patch
+ENV MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1
+
 # Build MLX with sm_80 ONLY — minimal first tier.
 # KEEP the build directory for incremental arch additions.
 RUN cd /opt/mlx \

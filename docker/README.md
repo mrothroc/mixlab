@@ -203,14 +203,22 @@ build artifacts. Without layers, every code change would trigger a full MLX
 rebuild. The layered approach separates what changes rarely from what changes
 often:
 
-- **Layer 1 (base):** Go + MLX + CUDA for one architecture. Rebuild only when
-  upgrading Go or MLX versions. ~30 min.
+- **Layer 1 (base):** Go + MLX + CUDA for one architecture. Rebuild when
+  upgrading Go/MLX or changing a pinned MLX dependency patch. ~30 min.
 - **Layer 2 (addarch):** Adds GPU architectures incrementally. Ninja reuses
   existing object files — only new kernels compile. ~10 min per architecture.
 - **Layer 3 (app):** Builds mixlab, installs preparation dependencies, and runs
   an embedded preparation smoke test. Rebuild on every code change; no MLX rebuild.
 
 For day-to-day development, you rebuild only layer 3.
+
+Dependency patches under `docker/patches` require rebuilding **base, architecture
+tiers, app, and RunPod images in order**. In particular, the FP32 grid decoder
+memory fix lives in MLX's transposed-convolution weight backward, not in the Go
+binary. `MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1` marks that patched base; downstream
+Dockerfiles reject older bases. Rebuilding only the app cannot deliver this fix.
+See [dense grid memory checks](../docs/performance.md#dense-grid-memory-checks)
+for the GPU acceptance command and memory attribution.
 
 ### Layer 1: Base image (CUDA + Go + MLX)
 
