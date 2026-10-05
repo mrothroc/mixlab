@@ -64,6 +64,16 @@ RUN git -C /opt/mlx apply --check /tmp/mlx-conv-transpose-weight-grad.patch \
     && git -C /opt/mlx apply /tmp/mlx-conv-transpose-weight-grad.patch
 ENV MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1
 
+# Bound the logical cache and reclaim completed pool frees before retrying OOM.
+# Exercise the pinned methods without CUDA before/after applying the patch.
+COPY docker/patches/mlx-cuda-allocator-reclaim.patch /tmp/mlx-cuda-allocator-reclaim.patch
+COPY docker/test_mlx_allocator.py /tmp/test_mlx_allocator.py
+RUN python3 /tmp/test_mlx_allocator.py --source /opt/mlx/mlx/backend/cuda/allocator.cpp --expect-broken \
+    && git -C /opt/mlx apply --check /tmp/mlx-cuda-allocator-reclaim.patch \
+    && git -C /opt/mlx apply /tmp/mlx-cuda-allocator-reclaim.patch \
+    && python3 /tmp/test_mlx_allocator.py --source /opt/mlx/mlx/backend/cuda/allocator.cpp
+ENV MIXLAB_MLX_CUDA_ALLOCATOR_FIX=1
+
 # Build MLX with sm_80 ONLY — minimal first tier.
 # KEEP the build directory for incremental arch additions.
 RUN cd /opt/mlx \

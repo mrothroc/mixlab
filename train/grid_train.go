@@ -288,6 +288,9 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 				}
 			}
 			handleMLXMemoryControls(cfg.Name, step, memLogEvery, clearCacheEvery, opts.telemetry)
+			if memLogEvery > 0 && (step == 0 || (step+1)%memLogEvery == 0 || step+1 == steps) {
+				fmt.Printf("  [%s] %s\n", cfg.Name, gridMemoryDiagnostic("training", memoryPlan))
+			}
 		}
 		if (step+1)%valEvery == 0 || step+1 == steps {
 			stopped, e = validate(step + 1)

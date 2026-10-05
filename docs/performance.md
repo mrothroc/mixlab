@@ -129,7 +129,13 @@ not change batch size, precision, gradient normalization or the training recipe.
 `MIXLAB_GRID_MEMORY_PREFLIGHT=0` disables this check; `=1` also enables it on
 Metal for debugging. CUDA enables it by default, Metal does not. The check logs
 MLX active/cache/peak allocations, available device memory when reported, and
-the configured limit. `MIXLAB_MLX_MEM_LOG_EVERY` additionally enables grid
+the configured limit. CUDA also reports default-pool reserved/used bytes and
+graph reserved/used bytes, when the runtime supports those queries. Used bytes
+are included in their corresponding reserved totals; do not add them together
+or add MLX counters to pool counters. Samples are non-synchronizing and may
+include pending asynchronous frees. Initial device-free memory is retained in
+the diagnostic to distinguish pre-existing pressure from growth during the run.
+`MIXLAB_MLX_MEM_LOG_EVERY` additionally enables grid training and
 validation-phase memory lines. Peaks are process-wide high-water marks, not
 per-phase allocation sums. An OOM names initialization, preflight, validation,
 or training and includes grid geometry and batch size.
@@ -139,6 +145,10 @@ guarantee against later pressure from other processes. A failed allocation's
 observed peak is only the memory successfully allocated before failure, not the
 total the run would have required. No automatic lower batch size or mixed
 precision fallback is applied.
+
+Low initial device availability adds a suggestion to check other GPU processes;
+otherwise OOM guidance starts with allocator/graph reservations and limits.
+Neither diagnostic establishes which process owns unaccounted memory.
 
 The explicit synthetic full-resolution acceptance probe runs the shipped graph
 at batch 16 and preserves stage-2 freezing and detach boundaries:
@@ -180,6 +190,81 @@ Device-free samples are not a continuous minimum, and throughput is a synthetic
 kernel/trainer measurement excluding startup and validation, not dataset I/O.
 CUDA graph/cache retention varies between runs; these numbers are evidence for
 this workload, not a universal memory requirement.
+
+### CUDA Allocator Recovery
+
+A dataset-backed stage-2 batch-16 run on a 4090 subsequently failed after
+roughly 55 updates. Instrumentation reproduced the large accounting gap:
+the default CUDA pool reserved 14,816 MiB with only 3,131.5 MiB used after
+stage 1, and 17,216 MiB with about 3,044 MiB used during stage 2. CUDA graph
+memory was zero. These differences are unused pool backing, not live tensors
+or proof of a tensor leak.
+
+The pinned allocator had two defects: it could exceed its cache limit by the
+size of the last recycled buffer, and a physical allocation OOM threw without
+reclaiming disposable MLX cache or draining asynchronous frees. The follow-up
+dependency patch:
+
+- Checks the resulting cache size, including when lowering the limit.
+- On pooled `cudaMallocAsync` OOM, evicts cached buffers, waits for allocator
+  free streams, trims unused pool backing, and retries that allocation once.
+- Makes explicit cache clearing drain/trim as well; live arrays remain intact.
+- Leaves successful allocations asynchronous and does not replay training
+  steps or optimizer updates. Real capacity exhaustion still fails normally.
+
+The allocator mutex is released before waiting, and the caller's current CUDA
+device is restored. CUDA distinguishes unused reservations from used memory;
+pool trimming requires completed frees. See the [CUDA allocator documentation](https://docs.nvidia.com/cuda/archive/12.2.0/cuda-runtime-api/group__CUDART__MEMORY__POOLS.html).
+Idle reservations may remain between steps for reuse; the MLX cache limit is
+not a hard ceiling on all CUDA reservations. This is not a per-step global
+synchronization policy.
+
+Rebuild base, architecture tiers, app, and RunPod with
+`MIXLAB_MLX_CUDA_ALLOCATOR_FIX=1`. Older bases are rejected by downstream builds.
+The three-step preflight is still not a long-run memory guarantee.
+
+The stronger, opt-in lifecycle probe uses shuffled synthetic records, masked
+pixels, dihedral augmentation, partial training/validation batches, validation
+every 25 steps, and checkpoint serialization. Run stages in separate processes:
+
+```bash
+GRID_MEMORY_DATASET_PROBE=1 GRID_MEMORY_STAGE=1 \
+  GRID_MEMORY_SAVE=/tmp/grid-stage1.safetensors \
+  go test -tags mlx ./train -run '^TestGridMemoryDatasetProbe$' -count=1 -v
+GRID_MEMORY_DATASET_PROBE=1 GRID_MEMORY_STAGE=2 \
+  GRID_MEMORY_INIT=/tmp/grid-stage1.safetensors \
+  go test -tags mlx ./train -run '^TestGridMemoryDatasetProbe$' -count=1 -v
+```
+
+This requires NumPy for prepare integration and defaults to 200 updates per
+stage. `GRID_MEMORY_STEPS` can shorten a diagnostic run, but fewer than 200
+updates are not acceptance. Remove the saved stage-1 checkpoint after testing.
+
+Follow-up acceptance on RTX 4090 (24,564 MiB VRAM), pinned MLX 0.32.0 plus
+patches, FP32 and batch 16:
+
+| Stage | Updates | MLX peak | Minimum logged free | Records/s |
+|---|---:|---:|---:|---:|
+| 1 | 200 | 10,936.3 MiB | 9,313.8 MiB | 114.23 |
+| 2, warm-started | 200 | 12,400.1 MiB | 6,579.8 MiB | 81.51 |
+
+Both used changing records, partial batches, validation every 25 updates and
+checkpoint writes every 100. The cache stayed within the 2,960.5 MiB configured
+limit. Records/s counts real records, not padding; these numbers are not
+directly comparable to the repeated-full-batch probe or a real dataset run.
+Paired ten-update Metal runs agree within `1e-5 + 1e-4 * abs(reference)`;
+maximum differences are 3.50e-7 and 8.82e-6. Using the same stage-1 checkpoint,
+the patched/unpatched stage-2 first-ten loss difference is at most 2.70e-8.
+
+The exact reported late OOM did not recur on this synthetic workload even
+before the allocator patch. A separate deterministic GPU regression reproduced
+the recovery defect: with this process's non-MLX workspace occupying part of
+VRAM, unpatched MLX failed despite 4.63 GiB of disposable cache; patched MLX
+reclaimed it and succeeded, preserving live data. Explicit clearing returned
+the idle pool to zero; an oversized request still failed. CPU tests exercise
+the pinned cache/free/clear method bodies, and CUDA spatial forward/gradient,
+preflight-restoration and checkpoint-resume tests pass. The requestor's exact
+dataset/job remains a deployment confirmation, not a claimed reproduction.
 
 ## Dense Grid Pooling
 

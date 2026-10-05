@@ -15,6 +15,11 @@ const WorkerProtocol = workercontrol.Version
 
 const shortRevisionLen = 12
 
+// Version and Revision are set by container builds without module/VCS metadata.
+// Empty values retain Go's normal module and VCS reporting.
+var Version string
+var Revision string
+
 // Report reads linker metadata and includes the worker protocol identity.
 func Report(binary string) string {
 	info, _ := debug.ReadBuildInfo()
@@ -46,6 +51,12 @@ func FormatVersion(binary string, info *debug.BuildInfo) string {
 				modified = setting.Value == "true"
 			}
 		}
+	}
+	if Version != "" {
+		version = Version
+	}
+	if Revision != "" {
+		revision = Revision
 	}
 	out := binary + " " + version
 	if revision == "" && buildTime == "" {

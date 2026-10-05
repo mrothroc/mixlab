@@ -42,3 +42,24 @@ func TestGridMemoryFailureDiagnostic(t *testing.T) {
 		t.Fatal("nil error changed")
 	}
 }
+
+func TestGridMemoryHintUsesInitialAvailability(t *testing.T) {
+	if got := gridMemoryHint(mlxMemoryLimitPlan{}); strings.Contains(got, "CUDA") {
+		t.Fatal(got)
+	}
+	for _, tc := range []struct {
+		free  uint64
+		other bool
+	}{
+		{0, false}, {23 << 30, false}, {20 << 30, false}, {12 << 30, true},
+	} {
+		p := mlxMemoryLimitPlan{DedicatedDevice: true, DeviceMemoryBytes: 24 << 30, DeviceFreeBytes: tc.free}
+		got := gridMemoryHint(p)
+		if strings.Contains(got, "other GPU processes") != tc.other {
+			t.Fatalf("free=%d: %s", tc.free, got)
+		}
+		if !strings.Contains(got, "allocator/graph reservations") {
+			t.Fatal(got)
+		}
+	}
+}

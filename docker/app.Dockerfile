@@ -10,11 +10,16 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE} AS builder
 
+ARG MIXLAB_VERSION=dev
+ARG VCS_REF=unknown
+
 # Refuse an old cached MLX base: rebuilding only the app cannot fix libmlx.
 RUN test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1" \
     || { echo "Rebuild the MLX CUDA base and architecture tiers with the worker fix" >&2; exit 1; }
 RUN test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1" \
     || { echo "Rebuild the MLX CUDA base and architecture tiers with the convolution gradient fix" >&2; exit 1; }
+RUN test "${MIXLAB_MLX_CUDA_ALLOCATOR_FIX}" = "1" \
+    || { echo "Rebuild the MLX CUDA base and architecture tiers with the allocator reclaim fix" >&2; exit 1; }
 
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -36,7 +41,9 @@ RUN MIXLAB_REQUIRE_CUDA_KERNELS=1 bash gpu/cuda_kernels/generate_registry.sh \
            || { echo "CUDA kernel missing from generated registry: ${kernel_name}" >&2; exit 1; }; \
        done < gpu/cuda_kernels/cuda_kernels.list
 
-RUN CGO_ENABLED=1 go build -tags mlx -o /mixlab ./cmd/mixlab \
+RUN CGO_ENABLED=1 go build -tags mlx \
+    -ldflags "-X github.com/mrothroc/mixlab/internal/buildinfo.Version=${MIXLAB_VERSION} -X github.com/mrothroc/mixlab/internal/buildinfo.Revision=${VCS_REF}" \
+    -o /mixlab ./cmd/mixlab \
     && CGO_ENABLED=0 go build -o /mixlab-prepare-check ./cmd/mixlab \
     && echo "Build OK: $(file /mixlab)"
 

@@ -1,0 +1,78 @@
+--- a/mlx/backend/cuda/allocator.cpp
++++ b/mlx/backend/cuda/allocator.cpp
+@@ -12,6 +12,7 @@
+ #include <fmt/format.h>
+ 
+ #include <cassert>
++#include <cstdio>
+ #include <fstream>
+ #include <string>
+ 
+@@ -203,7 +204,20 @@
+       } else {
+         cu::device(device).make_current();
+         if (mem_pools_[device]) { // supports memory pools
+-          CHECK_CUDA_ERROR(cudaMallocAsync(&data, size, stream));
++          auto status = cudaMallocAsync(&data, size, stream);
++          if (status == cudaErrorMemoryAllocation) {
++            // MLX counters exclude pool reservations and library allocations.
++            // Reclaim disposable buffers before declaring a physical OOM.
++            // Never retry a submitted graph or an optimizer update.
++            (void)cudaGetLastError();
++            clear_cache();
++            cu::device(device).make_current();
++            std::fprintf(stderr,
++                "[mlx cuda allocator] allocation pressure: reclaimed cache/pool; retrying %zu bytes once\n",
++                size);
++            status = cudaMallocAsync(&data, size, stream);
++          }
++          CHECK_CUDA_ERROR(status);
+         } else {
+           CHECK_CUDA_ERROR(cudaMalloc(&data, size));
+         }
+@@ -265,7 +279,8 @@
+ 
+   std::unique_lock lock(mutex_);
+   active_memory_ -= buf->size;
+-  if (get_cache_memory() < max_pool_size_) {
++  if (get_cache_memory() <= max_pool_size_ &&
++      buf->size <= max_pool_size_ - get_cache_memory()) {
+     buffer_cache_.recycle_to_cache(buf);
+   } else {
+     free_cuda_buffer(buf);
+@@ -356,12 +371,33 @@
+ size_t CudaAllocator::set_cache_limit(size_t limit) {
+   std::lock_guard lk(mutex_);
+   std::swap(limit, max_pool_size_);
++  if (get_cache_memory() > max_pool_size_) {
++    buffer_cache_.release_cached_buffers(get_cache_memory() - max_pool_size_);
++  }
+   return limit;
+ }
+ 
+ void CudaAllocator::clear_cache() {
+-  std::lock_guard lk(mutex_);
+-  buffer_cache_.clear();
++  {
++    std::lock_guard lk(mutex_);
++    buffer_cache_.clear();
++  }
++  // Free callbacks enqueue work on dedicated allocator streams. Observing
++  // their completion lets CUDA release backing storage, not just MLX handles.
++  // Do not hold the allocator mutex while waiting; live buffers are untouched.
++  int previous_device;
++  CHECK_CUDA_ERROR(cudaGetDevice(&previous_device));
++  struct RestoreDevice {
++    int device;
++    ~RestoreDevice() { (void)cudaSetDevice(device); }
++  } restore{previous_device};
++  for (size_t i = 0; i < mem_pools_.size(); ++i) {
++    if (mem_pools_[i]) {
++      cu::device(i).make_current();
++      CHECK_CUDA_ERROR(cudaStreamSynchronize(free_streams_[i]));
++      CHECK_CUDA_ERROR(cudaMemPoolTrimTo(mem_pools_[i], 0));
++    }
++  }
+ }
+ 
+ CudaAllocator& allocator() {

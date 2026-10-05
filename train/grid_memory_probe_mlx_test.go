@@ -68,6 +68,7 @@ func TestGridMemoryProbe(t *testing.T) {
 		m := gpu.MemoryStatsSnapshot()
 		d, _ := gpu.DeviceMemoryInfo()
 		t.Logf("grid-memory stage=%s phase=%s active=%d cache=%d peak=%d device_free=%d", stage, phase, m.ActiveBytes, m.CacheBytes, m.PeakBytes, d.FreeBytes)
+		t.Log(gridMemoryDiagnostic(phase, memoryPlan))
 	}
 	tr, err := initGPUTrainer(prog, cfg, nil, nil)
 	if err != nil {

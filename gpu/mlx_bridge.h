@@ -55,6 +55,8 @@ const char* mlx_device_name(void);
 // Read memory properties for the active MLX GPU. Values are bytes. Free
 // memory is reported when the backend exposes it (currently CUDA).
 int mlx_device_memory_info(uint64_t* total_memory, uint64_t* free_memory);
+int mlx_cuda_memory_snapshot(uint64_t* reserved, uint64_t* used,
+                            uint64_t* graph_reserved, uint64_t* graph_used);
 
 // MLX memory counters and cache controls. Values are bytes.
 uint64_t mlx_memory_active(void);

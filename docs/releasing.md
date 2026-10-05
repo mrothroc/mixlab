@@ -207,7 +207,8 @@ labels and digest before pointing an endpoint at it; see
   `docs/mlx-0.32-upgrade.md` for the dependency and NCCL acceptance contract.
   The same rebuild order applies to `docker/patches`, including the grid
   transposed-convolution gradient memory fix. Downstream images require
-  `MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1`; see
+  `MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1` and
+  `MIXLAB_MLX_CUDA_ALLOCATOR_FIX=1` (allocator recovery/cache bounds); see
   [dense grid memory checks](performance.md#dense-grid-memory-checks).
   If verification fails, fix the source and cut a patch release. Do not move the
   tag: the `release tags` ruleset blocks it for everyone but admins, and the signed

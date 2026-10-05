@@ -28,19 +28,37 @@ func gridMemoryPreflightEnabled(dedicated bool) (bool, error) {
 func gridMemoryDiagnostic(phase string, plan mlxMemoryLimitPlan) string {
 	m := gpu.MemoryStatsSnapshot()
 	d, _ := gpu.DeviceMemoryInfo()
-	return fmt.Sprintf("grid memory phase=%s active=%s cache=%s peak=%s device_free=%s configured_limit=%s",
+	line := fmt.Sprintf("grid memory phase=%s active=%s cache=%s peak=%s device_free=%s initial_device_free=%s configured_limit=%s",
 		phase, formatMiB(m.ActiveBytes), formatMiB(m.CacheBytes), formatMiB(m.PeakBytes),
-		formatOptionalMiB(d.FreeBytes), formatAppliedLimit(plan.ApplyMemoryLimit, plan.MemoryLimitBytes))
+		formatOptionalMiB(d.FreeBytes), formatOptionalMiB(plan.DeviceFreeBytes), formatAppliedLimit(plan.ApplyMemoryLimit, plan.MemoryLimitBytes))
+	if c, ok := gpu.CUDAMemorySnapshot(); ok {
+		line += fmt.Sprintf(" cuda_pool_reserved=%s cuda_pool_used=%s cuda_graph_reserved=%s cuda_graph_used=%s",
+			formatMiB(c.PoolReservedBytes), formatMiB(c.PoolUsedBytes), formatMiB(c.GraphReservedBytes), formatMiB(c.GraphUsedBytes))
+	}
+	return line
 }
 
 func annotateGridMemoryError(err error, phase string, cfg *ArchConfig, plan mlxMemoryLimitPlan) error {
 	if err == nil || !isMLXOutOfMemoryError(err) {
 		return err
 	}
-	return fmt.Errorf("dense_regression memory failure during %s: device=%q vram=%s batch_size=%d grid=%dx%dx%d; %s. The requested allocation did not fit; the observed peak is not an estimate of total required memory. Check other GPU processes and memory/cache limits: %w",
+	return fmt.Errorf("dense_regression memory failure during %s: device=%q vram=%s batch_size=%d grid=%dx%dx%d; %s. The requested allocation did not fit; the observed peak is not an estimate of total required memory. %s: %w",
 		phase, plan.DeviceName, formatOptionalMiB(plan.DeviceMemoryBytes), cfg.Training.BatchSize,
 		cfg.InputAdapter.Height, cfg.InputAdapter.Width, cfg.InputAdapter.Channels,
-		gridMemoryDiagnostic(phase, plan), err)
+		gridMemoryDiagnostic(phase, plan), gridMemoryHint(plan), err)
+}
+
+func gridMemoryHint(plan mlxMemoryLimitPlan) string {
+	if !plan.DedicatedDevice {
+		return "Inspect MLX allocations and configured memory/cache limits"
+	}
+	hint := "Inspect CUDA allocator/graph reservations and configured memory/cache limits"
+	// Low initial availability is evidence of pre-existing device pressure, not
+	// proof that another process caused the failed allocation.
+	if plan.DeviceMemoryBytes > 0 && plan.DeviceFreeBytes > 0 && plan.DeviceFreeBytes < plan.DeviceMemoryBytes-plan.DeviceMemoryBytes/5 {
+		hint += "; device availability was already below 80% at startup, also check other GPU processes"
+	}
+	return hint
 }
 
 // Exercise both cold and cached steps before full validation. Grid graphs have
