@@ -47,6 +47,15 @@ func evaluateGridDataset(cfg *ArchConfig, t GPUTrainer, ds *data.GridDataset) (g
 		return m, fmt.Errorf("trainer cannot evaluate grid predictions")
 	}
 	bs := cfg.Training.BatchSize
+	reader, err := data.NewGridBatchReader(ds, cfg.Training.GridLoader.EffectiveReadWorkers(bs))
+	if err != nil {
+		return m, err
+	}
+	defer func() { _ = reader.Close() }()
+	b, err := data.NewGridBatch(ds.Geometry, bs)
+	if err != nil {
+		return m, err
+	}
 	ids := make([]int, bs)
 	g := ds.Geometry
 	for start := 0; start < ds.Len(); start += bs {
@@ -54,8 +63,7 @@ func evaluateGridDataset(cfg *ArchConfig, t GPUTrainer, ds *data.GridDataset) (g
 		for j := 0; j < n; j++ {
 			ids[j] = start + j
 		}
-		b, err := ds.ReadBatch(ids[:n], bs)
-		if err != nil {
+		if err := reader.ReadInto(ids[:n], &b); err != nil {
 			return m, err
 		}
 		if _, err = e.EvaluateObjectiveGPUWithOutputs(objectiveBatch{grid: &b}, bs, 0, []string{"predictions"}); err != nil {

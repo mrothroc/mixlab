@@ -57,14 +57,22 @@ func visitGridPredictions(cfg *ArchConfig, checkpoint string, ds *data.GridDatas
 	}
 	defer program.Destroy()
 	bs := cfg.Training.BatchSize
+	reader, err := data.NewGridBatchReader(ds, cfg.Training.GridLoader.EffectiveReadWorkers(bs))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = reader.Close() }()
+	b, err := data.NewGridBatch(ds.Geometry, bs)
+	if err != nil {
+		return err
+	}
 	ids := make([]int, bs)
 	for start := 0; start < ds.Len(); start += bs {
 		n := min(bs, ds.Len()-start)
 		for j := 0; j < n; j++ {
 			ids[j] = start + j
 		}
-		b, err := ds.ReadBatch(ids[:n], bs)
-		if err != nil {
+		if err = reader.ReadInto(ids[:n], &b); err != nil {
 			return err
 		}
 		inputs, err := makeGridInputs(p.Inputs, &b)

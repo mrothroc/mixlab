@@ -91,7 +91,7 @@ Normalize outside the encoder using training-only statistics. Float32 storage
 preserves all finite bit patterns, including signed zero. Opt-in float16 stores
 the float32-to-float16 rounded value, not the original exact value; overflow
 is rejected. Review quantization error before using it for a large dataset.
-The reader keeps a record index, one open shard, one record scratch buffer and
+The reader keeps a record index, bounded open shards and decode scratch, and
 reusable batch storage; it does not cache whole shards. Training shuffles all
 record indices each epoch and includes the last partial batch.
 
@@ -398,3 +398,57 @@ training updates, and writes machine-readable `*-export-report.json` files besid
 the temporary fixtures. The stage-two warm start uses trained stage-one tensors.
 Routine tests cover every intermediate shape, mapping errors, both layouts,
 normalization offsets, bounded batch inference and no-overwrite publication.
+
+## Loader And Throughput
+
+Grid training defaults to two prefetched batches and up to
+`min(batch_size, GOMAXPROCS)` parallel read/decode workers. Configure runtime
+loading independently of the model:
+
+```json
+"grid_loader": {"prefetch_batches": 2, "read_workers": 0}
+```
+
+Place this object under `training`. Depth 0 with workers 1 is the serial
+baseline. Depth must be 0..64; workers 0 is automatic, otherwise 1..256 (capped
+by batch size). Validation and prediction use parallel reads but no prefetch.
+Changing these settings on resume preserves sampled order, D4 transforms and
+padding. Checkpoints save the consumed cursor, never the read-ahead cursor.
+
+Read, decode and augmentation run on the CPU while the GPU computes the prior
+batch. The pool contains at most `prefetch_batches + 1` decoded batches,
+including the consumer and any batch under construction. Each read worker
+holds at most one open shard and one encoded-record scratch buffer. The banner
+reports the decoded pool and scratch bounds separately. Decoded bytes are
+`(depth+1) * batch_size * H * W * (C+2*Ct) * 4`; targets and broadcast masks count
+even when shards are float16. Metadata, OS page cache, GPU input copies, and the
+separate validation batch are not included. This is not a whole-dataset cache.
+Early stop/error cleanup joins workers; an in-progress filesystem read must
+return before shutdown can finish.
+
+Logs and telemetry distinguish:
+
+- `records/s` / `records_per_sec`: compute-only rate, unchanged.
+- `train_records/s` / `train_records_per_sec`: consumer step rate including data
+  waits and step bookkeeping, excluding validation/checkpoints and log writes.
+- `data_wait` / `data_wait_percent`: percentage of measured consumer step time
+  blocked obtaining a batch, including synchronous preparation when depth is 0.
+- `wall_records/s` / `wall_records_per_sec`: all real records divided by elapsed
+  run-loop time, including previous validation/checkpoints and startup loading.
+
+Compute and consumer-step rates exclude the first update after start/resume to
+avoid compilation skew. Wall rate includes it, but excludes preflight and
+initial validation before the training loop. Padding never counts as records.
+The completion line includes final validation/checkpoint/export time.
+
+Compare depth 0/workers 1 against depth 2/automatic workers on the same dataset,
+seed, step count and validation/checkpoint cadence. Record all three rates and
+data-wait percentage. Test local disk and network storage separately; warm
+page-cache measurements are not cold-network measurements. More workers can
+overload shared storage, so tune down for concurrent jobs. A wall rate within
+10% of compute is a workload target, not a guarantee.
+
+A repeatable host-only overlap check is
+`go test ./data -run '^$' -bench BenchmarkGridPrefetchOverlap -benchtime=40x`.
+It uses local synthetic 7-channel 256x256 float16 shards and a sleeping consumer
+to simulate compute. Its `sim-compute-records/s` is not GPU throughput.

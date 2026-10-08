@@ -101,7 +101,11 @@ func (d *GridDataset) ReadBatch(indices []int, batchSize int) (GridBatch, error)
 		return GridBatch{}, fmt.Errorf("grid batch exceeds element limit")
 	}
 	if d.batch.BatchSize != batchSize {
-		d.batch = GridBatch{BatchSize: batchSize, Geometry: g, Inputs: make([]float32, batchSize*p*g.Channels), Targets: make([]float32, batchSize*p*g.TargetChannels), LossMask: make([]float32, batchSize*p*g.TargetChannels), IDs: make([]string, batchSize)}
+		var err error
+		d.batch, err = NewGridBatch(g, batchSize)
+		if err != nil {
+			return GridBatch{}, err
+		}
 	}
 	b := &d.batch
 	clear(b.Inputs)

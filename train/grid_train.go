@@ -143,9 +143,21 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 		for i := range ids {
 			ids[i] = i
 		}
-		b, e := ds.ReadBatch(ids, batchSize)
+		b, e := data.NewGridBatch(ds.Geometry, batchSize)
 		if e != nil {
 			return result, e
+		}
+		r, e := data.NewGridBatchReader(ds, cfg.Training.GridLoader.EffectiveReadWorkers(batchSize))
+		if e != nil {
+			return result, e
+		}
+		e = r.ReadInto(ids, &b)
+		closeErr := r.Close()
+		if e != nil {
+			return result, e
+		}
+		if closeErr != nil {
+			return result, closeErr
 		}
 		fmt.Printf("  [%s] %s\n", cfg.Name, gridMemoryDiagnostic("preflight-start", memoryPlan))
 		if e = preflightGridTraining(trainer, shapes, b, setup.StartStep, sched.At(setup.StartStep)); e != nil {
@@ -212,10 +224,17 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 			return result, err
 		}
 	}
-	var augmenter data.GridAugmenter
 	start := time.Now()
-	var compute time.Duration
-	records := 0
+	var timing gridThroughput
+	loaderSteps := steps
+	if stopped {
+		loaderSteps = setup.StartStep
+	}
+	loader, err := newTrainingGridPrefetch(cfg, ds, sampler, setup.StartStep, loaderSteps)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = loader.Close() }()
 	fmt.Printf("  [%s] dense regression: records=%d batch_size=%d grid=%dx%dx%d epochs are complete shuffled passes\n", cfg.Name, ds.Len(), batchSize, ds.Geometry.Channels, ds.Geometry.Height, ds.Geometry.Width)
 	var frozen []string
 	for _, shape := range shapes {
@@ -225,19 +244,18 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 	}
 	fmt.Printf("  [%s] trainable_weights=%d frozen_or_unreachable=%d names=%v\n", cfg.Name, len(gridTrainableNames(shapes)), len(frozen), frozen)
 	for step := setup.StartStep; step < steps && !stopped; step++ {
+		stepStart := time.Now()
 		logPhaseRates(trainer, sched, step, setup.StartStep, cfg.Name)
-		indices, epoch, occurrence, e := sampler.Next(batchSize)
+		waitStart := time.Now()
+		b, epoch, e := loader.Next()
+		dataWait := time.Since(waitStart)
 		if e != nil {
 			return result, e
 		}
-		b, e := ds.ReadBatch(indices, batchSize)
+		// Only this cursor is checkpointed; the producer may be several batches ahead.
+		_, _, _, e = sampler.Next(batchSize)
 		if e != nil {
 			return result, e
-		}
-		if a := cfg.Training.GridAugmentation; a != nil && a.Dihedral {
-			if e = augmenter.Apply(b, cfg.Training.Seed, epoch, occurrence); e != nil {
-				return result, e
-			}
 		}
 		tick := time.Now()
 		if e = submitPreparedStepGPU(trainer, objectiveBatch{grid: &b}, batchSize, 0, sched.At(step)); e != nil {
@@ -250,10 +268,7 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 		if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
 			return result, fmt.Errorf("grid step %d: non-finite loss", step)
 		}
-		if step > setup.StartStep {
-			compute += time.Since(tick)
-			records += b.Count
-		}
+		computeTime := time.Since(tick)
 		if step == 0 {
 			result.FirstLoss = float64(loss)
 		}
@@ -268,18 +283,16 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 		if stats.LastStepSkipped {
 			fmt.Printf("  [%s] step=%d optimizer update skipped: total=%d consecutive=%d\n", cfg.Name, step+1, stats.SkippedSteps, stats.ConsecutiveSkipped)
 		}
+		timing.observe(b.Count, dataWait, computeTime, time.Since(stepStart), step == setup.StartStep)
 		if step == 0 || (step+1)%logEvery == 0 || step+1 == steps {
-			rate := 0.0
-			if compute > 0 {
-				rate = float64(records) / compute.Seconds()
-			}
-			fmt.Printf("  [%s] step=%d/%d epoch=%d loss=%.7g lr=%g records/s=%.2f pixels/s=%.0f\n", cfg.Name, step+1, steps, epoch, float64(loss), sched.At(step), rate, rate*float64(ds.Geometry.Height*ds.Geometry.Width))
+			rate, trainingRate, wallRate, waitPercent := timing.rates(time.Since(start))
+			fmt.Printf("  [%s] step=%d/%d epoch=%d loss=%.7g lr=%g records/s=%.2f train_records/s=%.2f wall_records/s=%.2f data_wait=%.1f%% pixels/s=%.0f\n", cfg.Name, step+1, steps, epoch, float64(loss), sched.At(step), rate, trainingRate, wallRate, waitPercent, rate*float64(ds.Geometry.Height*ds.Geometry.Width))
 			if opts.telemetry != nil {
 				opts.telemetry.state.update(telemetryUpdate{
 					Model: cfg.Name, Step: step + 1, TotalSteps: steps, Loss: float64(loss), HasLoss: true,
 					ValLoss: result.LastValLoss, HasValLoss: result.HasValLoss, LR: sched.At(step),
 					Objective: arch.ObjectiveDenseRegression, Elapsed: time.Since(start),
-					Extra:          map[string]float64{"records_per_sec": rate, "pixels_per_sec": rate * float64(ds.Geometry.Height*ds.Geometry.Width), "batch_size": float64(batchSize)},
+					Extra:          map[string]float64{"records_per_sec": rate, "train_records_per_sec": trainingRate, "wall_records_per_sec": wallRate, "data_wait_percent": waitPercent, "pixels_per_sec": rate * float64(ds.Geometry.Height*ds.Geometry.Width), "batch_size": float64(batchSize)},
 					OptimizerSteps: stats.CommittedSteps, SkippedOptimizerSteps: stats.SkippedSteps,
 					ConsecutiveSkipped: stats.ConsecutiveSkipped, OptimizerStepSkipped: stats.LastStepSkipped,
 				})
@@ -309,6 +322,9 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 			}
 		}
 	}
+	if err = loader.Close(); err != nil {
+		return result, err
+	}
 	if opts.SafetensorsPath != "" {
 		if err = save(opts.SafetensorsPath); err != nil {
 			return result, err
@@ -316,5 +332,7 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 	}
 	result.Delta = result.FirstLoss - result.LastLoss
 	result.Elapsed = time.Since(start)
+	_, _, wallRate, _ := timing.rates(result.Elapsed)
+	fmt.Printf("  [%s] grid complete: records=%d wall_records/s=%.2f elapsed=%s\n", cfg.Name, timing.allRecords, wallRate, result.Elapsed.Round(time.Millisecond))
 	return result, nil
 }

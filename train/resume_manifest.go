@@ -160,6 +160,7 @@ func resumeConfigHash(cfg *ArchConfig) (string, error) {
 	clone := *cfg
 	clone.Training = cfg.Training
 	if cfg.GridEnabled() {
+		clone.Training.GridLoader = nil
 		// Warm-start instructions are one-time actions, never resume inputs.
 		clone.Training.InitFrom = ""
 		clone.Training.InitAllowMissing = nil

@@ -342,6 +342,7 @@ func (e *ExampleFramingSpec) UnmarshalJSON(data []byte) error {
 // TrainingSpec holds training hyperparameters.
 type TrainingSpec struct {
 	GridAugmentation                  *GridAugmentationSpec        `json:"grid_augmentation,omitempty"`
+	GridLoader                        *GridLoaderSpec              `json:"grid_loader,omitempty"`
 	InitFrom                          string                       `json:"init_from,omitempty"`
 	InitAllowMissing                  []string                     `json:"init_allow_missing,omitempty"`
 	Freeze                            []string                     `json:"freeze,omitempty"`
@@ -530,8 +531,8 @@ func validateConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if cfg.GridEnabled() || cfg.DenseRegression != nil || cfg.Training.Objective == ObjectiveDenseRegression {
 		return validateGridConfig(cfg, source)
 	}
-	if cfg.Training.GridAugmentation != nil || cfg.Training.InitFrom != "" || len(cfg.Training.InitAllowMissing) > 0 || len(cfg.Training.Freeze) > 0 {
-		return nil, fmt.Errorf("grid_augmentation, init_from, init_allow_missing, and freeze currently require dense_regression")
+	if cfg.Training.GridLoader != nil || cfg.Training.GridAugmentation != nil || cfg.Training.InitFrom != "" || len(cfg.Training.InitAllowMissing) > 0 || len(cfg.Training.Freeze) > 0 {
+		return nil, fmt.Errorf("grid_loader, grid_augmentation, init_from, init_allow_missing, and freeze currently require dense_regression")
 	}
 	if cfg.ModelDim <= 0 {
 		return nil, fmt.Errorf("config %q missing/invalid model_dim", source)
