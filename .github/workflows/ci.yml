@@ -126,7 +126,7 @@ jobs:
         env:
           CGO_ENABLED: "0"
         with:
-          version: v2.13.2
+          version: v2.14.0
           args: ./...
 
       - name: Check file sizes (max 1000 lines per .go file)

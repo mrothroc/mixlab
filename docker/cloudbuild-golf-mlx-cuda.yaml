@@ -4,7 +4,7 @@
 #   gcloud builds submit \
 #     --config=docker/cloudbuild-golf-mlx-cuda.yaml \
 #     --substitutions=_REGISTRY_PREFIX=us-central1-docker.pkg.dev/my-project/my-repo,\
-# _BASE_IMAGE=us-central1-docker.pkg.dev/my-project/my-repo/golf-mlx-cuda-base:mlx-0.32.0-go1.27.1,\
+# _BASE_IMAGE=us-central1-docker.pkg.dev/my-project/my-repo/golf-mlx-cuda-base:mlx-0.32.0-go1.27.2,\
 # _ARCHS="80;86;89;90" \
 #     --timeout=14400s \
 #     .
@@ -29,7 +29,7 @@ substitutions:
   _ARCHS: "80;86;89;90"
   _REGISTRY_PREFIX: ""
   _BASE_IMAGE: ""
-  _IMAGE_TAG: "mlx-0.32.0-go1.27.1"
+  _IMAGE_TAG: "mlx-0.32.0-go1.27.2"
   _MLX_VERSION: "v0.32.0"
   _MLX_COMMIT: "7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247"
 
