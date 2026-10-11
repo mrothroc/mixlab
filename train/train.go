@@ -19,6 +19,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 	if cfg.Training.Distributed != nil {
 		return runDistributedTrain(cfg, trainPattern, opts)
 	}
+	if err := startTrainingPrecision(cfg, opts); err != nil {
+		return TrainResult{}, err
+	}
 	// MLX CUDA uses thread-local stream state, so trainer creation and all
 	// subsequent trainer calls must stay on the same OS thread.
 	runtime.LockOSThread()

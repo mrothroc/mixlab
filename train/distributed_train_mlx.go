@@ -20,6 +20,9 @@ import (
 // runDistributedTrain owns optimizer attempts, not gradient synchronization.
 // The C++ trainer remains the only owner of collective update transactions.
 func runDistributedTrain(cfg *ArchConfig, pattern string, opts TrainOptions) (TrainResult, error) {
+	if _, err := trainingPrecision(cfg); err != nil {
+		return TrainResult{}, err
+	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	if err := arch.ValidateDistributedConfig(cfg); err != nil {
@@ -75,6 +78,14 @@ func runDistributedTrain(cfg *ArchConfig, pattern string, opts TrainOptions) (Tr
 		return TrainResult{}, err
 	}
 	defer group.Close()
+	precisionOpts := opts
+	if group.Rank() != 0 {
+		precisionOpts.SafetensorsPath = ""
+		precisionOpts.CheckpointDir = ""
+	}
+	if err := startTrainingPrecision(cfg, precisionOpts); err != nil {
+		return TrainResult{}, err
+	}
 	loader, err := data.NewDistributedLoader(pattern, cfg.Training.Seed, group.WorldSize(), group.Rank(), cfg.SeqLen, effectiveShuffleChunkTokens(cfg), cfg.VocabSize, group.LocalView().Membership.MembersHash)
 	if err != nil {
 		return TrainResult{}, err

@@ -123,9 +123,65 @@ compute rate. The telemetry JSON includes these rates in `extra`.
 AdamW and LAMB are supported. Rank-4 kernels use matrix LR/decay overrides;
 vector biases use scalar settings. For Adam equivalence choose AdamW, zero
 global/group decay, beta1 0.9, beta2 0.999, epsilon 1e-8.
-Use FP32 compute: the existing BF16 custom-block restriction still applies.
+Use `compute_dtype: "float32"`: the existing BF16 custom-block restriction still
+applies. On a GPU, float32 storage defaults to allowing reduced-precision
+arithmetic in eligible kernels; it is not a promise of strict FP32 multiplication.
 DDP, accumulation, SWA, token objectives, sequence schedules, built-in sequence
 blocks, HF export and token generation are not supported for grid tasks.
+
+### GPU Float32 Precision
+
+MLX gates reduced-precision float32 arithmetic with one switch on both GPU
+backends. On CUDA it permits TF32 in eligible matmuls and convolutions. On Apple
+GPUs with neural accelerators (M5-class GPUs on macOS 26.2 or later) it routes
+float32 matmuls and attention through the accelerators; earlier Apple GPUs have no
+reduced-precision path, so the setting changes nothing there.
+
+Use `training.allow_tf32: false` for strict-FP32 parity experiments. Omitted
+preserves MLX's speed default, but honors an existing `MLX_ENABLE_TF32=0` and, on
+CUDA, `NVIDIA_TF32_OVERRIDE=0`. Explicit config must agree with `MLX_ENABLE_TF32`;
+on CUDA, explicit true conflicts with `NVIDIA_TF32_OVERRIDE=0`.
+`NVIDIA_TF32_OVERRIDE=1` does not force TF32 when Mixlab disables it, and Metal
+ignores it. Environment values must be `0` or `1`. Without a GPU backend, explicit
+values fail at execution, not config parsing.
+
+The banner reports dtype, backend, and the permission. This is permission for
+eligible kernels, not a claim that every operation uses reduced precision. The
+switch is locked for the process lifetime, including native eval/prediction.
+Use a fresh process for each precision variant. This policy does not configure
+an independently exported Hugging Face/PyTorch runtime.
+
+Runs with a final safetensors path write `<path>.run.json`; otherwise runs with
+a checkpoint directory write `<checkpoint-dir>/run.json`. Runs without an
+artifact destination report precision in the banner only. Single-device and
+DDP resume manifests also record the resolved policy. Exact resume rejects a
+policy/backend change, including an environment-only change, or a legacy
+manifest without precision provenance: a checkpoint from before this policy
+cannot show whether reduced precision was allowed. To change policy
+intentionally, or to continue a legacy run, start a new weights-only run; do
+not edit the resume manifest. Matching policy is necessary but does not
+guarantee bitwise results across GPUs or library versions.
+
+Error and speed tradeoffs depend on shapes, values, and kernels. Our RTX 4090
+tied-convolution fixture measured worst per-tensor normalized gradient errors
+around `5e-3` to `9e-3` with TF32, versus `6e-7` to `1e-5` with it disabled,
+checked against PyTorch float64. The two-channel stage-1 graph ran at 123-125
+records/s with TF32 versus 96-102 with strict FP32 (batch 16, warmed-up compute
+only). These are workload-specific observations, not error bounds or
+full-dataset training guarantees. Strict FP32 does not guarantee bit-identical
+CUDA and Metal results.
+
+To reproduce, run the numerical probes in fresh processes against a float64
+oracle (Metal runs them by default; CUDA needs the opt-in), optionally check the
+dumps with PyTorch, then time each setting in its own process on CUDA:
+
+```bash
+MIXLAB_TEST_CUDA_PRECISION=1 MIXLAB_TF32_PROBE_OUT=/tmp/tf32-probes \
+  go test -tags mlx ./gpu -run '^TestGPUPrecisionSubprocess$' -count=1 -v
+python3 scripts/validate_tf32_probe.py /tmp/tf32-probes
+MIXLAB_TEST_GRID_TF32=1 go test -tags mlx ./train -run '^TestGridTF32Throughput$' -count=1 -v
+MIXLAB_TEST_GRID_TF32=0 go test -tags mlx ./train -run '^TestGridTF32Throughput$' -count=1 -v
+```
 
 ## Piecewise-Constant Learning Rates
 

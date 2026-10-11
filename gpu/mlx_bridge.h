@@ -13,6 +13,7 @@ void mlx_set_cuda_graph_limits(int max_ops, int max_mb);
 
 // Initialize MLX - returns 0 on success, -1 on failure
 int mlx_init(void);
+int mlx_configure_tf32(int allowed);
 
 // Runtime dependency identity and compiled distributed-backend capabilities.
 // Capability checks do not initialize a distributed process group.

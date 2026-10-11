@@ -26,6 +26,13 @@ func prepareResumeRun(cfg *ArchConfig, trainPattern, resumePath string, earlySto
 	if err != nil {
 		return resumeRunSetup{}, err
 	}
+	precision, err := trainingPrecision(cfg)
+	if err != nil {
+		return resumeRunSetup{}, err
+	}
+	if err := checkResumePrecision(manifest.Precision, precision); err != nil {
+		return resumeRunSetup{}, err
+	}
 	currentConfigHash, err := resumeConfigHash(cfg)
 	if err != nil {
 		return resumeRunSetup{}, fmt.Errorf("hash current config: %w", err)

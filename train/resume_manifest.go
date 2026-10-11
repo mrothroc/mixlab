@@ -43,6 +43,7 @@ type resumeEarlyStop struct {
 }
 
 type resumeManifest struct {
+	Precision           *gpu.PrecisionPolicy      `json:"precision,omitempty"`
 	Format              string                    `json:"format"`
 	GlobalStep          int                       `json:"global_step"`
 	ModelFile           string                    `json:"model_file"`

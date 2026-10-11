@@ -2,6 +2,18 @@
 
 mixlab runs natively on Apple Silicon (Metal/MLX). For NVIDIA GPUs, use Docker.
 The current CUDA image is built from MLX v0.32.0 and requires NCCL support.
+
+### Float32 And TF32
+
+`compute_dtype: "float32"` controls tensor dtype, not strict multiplication
+precision: CUDA allows TF32 for eligible float32 matmuls/convolutions by default.
+Set `training.allow_tf32: false` or, when the config omits that field,
+`MLX_ENABLE_TF32=0` before starting Mixlab for strict FP32. Conflicting explicit
+config/environment settings fail. The policy is process-wide, is printed at
+startup, and is recorded in run and resume manifests. Resume cannot silently
+switch precision. Use separate processes to compare settings, and measure both
+numerical error and warmed-up throughput; slowdown is workload-dependent.
+See [precision and provenance](../docs/dense-grid.md#gpu-float32-precision).
 See [the MLX upgrade contract](../docs/mlx-0.32-upgrade.md) before rebuilding
 the dependency layers.
 

@@ -36,6 +36,7 @@
 std::string g_device_name;
 std::atomic<bool> g_initialized{false};
 std::mutex g_init_mutex;
+static std::optional<bool> g_tf32_policy;
 std::recursive_mutex g_bridge_pool_mutex;
 thread_local std::optional<mx::Stream> g_bridge_thread_stream;
 thread_local std::string g_last_bridge_error;
@@ -299,6 +300,19 @@ void erase_compiled_ir_eval_cache_for_program(int64_t program) {
 
 extern "C" {
 
+int mlx_configure_tf32(int allowed) {
+  std::lock_guard<std::mutex> lock(g_init_mutex);
+  const bool enabled = allowed != 0;
+  if (g_tf32_policy.has_value()) {
+    return *g_tf32_policy == enabled ? 0 : -1;
+  }
+  if (setenv("MLX_ENABLE_TF32", enabled ? "1" : "0", 1) != 0) {
+    return -1;
+  }
+  g_tf32_policy = enabled;
+  return 0;
+}
+
 void mlx_set_cuda_graph_limits(int max_ops, int max_mb) {
   if (max_ops > 0) {
     setenv("MLX_MAX_OPS_PER_BUFFER", std::to_string(max_ops).c_str(), 1);
@@ -314,6 +328,21 @@ int mlx_init(void) {
     if (!g_initialized.load(std::memory_order_acquire)) {
       std::lock_guard<std::mutex> lock(g_init_mutex);
       if (!g_initialized.load(std::memory_order_relaxed)) {
+        // Freeze even for callers that initialize the GPU before a trainer.
+        // MLX caches MLX_ENABLE_TF32 on first use on both CUDA (TF32) and
+        // Metal (neural-accelerator matmul/attention).
+        if (!g_tf32_policy.has_value()) {
+          const char* value = std::getenv("MLX_ENABLE_TF32");
+          bool allowed = !value || std::atoi(value) != 0;
+#ifdef __linux__
+          const char* override_value = std::getenv("NVIDIA_TF32_OVERRIDE");
+          allowed = allowed && (!override_value || std::atoi(override_value) != 0);
+#endif
+          if (setenv("MLX_ENABLE_TF32", allowed ? "1" : "0", 1) != 0) {
+            return -1;
+          }
+          g_tf32_policy = allowed;
+        }
         if (!mx::is_available(mx::Device::gpu)) {
           return -1;
         }

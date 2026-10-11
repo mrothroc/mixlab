@@ -33,6 +33,7 @@ type distributedResumeSamplerState struct {
 }
 
 type distributedResumeManifest struct {
+	Precision                *gpu.PrecisionPolicy          `json:"precision,omitempty"`
 	Format                   string                        `json:"format"`
 	GlobalOptimizerAttempt   uint64                        `json:"global_optimizer_attempt"`
 	GlobalCommittedStep      uint64                        `json:"global_committed_step"`

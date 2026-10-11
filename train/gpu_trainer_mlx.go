@@ -149,6 +149,9 @@ func initMLXGPUTrainerWithDistributedContext(
 		}
 	}()
 
+	if _, err := trainingPrecision(cfg); err != nil {
+		return nil, err
+	}
 	if !gpu.Available() {
 		return nil, fmt.Errorf("MLX backend unavailable; rebuild with: CGO_ENABLED=1 go build -tags mlx -o mixlab ./cmd/mixlab")
 	}

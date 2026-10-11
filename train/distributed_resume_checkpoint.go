@@ -408,7 +408,12 @@ func buildDistributedResumeManifest(
 	}
 	sort.Ints(exactWorldSizes)
 	exactWorldSizes = slices.Compact(exactWorldSizes)
+	precision, err := trainingPrecision(cfg)
+	if err != nil {
+		return distributedResumeManifest{}, nil, err
+	}
 	manifest := distributedResumeManifest{
+		Precision:              &precision,
 		Format:                 distributedResumeCheckpointFormat,
 		GlobalOptimizerAttempt: snapshot.Optimizer.AttemptedSteps,
 		GlobalCommittedStep:    snapshot.Optimizer.CommittedSteps,

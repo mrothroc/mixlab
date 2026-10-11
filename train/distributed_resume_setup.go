@@ -18,6 +18,7 @@ import (
 )
 
 type distributedResumeExpectations struct {
+	Precision         gpu.PrecisionPolicy
 	LocalView         distributed.LocalGroupView
 	LocalBatchTokens  int
 	AccumulationSteps int
@@ -98,7 +99,12 @@ func newDistributedResumeExpectations(
 	if err != nil {
 		return distributedResumeExpectations{}, err
 	}
+	precision, err := trainingPrecision(cfg)
+	if err != nil {
+		return distributedResumeExpectations{}, err
+	}
 	return distributedResumeExpectations{
+		Precision:         precision,
 		LocalView:         view,
 		LocalBatchTokens:  localBatchTokens,
 		AccumulationSteps: accumulationSteps,
@@ -214,6 +220,9 @@ func validateDistributedResumeCompatibility(
 			expected.LocalBatchTokens,
 			expected.AccumulationSteps,
 		)
+	}
+	if err := checkResumePrecision(manifest.Precision, expected.Precision); err != nil {
+		return err
 	}
 	for _, hash := range []struct {
 		name       string

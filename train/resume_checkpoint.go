@@ -78,6 +78,11 @@ func writeResumableCheckpoint(
 		EarlyStop:     ctx.EarlyStop.resumeSnapshot(),
 		Grid:          ctx.Grid,
 	}
+	precision, err := trainingPrecision(cfg)
+	if err != nil {
+		return safetensorsArtifacts{}, "", err
+	}
+	manifest.Precision = &precision
 	if artifacts.SWAPath != "" {
 		manifest.SWAFile = filepath.Base(artifacts.SWAPath)
 	}

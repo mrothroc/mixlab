@@ -27,6 +27,9 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 	if err := validateRunTrainOptions(opts); err != nil {
 		return result, err
 	}
+	if err := startTrainingPrecision(cfg, opts); err != nil {
+		return result, err
+	}
 	initPath, err := gridWarmStartPath(cfg, opts)
 	if err != nil {
 		return result, err

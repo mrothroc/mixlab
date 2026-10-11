@@ -436,6 +436,7 @@ type TrainingSpec struct {
 	MuonNesterov             *bool    `json:"muon_nesterov,omitempty"`
 	Optimizer                string   `json:"optimizer,omitempty"` // "muon" (default), "muon_eq_r", "normuon", "adamw", or "lamb"
 	ComputeDType             string   `json:"compute_dtype,omitempty"`
+	AllowTF32                *bool    `json:"allow_tf32,omitempty"`
 	QAT                      string   `json:"qat,omitempty"` // "none" (default), "int8", or "int6"
 	QATStart                 int      `json:"qat_start,omitempty"`
 	WeightInit               string   `json:"weight_init,omitempty"`     // See validateWeightInitialization for supported policies.

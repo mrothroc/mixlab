@@ -94,7 +94,7 @@ func validateGridConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	// The common defaults include sequence-only knobs; validate explicit policy
 	// before applying them, then leave those defaults inert in the grid runner.
 	allowed := map[string]bool{"GridLoader": true, "GridAugmentation": true, "InitFrom": true, "InitAllowMissing": true, "Freeze": true, "Phases": true}
-	for _, name := range []string{"Objective", "BatchSize", "Steps", "Seed", "LR", "Optimizer", "WeightDecay", "WeightDecayPolicy", "EmbedLR", "MatrixLR", "ScalarLR", "HeadLR", "EmbedWeightDecay", "MatrixWeightDecay", "ScalarWeightDecay", "HeadWeightDecay", "Beta1", "Beta2", "Epsilon", "LAMBBeta1", "LAMBBeta2", "LAMBEps", "LAMBTrustRatioCap", "GradClip", "WarmupSteps", "WarmupRatio", "HoldSteps", "WarmdownSteps", "MinLRFraction", "LRScheduleSteps", "WeightInit", "WeightInitStd", "ComputeDType", "ValEverySteps", "ValExamples", "EarlyStop", "TargetValLoss"} {
+	for _, name := range []string{"Objective", "BatchSize", "Steps", "Seed", "LR", "Optimizer", "WeightDecay", "WeightDecayPolicy", "EmbedLR", "MatrixLR", "ScalarLR", "HeadLR", "EmbedWeightDecay", "MatrixWeightDecay", "ScalarWeightDecay", "HeadWeightDecay", "Beta1", "Beta2", "Epsilon", "LAMBBeta1", "LAMBBeta2", "LAMBEps", "LAMBTrustRatioCap", "GradClip", "WarmupSteps", "WarmupRatio", "HoldSteps", "WarmdownSteps", "MinLRFraction", "LRScheduleSteps", "WeightInit", "WeightInitStd", "ComputeDType", "AllowTF32", "ValEverySteps", "ValExamples", "EarlyStop", "TargetValLoss"} {
 		allowed[name] = true
 	}
 	if err := rejectGridExtras(cfg.Training, allowed, "training"); err != nil {

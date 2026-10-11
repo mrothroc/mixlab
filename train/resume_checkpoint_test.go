@@ -79,6 +79,13 @@ func TestResumableCheckpointBundleRoundTripAndNewestComplete(t *testing.T) {
 	if loaded.Manifest.GlobalStep != 2 || loaded.ModelPath != artifacts.FinalPath {
 		t.Fatalf("loaded manifest=%+v model=%s", loaded.Manifest, loaded.ModelPath)
 	}
+	precision, err := trainingPrecision(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Manifest.Precision == nil || *loaded.Manifest.Precision != precision {
+		t.Fatalf("missing or wrong precision: %+v", loaded.Manifest.Precision)
+	}
 	if !reflect.DeepEqual(loaded.Trainer, state) {
 		t.Fatalf("trainer state round trip mismatch\n got=%+v\nwant=%+v", loaded.Trainer, state)
 	}

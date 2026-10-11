@@ -38,10 +38,15 @@ func distributedInitializationFields(
 		{Name: "world_size", Value: uint64(context.LocalView.Membership.WorldSize())},
 		{Name: "config", Value: hashString64(configHash)},
 	}
+	precision, err := trainingPrecision(cfg)
+	if err != nil {
+		return nil, err
+	}
 	for _, value := range []struct {
 		name  string
 		value any
 	}{
+		{name: "precision", value: precision},
 		{name: "ir", value: program},
 		{name: "weight_layout", value: shapes},
 		{name: "optimizer", value: optimizer},
