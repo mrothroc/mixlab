@@ -30,26 +30,32 @@ int main(int argc, char** argv) {
   auto live = allocator.malloc_async(MiB, 0, stream);
   auto* live_ptr = static_cast<mlx::core::cu::CudaBuffer*>(live.ptr())->data;
   check(cudaMemsetAsync(live_ptr, 0x5a, MiB, stream));
-  auto cached = allocator.malloc_async(available / 5, 0, stream);
-  check(cudaStreamSynchronize(stream));
-  allocator.free(cached);
-  std::printf("pressure cache=%zu active=%zu free_at_start=%zu\n",
-      allocator.get_cache_memory(), allocator.get_active_memory(), available);
   bool oom = false;
-  try {
-    auto large = allocator.malloc_async(available * 2 / 3 - 512 * MiB, 0, stream);
+  // Repeat in one process so pool/free-stream lifetime spans pressure events.
+  const int cycles = expect_oom ? 1 : 512;
+  for (int cycle = 0; cycle < cycles; ++cycle) {
+    auto cached = allocator.malloc_async(available / 5, 0, stream);
     check(cudaStreamSynchronize(stream));
-    allocator.free(large);
-  } catch (const std::exception& e) {
-    if (std::string(e.what()).find("out of memory") == std::string::npos) throw;
-    oom = true;
-    std::printf("allocation: %s\n", e.what());
-    (void)cudaGetLastError();
-  }
-  unsigned char sentinel[16];
-  check(cudaMemcpy(sentinel, live_ptr, sizeof(sentinel), cudaMemcpyDeviceToHost));
-  if (!std::all_of(std::begin(sentinel), std::end(sentinel), [](auto x) { return x == 0x5a; })) {
-    throw std::runtime_error("reclaim modified live memory");
+    allocator.free(cached);
+    std::printf("pressure cycle=%d cache=%zu active=%zu free_at_start=%zu\n",
+        cycle, allocator.get_cache_memory(), allocator.get_active_memory(), available);
+    oom = false;
+    try {
+      auto large = allocator.malloc_async(available * 2 / 3 - 512 * MiB, 0, stream);
+      check(cudaStreamSynchronize(stream));
+      allocator.free(large);
+    } catch (const std::exception& e) {
+      if (std::string(e.what()).find("out of memory") == std::string::npos) throw;
+      oom = true;
+      std::printf("allocation: %s\n", e.what());
+      (void)cudaGetLastError();
+    }
+    unsigned char sentinel[16];
+    check(cudaMemcpy(sentinel, live_ptr, sizeof(sentinel), cudaMemcpyDeviceToHost));
+    if (!std::all_of(std::begin(sentinel), std::end(sentinel), [](auto x) { return x == 0x5a; })) {
+      throw std::runtime_error("reclaim modified live memory");
+    }
+    if (oom != expect_oom) return 1;
   }
   allocator.free(live);
   allocator.clear_cache();
@@ -67,7 +73,7 @@ int main(int argc, char** argv) {
   check(cudaFree(workspace));
   check(cudaDeviceSynchronize());
   if (!expect_oom) {
-    // A real capacity failure must still throw, with exactly one retry.
+    // A real capacity failure must still throw after bounded retries.
     bool failed = false;
     try { (void)allocator.malloc_async(total + MiB, 0, stream); }
     catch (const std::exception& e) {

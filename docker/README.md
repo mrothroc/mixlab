@@ -230,8 +230,10 @@ tiers, app, and RunPod images in order**. In particular, the FP32 grid decoder
 memory fix lives in MLX's transposed-convolution weight backward, not in the Go
 binary. `MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1` marks that patched base; downstream
 Dockerfiles reject older bases. The allocator recovery follow-up additionally
-requires `MIXLAB_MLX_CUDA_ALLOCATOR_FIX=1`: strict logical cache bounds and one
-cache/pool reclaim-and-retry on allocation OOM. Rebuilding only the app cannot
+requires `MIXLAB_MLX_CUDA_ALLOCATOR_FIX=2`: strict logical cache bounds, attributed
+pressure logs and two bounded allocation retries, the second after stream
+synchronization. Capture and non-OOM failures are not retried. This marker is
+image provenance, not an opt-in setting. Rebuilding only the app cannot
 deliver either fix. The base build and CI exercise the actual pinned allocator
 methods before and after patching. On an otherwise idle CUDA host, run
 `bash docker/test_mlx_allocator_cuda.sh` for the real memory-pressure regression

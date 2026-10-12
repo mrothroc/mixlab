@@ -1,37 +1,113 @@
+diff --git a/mlx/backend/cuda/allocator.cpp b/mlx/backend/cuda/allocator.cpp
+index b04d72d..04bad64 100644
 --- a/mlx/backend/cuda/allocator.cpp
 +++ b/mlx/backend/cuda/allocator.cpp
 @@ -12,6 +12,7 @@
  #include <fmt/format.h>
- 
+
  #include <cassert>
 +#include <cstdio>
  #include <fstream>
  #include <string>
- 
-@@ -203,7 +204,20 @@
+
+@@ -180,6 +181,14 @@ CudaAllocator::malloc_async(size_t size, int device, cudaStream_t stream) {
+     device = -1;
+   }
+
++  // Explicit diagnostic only: includes cache hits so temporary-buffer demand
++  // can be attributed without waiting for an intermittent OOM.
++  static const int trace_mb = env::get_var("MLX_CUDA_ALLOCATOR_TRACE_MIN_MB", 0);
++  if (device >= 0 && trace_mb > 0 && size >= (size_t(trace_mb) << 20)) {
++    cu::device(device).make_current();
++    log_pressure(size, device, stream, "trace-request", cudaSuccess);
++  }
++
+   // Find available buffer from cache.
+   std::unique_lock lock(mutex_);
+   CudaBuffer* buf = buffer_cache_.reuse_from_cache(size);
+@@ -202,11 +211,7 @@ CudaAllocator::malloc_async(size_t size, int device, cudaStream_t stream) {
+         data = unified_malloc(size);
        } else {
          cu::device(device).make_current();
-         if (mem_pools_[device]) { // supports memory pools
+-        if (mem_pools_[device]) { // supports memory pools
 -          CHECK_CUDA_ERROR(cudaMallocAsync(&data, size, stream));
-+          auto status = cudaMallocAsync(&data, size, stream);
-+          if (status == cudaErrorMemoryAllocation) {
-+            // MLX counters exclude pool reservations and library allocations.
-+            // Reclaim disposable buffers before declaring a physical OOM.
-+            // Never retry a submitted graph or an optimizer update.
-+            (void)cudaGetLastError();
-+            clear_cache();
-+            cu::device(device).make_current();
-+            std::fprintf(stderr,
-+                "[mlx cuda allocator] allocation pressure: reclaimed cache/pool; retrying %zu bytes once\n",
-+                size);
-+            status = cudaMallocAsync(&data, size, stream);
-+          }
-+          CHECK_CUDA_ERROR(status);
-         } else {
-           CHECK_CUDA_ERROR(cudaMalloc(&data, size));
-         }
-@@ -265,7 +279,8 @@
- 
+-        } else {
+-          CHECK_CUDA_ERROR(cudaMalloc(&data, size));
+-        }
++        data = allocate_device(size, device, stream);
+       }
+       if (!data) {
+         std::ostringstream msg;
+@@ -253,6 +258,67 @@ Buffer CudaAllocator::malloc(size_t size) {
+   return malloc_async(size, -1, nullptr);
+ }
+
++void CudaAllocator::log_pressure(size_t size, int device, cudaStream_t stream,
++                                const char* stage, cudaError_t status) {
++  size_t available = 0, total = 0;
++  uint64_t reserved = 0, used = 0;
++  auto info = cudaMemGetInfo(&available, &total);
++  auto pool = mem_pools_[device];
++  auto r = pool ? cudaMemPoolGetAttribute(pool, cudaMemPoolAttrReservedMemCurrent, &reserved) : cudaErrorInvalidValue;
++  auto u = pool ? cudaMemPoolGetAttribute(pool, cudaMemPoolAttrUsedMemCurrent, &used) : cudaErrorInvalidValue;
++  // Diagnostics must not replace the original error; unavailable counters are
++  // explicitly marked invalid instead of being reported as genuine zeroes.
++  std::fprintf(stderr,
++      "[mlx cuda allocator] allocation pressure: op=%s kind=%s bytes=%zu device=%d stream=%p stage=%s status=%s device_free=%zu device_total=%zu memory_valid=%d pool_reserved=%llu pool_used=%llu pool_valid=%d\n",
++      allocation_op, allocation_kind, size, device, static_cast<void*>(stream),
++      stage, cudaGetErrorString(status), available, total, info == cudaSuccess,
++      static_cast<unsigned long long>(reserved), static_cast<unsigned long long>(used),
++      r == cudaSuccess && u == cudaSuccess);
++}
++
++void* CudaAllocator::allocate_device(size_t size, int device, cudaStream_t stream) {
++  void* data = nullptr;
++  auto allocate = [&]() {
++    return mem_pools_[device] ? cudaMallocAsync(&data, size, stream) : cudaMalloc(&data, size);
++  };
++  auto status = allocate();
++  if (status != cudaErrorMemoryAllocation) {
++    CHECK_CUDA_ERROR(status);
++    return data;
++  }
++  log_pressure(size, device, stream, "initial", status);
++  (void)cudaGetLastError();
++  // Capture must never be invalidated by recovery synchronization. This check
++  // also protects the existing free-stream synchronization in clear_cache().
++  cudaStreamCaptureStatus capture;
++  CHECK_CUDA_ERROR(cudaStreamIsCapturing(stream, &capture));
++  if (capture != cudaStreamCaptureStatusNone) {
++    log_pressure(size, device, stream, "capture-no-retry", status);
++    CHECK_CUDA_ERROR(status);
++  }
++  for (int attempt = 1; attempt <= 2; ++attempt) {
++    (void)cudaGetLastError();
++    if (attempt == 2) {
++      // Wait for already submitted work only. Do not commit/replay graphs from
++      // inside a primitive or hold mutex_ while waiting for CUDA.
++      auto sync = cudaStreamSynchronize(stream);
++      if (sync != cudaSuccess) {
++        log_pressure(size, device, stream, "stream-sync-failed", sync);
++        CHECK_CUDA_ERROR(sync);
++      }
++    }
++    clear_cache();
++    cu::device(device).make_current();
++    const char* stage = attempt == 1 ? "reclaim-retry-1" : "stream-sync-reclaim-retry-2";
++    log_pressure(size, device, stream, stage, status);
++    status = allocate();
++    log_pressure(size, device, stream, "result", status);
++    if (status != cudaErrorMemoryAllocation) break;
++  }
++  CHECK_CUDA_ERROR(status);
++  return data;
++}
++
+ void CudaAllocator::free(Buffer buffer) {
+   auto* buf = static_cast<CudaBuffer*>(buffer.ptr());
+   if (!buf) {
+@@ -265,7 +331,8 @@ void CudaAllocator::free(Buffer buffer) {
+
    std::unique_lock lock(mutex_);
    active_memory_ -= buf->size;
 -  if (get_cache_memory() < max_pool_size_) {
@@ -40,7 +116,7 @@
      buffer_cache_.recycle_to_cache(buf);
    } else {
      free_cuda_buffer(buf);
-@@ -356,12 +371,33 @@
+@@ -356,12 +423,35 @@ size_t CudaAllocator::get_cache_memory() const {
  size_t CudaAllocator::set_cache_limit(size_t limit) {
    std::lock_guard lk(mutex_);
    std::swap(limit, max_pool_size_);
@@ -49,7 +125,7 @@
 +  }
    return limit;
  }
- 
+
  void CudaAllocator::clear_cache() {
 -  std::lock_guard lk(mutex_);
 -  buffer_cache_.clear();
@@ -68,11 +144,114 @@
 +  } restore{previous_device};
 +  for (size_t i = 0; i < mem_pools_.size(); ++i) {
 +    if (mem_pools_[i]) {
-+      cu::device(i).make_current();
++      // Avoid changing Device::make_current's thread-local cache while a raw
++      // cudaSetDevice restore guard owns the current-device transition.
++      CHECK_CUDA_ERROR(cudaSetDevice(i));
 +      CHECK_CUDA_ERROR(cudaStreamSynchronize(free_streams_[i]));
 +      CHECK_CUDA_ERROR(cudaMemPoolTrimTo(mem_pools_[i], 0));
 +    }
 +  }
  }
- 
+
  CudaAllocator& allocator() {
+diff --git a/mlx/backend/cuda/allocator.h b/mlx/backend/cuda/allocator.h
+index af76ad9..2070648 100644
+--- a/mlx/backend/cuda/allocator.h
++++ b/mlx/backend/cuda/allocator.h
+@@ -17,6 +17,22 @@ class CommandEncoder;
+
+ using allocator::Buffer;
+
++// Nested, thread-local attribution; no formatting or CUDA queries on success.
++inline thread_local const char* allocation_op = "unknown";
++inline thread_local const char* allocation_kind = "tensor";
++struct AllocationScope {
++  const char* previous_op = allocation_op;
++  const char* previous_kind = allocation_kind;
++  AllocationScope(const char* op, const char* kind) {
++    if (op) allocation_op = op;
++    if (kind) allocation_kind = kind;
++  }
++  ~AllocationScope() {
++    allocation_op = previous_op;
++    allocation_kind = previous_kind;
++  }
++};
++
+ // Stores cuda-managed unified memory.
+ struct CudaBuffer {
+   void* data;
+@@ -68,6 +84,9 @@ class CudaAllocator : public allocator::Allocator {
+   void clear_cache();
+
+  private:
++  void* allocate_device(size_t size, int device, cudaStream_t stream);
++  void log_pressure(size_t size, int device, cudaStream_t stream,
++                    const char* stage, cudaError_t status);
+   void free_cuda_buffer(CudaBuffer* buf);
+   void free_async(CudaBuffer& buf, cudaStream_t stream = nullptr);
+
+diff --git a/mlx/backend/cuda/conv/gemm_conv.cu b/mlx/backend/cuda/conv/gemm_conv.cu
+index 6fc9528..1e6e92e 100644
+--- a/mlx/backend/cuda/conv/gemm_conv.cu
++++ b/mlx/backend/cuda/conv/gemm_conv.cu
+@@ -87,7 +87,10 @@ array unfold_inputs_nd(
+     int mat_N,
+     ConvParams<NDIM>& params) {
+   array unfolded({mat_M, mat_K}, in.dtype(), nullptr, {});
+-  unfolded.set_data(cu::malloc_async(unfolded.nbytes(), encoder));
++  {
++    cu::AllocationScope allocation_scope(nullptr, "conv-unfold");
++    unfolded.set_data(cu::malloc_async(unfolded.nbytes(), encoder));
++  }
+   encoder.add_temporary(unfolded);
+
+   int filter_size = params.C;
+diff --git a/mlx/backend/cuda/conv/gemm_grouped_conv.cu b/mlx/backend/cuda/conv/gemm_grouped_conv.cu
+index 4060d74..d8d10c7 100644
+--- a/mlx/backend/cuda/conv/gemm_grouped_conv.cu
++++ b/mlx/backend/cuda/conv/gemm_grouped_conv.cu
+@@ -90,7 +90,10 @@ array grouped_unfold_transpose_inputs_nd(
+     int mat_N,
+     ConvParams<NDIM>& params) {
+   array unfolded({mat_M, mat_K * params.groups}, in.dtype(), nullptr, {});
+-  unfolded.set_data(cu::malloc_async(unfolded.nbytes(), encoder));
++  {
++    cu::AllocationScope allocation_scope(nullptr, "conv-grouped-unfold");
++    unfolded.set_data(cu::malloc_async(unfolded.nbytes(), encoder));
++  }
+   encoder.add_temporary(unfolded);
+
+   int filter_size = params.C;
+diff --git a/mlx/backend/cuda/cudnn_utils.cpp b/mlx/backend/cuda/cudnn_utils.cpp
+index eee3306..265db18 100644
+--- a/mlx/backend/cuda/cudnn_utils.cpp
++++ b/mlx/backend/cuda/cudnn_utils.cpp
+@@ -1,6 +1,7 @@
+ // Copyright © 2025 Apple Inc.
+
+ #include "mlx/backend/cuda/cudnn_utils.h"
++#include "mlx/backend/cuda/allocator.h"
+ #include "mlx/backend/cuda/device.h"
+ #include "mlx/backend/gpu/device_info.h"
+
+@@ -149,6 +150,7 @@ fe::error_t DnnGraph::encode_capturing(
+ }
+
+ void* DnnGraph::prepare_workspace(cu::CommandEncoder& encoder) {
++  cu::AllocationScope allocation_scope(nullptr, "cudnn-workspace");
+   int64_t workspace_size = 0;
+   CHECK_CUDNN_ERROR(get_workspace_size(workspace_size));
+   return allocate_workspace(encoder, workspace_size);
+diff --git a/mlx/backend/cuda/eval.cpp b/mlx/backend/cuda/eval.cpp
+index f8a71d7..64171d3 100644
+--- a/mlx/backend/cuda/eval.cpp
++++ b/mlx/backend/cuda/eval.cpp
+@@ -40,6 +40,7 @@ void new_thread_unsafe_stream(Stream s) {
+
+ void eval(array& arr) {
+   nvtx3::scoped_range r("gpu::eval");
++  cu::AllocationScope allocation_scope(arr.primitive().name(), "tensor");
+   // Ensure CUDA context is active on this thread. Required when MLX is called
+   // from threads that have not yet established a CUDA context (e.g. thread
+   // pools, language runtimes that migrate work across OS threads).

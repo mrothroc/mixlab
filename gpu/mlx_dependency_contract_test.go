@@ -18,7 +18,8 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		"NCCL_LIBRARIES:FILEPATH",
 		"MIXLAB_MLX_CUDA_WORKER_FIX=1",
 		"MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1",
-		"MIXLAB_MLX_CUDA_ALLOCATOR_FIX=1",
+		"MIXLAB_MLX_CUDA_ALLOCATOR_FIX=2",
+		"python3 /tmp/test_mlx_allocator_retry.py --source /opt/mlx/mlx/backend/cuda/allocator.cpp",
 		"git -C /opt/mlx apply --check /tmp/mlx-cuda-allocator-reclaim.patch",
 		"python3 /tmp/test_mlx_allocator.py --source /opt/mlx/mlx/backend/cuda/allocator.cpp --expect-broken",
 		"git -C /opt/mlx apply --check /tmp/mlx-conv-transpose-weight-grad.patch",
@@ -81,7 +82,7 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		}
 	}
 	app := readRepositoryFile(t, "../docker/app.Dockerfile")
-	if !strings.Contains(app, `test "${MIXLAB_MLX_CUDA_ALLOCATOR_FIX}" = "1"`) {
+	if !strings.Contains(app, `test "${MIXLAB_MLX_CUDA_ALLOCATOR_FIX}" = "2"`) {
 		t.Fatal("app image must reject an MLX CUDA base without allocator reclamation")
 	}
 	if !strings.Contains(app, `test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1"`) {
@@ -94,7 +95,7 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 
 func TestCUDAAllocatorPatchIsCoveredInCI(t *testing.T) {
 	ci := readRepositoryFile(t, "../.github/workflows/ci.yml")
-	for _, required := range []string{"mlx-cuda-allocator-reclaim.patch", "test_mlx_allocator.py", "--expect-broken", pinnedMLXCommit + "/mlx/backend/cuda/allocator.cpp"} {
+	for _, required := range []string{"mlx-cuda-allocator-reclaim.patch", "test_mlx_allocator.py", "test_mlx_allocator_retry.py", "--expect-broken", "allocator.cpp allocator.h eval.cpp cudnn_utils.cpp conv/gemm_conv.cu conv/gemm_grouped_conv.cu", pinnedMLXCommit + "/mlx/backend/cuda/$FILE"} {
 		if !strings.Contains(ci, required) {
 			t.Errorf("CI missing %s", required)
 		}

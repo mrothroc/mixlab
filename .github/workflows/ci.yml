@@ -81,13 +81,17 @@ jobs:
           ROOT="$RUNNER_TEMP/mlx-allocator"
           SOURCE="$ROOT/mlx/backend/cuda/allocator.cpp"
           mkdir -p "$(dirname "$SOURCE")"
-          curl --fail --location --max-time 30 \
-            https://raw.githubusercontent.com/ml-explore/mlx/7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247/mlx/backend/cuda/allocator.cpp \
-            -o "$SOURCE"
+          mkdir -p "$(dirname "$SOURCE")/conv"
+          for FILE in allocator.cpp allocator.h eval.cpp cudnn_utils.cpp conv/gemm_conv.cu conv/gemm_grouped_conv.cu; do
+            curl --fail --location --max-time 30 \
+              "https://raw.githubusercontent.com/ml-explore/mlx/7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247/mlx/backend/cuda/$FILE" \
+              -o "$(dirname "$SOURCE")/$FILE"
+          done
           python3 docker/test_mlx_allocator.py --source "$SOURCE" --expect-broken
           git -C "$ROOT" apply --check "$GITHUB_WORKSPACE/docker/patches/mlx-cuda-allocator-reclaim.patch"
           git -C "$ROOT" apply "$GITHUB_WORKSPACE/docker/patches/mlx-cuda-allocator-reclaim.patch"
           python3 docker/test_mlx_allocator.py --source "$SOURCE"
+          python3 docker/test_mlx_allocator_retry.py --source "$SOURCE"
 
   image-python:
     name: Image Python dependencies

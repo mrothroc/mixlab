@@ -38,7 +38,7 @@ func main() {
 	flagFullEval := flag.Bool("eval", false, "run full validation BPB evaluation after training")
 	lutDir := flag.String("lut-dir", "data", "directory containing BPB lookup tables (bytes_per_token.bin, etc.)")
 	checkpointDir := flag.String("checkpoint-dir", "", "directory for periodic safetensors checkpoints")
-	checkpointEvery := flag.Int("checkpoint-every", 0, "save a safetensors checkpoint every N training steps (0 disables)")
+	checkpointEvery := flag.Int("checkpoint-every", 0, "save a checkpoint every N training steps (0 disables periodic snapshots; grid recovery uses validation cadence)")
 	logEvery := flag.Int("log-every", 0, "print progress every N training steps (0 uses default; MIXLAB_LOG_EVERY overrides)")
 	valEvery := flag.Int("val-every", 0, "run validation every N training steps (0 uses default; MIXLAB_VAL_EVERY overrides)")
 	evalAfterTrain := flag.Bool("eval-after-train", false, "run full validation BPB evaluation after training; clearer alias for -eval")

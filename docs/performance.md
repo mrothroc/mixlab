@@ -206,8 +206,15 @@ reclaiming disposable MLX cache or draining asynchronous frees. The follow-up
 dependency patch:
 
 - Checks the resulting cache size, including when lowering the limit.
-- On pooled `cudaMallocAsync` OOM, evicts cached buffers, waits for allocator
-  free streams, trims unused pool backing, and retries that allocation once.
+- On allocation OOM, logs the requesting MLX primitive, allocation kind
+  (`tensor`, `cudnn-workspace`, or convolution unfold), requested bytes,
+  device/stream and device/pool
+  counters. These snapshots are taken at the allocation, not only after unwind.
+- Evicts cached buffers, waits for allocator free streams, trims unused pool
+  backing, then retries. If that still fails, synchronizes the requesting stream,
+  reclaims again and performs one final retry (three allocation attempts total).
+- Refuses recovery during stream capture; non-OOM and synchronization errors
+  fail immediately. Diagnostic-query failures cannot replace the original error.
 - Makes explicit cache clearing drain/trim as well; live arrays remain intact.
 - Leaves successful allocations asynchronous and does not replay training
   steps or optimizer updates. Real capacity exhaustion still fails normally.
@@ -220,8 +227,35 @@ not a hard ceiling on all CUDA reservations. This is not a per-step global
 synchronization policy.
 
 Rebuild base, architecture tiers, app, and RunPod with
-`MIXLAB_MLX_CUDA_ALLOCATOR_FIX=1`. Older bases are rejected by downstream builds.
+`MIXLAB_MLX_CUDA_ALLOCATOR_FIX=2`. This is image provenance, not a user opt-in.
+Older bases are rejected by downstream builds.
 The three-step preflight is still not a long-run memory guarantee.
+
+For a short diagnostic run, `MLX_CUDA_ALLOCATOR_TRACE_MIN_MB=1024` also logs
+requests of at least 1 GiB, including cache hits, with `stage=trace-request`.
+This permits allocation ownership checks without inducing an OOM. Omit it for
+normal training; synchronous memory queries and log IO can affect throughput.
+`kind=conv-unfold` identifies the materialized convolution fallback patches,
+distinct from `kind=cudnn-workspace`. No workspace cap or algorithm change is
+applied by this tracing option.
+
+In the seven-channel, batch-16, 256x256 first-stage grid probe, the recurring
+3,460,300,800-byte request is attributed to `op=Reshape kind=tensor`, not
+`cudnn-workspace`. Its size is exactly `16 * 256 * 256 * 33 * 5 * 5 * 4`.
+This matches the pinned MLX convolution weight-gradient path
+(`conv_weight_backward_patches`), which reshapes strided input patches into a
+materialized matrix before matmul. A cuDNN workspace cap cannot bound this
+tensor. Eliminating it requires a separately validated convolution-gradient
+implementation, not an allocator setting. The CUDA pool may reuse its backing;
+the tensor exceeds the default MLX cache budget and cannot remain in that cache.
+
+With `-checkpoint-dir`, grid training keeps a rolling known-good recovery bundle
+before the first GPU update and at checkpoint cadence (validation cadence when
+`-checkpoint-every` is omitted). Memory failure reports its explicit `-resume`
+path and writes `recovery/failure.json` without reading failed GPU state.
+This bounds lost work to the last saved bundle, not necessarily the last step.
+Keep checkpoint storage persistent or upload bundles before deleting a pod.
+See [grid recovery](dense-grid.md#memory-failure-recovery).
 
 The stronger, opt-in lifecycle probe uses shuffled synthetic records, masked
 pixels, dihedral augmentation, partial training/validation batches, validation
@@ -239,6 +273,8 @@ GRID_MEMORY_DATASET_PROBE=1 GRID_MEMORY_STAGE=2 \
 This requires NumPy for prepare integration and defaults to 200 updates per
 stage. `GRID_MEMORY_STEPS` can shorten a diagnostic run, but fewer than 200
 updates are not acceptance. Remove the saved stage-1 checkpoint after testing.
+`GRID_MEMORY_CHANNELS=7` exercises seven input channels and the corresponding
+skip-concatenation widths; omitted keeps the two-channel fixture.
 
 Follow-up acceptance on RTX 4090 (24,564 MiB VRAM), pinned MLX 0.32.0 plus
 patches, FP32 and batch 16:
@@ -265,6 +301,16 @@ the idle pool to zero; an oversized request still failed. CPU tests exercise
 the pinned cache/free/clear method bodies, and CUDA spatial forward/gradient,
 preflight-restoration and checkpoint-resume tests pass. The requestor's exact
 dataset/job remains a deployment confirmation, not a claimed reproduction.
+
+Allocator recovery revision 2 was additionally tested on RTX 4090 with 512
+induced OOM/reclaim cycles in one process: all recovered, live data was unchanged,
+and final idle pool reserved/used memory was zero. A genuine oversized allocation
+failed after the bounded retries. Two independent seven-channel first-stage
+synthetic runs of 1,000 updates each passed without allocation retries, with
+12,016.5 MiB peak MLX memory and at least 8,605.7 MiB logged device-free memory.
+CUDA failed-step recovery reproduced uninterrupted weights, optimizer state,
+sampler and losses. These checks do not establish the reported several-run,
+50-epoch production acceptance gate; that requires the original dataset/job.
 
 ## Dense Grid Pooling
 

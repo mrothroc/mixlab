@@ -24,8 +24,8 @@ Common flags:
 | `-safetensors FILE` | Export final weights to safetensors after training. |
 | `-safetensors-load FILE` | Load model weights only for a warm start. Optimizer and schedule state start fresh. |
 | `-resume PATH` | Resume from a complete checkpoint directory, `.resume.json` manifest, model file, or state file. |
-| `-checkpoint-dir DIR` | Directory for periodic model and resumable-state checkpoint bundles. |
-| `-checkpoint-every N` | Save a complete resumable bundle every `N` training steps. `0` disables. |
+| `-checkpoint-dir DIR` | Directory for periodic model and resumable-state checkpoint bundles; grid runs also maintain rolling known-good recovery state. |
+| `-checkpoint-every N` | Save a complete resumable bundle every `N` training steps. `0` disables periodic snapshots; grid recovery still uses validation cadence when a checkpoint directory is set. See [grid recovery](dense-grid.md#memory-failure-recovery). |
 | `-eval-after-train` | Run full validation BPB evaluation after training. Preferred alias for legacy `-eval`. |
 | `-eval` | Legacy alias for `-eval-after-train`. |
 | `-lut-dir DIR` | Directory for BPB lookup tables. Default: `data`. |

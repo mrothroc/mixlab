@@ -11,15 +11,16 @@ import (
 // Grid state extends the common resume bundle; model, optimizer and scheduler
 // tensors retain their existing format and restore path.
 type gridResumeState struct {
-	Version     int                   `json:"version"`
-	Sampler     data.GridSamplerState `json:"sampler"`
-	Trainable   []string              `json:"trainable"`
-	BestRMSE    *float64              `json:"best_rmse,omitempty"`
-	LastValLoss *float64              `json:"last_val_loss,omitempty"`
-	FirstLoss   float64               `json:"first_loss"`
-	LastLoss    float64               `json:"last_loss"`
-	ValEvery    int                   `json:"val_every"`
-	Stopped     bool                  `json:"stopped"`
+	Version           int                   `json:"version"`
+	Sampler           data.GridSamplerState `json:"sampler"`
+	Trainable         []string              `json:"trainable"`
+	BestRMSE          *float64              `json:"best_rmse,omitempty"`
+	LastValLoss       *float64              `json:"last_val_loss,omitempty"`
+	FirstLoss         float64               `json:"first_loss"`
+	LastLoss          float64               `json:"last_loss"`
+	ValEvery          int                   `json:"val_every"`
+	Stopped           bool                  `json:"stopped"`
+	ValidationPending bool                  `json:"validation_pending,omitempty"`
 }
 
 func resumeTrainingDatasetHash(cfg *ArchConfig, path string) (string, error) {

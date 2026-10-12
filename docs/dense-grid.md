@@ -276,7 +276,29 @@ mixlab -mode arch -config examples/grid_two_stage_2.json \
 
 ## Resume
 
-Periodic checkpoints now use the common `mixlab_resume_v1` bundle: a
+### Memory failure recovery
+
+When `-checkpoint-dir` is configured, training also writes a rolling recovery
+bundle under `<checkpoint-dir>/recovery`. It saves initialized state before the
+first training/preflight update, then completed steps at `-checkpoint-every`
+cadence, or validation cadence if that option is omitted. The new complete bundle
+is published before removing the previous recovery bundle. Normal periodic and
+best checkpoints are retained separately.
+
+On a memory failure, the error gives an explicit `-resume <manifest>` command;
+`recovery/failure.json` records that path and completed step. `recovery/latest.json`
+identifies the latest bundle directory. The failing step is never retried and its
+potentially partial weights/moments are never saved. Resuming replays work after
+the last known-good bundle, including pending validation. Recovery checkpoint
+writes add CPU readback and disk IO at the configured cadence.
+
+Without `-checkpoint-dir` no recovery bundle is created. Local ephemeral disk
+does not survive pod deletion; use persistent storage or externally upload the
+whole bundle. Recovery is not a guarantee against process kill or machine loss.
+
+### Periodic resume bundles
+
+Periodic checkpoints use the common `mixlab_resume_v1` bundle: a
 `step_XXXXXX.st` model, optimizer-state safetensors, and a `.resume.json`
 manifest published last. Keep all companion files together. Resume restores
 the optimizer counters/moments, original LR schedule, record order/epoch/cursor,

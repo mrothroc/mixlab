@@ -290,7 +290,10 @@ func readResumeManifest(path string) (resumeManifest, error) {
 	if manifest.Format != resumeCheckpointFormat {
 		return resumeManifest{}, fmt.Errorf("resume manifest %q has format %q, want %q", path, manifest.Format, resumeCheckpointFormat)
 	}
-	if manifest.GlobalStep <= 0 || manifest.ModelFile == "" || manifest.StateFile == "" {
+	// Grid recovery may publish the initialized state before the first update
+	// or validation. Other zero-step manifests retain the previous rejection.
+	initialGridRecovery := manifest.GlobalStep == 0 && manifest.Grid != nil && manifest.Grid.ValidationPending
+	if (manifest.GlobalStep <= 0 && !initialGridRecovery) || manifest.ModelFile == "" || manifest.StateFile == "" {
 		return resumeManifest{}, fmt.Errorf("resume manifest %q is incomplete", path)
 	}
 	if manifest.Optimizer.AttemptedSteps != uint64(manifest.GlobalStep) {

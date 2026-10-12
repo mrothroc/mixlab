@@ -36,12 +36,15 @@ func (s *GridSampler) Snapshot() GridSamplerState {
 
 func (s *GridSampler) Restore(state GridSamplerState, step, batchSize int) error {
 	n := len(s.state.Order)
-	if step <= 0 || batchSize <= 0 || len(state.Order) != n {
+	if step < 0 || batchSize <= 0 || len(state.Order) != n {
 		return fmt.Errorf("invalid grid sampler checkpoint")
 	}
 	batches := 1 + (n-1)/batchSize
-	wantEpoch := (step - 1) / batches
-	wantCursor := min(n, (1+(step-1)%batches)*batchSize)
+	wantEpoch, wantCursor := 0, 0
+	if step > 0 {
+		wantEpoch = (step - 1) / batches
+		wantCursor = min(n, (1+(step-1)%batches)*batchSize)
+	}
 	if state.Epoch != wantEpoch || state.Cursor != wantCursor {
 		return fmt.Errorf("grid sampler epoch/cursor do not match checkpoint step")
 	}
