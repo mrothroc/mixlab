@@ -263,11 +263,13 @@ func gridOpShape(op OpSpec, shapes map[string][]int, fanIn map[string]int) ([]in
 	}
 	s := append([]int(nil), inputs[0]...)
 	switch op.Op {
+	case "group_norm":
+		return groupNormShape(op, inputs)
 	case "conv2d", "conv_transpose2d":
 		if len(inputs) < 2 || len(inputs) > 3 || len(s) != 4 || len(inputs[1]) != 4 {
 			return nil, fmt.Errorf("convolution requires NHWC input, rank-4 weight, optional bias")
 		}
-		k, st, p, err := spatialParams(op.Params)
+		k, st, p, dilation, err := spatialOpParams(op)
 		if err != nil {
 			return nil, err
 		}
@@ -292,10 +294,10 @@ func gridOpShape(op OpSpec, shapes map[string][]int, fanIn map[string]int) ([]in
 		fanIn[op.Inputs[1]] = fan
 		for d := 1; d <= 2; d++ {
 			if op.Op == "conv2d" {
-				if s[d]+2*p < k {
-					return nil, fmt.Errorf("kernel exceeds padded input")
+				s[d], err = gridConvOutputSize(s[d], k, st, p, dilation)
+				if err != nil {
+					return nil, err
 				}
-				s[d] = (s[d]+2*p-k)/st + 1
 			} else {
 				s[d] = (s[d]-1)*st - 2*p + k
 			}

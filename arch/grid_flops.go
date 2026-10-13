@@ -46,6 +46,11 @@ func estimateGridFLOPs(cfg *ArchConfig) FLOPsEstimate {
 			n *= int64(d)
 		}
 		switch op.Op {
+		case "group_norm":
+			// Mean, centering, square/variance, normalization and affine;
+			// epsilon and reciprocal-square-root once per sample/group.
+			groups, _, _ := groupNormParams(op.Params)
+			est.ForwardFLOPs += 9*n + 2*int64(s[0])*int64(groups)
 		case "conv2d":
 			w := shapes[op.Inputs[1]]
 			est.ForwardFLOPs += 2 * n * int64(w[1]) * int64(w[2]) * int64(w[3])

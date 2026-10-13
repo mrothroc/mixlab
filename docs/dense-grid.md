@@ -23,19 +23,68 @@ Spatial custom operations:
 
 | Op | Inputs | Parameters and semantics |
 |---|---|---|
-| `conv2d` | input, kernel, optional bias | Kernel `[Cout,K,K,Cin]`; integer `kernel`, `stride` (default 1), `padding` (default 0). |
+| `conv2d` | input, kernel, optional bias | Kernel `[Cout,K,K,Cin]`; integer `kernel`, `stride` (default 1), `padding` (default 0), `dilation` (default 1, positive). |
 | `conv_transpose2d` | input, kernel, optional bias | Kernel `[Cin,K,K,Cout]`; same parameters; `output_padding` must be 0. |
 | `max_pool2d` | input | `kernel=stride`, padding 0; floor output sizes; first maximum receives gradient on ties. |
+| `group_norm` | input, scale, bias | NHWC activation, affine vectors `[C]`; required positive integer `groups` dividing C, optional finite positive `eps` (default `1e-5`). |
 | `concat` | two inputs | `axis:3`; matching batch/height/width. |
 | `relu`, `stop_gradient` | one input | No parameters. |
 | `add`, `sub`, `mul` | two inputs | Equal shapes, no parameters. |
 | `transpose` | one input | Complete `axes` permutation. |
 | `slice` | one input | Explicit `start`, `end`, positive `step`, and `axis`; nonempty in-bounds range. |
 
-Convolutions use native MLX operations, not expanded patch matrices. V1 uses
-square kernels, groups=1 and dilation=1. Convolution output size is
-`floor((input+2*padding-kernel)/stride)+1`; transposed output size is
+Convolutions use native MLX operations. Square kernels, stride, padding and
+dilation apply equally to both spatial axes; groups remain 1. `conv2d` output size is
+`floor((input+2*padding-dilation*(kernel-1)-1)/stride)+1`; transposed output size is
 `(input-1)*stride-2*padding+kernel`.
+`dilation` is not accepted on `conv_transpose2d` or `max_pool2d`.
+Increasing dilation does not change weights, initialization fan-in or MACs per
+output pixel; it changes the sampled locations and potentially output size.
+For a stride-1 odd kernel, `padding=dilation*(kernel-1)/2` preserves spatial size.
+
+[`grid_aspp_tiny.json`](../examples/grid_aspp_tiny.json) combines four parallel
+3x3 branches at dilation 1/6/12/18 on a 32x32 grid, channel concatenation and a
+1x1 output projection. Train it with a two-channel 32x32 grid manifest using the
+same prepare/train workflow below. It is a runnable operator example, not a
+benchmark reproduction.
+
+### GroupNorm
+
+[`grid_group_norm_tiny.json`](../examples/grid_group_norm_tiny.json) uses
+convolution, GroupNorm, ReLU and an output projection, with batch size one.
+GroupNorm normalizes height, width and the channels within each group separately
+for each sample. It uses biased variance (`correction=0`) and epsilon inside the
+square root, matching [PyTorch GroupNorm](https://docs.pytorch.org/docs/stable/generated/torch.nn.GroupNorm.html).
+It is not channel-only normalization. Training and evaluation use the same
+statistics; there are no running buffers or dependence on other batch records.
+
+Declare affine weights explicitly with `init: {"kind":"one"}` for scale and
+`init: {"kind":"zero"}` for bias. No normalization or weights are inserted
+automatically. For example:
+
+```json
+{"op":"group_norm", "inputs":["hidden","norm.weight","norm.bias"],
+ "output":"normalized", "params":{"groups":2,"eps":0.00001}}
+```
+
+The implementation composes native MLX reductions and affine operations with
+autodiff on Metal/CUDA. Forward FLOPs are an analytical estimate (nine per
+element plus two per sample/group), not a measured kernel instruction count.
+State-dictionary export maps scale and bias unchanged with `identity` transforms.
+The consuming PyTorch model must instantiate `nn.GroupNorm(groups, C, eps=eps)`;
+export does not generate that model. Only convolution kernels need layout
+transposes. Regenerate forward/all-gradient fixtures with
+`python3 scripts/generate_grid_group_norm_reference.py`; run real training/export
+checks with `go test -tags mlx ./gpu ./train -run GridGroupNorm -count=1`.
+Random fixtures use float32 PyTorch; constant/near-constant fixtures use float64
+PyTorch on float32-representable inputs and affine weights as a higher-precision
+oracle. This avoids testing against cancellation in the reference's float32
+fused affine kernel. All comparisons retain the same spatial tolerances.
+
+Native convolution does not guarantee small temporary allocations: MLX may
+materialize patch tensors during backward. Measure peak training memory and
+steady-state throughput for the actual dilation/stride/shape/backend, rather
+than inferring them from parameter count. See [memory diagnostics](performance.md).
 
 Custom weights accept `init: {"kind":...}`: `zero`, `one`, `normal`, `uniform`,
 or `pytorch_conv_uniform`. Normal uses positive `scale` as standard deviation;
@@ -371,6 +420,9 @@ and cache limits also apply to training and prediction.
 
 `export-torch-state` is a CPU-only, grid-only weight/layout exporter. It does not
 export Python model code or require MLX. Existing grid HF rejection is unchanged.
+For dilated convolutions the weight mapping is unchanged; the consumer's
+`torch.nn.Conv2d` must use the same `dilation`, stride and padding. These settings
+are retained in the exported `config.json`, not encoded in the weight tensor.
 
 ```bash
 mixlab -mode export-torch-state -config model.json -safetensors-load weights.st \
@@ -445,7 +497,21 @@ and HF model export remain outside this workflow.
 
 `scripts/generate_grid_reference.py` regenerates the small PyTorch operator
 fixtures. Real MLX tests cover unequal channel counts, transposed layouts,
-pool ties and gradients. `scripts/generate_grid_model_reference.py` derives
+pool ties and gradients. Dilated convolution fixtures are regenerated separately:
+
+```bash
+python scripts/generate_grid_reference.py --dilation-only --out gpu/testdata/grid_dilation_reference.json
+go test -tags mlx ./gpu -run 'TestGridSpatialPyTorchForwardBackward|TestGridDilation' -count=1 -v
+go test -tags mlx ./train -run 'TestGridASPPTraining|TestGridDilationTorchExportParity' -count=1 -v
+```
+
+These tests cover dilation 2/4 forward and all gradients, stride/padding, optional
+bias, a 100-step ASPP training run and post-training PyTorch export parity.
+The training test reports compute-step throughput after five warmup steps and
+process-wide MLX peak memory; run it alone for comparable memory measurements.
+The export check additionally requires Python with PyTorch and safetensors.
+
+`scripts/generate_grid_model_reference.py` derives
 the full reference graph directly from pinned source and emits large fixtures
 only into a caller-selected temporary directory. Run the gated full-resolution
 test with `GRID_REFERENCE_DIR=<dir> go test -tags mlx ./train

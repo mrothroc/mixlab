@@ -18,6 +18,9 @@ type gridReferenceTensor struct {
 type gridReferenceCase struct {
 	Name, Op                string
 	Kernel, Stride, Padding int
+	Dilation                int
+	Groups                  int
+	Eps                     float32
 	Weights, Grads          []gridReferenceTensor
 	Output, Cotangent       gridReferenceTensor
 }
@@ -35,28 +38,50 @@ func TestGridSpatialPyTorchForwardBackward(t *testing.T) {
 	if err = json.Unmarshal(encoded, &fixtures); err != nil {
 		t.Fatal(err)
 	}
+	dilated, err := os.ReadFile("testdata/grid_dilation_reference.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var extra struct{ Cases []gridReferenceCase }
+	if err = json.Unmarshal(dilated, &extra); err != nil {
+		t.Fatal(err)
+	}
+	fixtures.Cases = append(fixtures.Cases, extra.Cases...)
 	fixtures.Cases = append(fixtures.Cases, gridPoolCPUFixtures()...)
 	fixtures.Cases = append(fixtures.Cases, gridConvTransposeCPUFixtures()...)
-	for _, f := range fixtures.Cases {
+	runGridReferenceCases(t, fixtures.Cases)
+}
+
+func runGridReferenceCases(t *testing.T, cases []gridReferenceCase) {
+	t.Helper()
+	for _, f := range cases {
 		t.Run(f.Name, func(t *testing.T) {
 			p := ir.NewProgram(len(f.Weights))
 			names := []string{"w0"}
 			code := ir.OpMaxPool2D
 			if f.Op != "max_pool2d" && f.Op != "layout" {
-				names = append(names, "w1", "w2")
+				for i := 1; i < len(f.Weights); i++ {
+					names = append(names, fmt.Sprintf("w%d", i))
+				}
 				code = ir.OpConv2D
 				if f.Op == "conv_transpose2d" {
 					code = ir.OpConvTranspose2D
 				}
 			}
-			if f.Op == "layout" {
+			if f.Op == "group_norm" {
+				p.AddOp(ir.OpGroupNorm, names, []string{"output"}, []float32{f.Eps}, []int{f.Groups})
+			} else if f.Op == "layout" {
 				p.ReLU("w0", "positive")
 				p.StopGradient("w0", "detached")
 				p.Concat("positive", "detached", 3, "joined")
 				p.Transpose("joined", []int{0, 2, 1, 3}, "transposed")
 				p.Slice("transposed", 1, 4, 1, 1, "output")
 			} else {
-				p.AddOp(code, names, []string{"output"}, nil, []int{f.Kernel, f.Stride, f.Padding})
+				params := []int{f.Kernel, f.Stride, f.Padding}
+				if f.Dilation > 1 {
+					params = append(params, f.Dilation)
+				}
+				p.AddOp(code, names, []string{"output"}, nil, params)
 			}
 			p.DeclareOutput("output", ir.TensorFloat32, f.Output.Shape)
 			p.DeclareInput("cotangent", ir.TensorFloat32, f.Cotangent.Shape)

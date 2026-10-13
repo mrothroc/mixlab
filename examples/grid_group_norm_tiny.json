@@ -1,0 +1,27 @@
+{
+  "name": "grid_group_norm_tiny",
+  "input_adapter": {"kind": "grid", "channels": 2, "height": 8, "width": 8},
+  "dense_regression": {"output": "network.prediction", "target_channels": 1},
+  "blocks": [{
+    "type": "custom", "name": "network",
+    "weights": [
+      {"name": "conv.weight", "shape": ["4", "3", "3", "2"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "conv.bias", "shape": ["4"], "init": {"kind": "zero"}},
+      {"name": "norm.weight", "shape": ["4"], "init": {"kind": "one"}},
+      {"name": "norm.bias", "shape": ["4"], "init": {"kind": "zero"}},
+      {"name": "out.weight", "shape": ["1", "1", "1", "4"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "out.bias", "shape": ["1"], "init": {"kind": "zero"}}
+    ],
+    "ops": [
+      {"op": "conv2d", "inputs": ["x", "conv.weight", "conv.bias"], "output": "hidden", "params": {"kernel": 3, "padding": 1}},
+      {"op": "group_norm", "inputs": ["hidden", "norm.weight", "norm.bias"], "output": "normalized", "params": {"groups": 2}},
+      {"op": "relu", "inputs": ["normalized"], "output": "activated"},
+      {"op": "conv2d", "inputs": ["activated", "out.weight", "out.bias"], "output": "prediction", "params": {"kernel": 1}}
+    ]
+  }],
+  "training": {
+    "objective": "dense_regression", "batch_size": 1, "steps": 100,
+    "optimizer": "adamw", "lr": 0.001, "beta1": 0.9, "beta2": 0.999,
+    "epsilon": 1e-8, "weight_decay": 0.0, "seed": 42
+  }
+}

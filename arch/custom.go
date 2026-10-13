@@ -9,6 +9,7 @@ import (
 
 // opNameToCode maps JSON op names to IR op codes for custom blocks.
 var opNameToCode = map[string]int{
+	"group_norm":       OpGroupNorm,
 	"conv2d":           OpConv2D,
 	"conv_transpose2d": OpConvTranspose2D,
 	"max_pool2d":       OpMaxPool2D,
@@ -380,6 +381,13 @@ func emitCustomBlockIR(
 		if err != nil {
 			return wi, fmt.Errorf("custom block %q op[%d] params: %w", spec.Name, i, err)
 		}
+		if code == OpGroupNorm {
+			groups, eps, e := groupNormParams(op.Params)
+			if e != nil {
+				return wi, fmt.Errorf("custom block %q op[%d]: %w", spec.Name, i, e)
+			}
+			intParams, floatParams = []int{groups}, []float32{eps}
+		}
 		if code == OpSlice {
 			intParams, err = sliceIntParams(op.Params)
 			if err != nil {
@@ -387,11 +395,14 @@ func emitCustomBlockIR(
 			}
 		}
 		if code == OpConv2D || code == OpConvTranspose2D || code == OpMaxPool2D {
-			k, stride, padding, err := spatialParams(op.Params)
+			k, stride, padding, dilation, err := spatialOpParams(op)
 			if err != nil {
 				return wi, fmt.Errorf("custom block %q op[%d]: %w", spec.Name, i, err)
 			}
 			intParams = []int{k, stride, padding}
+			if dilation != 1 {
+				intParams = append(intParams, dilation)
+			}
 		}
 		if code == OpCausalMask {
 			intParams, err = causalMaskIntParams(op.Params, D, heads, T, B, V)

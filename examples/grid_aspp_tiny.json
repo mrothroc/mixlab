@@ -1,0 +1,36 @@
+{
+  "name": "grid_aspp_tiny",
+  "input_adapter": {"kind": "grid", "channels": 2, "height": 32, "width": 32},
+  "dense_regression": {"output": "network.prediction", "target_channels": 1},
+  "blocks": [{
+    "type": "custom", "name": "network",
+    "weights": [
+      {"name": "d1.weight", "shape": ["4", "3", "3", "2"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "d1.bias", "shape": ["4"], "init": {"kind": "zero"}},
+      {"name": "d6.weight", "shape": ["4", "3", "3", "2"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "d6.bias", "shape": ["4"], "init": {"kind": "zero"}},
+      {"name": "d12.weight", "shape": ["4", "3", "3", "2"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "d12.bias", "shape": ["4"], "init": {"kind": "zero"}},
+      {"name": "d18.weight", "shape": ["4", "3", "3", "2"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "d18.bias", "shape": ["4"], "init": {"kind": "zero"}},
+      {"name": "project.weight", "shape": ["1", "1", "1", "16"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "project.bias", "shape": ["1"], "init": {"kind": "zero"}}
+    ],
+    "ops": [
+      {"op": "conv2d", "inputs": ["x", "d1.weight", "d1.bias"], "output": "b1", "params": {"kernel": 3, "padding": 1}},
+      {"op": "conv2d", "inputs": ["x", "d6.weight", "d6.bias"], "output": "b6", "params": {"kernel": 3, "padding": 6, "dilation": 6}},
+      {"op": "conv2d", "inputs": ["x", "d12.weight", "d12.bias"], "output": "b12", "params": {"kernel": 3, "padding": 12, "dilation": 12}},
+      {"op": "conv2d", "inputs": ["x", "d18.weight", "d18.bias"], "output": "b18", "params": {"kernel": 3, "padding": 18, "dilation": 18}},
+      {"op": "concat", "inputs": ["b1", "b6"], "output": "joined1", "params": {"axis": 3}},
+      {"op": "concat", "inputs": ["b12", "b18"], "output": "joined2", "params": {"axis": 3}},
+      {"op": "concat", "inputs": ["joined1", "joined2"], "output": "joined", "params": {"axis": 3}},
+      {"op": "relu", "inputs": ["joined"], "output": "hidden"},
+      {"op": "conv2d", "inputs": ["hidden", "project.weight", "project.bias"], "output": "prediction", "params": {"kernel": 1}}
+    ]
+  }],
+  "training": {
+    "objective": "dense_regression", "batch_size": 2, "steps": 100,
+    "optimizer": "adamw", "lr": 0.001, "beta1": 0.9, "beta2": 0.999,
+    "epsilon": 1e-8, "weight_decay": 0.0, "seed": 42
+  }
+}

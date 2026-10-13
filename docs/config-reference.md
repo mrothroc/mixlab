@@ -1166,9 +1166,10 @@ These symbols are accepted in custom weight shapes and in `params.shape`:
 | `layernorm` / `layer_norm` | 1 or 3 | 1 | `eps` | Non-affine LayerNorm with one input, or affine LayerNorm with `[x, scale, bias]`. |
 | `rope` | 2 | 2 | `T`, `head_dim`, `base` | Rotary embedding helper. Outputs are rotated Q and K. |
 | `stop_gradient` | 1 | 1 | None | Identity forward, zero backward. |
-| `conv2d` | 2 or 3 | 1 | `kernel`, `stride`, `padding` | NHWC spatial convolution, optional bias. See [grid contracts](dense-grid.md). |
+| `conv2d` | 2 or 3 | 1 | `kernel`, `stride`, `padding`, `dilation` | NHWC spatial convolution, optional bias. Positive square dilation defaults to 1. See [grid contracts](dense-grid.md). |
 | `conv_transpose2d` | 2 or 3 | 1 | `kernel`, `stride`, `padding`, `output_padding:0` | NHWC spatial transposed convolution, optional bias. |
 | `max_pool2d` | 1 | 1 | `kernel`, `stride`, `padding:0` | NHWC pooling; kernel=stride; first-max tie gradient. |
+| `group_norm` | 3 | 1 | required `groups`, optional `eps` (default `1e-5`) | NHWC input, scale `[C]`, bias `[C]`. Positive groups must divide C; positive finite epsilon. Normalizes H/W and channels within each group per sample, with biased variance. Declare scale/bias weights with `one`/`zero` initialization. See [grid contracts](dense-grid.md). |
 
 Grid custom graphs support the narrower, shape-checked operation subset listed
 in [Dense Grid Regression](dense-grid.md), not all sequence custom operations.

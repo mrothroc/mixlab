@@ -4162,23 +4162,61 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
       }
       case OP_CONV2D:
       case OP_CONV_TRANSPOSE2D: {
-        if (op.n_int_params != 3 || (op.n_inputs != 2 && op.n_inputs != 3)) {
-          throw std::runtime_error("spatial convolution requires kernel,stride,padding and input,weight[,bias]");
+        if ((op.n_int_params != 3 && !(op.type == OP_CONV2D && op.n_int_params == 4)) ||
+            (op.n_inputs != 2 && op.n_inputs != 3)) {
+          throw std::runtime_error("spatial convolution requires kernel,stride,padding[,dilation for conv2d] and input,weight[,bias]");
         }
         int kernel = op.int_params[0], stride = op.int_params[1], padding = op.int_params[2];
+        int dilation = op.n_int_params == 4 ? op.int_params[3] : 1;
         auto x = get(op, 0);
         auto w = get(op, 1);
-        if (kernel <= 0 || stride <= 0 || padding < 0 || x.ndim() != 4 || w.ndim() != 4 ||
+        if (kernel <= 0 || stride <= 0 || padding < 0 || dilation <= 0 || x.ndim() != 4 || w.ndim() != 4 ||
             w.shape(1) != kernel || w.shape(2) != kernel) {
           throw std::runtime_error("invalid spatial convolution shape or parameters");
+        }
+        if (op.type == OP_CONV2D &&
+            (int64_t(dilation) * (kernel - 1) + 1 > INT32_MAX ||
+             int64_t(x.shape(1)) + 2 * int64_t(padding) > INT32_MAX ||
+             int64_t(x.shape(2)) + 2 * int64_t(padding) > INT32_MAX)) {
+          throw std::runtime_error("convolution effective kernel or padded input exceeds int32 dimensions");
         }
         // Canonical transposed weights are I,H,W,O; MLX expects O,H,W,I.
         if (op.type == OP_CONV_TRANSPOSE2D) w = mx::transpose(w, {3, 1, 2, 0});
         auto y = op.type == OP_CONV2D
-          ? mx::conv2d(x, w, {stride,stride}, {padding,padding})
+          ? mx::conv2d(x, w, {stride,stride}, {padding,padding}, {dilation,dilation})
           : mx::conv_transpose2d(x, w, {stride,stride}, {padding,padding});
         if (op.n_inputs == 3) y = y + get(op, 2);
         set_out(op, 0, y);
+        break;
+      }
+      case OP_GROUP_NORM: {
+        if (op.n_inputs != 3 || op.n_int_params != 1 || op.n_float_params != 1 ||
+            op.int_params[0] <= 0 || !std::isfinite(op.float_params[0]) || op.float_params[0] <= 0) {
+          throw std::runtime_error("group_norm requires input,scale,bias, positive groups and finite positive eps");
+        }
+        auto x = get(op, 0), scale = get(op, 1), bias = get(op, 2);
+        int groups = op.int_params[0];
+        // The legacy trainer uploads logical vectors as [1,C]. Accept only
+        // that wrapper or canonical [C], not arbitrary equal-sized tensors.
+        auto is_channel_vector = [](const mx::array& a, int c) {
+          return (a.ndim() == 1 && a.shape(0) == c) ||
+                 (a.ndim() == 2 && a.shape(0) == 1 && a.shape(1) == c);
+        };
+        if (x.ndim() != 4 || x.shape(3) <= 0 || x.shape(3) % groups != 0 ||
+            !is_channel_vector(scale, x.shape(3)) || !is_channel_vector(bias, x.shape(3))) {
+          throw std::runtime_error("group_norm requires NHWC input, groups dividing C, scale/bias [C]");
+        }
+        // Centered biased variance over spatial axes and channels within each
+        // group. Keep the sample/group axes separate, including at batch one.
+        auto grouped = mx::reshape(x, {x.shape(0), x.shape(1), x.shape(2), groups, x.shape(3)/groups});
+        // Subtract a representative before reducing to avoid losing a small
+        // variance in a large common offset. The shift cancels algebraically.
+        auto origin = mx::stop_gradient(mx::slice(grouped, {0,0,0,0,0}, {x.shape(0),1,1,groups,1}));
+        auto shifted = grouped - origin;
+        auto centered = shifted - mx::mean(shifted, std::vector<int>{1, 2, 4}, true);
+        auto variance = mx::mean(mx::square(centered), std::vector<int>{1, 2, 4}, true);
+        auto normalized = centered * mx::rsqrt(variance + mx::array(op.float_params[0]));
+        set_out(op, 0, mx::reshape(normalized, x.shape()) * scale + bias);
         break;
       }
       case OP_MAX_POOL2D: {

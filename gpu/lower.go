@@ -99,6 +99,7 @@ var irToGPUOp = map[int]int{
 	ir.OpConv2D:               OpConv2D,
 	ir.OpConvTranspose2D:      OpConvTranspose2D,
 	ir.OpMaxPool2D:            OpMaxPool2D,
+	ir.OpGroupNorm:            OpGroupNorm,
 	ir.OpMaskedSymmetricKL:    OpMaskedSymmetricKL,
 	ir.OpMaskedMarginPLL:      OpMaskedMarginPLL,
 	ir.OpMaskedZLoss:          OpMaskedZLoss,
