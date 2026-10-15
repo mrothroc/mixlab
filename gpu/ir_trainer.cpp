@@ -2161,13 +2161,13 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   }
   last_step_stage_trace.clear();
   const bool final_distributed_microstep =
-      !distributed_context_active ||
+      !uses_staged_updates() ||
       distributed_accumulation_steps <= 1 ||
       distributed_accumulation_position + 1 >= distributed_accumulation_steps;
   if (final_distributed_microstep) {
     step_count++;
   }
-  if (distributed_context_active) {
+  if (uses_staged_updates()) {
     distributed_microstep_count++;
     if (distributed_accumulation_position == 0) {
       distributed_cycle_total_us = 0;
@@ -2211,7 +2211,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
               << std::endl;
   };
   auto record_distributed_timing = [&]() {
-    if (!distributed_context_active) {
+    if (!uses_staged_updates()) {
       return;
     }
     const uint64_t current_total_us = static_cast<uint64_t>(
@@ -2904,7 +2904,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   for (size_t i = 0; i < argnums.size(); ++i) {
     grads[static_cast<size_t>(argnums[i])] = step_out[output_names.size() + i];
   }
-  if (distributed_context_active && distributed_accumulation_steps > 1) {
+  if (uses_staged_updates() && distributed_accumulation_steps > 1) {
     auto microstep_bad = mx::logical_not(mx::isfinite(loss));
     const bool denominator_bad =
         !std::isfinite(step_loss_normalizer) || step_loss_normalizer < 0.0f;
@@ -2976,7 +2976,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
     grads = distributed_accumulated_gradients;
   }
   auto run_compiled_fused_mamba3_adamw_optimizer_update = [&]() -> bool {
-    if (distributed_context_active) {
+    if (uses_staged_updates()) {
       return false;
     }
     if (!supports_compiled_fused_mamba3_adamw_optimizer_update(*this)) {
@@ -3141,8 +3141,8 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
       mx::array(0.0f, mx::float32),
       false,
   };
-  if (distributed_context_active) {
-    if (!distributed_group.has_value()) {
+  if (uses_staged_updates()) {
+    if (distributed_context_active && !distributed_group.has_value()) {
       throw std::runtime_error("distributed trainer has no MLX group");
     }
     staged_result = prepare_distributed_staged_gradients(
@@ -3156,7 +3156,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
         step_loss_normalizer,
         distributed_accumulation_steps > 1,
         max_grad_norm,
-        *distributed_group,
+        distributed_group ? &*distributed_group : nullptr,
         distributed_gradient_bucket_plan,
         last_step_stage_trace);
     last_distributed_collective_us = staged_result.collective_us;
@@ -3219,10 +3219,10 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   }
   OptimizerStepTransaction transaction(*this);
   const auto opt_t0 = HostClock::now();
-  auto validated_gradient_nonfinite = distributed_context_active
+  auto validated_gradient_nonfinite = uses_staged_updates()
       ? staged_result.gradient_nonfinite
       : sanitize_and_clip_gradients(grads, max_grad_norm);
-  if (distributed_context_active) {
+  if (uses_staged_updates()) {
     last_step_stage_trace.push_back("candidate");
   }
   apply_optimizer_updates(grads);
@@ -3263,11 +3263,11 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   if (timing_enabled) {
     timing_eval_us = elapsed_us(eval_t0, HostClock::now());
   }
-  if (distributed_context_active) {
+  if (uses_staged_updates()) {
     last_step_stage_trace.push_back("candidate_finite");
   }
   const bool committed = transaction.finish();
-  if (distributed_context_active) {
+  if (uses_staged_updates()) {
     last_step_stage_trace.push_back(committed ? "commit" : "rollback");
   }
   if (!committed) {
@@ -3281,7 +3281,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   pending_outputs_ = std::move(outputs);
   has_pending_step_ = true;
   pending_step_index_ = step_count;
-  if (distributed_context_active) {
+  if (uses_staged_updates()) {
     distributed_accumulated_gradients.clear();
     distributed_accumulated_denominator = 0.0;
     distributed_accumulated_bad = mx::array(false);
@@ -3298,7 +3298,7 @@ void IRTrainer::set_distributed_group(
   if (step_count != 0 || has_pending_step_ || has_ready_step_) {
     throw std::runtime_error("distributed group must be configured before the first trainer step");
   }
-  if (distributed_context_active) {
+  if (uses_staged_updates()) {
     throw std::runtime_error("distributed group is already configured");
   }
   if (rank != group.rank() || world_size != group.size() || rank < 0 || world_size <= 0) {

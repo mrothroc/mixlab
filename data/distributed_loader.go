@@ -120,7 +120,14 @@ type DistributedLoader struct {
 }
 
 func NewDistributedLoader(pattern string, seed int64, world, rank, seqLen, chunkTokens, vocab int, partitionID string) (*DistributedLoader, error) {
-	if world < 2 || rank < 0 || rank >= world || seqLen <= 0 || chunkTokens < seqLen || chunkTokens%seqLen != 0 || vocab <= 0 || partitionID == "" {
+	if world < 2 {
+		return nil, fmt.Errorf("distributed loader requires at least two ranks")
+	}
+	return newPartitionedLoader(pattern, seed, world, rank, seqLen, chunkTokens, vocab, partitionID)
+}
+
+func newPartitionedLoader(pattern string, seed int64, world, rank, seqLen, chunkTokens, vocab int, partitionID string) (*DistributedLoader, error) {
+	if world < 1 || rank < 0 || rank >= world || seqLen <= 0 || chunkTokens < seqLen || chunkTokens%seqLen != 0 || vocab <= 0 || partitionID == "" {
 		return nil, fmt.Errorf("invalid distributed loader topology/shape; shuffle_chunk_tokens must be a positive multiple of seq_len")
 	}
 	m, _, found, err := FindDatasetManifest(pattern)

@@ -52,7 +52,7 @@ StagedGradientResult prepare_distributed_staged_gradients(
     float loss_normalizer,
     bool gradients_are_numerators,
     float max_grad_norm,
-    const mlx::core::distributed::Group& group,
+    const mlx::core::distributed::Group* group,
     const GradientBucketPlan& bucket_plan,
     std::vector<std::string>& stage_trace);
 

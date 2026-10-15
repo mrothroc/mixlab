@@ -19,7 +19,7 @@ func (t *mlxGPUTrainer) SubmitStepGPU(
 	if err != nil {
 		return err
 	}
-	if t.distributed != nil {
+	if t.distributed != nil || t.localAccumulation > 0 {
 		if err := gpu.TrainerSubmitStepWithNormalizer(
 			t.handle,
 			inputs,
@@ -44,7 +44,7 @@ func (t *mlxGPUTrainer) SubmitObjectiveStepGPU(
 	if err != nil {
 		return err
 	}
-	if t.distributed != nil {
+	if t.distributed != nil || t.localAccumulation > 0 {
 		if !batch.lossNormalizerSet {
 			return fmt.Errorf("distributed objective batch is missing loss_normalizer")
 		}

@@ -185,6 +185,10 @@ struct IRTrainer {
   bool mamba3_single_backward_fallback_logged = false;
 
   bool distributed_context_active = false;
+  bool local_accumulation_active = false;
+  bool uses_staged_updates() const {
+    return distributed_context_active || local_accumulation_active;
+  }
   int distributed_rank = 0;
   int distributed_world_size = 1;
   std::optional<mlx::core::distributed::Group> distributed_group;

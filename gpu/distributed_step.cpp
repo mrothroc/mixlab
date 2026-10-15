@@ -123,7 +123,7 @@ StagedGradientResult prepare_distributed_staged_gradients(
     float loss_normalizer,
     bool gradients_are_numerators,
     float max_grad_norm,
-    const mx::distributed::Group& group,
+    const mx::distributed::Group* group,
     const GradientBucketPlan& bucket_plan,
     std::vector<std::string>& stage_trace) {
   if (gradients.empty() || bucket_plan.buckets.empty()) {
@@ -157,9 +157,9 @@ StagedGradientResult prepare_distributed_staged_gradients(
   if (!denominator_valid) {
     local_bad = mx::array(1.0f, mx::float32);
   }
-  stage_trace.push_back("all_max_pre_update_bad");
+  stage_trace.push_back(group ? "all_max_pre_update_bad" : "local_pre_update_bad");
   const auto bad_collective_start = TelemetryClock::now();
-  auto global_bad = mx::distributed::all_max(local_bad, group);
+  auto global_bad = group ? mx::distributed::all_max(local_bad, *group) : local_bad;
   const auto bad_wait_start = TelemetryClock::now();
   mx::eval(global_bad);
   const auto bad_collective_end = TelemetryClock::now();
@@ -176,11 +176,10 @@ StagedGradientResult prepare_distributed_staged_gradients(
     };
   }
 
-  stage_trace.push_back("all_sum_denominator");
+  stage_trace.push_back(group ? "all_sum_denominator" : "local_denominator");
   const auto denominator_collective_start = TelemetryClock::now();
-  auto global_denominator = mx::distributed::all_sum(
-      mx::array(safe_normalizer, mx::float32),
-      group);
+  auto global_denominator = mx::array(safe_normalizer, mx::float32);
+  if (group) global_denominator = mx::distributed::all_sum(global_denominator, *group);
   const auto denominator_wait_start = TelemetryClock::now();
   mx::eval(global_denominator);
   const auto denominator_collective_end = TelemetryClock::now();
@@ -218,8 +217,8 @@ StagedGradientResult prepare_distributed_staged_gradients(
     auto flat = flat_entries.size() == 1
         ? flat_entries.front()
         : mx::concatenate(flat_entries, 0);
-    stage_trace.push_back("all_sum_bucket_" + std::to_string(bucket_index));
-    reduced_buckets.push_back(mx::distributed::all_sum(flat, group));
+    stage_trace.push_back((group ? "all_sum_bucket_" : "local_bucket_") + std::to_string(bucket_index));
+    reduced_buckets.push_back(group ? mx::distributed::all_sum(flat, *group) : flat);
   }
   const auto gradient_wait_start = TelemetryClock::now();
   mx::eval(reduced_buckets);

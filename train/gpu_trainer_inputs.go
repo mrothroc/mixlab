@@ -349,6 +349,10 @@ func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seq
 		rank := 0
 		microstep := 0
 		optimizerAttempt := t.trainingStep
+		if t.localAccumulation > 0 {
+			microstep = t.trainingStep % t.localAccumulation
+			optimizerAttempt = t.trainingStep / t.localAccumulation
+		}
 		if t.distributed != nil {
 			rank = t.distributed.LocalView.LocalRank
 			accumulationSteps := t.distributed.AccumulationSteps

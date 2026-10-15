@@ -14,6 +14,8 @@ DiLoCo is currently a [validation-only contract preview](config-reference.md#dil
 Its required `inner_steps`, `outer_optimizer`, `outer_lr`, `outer_momentum`, and
 `aggregation` fields are checked, but no managed learner/coordinator runtime is
 exposed yet. Do not use `mode: "diloco"` to launch training at this stage.
+Contributors can exercise the [local learner engine](../train/local_learner.md)
+independently; this foundation does not enable distributed DiLoCo runs.
 
 `training.distributed` now selects DDP through the ordinary `-mode arch`
 entrypoint. There is no separate DDP mode or Mixlab hostfile flag: `mlx.launch`

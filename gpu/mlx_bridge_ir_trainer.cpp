@@ -299,7 +299,7 @@ int mlx_ir_trainer_set_distributed_options(
     int accumulation_steps) {
   try {
     auto t = get_ir_trainer(trainer);
-    if (!t || t->step_count != 0 || t->distributed_context_active ||
+    if (!t || t->step_count != 0 || t->uses_staged_updates() ||
         gradient_bucket_bytes == 0 || accumulation_steps <= 0) {
       return -1;
     }

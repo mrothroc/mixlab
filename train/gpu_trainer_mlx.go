@@ -12,6 +12,7 @@ import (
 
 // mlxGPUTrainer wraps the MLX IR trainer for the training loop.
 type mlxGPUTrainer struct {
+	localAccumulation          int
 	gridInputs                 []ir.TensorDecl
 	handle                     gpu.TrainerHandle
 	prog                       *gpu.Program
