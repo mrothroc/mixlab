@@ -53,10 +53,19 @@ func TestStoreStagesAndVerifiesImmutableBytes(t *testing.T) {
 	if err := s.Put(ctx, ref, bytes.NewReader(body)); !errors.Is(err, statehome.ErrExists) {
 		t.Fatal("overwrote artifact", err)
 	}
+	if err := s.PutVerified(ctx, ref, bytes.NewReader(body)); err != nil {
+		t.Fatal("verified retry", err)
+	}
+	if err := s.PutVerified(ctx, ref, bytes.NewReader([]byte("wrong retry"))); err == nil {
+		t.Fatal("retry bypassed stream verification")
+	}
 	if err := os.WriteFile(filepath.Join(dir, ref.SHA256), bytes.Repeat([]byte("x"), len(body)), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Copy(ctx, ref, &out); err == nil {
 		t.Fatal("trusted digest-named corrupt file")
+	}
+	if err := s.PutVerified(ctx, ref, bytes.NewReader(body)); err == nil {
+		t.Fatal("retry trusted corrupt stored artifact")
 	}
 }

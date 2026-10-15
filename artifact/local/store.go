@@ -4,7 +4,9 @@ package local
 
 import (
 	"context"
+	"errors"
 	"io"
+	"os"
 
 	"github.com/mrothroc/mixlab/artifact"
 	"github.com/mrothroc/mixlab/statehome"
@@ -16,7 +18,44 @@ func Open(path statehome.Path) (*Store, error) {
 	if err := path.Validate(); err != nil {
 		return nil, err
 	}
+	if _, err := path.CleanupTemporaryFiles(); err != nil {
+		return nil, err
+	}
 	return &Store{path: path}, nil
+}
+
+// PutVerified permits exact retries, but verifies both the supplied stream and
+// the existing inode. A digest-shaped filename never proves integrity.
+func (s *Store) PutVerified(ctx context.Context, ref artifact.Ref, source io.Reader) error {
+	err := s.Put(ctx, ref, source)
+	if !errors.Is(err, statehome.ErrExists) {
+		return err
+	}
+	if err := artifact.Copy(ctx, io.Discard, source, ref); err != nil {
+		return err
+	}
+	return s.Copy(ctx, ref, io.Discard)
+}
+
+// OpenVerified returns the verified immutable inode positioned at its start.
+// The owner must close it. Private state directories must not be modified by
+// other applications while their artifacts are in use.
+func (s *Store) OpenVerified(ctx context.Context, ref artifact.Ref) (*os.File, error) {
+	if err := ref.Validate(); err != nil {
+		return nil, err
+	}
+	f, err := s.path.OpenRead(ref.SHA256)
+	if err != nil {
+		return nil, err
+	}
+	if err = artifact.Copy(ctx, io.Discard, f, ref); err == nil {
+		_, err = f.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
 }
 
 // Put never overwrites even an existing same-digest file. Owners may verify an

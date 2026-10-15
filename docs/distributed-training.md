@@ -16,6 +16,9 @@ Its required `inner_steps`, `outer_optimizer`, `outer_lr`, `outer_momentum`, and
 exposed yet. Do not use `mode: "diloco"` to launch training at this stage.
 Contributors can exercise the [local learner engine](../train/local_learner.md)
 independently; this foundation does not enable distributed DiLoCo runs.
+The [durable coordinator adapters](../coordinator/local/README.md) and
+[authenticated artifact gateway](../coordinator/artifactapi/README.md) are also
+available for integration tests, not yet as an installed coordinator service.
 
 `training.distributed` now selects DDP through the ordinary `-mode arch`
 entrypoint. There is no separate DDP mode or Mixlab hostfile flag: `mlx.launch`

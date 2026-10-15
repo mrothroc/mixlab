@@ -1,6 +1,6 @@
 // Package coordinator owns fixed-cohort round decisions. P1 provides the round
-// model against ports only; no production repository, transport or service is
-// installed. Callers must authenticate and authorize before invoking this API.
+// model against ports; durable and HTTP adapters live in child packages, but no
+// service is installed. Callers authenticate and authorize before invoking it.
 package coordinator
 
 import (
@@ -37,7 +37,7 @@ type Change struct {
 
 // Artifacts must verify content digest/size, decode bounded float32 tensors in
 // program layout order, and return owned arrays. Put is content-addressed and
-// idempotent. Real safetensors/streaming adapters belong to P3.
+// idempotent. The local adapter supplies bounded safetensors/streaming storage.
 type Artifacts interface {
 	Load(context.Context, run.Blob) ([]optimizer.Tensor, error)
 	Put(context.Context, string, []optimizer.Tensor) (run.Blob, error)

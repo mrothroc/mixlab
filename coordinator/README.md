@@ -2,8 +2,10 @@
 
 This package is an application model over repository, artifact, allocation,
 clock, and evaluator ports. It does not install a service or enable DiLoCo
-training. Tests use in-memory adapters; disk crash recovery and authenticated
-network handling remain integration work.
+training. The pure model tests use in-memory adapters. The [local adapters](local/README.md)
+add durable state and F32 artifacts, and the [artifact gateway](artifactapi/README.md)
+adds scoped authenticated transfers. Service/admission/managed-learner wiring
+remains separate integration work.
 
 ```text
 PLAN_STAGED -> COHORT_COMMITTED -> ROUND_OPEN -> AGGREGATING

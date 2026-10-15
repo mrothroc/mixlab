@@ -61,3 +61,15 @@ func TestDiLoCoApplicationEdges(t *testing.T) {
 		}
 	}
 }
+
+func TestDiLoCoDurableAdaptersRemainNumericsFree(t *testing.T) {
+	for _, target := range []string{"./coordinator/local", "./coordinator/artifactapi", "./artifact/tensors"} {
+		for _, p := range dependencies(t, "0", "", target) {
+			for _, forbidden := range []string{"train", "gpu", "arch", "learner", "admission"} {
+				if p.ImportPath == modulePath+forbidden || strings.HasPrefix(p.ImportPath, modulePath+forbidden+"/") {
+					t.Errorf("%s links %s", target, p.ImportPath)
+				}
+			}
+		}
+	}
+}
