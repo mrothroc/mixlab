@@ -1,0 +1,5 @@
+[
+  {"name":"uniform_no_momentum","momentum":0,"outer_lr":1,"aggregation":"uniform","tokens":[1,3],"models":[2.6875,1.94921875,1.533935546875],"momenta":[1.3125,0.73828125,0.415283203125]},
+  {"name":"weighted_no_momentum","momentum":0,"outer_lr":1,"aggregation":"effective_tokens","tokens":[1,3],"models":[2.90625,2.291015625,1.9449462890625],"momenta":[1.09375,0.615234375,0.3460693359375]},
+  {"name":"uniform_nesterov","momentum":0.5,"outer_lr":1,"aggregation":"uniform","tokens":[1,3],"models":[2.03125,1.0263671875,0.732208251953125],"momenta":[1.3125,1.107421875,0.56524658203125]}
+]

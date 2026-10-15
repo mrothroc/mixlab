@@ -6,6 +6,11 @@ import (
 )
 
 func TestDiLoCoPureContractBoundaries(t *testing.T) {
+	for _, p := range dependencies(t, "0", "", "./diloco/optimizer") {
+		if !p.Standard && p.ImportPath != modulePath+"diloco/optimizer" {
+			t.Errorf("pure outer optimizer imports %s", p.ImportPath)
+		}
+	}
 	allowed := map[string]bool{}
 	for _, p := range []string{"diloco/run", "diloco/learner", "diloco/internal/wire", "distributed", "precision", "artifact", "internal/strictjson"} {
 		allowed[modulePath+p] = true
