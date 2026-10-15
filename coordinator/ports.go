@@ -65,6 +65,7 @@ type Phase string
 
 const (
 	Staged      Phase = "PLAN_STAGED"
+	Aborted     Phase = "ADMISSION_ABORTED"
 	Ready       Phase = "COHORT_COMMITTED"
 	Open        Phase = "ROUND_OPEN"
 	Aggregating Phase = "AGGREGATING"
@@ -100,4 +101,5 @@ type State struct {
 	Candidate     *run.Round                `json:"candidate"`
 	Evaluation    *run.EvaluationAssignment `json:"evaluation"`
 	Failure       string                    `json:"failure"`
+	Attempts      []run.AttemptBinding      `json:"attempts,omitempty"`
 }

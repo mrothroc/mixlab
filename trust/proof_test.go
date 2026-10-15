@@ -14,9 +14,9 @@ func TestPrincipalPurposeMatrix(t *testing.T) {
 	policies := map[Role]map[Purpose]bool{
 		Authority:   {EnrollmentApproval: true, EnrollmentReceipt: true},
 		Controller:  {NodeJob: true, SecureTransportPlan: true, CredentialEnvelopePurpose: true, WorkloadGrant: true},
-		Coordinator: {RunPlan: true, RunCommit: true, RoundGrant: true, RecoveryGrant: true, ArtifactGrant: true},
+		Coordinator: {RunPlan: true, RunCommit: true, RoundGrant: true, RecoveryGrant: true, ArtifactGrant: true, WorkloadGrant: true},
 	}
-	purposes := []Purpose{EnrollmentApproval, EnrollmentReceipt, NodeJob, SecureTransportPlan, CredentialEnvelopePurpose, WorkloadKeyRequest, WorkloadGrant, RunPlan, RunCommit, RoundGrant, RecoveryGrant, ArtifactGrant, "certificate", "snapshot", "unknown"}
+	purposes := []Purpose{EnrollmentApproval, EnrollmentReceipt, NodeJob, SecureTransportPlan, CredentialEnvelopePurpose, WorkloadKeyRequest, WorkloadGrant, RunPlan, RunCommit, RoundGrant, RecoveryGrant, LearnerRecovery, ArtifactGrant, "certificate", "snapshot", "unknown"}
 	for role, allowed := range policies {
 		p := f.principal(t, role)
 		for _, purpose := range purposes {

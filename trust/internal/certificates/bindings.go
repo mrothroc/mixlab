@@ -27,6 +27,7 @@ const Worker Role = "worker"
 const WorkloadLifetime = 7 * 24 * time.Hour
 const NodeBindingVersion = "mixlab_node_binding_v1"
 const WorkloadBindingVersion = "mixlab_ddp_workload_binding_v1"
+const LearnerBindingVersion = "mixlab_learner_workload_binding_v1"
 
 const bindingURIPrefix = "urn:mixlab:binding:v1:"
 
@@ -43,8 +44,8 @@ type NodeBinding struct {
 	EnvelopeKey []byte `json:"envelope_key"`
 }
 
-// WorkloadBinding contains only the R1.1 DDP identity contract. DiLoCo and
-// recovery scopes require a separately versioned profile, not optional fields.
+// WorkloadBinding is a version-discriminated profile. Learner bindings forbid
+// DDP membership fields; DDP bindings forbid learner fields.
 type WorkloadBinding struct {
 	Version        string `json:"version"`
 	Cluster        string `json:"cluster"`
@@ -64,15 +65,33 @@ type WorkloadBinding struct {
 	MembershipHash string `json:"membership_hash"`
 	Member         string `json:"member"`
 	Rank           int    `json:"rank"`
+	Worker         string `json:"worker,omitempty"`
+	PlanHash       string `json:"plan_hash,omitempty"`
+	Coordinator    string `json:"coordinator,omitempty"`
 }
 
 func (b WorkloadBinding) validate(id Identity, c *x509.Certificate) error {
-	for _, value := range []string{b.Cluster, b.Principal, b.Participant, b.Run, b.Job, b.Lease, b.Attempt, b.Group, b.Member} {
+	for _, value := range []string{b.Cluster, b.Principal, b.Participant, b.Run, b.Job, b.Lease, b.Attempt} {
 		if !ValidID(value) {
 			return fmt.Errorf("invalid workload binding identifier")
 		}
 	}
-	for _, digest := range []string{b.MembershipHash, b.ManifestHash} {
+	hashes := []string{b.ManifestHash}
+	switch b.Version {
+	case WorkloadBindingVersion:
+		if !ValidID(b.Group) || !ValidID(b.Member) || b.Worker != "" || b.PlanHash != "" || b.Coordinator != "" {
+			return fmt.Errorf("invalid DDP workload profile")
+		}
+		hashes = append(hashes, b.MembershipHash)
+	case LearnerBindingVersion:
+		if !ValidID(b.Worker) || !ValidID(b.Coordinator) || b.Group != "" || b.Member != "" || b.MembershipHash != "" || b.Rank != 0 || b.Audience != "diloco/learner" {
+			return fmt.Errorf("invalid learner workload profile")
+		}
+		hashes = append(hashes, b.PlanHash)
+	default:
+		return fmt.Errorf("unsupported workload profile")
+	}
+	for _, digest := range hashes {
 		h, err := hex.DecodeString(digest)
 		if err != nil || len(h) != 32 || hex.EncodeToString(h) != digest {
 			return fmt.Errorf("invalid workload scope digest")
@@ -89,7 +108,7 @@ func (b WorkloadBinding) validate(id Identity, c *x509.Certificate) error {
 			return fmt.Errorf("invalid workload audience")
 		}
 	}
-	if b.Version != WorkloadBindingVersion || b.Cluster != id.Cluster || b.Role != Worker || b.Role != id.Role || b.Principal != id.Principal ||
+	if b.Cluster != id.Cluster || b.Role != Worker || b.Role != id.Role || b.Principal != id.Principal ||
 		b.IssuedAt <= 0 || b.ExpiresAt <= b.IssuedAt || b.ExpiresAt-b.IssuedAt > int64(WorkloadLifetime/time.Second) ||
 		c.NotBefore.Unix() != b.IssuedAt || c.NotAfter.Unix() != b.ExpiresAt {
 		return fmt.Errorf("workload binding/profile mismatch")

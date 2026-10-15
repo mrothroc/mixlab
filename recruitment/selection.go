@@ -83,6 +83,18 @@ type Selection struct {
 // by authenticated node ID. No partial cohort is returned on failure. Decisions
 // are stable reason codes, safe to log without leaking transport error details.
 func Select(ctx context.Context, hints []discovery.Hint, r Requirements, lookup Lookup, clock func() time.Time) (Selection, error) {
+	return selectFor(ctx, hints, r, lookup, clock, false)
+}
+
+// SelectLearners selects independent Metal learners, not a DDP ring. Nodes
+// must explicitly advertise the learner manifest; old agents stay ineligible.
+func SelectLearners(ctx context.Context, hints []discovery.Hint, r Requirements, lookup Lookup, clock func() time.Time) (Selection, error) {
+	if r.DeviceKind != "metal" {
+		return Selection{}, fmt.Errorf("R2 requires Metal learner nodes")
+	}
+	return selectFor(ctx, hints, r, lookup, clock, true)
+}
+func selectFor(ctx context.Context, hints []discovery.Hint, r Requirements, lookup Lookup, clock func() time.Time, learner bool) (Selection, error) {
 	out := Selection{Policy: SelectionPolicy, Requirements: r, Selected: []Candidate{}, Decisions: []Decision{}}
 	if err := r.Validate(); err != nil {
 		return out, err
@@ -127,7 +139,7 @@ func Select(ctx context.Context, hints []discovery.Hint, r Requirements, lookup 
 		if err != nil || queryErr != nil {
 			d.Reason = "unavailable_or_unauthenticated"
 		} else {
-			d.Reason = reject(o, r, clock())
+			d.Reason = rejectFor(o, r, clock(), learner)
 			if d.Reason != "wrong_identity" {
 				d.Node = o.Peer.Principal
 				if d.Reason != "" {
@@ -163,7 +175,7 @@ func Select(ctx context.Context, hints []discovery.Hint, r Requirements, lookup 
 		// Endpoint order is deterministic, but only a still-live observation
 		// can represent a multi-address node at commit time.
 		for _, o := range observations {
-			excluded[node] = reject(Observation{o.peer, o.candidate.Capabilities}, r, commitTime)
+			excluded[node] = rejectFor(Observation{o.peer, o.candidate.Capabilities}, r, commitTime, learner)
 			if excluded[node] == "" {
 				candidates = append(candidates, o.candidate)
 				break
@@ -204,6 +216,9 @@ func stableCapabilityHash(c nodeagent.Capabilities) string {
 }
 
 func reject(o Observation, r Requirements, now time.Time) string {
+	return rejectFor(o, r, now, false)
+}
+func rejectFor(o Observation, r Requirements, now time.Time, learner bool) string {
 	p, c := o.Peer, o.Capabilities
 	if p.Role != trust.Node || p.Cluster != r.Cluster || !canonicalHex(p.Principal, 16) || p.Principal != c.Node || now.Before(p.NotBefore) || !now.Before(p.ExpiresAt) {
 		return "wrong_identity"
@@ -214,11 +229,17 @@ func reject(o Observation, r Requirements, now time.Time) string {
 	if !c.Fresh(now, 30*time.Second, r.ProbeMaxAge) {
 		return "stale_capabilities"
 	}
-	if !c.Recruitable {
+	available := c.Recruitable
+	manifest := nodejob.Version
+	if learner {
+		available = c.Availability.Available && c.Probe.Available && c.Probe.MLXSupported
+		manifest = nodejob.LearnerVersion
+	}
+	if !available {
 		return "not_recruitable"
 	}
 	pb := c.Probe
-	if pb.BuildID != r.BuildID || pb.MLXVersion != r.MLXVersion || pb.DeviceKind != r.DeviceKind || !slices.Contains(pb.DTypes, r.DType) || !slices.Equal(pb.CustomOps, r.CustomOps) || !slices.Contains(c.ManifestVersions, nodejob.Version) {
+	if pb.BuildID != r.BuildID || pb.MLXVersion != r.MLXVersion || pb.DeviceKind != r.DeviceKind || !slices.Contains(pb.DTypes, r.DType) || !slices.Equal(pb.CustomOps, r.CustomOps) || !slices.Contains(c.ManifestVersions, manifest) {
 		return "incompatible_worker"
 	}
 	if !r.Limits.Within(c.Limits) || pb.MemoryBytes != nil && *pb.MemoryBytes < r.Limits.MemoryBytes || pb.FreeMemoryBytes != nil && *pb.FreeMemoryBytes < r.Limits.MemoryBytes {

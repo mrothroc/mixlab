@@ -73,3 +73,15 @@ func TestDiLoCoDurableAdaptersRemainNumericsFree(t *testing.T) {
 		}
 	}
 }
+
+func TestDiLoCoAdmissionAndAllocationBoundaries(t *testing.T) {
+	for _, target := range []string{"./admission", "./nodeagent", "./nodejob", "./coordinator/nodeleases", "./coordinator/recoveryauth"} {
+		for _, p := range dependencies(t, "0", "", target) {
+			for _, forbidden := range []string{"train", "gpu", "arch", "learner"} {
+				if p.ImportPath == modulePath+forbidden || strings.HasPrefix(p.ImportPath, modulePath+forbidden+"/") {
+					t.Errorf("%s links numerical/runtime owner %s", target, p.ImportPath)
+				}
+			}
+		}
+	}
+}

@@ -83,7 +83,7 @@ func (h *nodeHTTP) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, ok := managedtls.Principal(r.Context())
-	if !ok || actor.Role != trust.Controller {
+	if !ok || (actor.Role != trust.Controller && actor.Role != trust.Coordinator) {
 		http.Error(w, "controller required", http.StatusForbidden)
 		return
 	}
@@ -101,6 +101,13 @@ func (h *nodeHTTP) serve(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, "/v1/agent/") {
 		http.NotFound(w, r)
 		return
+	}
+	if actor.Role == trust.Coordinator {
+		allowed := len(parts) == 2 && parts[0] == "leases" && (r.Method == http.MethodGet || r.Method == http.MethodDelete) || len(parts) == 3 && parts[0] == "leases" && parts[2] == "renew" && r.Method == http.MethodPut
+		if !allowed {
+			http.Error(w, "coordinator may only manage committed leases", http.StatusForbidden)
+			return
+		}
 	}
 	if r.Method == http.MethodPost && len(parts) == 1 && parts[0] == "leases" {
 		var q nodeagent.Reserve
@@ -267,7 +274,7 @@ func (h *nodeHTTP) decode(w http.ResponseWriter, r *http.Request, dst any, limit
 		return false
 	}
 	current, err := h.policy.Authenticate(*r.TLS)
-	if err != nil || current.Role != trust.Controller || current.Principal != actor.Principal || r.Context().Err() != nil {
+	if err != nil || current.Role != actor.Role || current.Principal != actor.Principal || r.Context().Err() != nil {
 		http.Error(w, "current controller required", http.StatusForbidden)
 		return false
 	}

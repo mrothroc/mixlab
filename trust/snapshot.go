@@ -28,6 +28,7 @@ const (
 	Node                   = certificates.Node
 	Worker                 = certificates.Worker
 	WorkloadBindingVersion = certificates.WorkloadBindingVersion
+	LearnerBindingVersion  = certificates.LearnerBindingVersion
 	SnapshotVersion        = "mixlab_trust_snapshot_v1"
 	EndpointVersion        = "mixlab_authority_endpoints_v1"
 	SnapshotLifetime       = 15 * time.Minute

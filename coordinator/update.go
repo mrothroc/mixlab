@@ -19,6 +19,25 @@ func (m Model) Accept(ctx context.Context, id string, u learner.Update) (learner
 	if e != nil {
 		return learner.Receipt{}, e
 	}
+	return m.accept(ctx, s, u)
+}
+
+// AcceptSubmission checks the operational fence on the SAME repository revision
+// as update publication. HTTP/relay adapters must use this rather than a separate
+// CheckSubmission followed by Accept, which could race attempt replacement.
+func (m Model) AcceptSubmission(ctx context.Context, q learner.Submission) (learner.Receipt, error) {
+	s, err := m.load(ctx, q.Update.Binding.RunID)
+	if err != nil {
+		return learner.Receipt{}, err
+	}
+	if err = s.CheckSubmission(q); err != nil {
+		return learner.Receipt{}, err
+	}
+	return m.accept(ctx, s, q.Update)
+}
+func (m Model) accept(ctx context.Context, s State, u learner.Update) (learner.Receipt, error) {
+	id := s.Plan.Cohort.RunID
+	var e error
 	if e = u.Validate(); e != nil {
 		return learner.Receipt{}, e
 	}

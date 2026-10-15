@@ -128,6 +128,53 @@ func (m Model) Commit(ctx context.Context, id string, c run.Commit) error {
 	return m.save(ctx, s, Change{Next: next})
 }
 
+// AbortAdmission fences a late commit with the same repository CAS used by
+// Commit. A committed result must be handed off, never compensated as unstarted.
+func (m Model) AbortAdmission(ctx context.Context, id string) (*run.Commit, error) {
+	s, err := m.load(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if s.Commit != nil {
+		return s.Commit, nil
+	}
+	if s.Phase == Aborted {
+		return nil, nil
+	}
+	if s.Phase != Staged {
+		return nil, fmt.Errorf("run is not staged")
+	}
+	next := s
+	next.Phase = Aborted
+	return nil, m.save(ctx, s, Change{Next: next})
+}
+
+// FenceAdmission also handles a Stage request with an unknown outcome. The
+// absent-run tombstone competes on the same CAS as Stage, so delayed staging
+// cannot resurrect a compensated run. Unlike Stage, fencing is allowed after
+// the admission deadline.
+func (m Model) FenceAdmission(ctx context.Context, p run.Plan, policy EvaluationPolicy) (*run.Commit, error) {
+	if err := p.Validate(); err != nil {
+		return nil, err
+	}
+	if err := validatePolicy(policy, p); err != nil {
+		return nil, err
+	}
+	s, err := m.load(ctx, p.Cohort.RunID)
+	if errors.Is(err, ErrNotFound) {
+		return nil, m.save(ctx, State{Plan: p}, Change{Next: State{Phase: Aborted, Plan: p, Policy: policy}})
+	}
+	if err != nil {
+		return nil, err
+	}
+	h, _ := run.Digest(s.Policy)
+	want, _ := run.Digest(policy)
+	if s.Plan.SHA256 != p.SHA256 || h != want {
+		return nil, ErrConflict
+	}
+	return m.AbortAdmission(ctx, p.Cohort.RunID)
+}
+
 // OpenRound is idempotent for an already open round. Assignments share a fixed
 // deadline and are stable across acquire retries; expired work is never extended.
 func (m Model) OpenRound(ctx context.Context, id string, seconds int64) ([]run.Assignment, error) {

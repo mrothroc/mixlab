@@ -25,6 +25,26 @@ type Assignment struct {
 	Proof trust.SignedProof `json:"proof"`
 }
 
+type Recovery struct {
+	Body        run.AttemptBinding `json:"body"`
+	Coordinator run.Coordinator    `json:"coordinator"`
+	Proof       trust.SignedProof  `json:"proof"`
+}
+
+func (r Recovery) Validate() error {
+	if err := r.Body.Validate(); err != nil {
+		return err
+	}
+	if err := r.Coordinator.Validate(); err != nil {
+		return err
+	}
+	h, err := run.Digest(r.Body)
+	if err != nil {
+		return err
+	}
+	return binding(r.Proof, trust.RecoveryGrant, h, r.Body.Binding.RunID, r.Coordinator)
+}
+
 func (p Plan) Validate() error {
 	if e := p.Body.Validate(); e != nil {
 		return e

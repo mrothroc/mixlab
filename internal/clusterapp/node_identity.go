@@ -24,7 +24,7 @@ func NodePrincipalPolicy(p *principal.Store, clock func() time.Time) (*managedtl
 	if s.Role != trust.Node {
 		return nil, fmt.Errorf("agent requires a node principal")
 	}
-	return managedPrincipalPolicy(p, trust.Controller, clock)
+	return managedPrincipalPolicyRoles(p, clock, trust.Controller, trust.Coordinator)
 }
 
 func NodeCurrentTrust(p *principal.Store) func(context.Context, time.Time) (trust.Anchor, trust.VerifiedSnapshot, error) {

@@ -169,7 +169,7 @@ func (s *Store) validate(r leaseJournal) error {
 	}
 	for _, c := range r.Receipts {
 		l, ok := seen[c.Result.ID]
-		if !ok || !identifier(c.Key) || c.Controller != l.Controller || c.Result.Controller != l.Controller || c.Result.Version > l.Version || len(c.Digest) != 64 || commands[c.Controller+":"+c.Key] || c.Result.validate(s.node) != nil {
+		if !ok || !identifier(c.Key) || (c.Controller != l.Controller && c.Controller != l.Coordinator) || c.Result.Controller != l.Controller || c.Result.Version > l.Version || len(c.Digest) != 64 || commands[c.Controller+":"+c.Key] || c.Result.validate(s.node) != nil {
 			return fmt.Errorf("invalid lease command history")
 		}
 		switch c.Action {

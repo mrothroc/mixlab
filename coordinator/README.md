@@ -7,6 +7,20 @@ add durable state and F32 artifacts, and the [artifact gateway](artifactapi/READ
 adds scoped authenticated transfers. Service/admission/managed-learner wiring
 remains separate integration work.
 
+Learner admission now has a separate [durable saga](../admission/README.md).
+`FenceAdmission` competes atomically with stage/commit and preserves a winning
+commit. `ADMISSION_ABORTED` is a permanent no-training tombstone. The
+[allocation keeper](nodeleases/README.md) renews original node leases after
+handoff; its service scheduler remains part of later composition.
+
+`BindAttempt` persists node-authorized, same-allocation recovery separately from
+semantic round assignments. Recovery adapters verify current trust, the node's
+exact stopped-attempt authorization, and live allocation. Adapters use
+`AcceptSubmission` to check the operational fence on the same repository
+revision as update publication. A separate check followed by semantic `Accept`
+would race recovery. Neither
+hosting attempt IDs nor credential generations enter assignment or RNG identity.
+
 ```text
 PLAN_STAGED -> COHORT_COMMITTED -> ROUND_OPEN -> AGGREGATING
     -> PUBLISHING -> EVALUATING -> COHORT_COMMITTED | COMPLETE

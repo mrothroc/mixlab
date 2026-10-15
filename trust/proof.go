@@ -27,6 +27,7 @@ const (
 	CredentialEnvelopePurpose Purpose = "credential_envelope"
 	WorkloadKeyRequest        Purpose = "workload_key_request"
 	WorkloadGrant             Purpose = "workload_grant"
+	LearnerRecovery           Purpose = "learner_recovery"
 )
 
 type SignRequest struct {
@@ -49,9 +50,9 @@ func (r SignRequest) validate(role Role) error {
 	case Controller:
 		allowed = r.Purpose == NodeJob || r.Purpose == SecureTransportPlan || r.Purpose == CredentialEnvelopePurpose || r.Purpose == WorkloadGrant
 	case Node:
-		allowed = r.Purpose == WorkloadKeyRequest
+		allowed = r.Purpose == WorkloadKeyRequest || r.Purpose == LearnerRecovery
 	case Coordinator:
-		allowed = r.Purpose == RunPlan || r.Purpose == RunCommit || r.Purpose == RoundGrant || r.Purpose == RecoveryGrant || r.Purpose == ArtifactGrant
+		allowed = r.Purpose == RunPlan || r.Purpose == RunCommit || r.Purpose == RoundGrant || r.Purpose == RecoveryGrant || r.Purpose == ArtifactGrant || r.Purpose == WorkloadGrant
 	}
 	if !allowed {
 		return fmt.Errorf("role %q cannot sign purpose %q", role, r.Purpose)

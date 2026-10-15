@@ -57,6 +57,12 @@ func (s *Store) AbortReservation(ctx context.Context, actor trust.AuthenticatedP
 			if l == nil {
 				return fmt.Errorf("reservation history missing")
 			}
+			if l.Coordinator != "" {
+				return fmt.Errorf("committed lease belongs to coordinator")
+			}
+			if err := s.guardLearnerHandoff(*l, actor); err != nil {
+				return err
+			}
 			if l.State != Releasing && l.State != Released {
 				l.State = Releasing
 				l.CleanupReason = "released"

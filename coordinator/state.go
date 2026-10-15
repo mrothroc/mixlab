@@ -11,6 +11,9 @@ import (
 // Validate checks restored aggregate structure, not external trust or blob
 // integrity. Persistence adapters must not recover an unchecked partial state.
 func (s State) Validate() error {
+	if e := s.validateAttempts(); e != nil {
+		return e
+	}
 	if s.Revision == 0 {
 		return fmt.Errorf("missing repository revision")
 	}
@@ -20,7 +23,7 @@ func (s State) Validate() error {
 	if e := validatePolicy(s.Policy, s.Plan); e != nil {
 		return e
 	}
-	if s.Phase == Staged {
+	if s.Phase == Staged || s.Phase == Aborted {
 		if s.Commit != nil || s.Round != 0 || len(s.Assignments) != 0 || len(s.Updates) != 0 || s.Candidate != nil || s.Evaluation != nil {
 			return fmt.Errorf("staged plan contains round authority")
 		}

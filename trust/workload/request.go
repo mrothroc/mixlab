@@ -21,6 +21,7 @@ import (
 
 const Version = "mixlab_ddp_workload_request_v1"
 const Audience = "ddp/data"
+const LearnerVersion = "mixlab_learner_workload_request_v1"
 
 type Scope struct {
 	Cluster        string `json:"cluster"`
@@ -40,6 +41,10 @@ type Scope struct {
 	Created        int64  `json:"created"`
 	AdmitUntil     int64  `json:"admit_until"`
 	Deadline       int64  `json:"deadline"`
+	Profile        string `json:"profile,omitempty"`
+	Worker         string `json:"worker,omitempty"`
+	PlanHash       string `json:"plan_hash,omitempty"`
+	Coordinator    string `json:"coordinator,omitempty"`
 }
 
 func hexSize(s string, n int) bool {
@@ -48,12 +53,24 @@ func hexSize(s string, n int) bool {
 }
 
 func (s Scope) Validate() error {
-	for _, id := range []string{s.Cluster, s.Controller, s.Node, s.Lease, s.Run, s.Job, s.Attempt, s.Group, s.Member, s.Workload} {
+	for _, id := range []string{s.Cluster, s.Controller, s.Node, s.Lease, s.Run, s.Job, s.Attempt, s.Workload} {
 		if !hexSize(id, 16) {
 			return fmt.Errorf("invalid workload scope identity")
 		}
 	}
-	if !hexSize(s.MembershipHash, 32) || !hexSize(s.ManifestHash, 32) || s.Generation == 0 || s.Rank < 0 || s.Rank >= 64 || s.Created <= 0 || s.AdmitUntil <= s.Created || s.AdmitUntil-s.Created > 3600 || s.Deadline <= s.AdmitUntil || s.Deadline-s.Created > int64(trust.MaxWorkloadLifetime/time.Second) {
+	switch s.Profile {
+	case "":
+		if !hexSize(s.Group, 16) || !hexSize(s.Member, 16) || !hexSize(s.MembershipHash, 32) || s.Worker != "" || s.PlanHash != "" || s.Coordinator != "" {
+			return fmt.Errorf("invalid DDP workload scope")
+		}
+	case LearnerVersion:
+		if !hexSize(s.Worker, 16) || !hexSize(s.Coordinator, 16) || !hexSize(s.PlanHash, 32) || s.Group != "" || s.Member != "" || s.MembershipHash != "" || s.Rank != 0 {
+			return fmt.Errorf("invalid learner workload scope")
+		}
+	default:
+		return fmt.Errorf("unsupported workload scope profile")
+	}
+	if !hexSize(s.ManifestHash, 32) || s.Generation == 0 || s.Rank < 0 || s.Rank >= 64 || s.Created <= 0 || s.AdmitUntil <= s.Created || s.AdmitUntil-s.Created > 3600 || s.Deadline <= s.AdmitUntil || s.Deadline-s.Created > int64(trust.MaxWorkloadLifetime/time.Second) {
 		return fmt.Errorf("invalid workload scope binding or lifetime")
 	}
 	return nil
@@ -99,11 +116,27 @@ func NewRequest(scope Scope, key crypto.Signer) (Request, error) {
 		return Request{}, fmt.Errorf("Ed25519 workload key required")
 	}
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: digest(scope)}}, key)
-	return Request{Version, scope, csr}, err
+	return Request{scope.version(), scope, csr}, err
+}
+
+func (s Scope) version() string {
+	if s.Profile == LearnerVersion {
+		return LearnerVersion
+	}
+	return Version
+}
+
+// GrantRole distinguishes initial controller admission from coordinator-owned
+// same-allocation recovery. It grants no authority without the signed scope.
+func (s Scope) GrantRole() trust.Role {
+	if s.Profile == LearnerVersion && s.Controller == s.Coordinator {
+		return trust.Coordinator
+	}
+	return trust.Controller
 }
 
 func (r Request) PublicKey() (ed25519.PublicKey, error) {
-	if r.Version != Version || len(r.CSR) == 0 || len(r.CSR) > 4096 {
+	if r.Version != r.Scope.version() || len(r.CSR) == 0 || len(r.CSR) > 4096 {
 		return nil, fmt.Errorf("invalid workload key request")
 	}
 	if err := r.Scope.Validate(); err != nil {
@@ -142,6 +175,9 @@ func (r SignedRequest) GrantRequest() (trust.SignRequest, error) {
 }
 
 func (s Scope) binding(issued int64) trust.WorkloadBinding {
+	if s.Profile == LearnerVersion {
+		return trust.WorkloadBinding{Version: trust.LearnerBindingVersion, Cluster: s.Cluster, Role: trust.Worker, Principal: s.Workload, Participant: s.Node, Run: s.Run, Job: s.Job, Lease: s.Lease, ManifestHash: s.ManifestHash, Attempt: s.Attempt, Audience: "diloco/learner", IssuedAt: issued, ExpiresAt: s.Deadline, Generation: s.Generation, Worker: s.Worker, PlanHash: s.PlanHash, Coordinator: s.Coordinator}
+	}
 	return trust.WorkloadBinding{Version: trust.WorkloadBindingVersion, Cluster: s.Cluster, Role: trust.Worker, Principal: s.Workload, Participant: s.Node, Run: s.Run, Job: s.Job, Lease: s.Lease, ManifestHash: s.ManifestHash, Attempt: s.Attempt, Audience: Audience, IssuedAt: issued, ExpiresAt: s.Deadline, Group: s.Group, Generation: s.Generation, MembershipHash: s.MembershipHash, Member: s.Member, Rank: s.Rank}
 }
 

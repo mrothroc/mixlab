@@ -12,6 +12,14 @@ attempt, manifest digest, DDP membership digest/generation, member, rank,
 audience and deadline. The node-job context computes the deadline from the
 admitted runtime plus cleanup allowance; trust enforces the seven-day ceiling.
 
+The separately versioned learner profile binds run, worker, plan, coordinator,
+attempt, generation, original allocation and the `diloco/learner` audience. It
+forbids DDP membership/group fields. Initial grants require the controller;
+coordinator-owned recovery grants require the designated coordinator as both
+grant owner and coordinator in the node-signed scope. DDP grants remain
+controller-only. Trust validates the opaque scope and possession proofs;
+node management and coordinator applications own recovery authorization.
+
 The authority journals accepted proofs before signing and the issued certificate
 before returning it. Exact retries return the same published certificate;
 different grants cannot reuse a job/attempt, workload identity, or public key.

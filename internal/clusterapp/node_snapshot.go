@@ -55,7 +55,7 @@ func (s *NodeSnapshots) Policy() (*managedtls.Policy, error) {
 			return trust.AuthenticatedPrincipal{}, err
 		}
 		peer, err := trust.AuthenticatePrincipal(a, v, chain, now)
-		if err == nil && peer.Role != trust.Controller {
+		if err == nil && peer.Role != trust.Controller && peer.Role != trust.Coordinator {
 			err = fmt.Errorf("controller required")
 		}
 		return peer, err

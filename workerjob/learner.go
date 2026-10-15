@@ -16,7 +16,7 @@ import (
 const LearnerVersion = "mixlab_local_learner_assignment_v1"
 
 // LearnerAssignment is a separate advertised schema, not a singleton DDP view.
-// P0 defines it only; existing hosting continues to reject unsupported schemas.
+// Admission validates it; managed hosting must explicitly support this schema.
 type LearnerAssignment struct {
 	Version         string                    `json:"version"`
 	JobID           string                    `json:"job_id"`

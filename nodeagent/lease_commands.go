@@ -86,7 +86,7 @@ func (s *Store) ReleaseLease(ctx context.Context, actor trust.AuthenticatedPrinc
 // LeaseStatus includes reconciled release, unlike a release command's immutable
 // retry response. Controllers use it to confirm compensation actually finished.
 func (s *Store) LeaseStatus(ctx context.Context, actor trust.AuthenticatedPrincipal, id string, now time.Time) (out Lease, err error) {
-	if err := authorize(actor, s.cluster, now); err != nil {
+	if err := authorizeLeaseActor(actor, s.cluster, now); err != nil {
 		return out, err
 	}
 	if !identifier(id) {
@@ -101,7 +101,7 @@ func (s *Store) LeaseStatus(ctx context.Context, actor trust.AuthenticatedPrinci
 			if l.ID != id {
 				continue
 			}
-			if l.Controller != actor.Principal {
+			if !ownsLease(actor, l) {
 				return fmt.Errorf("lease belongs to another controller")
 			}
 			out = l
@@ -112,7 +112,7 @@ func (s *Store) LeaseStatus(ctx context.Context, actor trust.AuthenticatedPrinci
 	return out, err
 }
 func (s *Store) leaseCommand(ctx context.Context, actor trust.AuthenticatedPrincipal, q LeaseCommand, action string, now time.Time) (out Lease, err error) {
-	if err := authorize(actor, s.cluster, now); err != nil {
+	if err := authorizeLeaseActor(actor, s.cluster, now); err != nil {
 		return out, err
 	}
 	if !identifier(q.IdempotencyKey) || !identifier(q.Lease) || q.ExpectedVersion == 0 {
@@ -121,6 +121,13 @@ func (s *Store) leaseCommand(ctx context.Context, actor trust.AuthenticatedPrinc
 	err = s.path.WithProcessLock(ctx, nodeLock, func() error {
 		old, r, err := s.load()
 		if err != nil {
+			return err
+		}
+		current := findLease(&r, q.Lease)
+		if current == nil || !ownsLease(actor, *current) {
+			return fmt.Errorf("lease authority changed")
+		}
+		if err := s.guardLearnerHandoff(*current, actor); err != nil {
 			return err
 		}
 		prior, ok, err := replay(r, actor.Principal, q.IdempotencyKey, action, digest(q))
@@ -136,7 +143,7 @@ func (s *Store) leaseCommand(ctx context.Context, actor trust.AuthenticatedPrinc
 			if l.ID != q.Lease {
 				continue
 			}
-			if l.Controller != actor.Principal {
+			if !ownsLease(actor, *l) {
 				return fmt.Errorf("lease belongs to another controller")
 			}
 			if l.Version != q.ExpectedVersion {
@@ -147,6 +154,16 @@ func (s *Store) leaseCommand(ctx context.Context, actor trust.AuthenticatedPrinc
 					return fmt.Errorf("lease cannot be renewed")
 				}
 				expires := min(now.Add(time.Duration(q.TTLSeconds)*time.Second).Unix(), actor.ExpiresAt.Unix())
+				if l.JobKind == "learner" && l.Coordinator == "" {
+					_, job, err := s.loadLearner(l.Job)
+					if err != nil {
+						return err
+					}
+					expires = min(expires, job.Signed.Manifest.Plan.ExpiresAt)
+				}
+				if l.WorkloadDeadline != 0 {
+					expires = min(expires, l.WorkloadDeadline)
+				}
 				if expires <= l.Expires {
 					return fmt.Errorf("renewal must extend lease expiry")
 				}

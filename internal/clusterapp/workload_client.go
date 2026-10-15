@@ -20,7 +20,7 @@ func IssueRemoteWorkload(ctx context.Context, p *principal.Store, endpoint strin
 	if err != nil {
 		return workload.Result{}, err
 	}
-	if s.Role != trust.Controller || grant.Request.Request.Scope.Controller != s.Principal {
+	if s.Role != grant.Request.Request.Scope.GrantRole() || grant.Request.Request.Scope.Controller != s.Principal {
 		return workload.Result{}, fmt.Errorf("owning controller required")
 	}
 	policy, err := managedPrincipalPolicy(p, trust.Authority, clock)

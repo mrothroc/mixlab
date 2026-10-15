@@ -34,7 +34,7 @@ func NewNodeClient(p *principal.Store, endpoint, node string, clock func() time.
 		if err != nil {
 			return nil, err
 		}
-		if s.Role != trust.Controller {
+		if s.Role != trust.Controller && s.Role != trust.Coordinator {
 			return nil, fmt.Errorf("controller principal required")
 		}
 		return managedPrincipalPolicy(p, trust.Node, clock)

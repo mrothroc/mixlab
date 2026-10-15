@@ -37,6 +37,10 @@ type Lease struct {
 	RenewBy              int64  `json:"renew_by"`
 	Job                  string `json:"job"`
 	CleanupReason        string `json:"cleanup_reason"`
+	JobKind              string `json:"job_kind,omitempty"`
+	Coordinator          string `json:"coordinator,omitempty"`
+	RunCommitHash        string `json:"run_commit_hash,omitempty"`
+	WorkloadDeadline     int64  `json:"workload_deadline,omitempty"`
 }
 type Reserve struct {
 	IdempotencyKey       string `json:"idempotency_key"`
@@ -79,6 +83,15 @@ func ttl(seconds int) error {
 	return nil
 }
 func (l Lease) validate(node string) error {
+	if l.JobKind != "" && l.JobKind != "learner" {
+		return fmt.Errorf("invalid lease job kind")
+	}
+	if l.Coordinator != "" && (l.JobKind != "learner" || !identifier(l.Coordinator) || len(l.RunCommitHash) != 64 || l.WorkloadDeadline <= l.Created) {
+		return fmt.Errorf("invalid coordinator lease authority")
+	}
+	if l.Coordinator == "" && (l.RunCommitHash != "" || l.WorkloadDeadline != 0) {
+		return fmt.Errorf("incomplete coordinator lease authority")
+	}
 	if l.Format != LeaseVersion || !identifier(l.ID) || l.Node != node || !identifier(l.Controller) || !identifier(l.Run) || l.Version == 0 || l.CapabilityGeneration == 0 || l.Created <= 0 || l.Expires <= l.Created || l.RenewBy > l.Expires || l.RenewBy < l.Created {
 		return fmt.Errorf("invalid lease identity or lifetime")
 	}
@@ -104,4 +117,20 @@ func (l Lease) validate(node string) error {
 		return fmt.Errorf("invalid cleanup reason")
 	}
 	return nil
+}
+
+func authorizeLeaseActor(p trust.AuthenticatedPrincipal, cluster string, now time.Time) error {
+	if p.Role == trust.Controller {
+		return authorize(p, cluster, now)
+	}
+	if p.Role != trust.Coordinator || p.Cluster != cluster || !identifier(p.Principal) || now.Before(p.NotBefore) || !now.Before(p.ExpiresAt) {
+		return fmt.Errorf("current controller or coordinator required")
+	}
+	return nil
+}
+func ownsLease(p trust.AuthenticatedPrincipal, l Lease) bool {
+	if l.Coordinator != "" {
+		return p.Role == trust.Coordinator && p.Principal == l.Coordinator
+	}
+	return p.Role == trust.Controller && p.Principal == l.Controller
 }

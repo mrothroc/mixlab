@@ -31,6 +31,11 @@ import (
 
 func capabilityNode(t *testing.T, f *tlsFixture) (*nodeagent.Store, *managedtls.Policy, *managedtls.Policy, recruitment.Requirements) {
 	t.Helper()
+	return capabilityNodeIn(t, f, t.TempDir())
+}
+
+func capabilityNodeIn(t *testing.T, f *tlsFixture, directory string) (*nodeagent.Store, *managedtls.Policy, *managedtls.Policy, recruitment.Requirements) {
+	t.Helper()
 	node := id(t)
 	k := key(t)
 	envelope, err := ecdh.X25519().GenerateKey(rand.Reader)
@@ -49,7 +54,7 @@ func capabilityNode(t *testing.T, f *tlsFixture) (*nodeagent.Store, *managedtls.
 		return trust.AuthenticatePrincipal(f.a, f.view, chain, now)
 	}, f.clock)
 	check(t, err)
-	dir, err := filepath.EvalSymlinks(t.TempDir())
+	dir, err := filepath.EvalSymlinks(directory)
 	check(t, err)
 	check(t, os.Chmod(dir, 0700))
 	p, err := statehome.Resolve(statehome.Options{ExactDir: dir}, statehome.Context{Kind: statehome.Agent})

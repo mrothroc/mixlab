@@ -34,7 +34,7 @@ func authorityManagedHandler(a *Authority, clock func() time.Time) http.Handler 
 		}
 		switch r.URL.Path {
 		case workloadIssueRoute:
-			if peer.Role != trust.Controller || a.Workloads == nil {
+			if (peer.Role != trust.Controller && peer.Role != trust.Coordinator) || a.Workloads == nil {
 				http.Error(w, "workload issuance unavailable to this principal", http.StatusForbidden)
 				return
 			}

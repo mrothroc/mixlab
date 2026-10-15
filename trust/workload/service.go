@@ -198,7 +198,7 @@ func (s *Service) validate(r record) error {
 		g := e.Grant
 		scope := g.Request.Request.Scope
 		q, err := g.Request.GrantRequest()
-		if err != nil || g.Proof.Request != q || g.Proof.Evidence.Principal != scope.Controller || g.Proof.Evidence.Role != trust.Controller || scope.Cluster != r.Cluster || e.IssuedAt < scope.Created || e.IssuedAt >= scope.AdmitUntil || !hexSize(e.NodeCommit.Digest, 32) || !hexSize(e.GrantCommit.Digest, 32) || e.NodeCommit.Generation == 0 || e.GrantCommit.Generation == 0 || e.NodeCommit.Generation > r.Generation || e.GrantCommit.Generation > r.Generation {
+		if err != nil || g.Proof.Request != q || g.Proof.Evidence.Principal != scope.Controller || g.Proof.Evidence.Role != scope.GrantRole() || scope.Cluster != r.Cluster || e.IssuedAt < scope.Created || e.IssuedAt >= scope.AdmitUntil || !hexSize(e.NodeCommit.Digest, 32) || !hexSize(e.GrantCommit.Digest, 32) || e.NodeCommit.Generation == 0 || e.GrantCommit.Generation == 0 || e.NodeCommit.Generation > r.Generation || e.GrantCommit.Generation > r.Generation {
 			return fmt.Errorf("invalid workload issuance entry")
 		}
 		public, _ := g.Request.Request.PublicKey()
@@ -256,7 +256,7 @@ func (s *Service) Issue(ctx context.Context, callerChain [][]byte, g Grant, view
 	}
 	scope := g.Request.Request.Scope
 	actor, err := trust.AuthenticatePrincipal(s.a.Anchor, view, callerChain, now)
-	if err != nil || actor.Role != trust.Controller || actor.Principal != scope.Controller || scope.Cluster != s.a.Anchor.Cluster() || g.Proof.Evidence.Principal != actor.Principal || now.Unix() < scope.Created || now.Unix() >= scope.AdmitUntil {
+	if err != nil || actor.Role != scope.GrantRole() || actor.Principal != scope.Controller || scope.Cluster != s.a.Anchor.Cluster() || g.Proof.Evidence.Principal != actor.Principal || now.Unix() < scope.Created || now.Unix() >= scope.AdmitUntil {
 		return out, fmt.Errorf("workload admission controller or deadline mismatch")
 	}
 	// Historical commit evidence preserves an exact retry's signatures, but
