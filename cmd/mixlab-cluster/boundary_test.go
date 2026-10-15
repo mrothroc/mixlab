@@ -87,7 +87,7 @@ func TestExecDependencyBoundaries(t *testing.T) {
 		for _, cgo := range []string{"0", "1"} {
 			t.Run("tags="+tags+"/cgo="+cgo, func(t *testing.T) {
 				for _, pkg := range dependencies(t, cgo, tags, "./cmd/mixlab-cluster") {
-					if strings.HasPrefix(pkg.ImportPath, modulePath) && hasComponent(pkg.ImportPath, "train", "gpu", "learner") {
+					if strings.HasPrefix(pkg.ImportPath, modulePath) && (hasComponent(pkg.ImportPath, "train", "gpu") || pkg.ImportPath == modulePath+"learner" || strings.HasPrefix(pkg.ImportPath, modulePath+"learner/")) {
 						t.Errorf("cluster must not link training/MLX components: %s", pkg.ImportPath)
 					}
 				}

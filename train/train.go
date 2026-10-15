@@ -17,6 +17,9 @@ func runTrain(cfg *ArchConfig, trainPattern string, opts TrainOptions) (TrainRes
 		return runGridTrain(cfg, trainPattern, opts)
 	}
 	if cfg.Training.Distributed != nil {
+		if cfg.Training.Distributed.Mode == "diloco" {
+			return TrainResult{}, fmt.Errorf("DiLoCo contracts are available for validation only; managed learner runtime is not implemented yet")
+		}
 		return runDistributedTrain(cfg, trainPattern, opts)
 	}
 	if err := startTrainingPrecision(cfg, opts); err != nil {

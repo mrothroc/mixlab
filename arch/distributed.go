@@ -5,20 +5,65 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"strings"
+
+	"github.com/mrothroc/mixlab/internal/strictjson"
 )
 
 // DistributedSpec contains training semantics, never host or launcher identity.
 type DistributedSpec struct {
-	Mode                      string `json:"mode"`
-	Backend                   string `json:"backend"`
-	GradientAccumulationSteps int    `json:"gradient_accumulation_steps"`
-	GradientBucketBytes       int    `json:"gradient_bucket_bytes"`
+	Mode                      string   `json:"mode"`
+	Backend                   string   `json:"backend"`
+	GradientAccumulationSteps int      `json:"gradient_accumulation_steps"`
+	GradientBucketBytes       int      `json:"gradient_bucket_bytes"`
+	InnerSteps                int      `json:"inner_steps,omitempty"`
+	OuterOptimizer            string   `json:"outer_optimizer,omitempty"`
+	OuterLR                   float64  `json:"outer_lr,omitempty"`
+	OuterMomentum             *float64 `json:"outer_momentum,omitempty"`
+	Aggregation               string   `json:"aggregation,omitempty"`
 }
 
 func (s *DistributedSpec) UnmarshalJSON(blob []byte) error {
+	if len(blob) > 4096 {
+		return fmt.Errorf("training.distributed: config exceeds 4096 bytes")
+	}
+	if err := strictjson.Validate(blob, 4); err != nil {
+		return err
+	}
 	type plain DistributedSpec
 	value := plain{Backend: "auto", GradientAccumulationSteps: 1, GradientBucketBytes: 32 << 20}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(blob, &fields); err != nil {
+		return err
+	}
+	for key, raw := range fields {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("training.distributed.%s cannot be null", key)
+		}
+	}
+	var mode string
+	if raw, ok := fields["mode"]; ok {
+		if err := json.Unmarshal(raw, &mode); err != nil {
+			return err
+		}
+	}
+	if mode == "diloco" {
+		value.Backend = ""
+		value.GradientBucketBytes = 0
+		if _, ok := fields["backend"]; ok {
+			return fmt.Errorf("training.distributed.backend is DDP-only")
+		}
+		if _, ok := fields["gradient_bucket_bytes"]; ok {
+			return fmt.Errorf("training.distributed.gradient_bucket_bytes is DDP-only")
+		}
+	} else {
+		for _, key := range []string{"inner_steps", "outer_optimizer", "outer_lr", "outer_momentum", "aggregation"} {
+			if _, ok := fields[key]; ok {
+				return fmt.Errorf("training.distributed.%s requires mode=diloco", key)
+			}
+		}
+	}
 	d := json.NewDecoder(bytes.NewReader(blob))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&value); err != nil {
@@ -29,6 +74,27 @@ func (s *DistributedSpec) UnmarshalJSON(blob []byte) error {
 	}
 	*s = DistributedSpec(value)
 	return nil
+}
+
+// MarshalJSON preserves the shipped DDP encoding and omits collective settings
+// from single-process learner configs. A pointer preserves explicit zero momentum.
+func (s DistributedSpec) MarshalJSON() ([]byte, error) {
+	type plain DistributedSpec
+	if s.Mode != "diloco" {
+		return json.Marshal(plain(s))
+	}
+	if s.Backend != "" || s.GradientBucketBytes != 0 {
+		return nil, fmt.Errorf("diloco cannot marshal DDP settings")
+	}
+	return json.Marshal(struct {
+		Mode           string   `json:"mode"`
+		Accumulation   int      `json:"gradient_accumulation_steps"`
+		InnerSteps     int      `json:"inner_steps"`
+		OuterOptimizer string   `json:"outer_optimizer"`
+		OuterLR        float64  `json:"outer_lr"`
+		OuterMomentum  *float64 `json:"outer_momentum"`
+		Aggregation    string   `json:"aggregation"`
+	}{s.Mode, s.GradientAccumulationSteps, s.InnerSteps, s.OuterOptimizer, s.OuterLR, s.OuterMomentum, s.Aggregation})
 }
 
 // ValidateDistributedConfig is also used by programmatic training callers.
@@ -45,10 +111,25 @@ func ValidateDistributedConfig(cfg *ArchConfig) error {
 			issues = append(issues, field)
 		}
 	}
-	check(s.Mode != "ddp", "mode must be ddp")
-	check(s.Backend != "" && s.Backend != "auto" && s.Backend != "ring" && s.Backend != "nccl", "backend must be auto, ring, or nccl")
+	check(s.Mode != "ddp" && s.Mode != "diloco", "mode must be ddp or diloco")
 	check(s.GradientAccumulationSteps <= 0, "gradient_accumulation_steps must be positive")
-	check(s.GradientBucketBytes <= 0, "gradient_bucket_bytes must be positive")
+	if s.Mode == "diloco" {
+		check(s.Backend != "" || s.GradientBucketBytes != 0, "backend and gradient_bucket_bytes are DDP-only")
+		check(s.InnerSteps <= 0, "inner_steps must be positive")
+		check(t.Steps <= 0 || (s.InnerSteps > 0 && t.Steps%s.InnerSteps != 0), "steps must be positive and divisible by inner_steps")
+		check(s.OuterOptimizer != "nesterov", "outer_optimizer must be nesterov")
+		check(s.OuterLR <= 0 || math.IsNaN(s.OuterLR) || math.IsInf(s.OuterLR, 0), "outer_lr must be finite and positive")
+		check(s.OuterMomentum == nil, "outer_momentum is required (explicit zero is valid)")
+		if s.OuterMomentum != nil {
+			v := *s.OuterMomentum
+			check(v < 0 || v >= 1 || math.IsNaN(v) || math.IsInf(v, 0), "outer_momentum must be finite in [0,1)")
+		}
+		check(s.Aggregation != "uniform" && s.Aggregation != "effective_tokens", "aggregation must be uniform or effective_tokens")
+	} else {
+		check(s.Backend != "" && s.Backend != "auto" && s.Backend != "ring" && s.Backend != "nccl", "backend must be auto, ring, or nccl")
+		check(s.GradientBucketBytes <= 0, "gradient_bucket_bytes must be positive")
+		check(s.InnerSteps != 0 || s.OuterOptimizer != "" || s.OuterLR != 0 || s.OuterMomentum != nil || s.Aggregation != "", "DiLoCo fields require mode=diloco")
+	}
 	check(t.EffectiveObjective() != ObjectiveCausal, "objective must be causal")
 	check(t.Optimizer != "adamw", "optimizer must be adamw")
 	check(t.BatchTokens <= 0 || cfg.SeqLen <= 0 || t.BatchTokens%max(cfg.SeqLen, 1) != 0, "batch_tokens must be divisible by seq_len")

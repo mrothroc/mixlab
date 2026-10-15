@@ -1,15 +1,15 @@
 package gpu
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/mrothroc/mixlab/precision"
+)
 
 // PrecisionPolicy describes permission for reduced-precision FP32 arithmetic,
 // not the algorithm selected for every operation. BF16 work may also contain
 // float32 operations to which this policy applies.
-type PrecisionPolicy struct {
-	ComputeDType string `json:"compute_dtype"`
-	Backend      string `json:"backend"`
-	TF32Allowed  bool   `json:"tf32_allowed"`
-}
+type PrecisionPolicy = precision.Policy
 
 // ResolvePrecisionPolicy is pure: it does not initialize MLX or mutate env.
 func ResolvePrecisionPolicy(dtype, backend string, requested *bool, lookup func(string) (string, bool)) (PrecisionPolicy, error) {
@@ -60,20 +60,4 @@ func ResolvePrecisionPolicy(dtype, backend string, requested *bool, lookup func(
 		p.TF32Allowed = false
 	}
 	return p, nil
-}
-
-func (p PrecisionPolicy) String() string {
-	if p.Backend == "cuda" {
-		if p.TF32Allowed {
-			return fmt.Sprintf("compute=%s (cuda: TF32 allowed for eligible float32 matmuls/convolutions; MLX_ENABLE_TF32=0 for strict FP32)", p.ComputeDType)
-		}
-		return fmt.Sprintf("compute=%s (cuda: TF32 disabled; strict FP32 for float32 matmuls/convolutions)", p.ComputeDType)
-	}
-	if p.Backend == "metal" {
-		if p.TF32Allowed {
-			return fmt.Sprintf("compute=%s (metal: reduced precision allowed for float32 matmuls/attention on GPUs with neural accelerators; MLX_ENABLE_TF32=0 for strict FP32)", p.ComputeDType)
-		}
-		return fmt.Sprintf("compute=%s (metal: reduced precision disabled; strict FP32 for float32 matmuls/attention)", p.ComputeDType)
-	}
-	return fmt.Sprintf("compute=%s (%s: no GPU precision policy)", p.ComputeDType, p.Backend)
 }

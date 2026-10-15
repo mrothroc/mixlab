@@ -53,3 +53,28 @@ func TestPrecisionPolicy(t *testing.T) {
 		})
 	}
 }
+
+// The pure precision contract must accept every policy the resolver emits,
+// including the portable build's backend, so digests work on every build.
+func TestResolvedPoliciesSatisfyContract(t *testing.T) {
+	no := false
+	for _, backend := range []string{"cuda", "metal", "unavailable", PrecisionBackend()} {
+		for _, dtype := range []string{"float32", "bf16"} {
+			for _, request := range []*bool{nil, &no} {
+				if backend != "cuda" && backend != "metal" && request != nil {
+					continue
+				}
+				p, err := ResolvePrecisionPolicy(dtype, backend, request, func(string) (string, bool) { return "", false })
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = p.Validate(); err != nil {
+					t.Fatalf("%+v: %v", p, err)
+				}
+				if _, err = p.Digest(); err != nil {
+					t.Fatalf("%+v: %v", p, err)
+				}
+			}
+		}
+	}
+}

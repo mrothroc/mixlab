@@ -10,6 +10,11 @@ slower per token than one Mac.
 
 ## Status
 
+DiLoCo is currently a [validation-only contract preview](config-reference.md#diloco-contract-preview).
+Its required `inner_steps`, `outer_optimizer`, `outer_lr`, `outer_momentum`, and
+`aggregation` fields are checked, but no managed learner/coordinator runtime is
+exposed yet. Do not use `mode: "diloco"` to launch training at this stage.
+
 `training.distributed` now selects DDP through the ordinary `-mode arch`
 entrypoint. There is no separate DDP mode or Mixlab hostfile flag: `mlx.launch`
 (or an equivalent administrator-operated launcher) supplies MLX rendezvous.

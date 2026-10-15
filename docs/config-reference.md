@@ -28,7 +28,7 @@ the MLX launcher. Omission preserves ordinary single-process training.
 }
 ```
 
-`mode` must be `ddp`. `backend` is `auto` (default), `ring` (Metal/macOS), or
+For executable distributed training, `mode` must be `ddp`. `backend` is `auto` (default), `ring` (Metal/macOS), or
 `nccl` (CUDA/Linux); auto resolves explicitly before strict MLX initialization.
 `gradient_accumulation_steps` defaults to 1 and `gradient_bucket_bytes` to
 32 MiB. Both must be positive; unknown nested fields are rejected. An MLX
@@ -52,6 +52,20 @@ the same ordered hosts/ranks, backend, local batch size, and accumulation.
 See [Distributed Training](distributed-training.md) for the launch procedure and
 [R1 DDP hardware acceptance](distributed-r1-hardware-acceptance.md) for current
 acceptance status.
+
+### DiLoCo Contract Preview
+
+`mode: "diloco"` is currently **validation-only**; attempting training fails
+before data or GPU initialization. Managed learner execution is not available
+yet. Its fixed-cohort contract requires explicit `inner_steps` (positive),
+`outer_optimizer: "nesterov"`, finite positive `outer_lr`, explicit finite
+`outer_momentum` in `[0,1)` (zero is valid), and `aggregation: "uniform"` or
+`"effective_tokens"`. `training.steps` must be positive and divisible by
+`inner_steps`. Local `gradient_accumulation_steps` defaults to 1; inner steps
+count optimizer attempts, not microbatches. `backend` and
+`gradient_bucket_bytes` are DDP-only and must be omitted in this mode.
+The causal AdamW fixed-shape support restrictions above also apply. The planned
+runtime uses single-process Metal learners, without an MLX collective group.
 
 This reference covers the current JSON schema used by `mixlab`, based on:
 
