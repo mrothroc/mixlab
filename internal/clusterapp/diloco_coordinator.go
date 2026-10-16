@@ -16,11 +16,13 @@ import (
 	coordinatorlocal "github.com/mrothroc/mixlab/coordinator/local"
 	"github.com/mrothroc/mixlab/diloco/authenticated"
 	"github.com/mrothroc/mixlab/diloco/run"
+	"github.com/mrothroc/mixlab/nodejob"
 	"github.com/mrothroc/mixlab/recruitment"
 	"github.com/mrothroc/mixlab/statehome"
 	"github.com/mrothroc/mixlab/transport/managedtls"
 	"github.com/mrothroc/mixlab/trust"
 	"github.com/mrothroc/mixlab/trust/principal"
+	"github.com/mrothroc/mixlab/trust/workload"
 )
 
 type DiLoCoCoordinatorOptions struct {
@@ -121,6 +123,43 @@ func ServeInstalledDiLoCo(ctx context.Context, l net.Listener, o DiLoCoCoordinat
 		}
 		return trust.VerifySnapshot(anchor, s.Snapshot, now)
 	})
+	models.Recover = func(ctx context.Context, q admission.Submission, m coordinator.Model) (bool, error) {
+		nodes := serviceNodes{q, p, o.Clock}
+		recovery := DiLoCoRecovery{Model: m, Anchor: anchor, Clock: o.Clock, Sign: sign,
+			Current: func(ctx context.Context) (trust.VerifiedSnapshot, error) { return current.Current(ctx, o.Clock()) },
+			Node:    func(a run.Allocation) (LearnerRecoveryNode, error) { return nodes.client(a) },
+			Grant: func(ctx context.Context, request workload.SignedRequest) (workload.Grant, error) {
+				scope := request.Request.Scope
+				deadline, err := (nodejob.Manifest{Created: q.Specification.CreatedAt, Expires: q.Deadline, Limits: q.Launch.Selection.Requirements.Limits}).WorkloadDeadline()
+				if err != nil {
+					return workload.Grant{}, err
+				}
+				if scope.Deadline != deadline.Unix() {
+					return workload.Grant{}, fmt.Errorf("recovery cannot extend original workload deadline")
+				}
+				return inbox.RecoveryWorkloadGrant(ctx, q.Launch.Run, scope.Job, request, func() (workload.Grant, error) {
+					req, err := request.GrantRequest()
+					if err != nil {
+						return workload.Grant{}, err
+					}
+					proof, err := sign(ctx, req)
+					return workload.Grant{Request: request, Proof: proof}, err
+				})
+			},
+			Issue: func(ctx context.Context, grant workload.Grant) (workload.Result, error) {
+				identity, _, err := p.Active(o.Clock())
+				if err != nil {
+					return workload.Result{}, err
+				}
+				endpoints := identity.Snapshot.Payload.Endpoints.Payload.URLs
+				if len(endpoints) == 0 {
+					return workload.Result{}, fmt.Errorf("signed authority endpoint missing")
+				}
+				return IssueRemoteWorkload(ctx, p, endpoints[0], grant, o.Clock)
+			},
+		}
+		return recovery.Tick(ctx, q.Launch.Run)
+	}
 	service := DiLoCoService{Inbox: inbox, Clock: o.Clock, Interval: time.Second}
 	leases := DiLoCoAdmissionLeases{Repository: repository, Clock: o.Clock, Client: func(role trust.Role, candidate recruitment.Candidate) (AdmissionLeaseClient, error) {
 		identity := a

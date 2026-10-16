@@ -58,6 +58,9 @@ func (m Model) recordStart(ctx context.Context, s State, start learner.Start) er
 	if s.Phase != Open || s.Commit == nil || s.Commit.Binding != start.Binding {
 		return fmt.Errorf("start commitment requires an open committed round")
 	}
+	if err = s.checkRecoveryWrite(start.WorkerID); err != nil {
+		return err
+	}
 	for _, prior := range s.Starts {
 		if prior.WorkerID == start.WorkerID {
 			if prior == start {

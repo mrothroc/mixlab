@@ -46,6 +46,18 @@ func (r *Runtime) Evaluate(ctx context.Context, a run.EvaluationAssignment, eval
 		if j.Completed == nil || j.Assignment.Binding != a.Binding || j.Assignment.Round != a.Round || j.Assignment.WorkerID != a.WorkerID || j.Completed.Precision != a.Precision {
 			return fmt.Errorf("evaluation requires same-round completed private state")
 		}
+		h, e := run.Digest(*j.Completed)
+		if e != nil {
+			return e
+		}
+		if s.ExpectedPrivateHash != "" && h != s.ExpectedPrivateHash {
+			return fmt.Errorf("evaluation recovery private snapshot mismatch")
+		}
+		// Verify local artifacts even for a cached evaluation response. An
+		// accepted result cannot make missing/corrupt private state recoverable.
+		if _, e = r.Store.restore(ctx, *j.Completed); e != nil {
+			return e
+		}
 		if j.Evaluation != nil {
 			if j.Evaluation.Assignment != a {
 				return fmt.Errorf("evaluation policy changed")
@@ -60,9 +72,6 @@ func (r *Runtime) Evaluate(ctx context.Context, a run.EvaluationAssignment, eval
 		defer cancel()
 		if a.Model.Ref.Bytes > r.Store.limit {
 			return fmt.Errorf("evaluation model exceeds budget")
-		}
-		if _, e = r.Store.restore(ctx, *j.Completed); e != nil {
-			return e
 		}
 		var buf bytes.Buffer
 		if e = reader.ReadEvaluation(ctx, a, &boundedWriter{dst: &buf, left: a.Model.Ref.Bytes}); e != nil {
@@ -80,7 +89,7 @@ func (r *Runtime) Evaluate(ctx context.Context, a run.EvaluationAssignment, eval
 		if e != nil {
 			return e
 		}
-		h, e := run.Digest(a)
+		h, e = run.Digest(a)
 		if e != nil {
 			return e
 		}

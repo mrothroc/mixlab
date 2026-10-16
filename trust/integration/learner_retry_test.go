@@ -115,6 +115,41 @@ func TestLearnerSemanticRetryTLSCoordinatorRestart(t *testing.T) {
 	}
 }
 
+func TestLearnerSemanticRetryTLSServiceDraining(t *testing.T) {
+	x := newLearnerRelay(t)
+	h := retryRelayHandler(t, x)
+	var calls atomic.Int32
+	server := serveCapabilities(t, x.g.Policy, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) < 3 {
+			http.Error(w, "coordinator stopping", http.StatusServiceUnavailable)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r, err := retryRelayClient(t, x, server.URL, nil).Poll(ctx)
+	check(t, err)
+	if calls.Load() != 3 || r.Assignment == nil || *r.Assignment != x.s.Assignments[0] {
+		t.Fatalf("drain interrupted poll or changed assignment: %+v calls=%d", r, calls.Load())
+	}
+}
+
+func TestLearnerSemanticRetryTLSUnavailableExhaustion(t *testing.T) {
+	x := newLearnerRelay(t)
+	var calls atomic.Int32
+	server := serveCapabilities(t, x.g.Policy, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		http.Error(w, "coordinator stopping", http.StatusServiceUnavailable)
+	}))
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	_, err := retryRelayClient(t, x, server.URL, nil).Poll(ctx)
+	if !errors.Is(err, private.ErrUnavailable) || !errors.Is(err, context.DeadlineExceeded) || calls.Load() < 1 {
+		t.Fatalf("unbounded or unclassified outage: %v calls=%d", err, calls.Load())
+	}
+}
+
 func TestLearnerSemanticRetryTLSLostSubmitAcknowledgment(t *testing.T) {
 	x := newLearnerRelay(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -174,7 +209,7 @@ func TestLearnerSemanticRetryTLSLostSubmitAcknowledgment(t *testing.T) {
 
 func TestLearnerSemanticRetryTLSRejectsNonTransportFailures(t *testing.T) {
 	x := newLearnerRelay(t)
-	for _, status := range []int{400, 401, 403, 409, 500, 503, 200} {
+	for _, status := range []int{400, 401, 403, 409, 500, 200} {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			var calls, policies atomic.Int32
 			server := serveCapabilities(t, x.g.Policy, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

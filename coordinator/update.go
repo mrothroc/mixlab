@@ -44,6 +44,9 @@ func (m Model) accept(ctx context.Context, s State, u learner.Update) (learner.R
 	if s.Commit == nil || u.Binding != s.Commit.Binding {
 		return learner.Receipt{}, fmt.Errorf("update requires matching committed run")
 	}
+	if e = s.checkRecoveryWrite(u.WorkerID); e != nil {
+		return learner.Receipt{}, e
+	}
 	index := -1
 	for i, r := range s.Commit.Registrations {
 		if u.WorkerID == r.Slot.Member.WorkerID && u.ParticipantID == r.Slot.Member.ParticipantID && u.IslandID == r.Slot.Member.IslandID {

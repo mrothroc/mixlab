@@ -73,15 +73,26 @@ func (q request) Validate() error {
 }
 
 type response struct {
-	Reply    *private.RelayResponse `json:"reply,omitempty"`
-	Transfer string                 `json:"transfer,omitempty"`
-	Data     []byte                 `json:"data,omitempty"`
-	Error    string                 `json:"error,omitempty"`
+	Reply     *private.RelayResponse `json:"reply,omitempty"`
+	Transfer  string                 `json:"transfer,omitempty"`
+	Data      []byte                 `json:"data,omitempty"`
+	Error     string                 `json:"error,omitempty"`
+	ErrorCode string                 `json:"error_code,omitempty"`
 }
 
 func (r response) Validate() error {
 	if len(r.Transfer) > 64 || len(r.Data) > ChunkBytes || len(r.Error) > 1024 {
 		return fmt.Errorf("unbounded learner IPC response")
+	}
+	if r.ErrorCode != "" && r.ErrorCode != "unavailable" && r.ErrorCode != "rejected" {
+		return fmt.Errorf("unknown learner IPC error code")
+	}
+	if r.Error != "" {
+		if r.Reply != nil || r.Transfer != "" || len(r.Data) != 0 {
+			return fmt.Errorf("error response contains result")
+		}
+	} else if r.ErrorCode != "" {
+		return fmt.Errorf("error code without error")
 	}
 	if r.Reply != nil {
 		return r.Reply.Validate()

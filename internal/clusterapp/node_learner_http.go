@@ -40,6 +40,10 @@ type NodeLearnerOperations interface {
 }
 
 func (h *nodeHTTP) learner(w http.ResponseWriter, r *http.Request, actor trust.AuthenticatedPrincipal, parts []string) {
+	if learnerRecoveryRoute(parts, r.Method) {
+		h.learnerRecovery(w, r, actor, parts)
+		return
+	}
 	owner, ok := h.jobs.(NodeLearnerOperations)
 	if !ok || len(parts) != 3 || !nodeRouteID(parts[1]) {
 		http.NotFound(w, r)

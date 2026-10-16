@@ -6,6 +6,7 @@ package coordinator
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/mrothroc/mixlab/diloco/learner"
 	"github.com/mrothroc/mixlab/diloco/optimizer"
@@ -15,6 +16,9 @@ import (
 var (
 	ErrNotFound = errors.New("coordinator record not found")
 	ErrConflict = errors.New("coordinator concurrent/conflicting operation")
+	// ErrConcurrent identifies a lost repository CAS, not conflicting immutable
+	// input. Retry must reload and reauthorize; ErrConflict matching is retained.
+	ErrConcurrent = fmt.Errorf("coordinator revision changed: %w", ErrConflict)
 )
 
 // Repository returns independent snapshots. Save atomically compares Revision
@@ -93,20 +97,22 @@ type EvaluationPolicy struct {
 }
 
 type State struct {
-	Revision      uint64                    `json:"revision"`
-	Phase         Phase                     `json:"phase"`
-	Plan          run.Plan                  `json:"plan"`
-	Commit        *run.Commit               `json:"commit"`
-	Policy        EvaluationPolicy          `json:"evaluation_policy"`
-	Round         uint64                    `json:"round"`
-	Base          run.Blob                  `json:"base"`
-	Momentum      run.Blob                  `json:"momentum"`
-	PrivateHashes []string                  `json:"private_hashes"`
-	Assignments   []run.Assignment          `json:"assignments"`
-	Updates       []learner.Update          `json:"updates"`
-	Candidate     *run.Round                `json:"candidate"`
-	Evaluation    *run.EvaluationAssignment `json:"evaluation"`
-	Failure       string                    `json:"failure"`
-	Attempts      []run.AttemptBinding      `json:"attempts,omitempty"`
-	Starts        []learner.Start           `json:"starts,omitempty"`
+	Revision             uint64                    `json:"revision"`
+	Phase                Phase                     `json:"phase"`
+	Plan                 run.Plan                  `json:"plan"`
+	Commit               *run.Commit               `json:"commit"`
+	Policy               EvaluationPolicy          `json:"evaluation_policy"`
+	Round                uint64                    `json:"round"`
+	Base                 run.Blob                  `json:"base"`
+	Momentum             run.Blob                  `json:"momentum"`
+	PrivateHashes        []string                  `json:"private_hashes"`
+	Assignments          []run.Assignment          `json:"assignments"`
+	Updates              []learner.Update          `json:"updates"`
+	Candidate            *run.Round                `json:"candidate"`
+	Evaluation           *run.EvaluationAssignment `json:"evaluation"`
+	Failure              string                    `json:"failure"`
+	Attempts             []run.AttemptBinding      `json:"attempts,omitempty"`
+	Starts               []learner.Start           `json:"starts,omitempty"`
+	Recovery             *LearnerRecovery          `json:"recovery,omitempty"`
+	LearnerUnavailableAt int64                     `json:"learner_unavailable_at,omitempty"`
 }

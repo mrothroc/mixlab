@@ -2,6 +2,7 @@ package clusterapp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -68,6 +69,7 @@ type DiLoCoModels struct {
 	Repository coordinator.Repository
 	Artifacts  coordinator.Artifacts
 	Clock      func() time.Time
+	Recover    func(context.Context, admission.Submission, coordinator.Model) (bool, error)
 	cache      sync.Map
 }
 type composedRun struct {
@@ -104,7 +106,14 @@ func (s *DiLoCoModels) Tick(ctx context.Context, q admission.Submission, _ admis
 		return e
 	}
 	if _, e = v.keeper.Tick(ctx); e != nil {
-		return e
+		state, loadErr := s.Repository.Load(ctx, q.Launch.Run)
+		if loadErr != nil || state.Phase == coordinator.Complete || state.Phase == coordinator.Failed {
+			return errors.Join(e, loadErr)
+		}
+		return errors.Join((DiLoCoRecovery{Model: v.model}).failureWithReason(ctx, q.Launch.Run, state.Recovery != nil, e, "allocation lease maintenance permanently rejected"), v.model.Tick(ctx, q.Launch.Run, int64(q.Launch.Selection.Requirements.Limits.RuntimeSeconds)))
 	}
-	return v.model.Tick(ctx, q.Launch.Run, int64(q.Launch.Selection.Requirements.Limits.RuntimeSeconds))
+	if s.Recover != nil {
+		_, e = s.Recover(ctx, q, v.model)
+	}
+	return errors.Join(e, v.model.Tick(ctx, q.Launch.Run, int64(q.Launch.Selection.Requirements.Limits.RuntimeSeconds)))
 }

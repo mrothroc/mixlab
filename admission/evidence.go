@@ -38,7 +38,23 @@ func (i *Inbox) Manifest(ctx context.Context, run, job string, build func() (nod
 }
 
 func (i *Inbox) WorkloadGrant(ctx context.Context, run, job string, request workload.SignedRequest, build func() (workload.Grant, error)) (out workload.Grant, err error) {
-	err = i.evidence(ctx, run, job, "workload-grant", &out, func() (any, error) { return build() }, func() error {
+	return i.workloadGrant(ctx, run, job, "workload-grant", request, build)
+}
+
+// Retry grants have separate immutable evidence for each operational attempt.
+func (i *Inbox) RecoveryWorkloadGrant(ctx context.Context, run, job string, request workload.SignedRequest, build func() (workload.Grant, error)) (workload.Grant, error) {
+	s := request.Request.Scope
+	if err := s.Validate(); err != nil {
+		return workload.Grant{}, err
+	}
+	if s.Profile != workload.LearnerVersion || s.Controller != s.Coordinator {
+		return workload.Grant{}, fmt.Errorf("coordinator recovery scope required")
+	}
+	return i.workloadGrant(ctx, run, job, "recovery-"+s.Attempt+"-grant", request, build)
+}
+
+func (i *Inbox) workloadGrant(ctx context.Context, run, job, kind string, request workload.SignedRequest, build func() (workload.Grant, error)) (out workload.Grant, err error) {
+	err = i.evidence(ctx, run, job, kind, &out, func() (any, error) { return build() }, func() error {
 		a, _ := json.Marshal(out.Request)
 		b, _ := json.Marshal(request)
 		if !bytes.Equal(a, b) || request.Request.Scope.Run != run || request.Request.Scope.Job != job {

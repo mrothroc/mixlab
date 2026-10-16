@@ -178,11 +178,16 @@ func (c *LearnerClient) callAttempt(ctx context.Context, q private.RelayRequest,
 		return out, transientLearnerTransport(err), err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK || resp.TLS == nil {
-		return out, false, fmt.Errorf("learner operation rejected (HTTP %d)", resp.StatusCode)
+	if resp.TLS == nil {
+		return out, false, fmt.Errorf("authenticated learner response required")
 	}
 	if _, err = p.Authenticate(*resp.TLS); err != nil {
 		return out, false, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		// Only an authenticated service-unavailable response is replayable.
+		// 4xx, unexpected 5xx and malformed successes remain fail-closed.
+		return out, resp.StatusCode == http.StatusServiceUnavailable, fmt.Errorf("learner operation rejected (HTTP %d)", resp.StatusCode)
 	}
 	b, err := io.ReadAll(io.LimitReader(resp.Body, learnerapi.MaxMessage+1))
 	if err != nil {

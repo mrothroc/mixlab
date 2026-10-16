@@ -25,6 +25,12 @@ type NodeClient struct {
 	policy         func() (*managedtls.Policy, error)
 }
 
+type NodeHTTPError struct{ Status int }
+
+func (e *NodeHTTPError) Error() string {
+	return fmt.Sprintf("node operation rejected (HTTP %d)", e.Status)
+}
+
 func NewNodeClient(p *principal.Store, endpoint, node string, clock func() time.Time) (*NodeClient, error) {
 	if p == nil || clock == nil {
 		return nil, fmt.Errorf("current controller principal required")
@@ -89,8 +95,14 @@ func (c *NodeClient) request(ctx context.Context, method, path string, body, out
 		return err
 	}
 	defer func() { _ = r.Body.Close() }()
-	if r.StatusCode != http.StatusOK || r.TLS == nil {
-		return fmt.Errorf("node operation rejected (HTTP %d)", r.StatusCode)
+	if r.TLS == nil {
+		return fmt.Errorf("authenticated node TLS response required")
+	}
+	if _, err := p.Authenticate(*r.TLS); err != nil {
+		return err
+	}
+	if r.StatusCode != http.StatusOK {
+		return &NodeHTTPError{Status: r.StatusCode}
 	}
 	b, err := io.ReadAll(io.LimitReader(r.Body, (2<<20)+1))
 	if err != nil {
@@ -98,9 +110,6 @@ func (c *NodeClient) request(ctx context.Context, method, path string, body, out
 	}
 	if len(b) > 2<<20 {
 		return fmt.Errorf("node response too large")
-	}
-	if _, err := p.Authenticate(*r.TLS); err != nil {
-		return err
 	}
 	if err := strictjson.Validate(b, 32); err != nil {
 		return err

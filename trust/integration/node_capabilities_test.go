@@ -35,6 +35,10 @@ func capabilityNode(t *testing.T, f *tlsFixture) (*nodeagent.Store, *managedtls.
 }
 
 func capabilityNodeIn(t *testing.T, f *tlsFixture, directory string) (*nodeagent.Store, *managedtls.Policy, *managedtls.Policy, recruitment.Requirements) {
+	return capabilityNodeWithBuild(t, f, directory, strings.Repeat("a", 64))
+}
+
+func capabilityNodeWithBuild(t *testing.T, f *tlsFixture, directory, build string) (*nodeagent.Store, *managedtls.Policy, *managedtls.Policy, recruitment.Requirements) {
 	t.Helper()
 	node := id(t)
 	k := key(t)
@@ -61,11 +65,11 @@ func capabilityNodeIn(t *testing.T, f *tlsFixture, directory string) (*nodeagent
 	check(t, err)
 	s, err := nodeagent.Initialize(context.Background(), p, f.a.Cluster(), node, 1)
 	check(t, err)
-	hash := strings.Repeat("a", 64)
 	limits := nodejob.Limits{RuntimeSeconds: 60, CPUSeconds: 120, MemoryBytes: 1 << 30, DiskBytes: 1 << 30, LogBytes: 1 << 20}
-	probe := workerprobe.Report{Version: workerprobe.Version, BuildID: hash, BuildVersion: "test", WorkerProtocol: workercontrol.Version, OS: "darwin", Arch: "arm64", Available: true, MLXVersion: "0.32.1", MLXSupported: true, DeviceKind: "metal", DeviceName: "test", Backends: []string{"ring"}, DTypes: []string{"fp32"}, CustomOps: []string{"mixlab-ir-v1"}}
+	hash := strings.Repeat("a", 64)
+	probe := workerprobe.Report{Version: workerprobe.Version, BuildID: build, BuildVersion: "test", WorkerProtocol: workercontrol.Version, OS: "darwin", Arch: "arm64", Available: true, MLXVersion: "0.32.1", MLXSupported: true, DeviceKind: "metal", DeviceName: "test", Backends: []string{"ring"}, DTypes: []string{"fp32"}, CustomOps: []string{"mixlab-ir-v1"}}
 	check(t, s.InstallProfile(context.Background(), nodeagent.Profile{Version: nodeagent.ProfileVersion, Node: node, DisplayName: "test", Generation: 1, ProbeObservedAt: f.now.Unix(), Probe: probe, Limits: limits, Datasets: []nodeagent.LocalDataset{{Dataset: nodeagent.Dataset{Selector: "toy", ID: hash}, TrainPattern: "/private/local/train.bin"}}}))
-	r := recruitment.Requirements{Cluster: f.a.Cluster(), Count: 2, BuildID: hash, MLXVersion: "0.32.1", DeviceKind: "metal", DType: "fp32", CustomOps: []string{"mixlab-ir-v1"}, DatasetSelector: "toy", DatasetID: hash, Limits: limits, ProbeMaxAge: time.Minute}
+	r := recruitment.Requirements{Cluster: f.a.Cluster(), Count: 2, BuildID: build, MLXVersion: "0.32.1", DeviceKind: "metal", DType: "fp32", CustomOps: []string{"mixlab-ir-v1"}, DatasetSelector: "toy", DatasetID: hash, Limits: limits, ProbeMaxAge: time.Minute}
 	return s, nodePolicy, clientPolicy, r
 }
 

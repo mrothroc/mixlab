@@ -29,13 +29,16 @@ type DiLoCoInfo struct {
 }
 
 type DiLoCoSubmissionStatus struct {
-	RunID        string            `json:"run_id"`
-	Admission    string            `json:"admission"`
-	RunPhase     coordinator.Phase `json:"run_phase,omitempty"`
-	Round        uint64            `json:"round"`
-	Failure      string            `json:"failure,omitempty"`
-	ServiceError bool              `json:"service_error"`
-	ObservedAt   int64             `json:"observed_at,omitempty"`
+	RunID                   string            `json:"run_id"`
+	Admission               string            `json:"admission"`
+	RunPhase                coordinator.Phase `json:"run_phase,omitempty"`
+	Round                   uint64            `json:"round"`
+	Failure                 string            `json:"failure,omitempty"`
+	ServiceError            bool              `json:"service_error"`
+	ObservedAt              int64             `json:"observed_at,omitempty"`
+	RecoveryWorker          string            `json:"recovery_worker,omitempty"`
+	RecoveryStartedAt       int64             `json:"recovery_started_at,omitempty"`
+	LearnerUnavailableSince int64             `json:"learner_unavailable_since,omitempty"`
 }
 
 // DiLoCoSubmissionAPI owns transport authentication only. Admission persists
@@ -187,7 +190,7 @@ func (a DiLoCoSubmissionAPI) serve(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "committed run journal unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		out.RunPhase, out.Round, out.Failure = s.Phase, s.Round, s.Failure
+		out.setRunState(s)
 	}
 	o, err := a.Inbox.Observation(ctx, q.Launch.Run)
 	if err != nil {
@@ -200,4 +203,17 @@ func (a DiLoCoSubmissionAPI) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, out)
+}
+
+func (out *DiLoCoSubmissionStatus) setRunState(s coordinator.State) {
+	out.RunPhase, out.Round, out.Failure = s.Phase, s.Round, s.Failure
+	out.RecoveryWorker, out.RecoveryStartedAt, out.LearnerUnavailableSince = "", 0, 0
+	if s.Phase == coordinator.Complete || s.Phase == coordinator.Failed {
+		return
+	}
+	out.LearnerUnavailableSince = s.LearnerUnavailableAt
+	if s.Recovery != nil {
+		out.RecoveryWorker = s.Recovery.WorkerID
+		out.RecoveryStartedAt = s.Recovery.Started
+	}
 }

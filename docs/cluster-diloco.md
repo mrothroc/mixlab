@@ -196,16 +196,35 @@ cannot be repaired by silently starting fresh. The cohort does not elastically
 replace failed members. A long logout/reboot or outage can exhaust deadlines and
 fail the run even though the service restarts successfully.
 
+The coordinator observes stopped learner processes and automatically attempts
+same-allocation recovery, capped at three replacement attempts per worker per
+run. Recovery intent, its fresh attempt identity and its 60-second deadline are
+durable, so restarting the coordinator does not reset the allowance. An unknown
+private-state hash (including failure before the first recorded start), a
+permanent authorization rejection, or exhausted recovery fails the run explicitly.
+An unavailable node-status endpoint also has a persisted 60-second budget.
+Status includes `recovery_worker` and `recovery_started_at` during recovery,
+or `learner_unavailable_since` while node status cannot be read. Exhaustion
+changes `run_phase` to `FAILED` with a sanitized `failure` reason.
+Fresh credentials fence the old attempt; private optimizer, sampler and RNG
+state are restored, never replaced with newly initialized state.
+
 The agent retries only semantic learner HTTP requests after transient connection
-refusal/reset, EOF or timeout, using the exact encoded request and fresh pinned
+refusal/reset, route unavailability, EOF or timeout, or authenticated HTTP 503
+while the coordinator is unavailable/draining or retryable state contention
+occurs, using the exact encoded request and fresh pinned
 trust policy for each attempt. Retries fit within the caller's deadline and a
 20-second total cap, with at most five seconds per attempt and 100 ms to one
-second backoff. Authentication, certificate, scope, HTTP-status and malformed
+second backoff. Authentication, certificate, scope, other HTTP-status and malformed
 response failures are not retried. Lost acknowledgments use the coordinator's
 existing idempotency records, not extra inner training. This is a short-outage
 allowance, not indefinite restart tolerance. Raw artifact reads/writes are not
 automatically replayed: their caller-owned streams have no implicit rewind or
 destination reset, so an interruption can still fail the learner attempt.
+That failure uses the same bounded, private-state-preserving recovery path;
+it is not a claim that every interrupted transfer preserves the original PID.
+The local IPC boundary distinguishes exhausted transient unavailability from
+terminal rejection without disclosing remote credential diagnostics.
 
 To start a **new weights-only run**, optionally pass
 `-initial-model /absolute/path/model.safetensors` with the new-run flags. It must

@@ -24,6 +24,7 @@ import (
 	"github.com/mrothroc/mixlab/nodecredentials"
 	"github.com/mrothroc/mixlab/nodejob"
 	"github.com/mrothroc/mixlab/precision"
+	"github.com/mrothroc/mixlab/recruitment"
 	"github.com/mrothroc/mixlab/statehome"
 	"github.com/mrothroc/mixlab/transport/managedtls"
 	"github.com/mrothroc/mixlab/trust"
@@ -40,6 +41,8 @@ type learnerHTTPFixture struct {
 	url             string
 	calls           atomic.Int32
 	initializations atomic.Int32
+	capabilities    nodeagent.Capabilities
+	requirements    recruitment.Requirements
 }
 
 type learnerHTTPJobs struct {
@@ -75,9 +78,17 @@ func learnerHTTPPath(t *testing.T, kind statehome.Kind) statehome.Path {
 }
 
 func newLearnerHTTP(t *testing.T) *learnerHTTPFixture {
+	return newLearnerHTTPWithPlan(t, nil)
+}
+
+func newLearnerHTTPWithPlan(t *testing.T, configure func(*run.Plan)) *learnerHTTPFixture {
+	return newLearnerHTTPWithBuild(t, configure, strings.Repeat("a", 64))
+}
+
+func newLearnerHTTPWithBuild(t *testing.T, configure func(*run.Plan), build string) *learnerHTTPFixture {
 	t.Helper()
 	f := newTLSFixture(t)
-	s, original, _, requirements := capabilityNode(t, f)
+	s, original, _, requirements := capabilityNodeWithBuild(t, f, t.TempDir(), build)
 	f.snapshot.Payload.EligibleRoles = append(f.snapshot.Payload.EligibleRoles, trust.Worker)
 	f.signSnapshot(t)
 	x := &learnerHTTPFixture{f: f, store: s, coordinator: f.leaf(t, trust.Coordinator, id(t))}
@@ -86,6 +97,7 @@ func newLearnerHTTP(t *testing.T) *learnerHTTPFixture {
 	check(t, err)
 	caps, err := s.Capabilities(ctx, actor, f.now)
 	check(t, err)
+	x.capabilities, x.requirements = caps, requirements
 	lease, err := s.Reserve(ctx, actor, nodeagent.Reserve{IdempotencyKey: id(t), ExpectedNodeVersion: 1, CapabilityGeneration: 1, Run: id(t), TTLSeconds: 300}, f.now)
 	check(t, err)
 	var plan run.Plan
@@ -105,8 +117,12 @@ func newLearnerHTTP(t *testing.T) *learnerHTTPFixture {
 	check(t, err)
 	plan.Coordinator = run.Coordinator{ClusterID: f.a.Cluster(), PrincipalID: coordinator.Principal, Role: "coordinator", Audience: "learner-run"}
 	plan.CreatedAt, plan.ExpiresAt = f.now.Unix(), f.now.Add(time.Minute).Unix()
-	config := json.RawMessage(`{"model_dim":16}`)
+	config := json.RawMessage(fmt.Sprintf(`{"model_dim":16,"clock":%d}`, f.now.Unix()))
+	plan.Contract.BuildHash = build
 	plan.Contract.ConfigHash = nodejob.Hash(config)
+	if configure != nil {
+		configure(&plan)
+	}
 	plan.SHA256, err = plan.Digest()
 	check(t, err)
 	m := nodejob.LearnerManifest{Version: nodejob.LearnerVersion, Controller: actor.Principal, Attempt: id(t), WorkloadGeneration: 1, Plan: plan, Slot: plan.Slots[0], Config: config, DatasetSelector: "toy", Limits: requirements.Limits}
@@ -155,6 +171,8 @@ func newLearnerHTTP(t *testing.T) *learnerHTTPFixture {
 	probe := workerprobe.Plan{Version: workerprobe.PlanVersion, BuildID: c.BuildHash, ConfigHash: c.ConfigHash, ProgramHash: c.ProgramHash, WeightLayoutHash: c.WeightLayoutHash, OptimizerHash: c.InnerOptimizerHash, DType: "fp32", Learner: &workerprobe.LearnerPlan{Outer: plan.Outer, BatchTokens: 16, SequenceLength: 4, Precision: &precision.Policy{ComputeDType: "float32", Backend: "metal"}}}
 	jobs, err := clusterapp.NewNodeJobs(ctx, clusterapp.NodeJobOptions{Store: s, Node: caps.Node, Anchor: f.a, CredentialRoot: root, Workload: wp, RelayAddress: "127.0.0.1:32499", Clock: f.clock, CurrentTrust: func(context.Context, time.Time) (trust.Anchor, trust.VerifiedSnapshot, error) {
 		return f.a, f.view, nil
+	}, SignRecovery: func(ctx context.Context, q trust.SignRequest) (trust.SignedProof, error) {
+		return trust.SignPrincipalProof(f.a, nodeIdentity.Chain, nodeIdentity.Key, f.view, q, f.now)
 	}, Preparation: nodeagent.PreparationPorts{Clock: f.clock, Probe: func(context.Context) (workerprobe.Report, error) { return caps.Probe, nil }, DatasetID: func(_ context.Context, path string) (string, error) {
 		if path != "/private/local/train.bin" {
 			return "", fmt.Errorf("nonlocal dataset path")

@@ -107,46 +107,64 @@ func (g Gateway) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), g.Timeout)
 	defer cancel()
+	if ctx.Err() != nil {
+		learnerError(w, ctx, "learner service unavailable", http.StatusServiceUnavailable)
+		return
+	}
 	b, err := io.ReadAll(io.LimitReader(r.Body, MaxMessage+1))
 	var q Request
-	if err != nil || authenticated.Decode(b, &q) != nil {
-		http.Error(w, "invalid learner request", http.StatusBadRequest)
+	if ctx.Err() != nil || err != nil || authenticated.Decode(b, &q) != nil {
+		learnerError(w, ctx, "invalid learner request", http.StatusBadRequest)
 		return
 	}
 	if g.ModelForRun != nil {
 		model, err := g.ModelForRun(ctx, q.Call.Binding.RunID)
-		if err != nil || model.Repository == nil || model.Allocations == nil || model.Artifacts == nil || model.Clock == nil || model.Evaluator == nil {
-			http.Error(w, "run is not available", http.StatusForbidden)
+		if ctx.Err() != nil || err != nil || model.Repository == nil || model.Allocations == nil || model.Artifacts == nil || model.Clock == nil || model.Evaluator == nil {
+			learnerError(w, ctx, "run is not available", http.StatusForbidden)
 			return
 		}
 		g.Model = model
 	}
 	guard := guardedRepository{Repository: g.Model.Repository, check: func(ctx context.Context, s coordinator.State) error { return g.authorize(ctx, r, q, s) }}
 	s, err := guard.Load(ctx, q.Call.Binding.RunID)
-	if err != nil {
-		http.Error(w, "learner access rejected", http.StatusForbidden)
+	if ctx.Err() != nil || err != nil {
+		learnerError(w, ctx, "learner access rejected", http.StatusForbidden)
 		return
 	}
 	m := g.Model
 	m.Repository = guard
 	out, err := g.dispatch(ctx, m, s, q)
-	if err != nil {
-		http.Error(w, "learner operation rejected", http.StatusConflict)
+	if errors.Is(err, coordinator.ErrConcurrent) {
+		learnerError(w, ctx, "learner service unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if ctx.Err() != nil || err != nil {
+		learnerError(w, ctx, "learner operation rejected", http.StatusConflict)
 		return
 	}
 	// Never release a result after trust or the attempt changed during the call.
-	if _, err = guard.Load(ctx, q.Call.Binding.RunID); err != nil {
-		http.Error(w, "learner access changed", http.StatusForbidden)
+	if _, err = guard.Load(ctx, q.Call.Binding.RunID); ctx.Err() != nil || err != nil {
+		learnerError(w, ctx, "learner access changed", http.StatusForbidden)
 		return
 	}
 	b, err = json.Marshal(out)
-	if err != nil || len(b) > MaxMessage || out.Validate() != nil {
-		http.Error(w, "invalid learner result", http.StatusInternalServerError)
+	if ctx.Err() != nil || err != nil || len(b) > MaxMessage || out.Validate() != nil {
+		learnerError(w, ctx, "invalid learner result", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write(b)
 }
+
+func learnerError(w http.ResponseWriter, ctx context.Context, message string, status int) {
+	// Shutdown and request deadlines invalidate the operation, not its credentials.
+	// A dependency's context-shaped error alone is not evidence of unavailability.
+	if ctx.Err() != nil {
+		message, status = "learner service unavailable", http.StatusServiceUnavailable
+	}
+	http.Error(w, message, status)
+}
+
 func (g Gateway) authorize(ctx context.Context, r *http.Request, q Request, s coordinator.State) error {
 	if err := s.Validate(); err != nil {
 		return err
@@ -175,6 +193,9 @@ func (g Gateway) authorize(ctx context.Context, r *http.Request, q Request, s co
 	attempt, generation, err := s.CurrentAttempt(b.Worker)
 	if err != nil || attempt != b.Attempt || generation != b.Generation {
 		return fmt.Errorf("stale attempt")
+	}
+	if s.Recovery != nil && s.Recovery.WorkerID == b.Worker && s.Recovery.Previous == b.Attempt {
+		return fmt.Errorf("attempt fenced by pending recovery")
 	}
 	for _, reg := range s.Commit.Registrations {
 		slot := reg.Slot

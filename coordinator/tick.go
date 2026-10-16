@@ -20,13 +20,16 @@ func (m Model) Tick(ctx context.Context, id string, roundSeconds int64) error {
 	case Staged, Aborted, Complete, Failed:
 		return nil
 	case Ready:
+		if s.Recovery != nil || s.LearnerUnavailableAt != 0 {
+			return nil
+		}
 		_, err = m.OpenRound(ctx, id, roundSeconds)
 		return err
 	case Open:
 		if m.Clock.Unix() >= s.Assignments[0].ExpiresAt {
 			return m.Fail(ctx, id, "learner round deadline expired")
 		}
-		if len(s.Updates) == len(s.Plan.Slots) {
+		if s.Recovery == nil && s.LearnerUnavailableAt == 0 && len(s.Updates) == len(s.Plan.Slots) {
 			return m.Advance(ctx, id)
 		}
 		return nil

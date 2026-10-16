@@ -105,6 +105,7 @@ func (h *nodeHTTP) serve(w http.ResponseWriter, r *http.Request) {
 	if actor.Role == trust.Coordinator {
 		allowed := len(parts) == 2 && parts[0] == "leases" && (r.Method == http.MethodGet || r.Method == http.MethodDelete) || len(parts) == 3 && parts[0] == "leases" && parts[2] == "renew" && r.Method == http.MethodPut
 		allowed = allowed || len(parts) == 3 && parts[0] == "learners" && parts[2] == "finalize" && r.Method == http.MethodPut
+		allowed = allowed || learnerRecoveryRoute(parts, r.Method)
 		if !allowed {
 			http.Error(w, "coordinator may only manage committed leases", http.StatusForbidden)
 			return

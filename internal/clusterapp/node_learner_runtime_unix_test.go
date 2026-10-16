@@ -32,6 +32,19 @@ import (
 // precommit polling and fencing must complete before either is consulted.
 func learnerRuntimeRemote(t *testing.T) *nodeLearnerRemote {
 	t.Helper()
+	return newLearnerRuntimeFixture(t).remote
+}
+
+type learnerRuntimeFixture struct {
+	remote      *nodeLearnerRemote
+	authority   *Authority
+	controller  *principal.Store
+	coordinator *principal.Store
+	ports       nodeagent.WorkloadPorts
+}
+
+func newLearnerRuntimeFixture(t *testing.T) learnerRuntimeFixture {
+	t.Helper()
 	ctx := context.Background()
 	p := initialized(t)
 	check(t, InitializeAuthority(ctx, p, testNow))
@@ -65,6 +78,13 @@ func learnerRuntimeRemote(t *testing.T) *nodeLearnerRemote {
 	controller, err := principal.Open(resolve("controller", statehome.Principal), testNow)
 	check(t, err)
 	t.Cleanup(func() { check(t, controller.Close()) })
+	coordinator, err := principal.Open(resolve("coordinator", statehome.Principal), testNow)
+	check(t, err)
+	t.Cleanup(func() { check(t, coordinator.Close()) })
+	coordinatorIdentity, _, err := coordinator.Active(testNow)
+	check(t, err)
+	coordinatorActor, err := trust.AuthenticatePrincipal(a.Anchor, v, coordinatorIdentity.Chain, testNow)
+	check(t, err)
 	identity, signer, err := controller.Active(testNow)
 	check(t, err)
 	actor, err := trust.AuthenticatePrincipal(a.Anchor, v, identity.Chain, testNow)
@@ -95,7 +115,7 @@ func learnerRuntimeRemote(t *testing.T) *nodeLearnerRemote {
 	capHash, err := run.Digest(caps)
 	check(t, err)
 	plan.Slots = []run.Slot{{Member: member, CapabilityHash: capHash, Allocation: allocation}}
-	plan.Coordinator = run.Coordinator{ClusterID: a.Anchor.Cluster(), PrincipalID: id(), Role: "coordinator", Audience: "learner-runtime"}
+	plan.Coordinator = run.Coordinator{ClusterID: a.Anchor.Cluster(), PrincipalID: coordinatorActor.Principal, Role: "coordinator", Audience: "learner-runtime"}
 	plan.CreatedAt, plan.ExpiresAt = testNow.Unix(), testNow.Add(time.Minute).Unix()
 	config := json.RawMessage(`{"model_dim":16}`)
 	plan.Contract.ConfigHash = nodejob.Hash(config)
@@ -129,7 +149,7 @@ func learnerRuntimeRemote(t *testing.T) *nodeLearnerRemote {
 	check(t, err)
 	binding, err := assignment.Binding()
 	check(t, err)
-	return &nodeLearnerRemote{runtime: NodeLearnerRuntime{Store: s, Principal: node, Anchor: a.Anchor, Clock: clock}, binding: binding}
+	return learnerRuntimeFixture{remote: &nodeLearnerRemote{runtime: NodeLearnerRuntime{Store: s, Principal: node, Anchor: a.Anchor, Clock: clock}, binding: binding}, authority: a, controller: controller, coordinator: coordinator, ports: ports}
 }
 
 func TestNodeLearnerRuntimePrecommitPollReturnsPromptly(t *testing.T) {

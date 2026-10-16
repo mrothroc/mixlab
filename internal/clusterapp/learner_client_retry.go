@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mrothroc/mixlab/coordinator/learnerapi"
+	private "github.com/mrothroc/mixlab/diloco/learner"
 	"github.com/mrothroc/mixlab/transport/managedtls"
 )
 
@@ -23,8 +24,12 @@ func retryLearnerSemantic(parent context.Context, attempt func(context.Context) 
 	ctx, cancel := context.WithTimeout(parent, learnerRetryBudget)
 	defer cancel()
 	delay := 100 * time.Millisecond
+	var last error
 	for {
 		if err := ctx.Err(); err != nil {
+			if last != nil {
+				return learnerapi.Response{}, errors.Join(private.ErrUnavailable, last, err)
+			}
 			return learnerapi.Response{}, err
 		}
 		call, stop := context.WithTimeout(ctx, learnerAttemptBudget)
@@ -33,14 +38,18 @@ func retryLearnerSemantic(parent context.Context, attempt func(context.Context) 
 		if err == nil {
 			return out, ctx.Err()
 		}
-		if !retry || ctx.Err() != nil {
+		if !retry {
 			return learnerapi.Response{}, errors.Join(err, ctx.Err())
+		}
+		last = err
+		if ctx.Err() != nil {
+			return learnerapi.Response{}, errors.Join(private.ErrUnavailable, err, ctx.Err())
 		}
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return learnerapi.Response{}, errors.Join(err, ctx.Err())
+			return learnerapi.Response{}, errors.Join(private.ErrUnavailable, err, ctx.Err())
 		case <-timer.C:
 		}
 		if delay < time.Second {
@@ -52,7 +61,7 @@ func retryLearnerSemantic(parent context.Context, attempt func(context.Context) 
 	}
 }
 
-// Classify transport failures only, never policy/HTTP/decoder errors. A peer
+// Classify transport failures only, never policy/decoder errors. A peer
 // rejection can wrap a timeout/EOF from a trust port and must still fail closed.
 func transientLearnerTransport(err error) bool {
 	var alert tls.AlertError
@@ -67,6 +76,7 @@ func transientLearnerTransport(err error) bool {
 		return false
 	}
 	if errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||
+		errors.Is(err, syscall.EHOSTUNREACH) || errors.Is(err, syscall.ENETUNREACH) || errors.Is(err, syscall.ENETDOWN) ||
 		errors.Is(err, syscall.EPIPE) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}

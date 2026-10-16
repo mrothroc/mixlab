@@ -157,8 +157,11 @@ func (r *Repository) Save(ctx context.Context, id string, revision uint64, c coo
 		} else if err != nil {
 			return err
 		}
-		if revision == ^uint64(0) || h.Revision != revision || c.Next.Revision != revision+1 || c.Next.Plan.Cohort.RunID != id {
+		if revision == ^uint64(0) || c.Next.Revision != revision+1 || c.Next.Plan.Cohort.RunID != id || h.Revision < revision {
 			return coordinator.ErrConflict
+		}
+		if h.Revision > revision {
+			return coordinator.ErrConcurrent
 		}
 		if err := validateChange(c); err != nil {
 			return err
@@ -204,7 +207,7 @@ func (r *Repository) Save(ctx context.Context, id string, revision uint64, c coo
 		}
 		encoded, _ := json.Marshal(next)
 		if err = r.path.CompareAndSwap(k+".head", old, encoded); errors.Is(err, statehome.ErrConflict) {
-			return coordinator.ErrConflict
+			return coordinator.ErrConcurrent
 		}
 		if err != nil {
 			return err

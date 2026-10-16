@@ -40,7 +40,7 @@ func (m Model) BindAttempt(ctx context.Context, a run.AttemptBinding, auth Recov
 	if err != nil {
 		return err
 	}
-	if s.Commit == nil || (s.Phase != Ready && s.Phase != Open) {
+	if s.Commit == nil || (s.Phase != Ready && s.Phase != Open && s.Phase != Evaluating) {
 		return fmt.Errorf("run cannot replace an attempt now")
 	}
 	if err = a.Validate(); err != nil {
@@ -74,18 +74,9 @@ func (m Model) BindAttempt(ctx context.Context, a run.AttemptBinding, auth Recov
 	if index < 0 {
 		return fmt.Errorf("unknown worker")
 	}
-	expectedPrivate := s.PrivateHashes[index]
-	for _, start := range s.Starts {
-		if start.WorkerID == a.WorkerID {
-			expectedPrivate = start.PrivateHash
-		}
-	}
-	for _, u := range s.Updates {
-		if u.WorkerID == a.WorkerID {
-			// A lost receipt is recoverable without repeating local work. The
-			// accepted update already binds the completed private checkpoint.
-			expectedPrivate = u.PrivateHash
-		}
+	expectedPrivate, err := s.ExpectedPrivate(a.WorkerID)
+	if err != nil {
+		return err
 	}
 	if err = a.ValidateFor(*s.Commit, previous, generation, expectedPrivate); err != nil {
 		return err

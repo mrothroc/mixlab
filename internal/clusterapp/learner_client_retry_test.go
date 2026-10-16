@@ -18,14 +18,14 @@ import (
 )
 
 func TestLearnerSemanticTransportRetryClassification(t *testing.T) {
-	for _, err := range []error{syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ECONNABORTED, syscall.EPIPE, io.EOF, io.ErrUnexpectedEOF, context.DeadlineExceeded, &net.DNSError{IsTimeout: true}} {
+	for _, err := range []error{syscall.EHOSTUNREACH, syscall.ENETUNREACH, syscall.ENETDOWN, syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.ECONNABORTED, syscall.EPIPE, io.EOF, io.ErrUnexpectedEOF, context.DeadlineExceeded, &net.DNSError{IsTimeout: true}} {
 		wrapped := &url.Error{Op: "Post", URL: "https://coordinator.invalid", Err: &net.OpError{Op: "read", Net: "tcp", Err: err}}
 		if !transientLearnerTransport(wrapped) {
 			t.Errorf("did not retry transport failure: %v", err)
 		}
 	}
 	for _, err := range []error{
-		nil, context.Canceled, syscall.EACCES, syscall.EHOSTUNREACH, &net.DNSError{IsNotFound: true},
+		nil, context.Canceled, syscall.EACCES, &net.DNSError{IsNotFound: true},
 		tls.AlertError(42), &tls.CertificateVerificationError{Err: context.DeadlineExceeded},
 		x509.UnknownAuthorityError{}, x509.CertificateInvalidError{}, x509.HostnameError{},
 		fmt.Errorf("%w: %w", managedtls.ErrPeerRejected, io.EOF),

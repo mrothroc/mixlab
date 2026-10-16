@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -71,7 +72,10 @@ func (s *Server) Handle(ctx context.Context, e wc.Envelope) (wc.Envelope, error)
 		s.closeStream()
 		// A semantic rejection (notably receipt-not-yet-present) is not a
 		// transport failure. Never return remote credential diagnostics.
-		r = response{Error: "operation rejected or unavailable"}
+		r = response{Error: "operation rejected", ErrorCode: "rejected"}
+		if errors.Is(err, private.ErrUnavailable) {
+			r = response{Error: "coordinator unavailable after bounded retry", ErrorCode: "unavailable"}
+		}
 	}
 	return envelope(wc.KindRoundResponse, r)
 }

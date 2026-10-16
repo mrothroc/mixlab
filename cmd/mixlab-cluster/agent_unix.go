@@ -148,8 +148,9 @@ func serveInstalledAgent(ctx context.Context, path statehome.Path, listen, adver
 	life, done := context.WithCancel(context.WithoutCancel(ctx))
 	defer done()
 	jobs, err := clusterapp.NewNodeJobs(life, clusterapp.NodeJobOptions{Store: store, Node: i.Node, Anchor: anchor, CredentialRoot: credentialRoot, Workload: workload, RelayAddress: i.RelayAddress, CurrentTrust: current, Clock: time.Now,
-		Output:    runtime.Output,
-		InputRoot: path,
+		SignRecovery: clusterapp.NodeRecoverySigner(p, time.Now),
+		Output:       runtime.Output,
+		InputRoot:    path,
 		LearnerProbe: func(ctx context.Context, config []byte) (workerprobe.Plan, error) {
 			return host.LearnerProbe(ctx, probePath, config)
 		},

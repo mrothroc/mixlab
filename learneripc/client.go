@@ -39,6 +39,9 @@ func (c *Client) request(ctx context.Context, q request) (response, error) {
 		return out, err
 	}
 	if out.Error != "" {
+		if out.ErrorCode == "unavailable" {
+			return out, private.ErrUnavailable
+		}
 		return out, fmt.Errorf("learner relay: %s", out.Error)
 	}
 	return out, nil

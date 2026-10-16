@@ -19,9 +19,8 @@ func (l *nodeExecutionLoop) cleanupLearner(ctx context.Context, x nodeagent.Loca
 
 func (l *nodeExecutionLoop) pollLearner(ctx context.Context, x nodeagent.LocalExecution, stopping bool) error {
 	if x.Outcome != nil && x.Outcome.Terminal() {
-		if err := l.store.ApplyLearnerOutcome(ctx, *x.Outcome); err != nil {
-			return err
-		}
+		// ActiveExecution already validated this durable outcome. A retry may
+		// have replaced its attempt since that read; do not republish it.
 		if stopping {
 			return l.cleanupLearner(ctx, x)
 		}
