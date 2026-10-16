@@ -170,6 +170,16 @@ func main() {
 		must(train.RunWorkerPlan(os.Stdin, os.Stdout))
 		return
 	}
+	if *mode == "worker-learner-probe" {
+		must(validateProbeFlags(providedFlags, flag.Args()))
+		must(train.RunWorkerLearnerProbe(os.Stdin, os.Stdout))
+		return
+	}
+	if *mode == "worker-initial-model" {
+		must(validateProbeFlags(providedFlags, flag.Args()))
+		must(train.RunWorkerInitialModel(os.Stdin, os.Stdout))
+		return
+	}
 	if *mode == "managed-worker" {
 		must(validateManagedFlags(providedFlags, flag.Args()))
 		must(train.RunManagedWorkerWithLearner(context.Background(), *workerSocket, *workerFD, serveManagedLearner))
@@ -489,11 +499,13 @@ type flagGroup struct {
 var supportedModes = []string{"smoke", "validate", "arch", "arch_race", "prepare", "prepare-pairs", "count", "optimizer-report", "inspect-contract", "eval", "hiddenstats", "generate", "generate-diffusion", "score-diffusion", "score-electra", "score-ebm", "predict-grid", "export-torch-state", "export-hf", "parity"}
 
 var modeFlagGroups = map[string][]flagGroup{
-	"inspect-contract":   {{"Required", []string{"config"}}, {"Contract inspection", []string{"contract-profile", "contract-require"}}},
-	"export-torch-state": {{"Required", []string{"config", "safetensors-load", "export-map", "export-dir"}}},
-	"predict-grid":       {{"Required", []string{"config", "safetensors-load", "grid-in", "grid-out"}}, {"Selection", []string{"grid-split"}}},
-	"worker-probe":       {{"Internal read-only device probe (no training arguments)", []string{}}},
-	"worker-plan":        {{"Internal read-only numerical plan from bounded stdin config", []string{}}},
+	"inspect-contract":     {{"Required", []string{"config"}}, {"Contract inspection", []string{"contract-profile", "contract-require"}}},
+	"export-torch-state":   {{"Required", []string{"config", "safetensors-load", "export-map", "export-dir"}}},
+	"predict-grid":         {{"Required", []string{"config", "safetensors-load", "grid-in", "grid-out"}}, {"Selection", []string{"grid-split"}}},
+	"worker-probe":         {{"Internal read-only device probe (no training arguments)", []string{}}},
+	"worker-plan":          {{"Internal read-only numerical plan from bounded stdin config", []string{}}},
+	"worker-learner-probe": {{"Internal DiLoCo plan and live precision probe from bounded stdin config", []string{}}},
+	"worker-initial-model": {{"Internal deterministic DiLoCo initial tensor artifact from bounded stdin config", []string{}}},
 	"managed-worker": {
 		{"Internal hosting connection (not a standalone training mode)", []string{"worker-control-socket", "worker-session-fd"}},
 	},

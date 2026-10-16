@@ -23,6 +23,10 @@ func (r *GuardianRuntime) Output(ctx context.Context, job, attempt string) (stat
 	return r.store.Output(ctx, job, attempt)
 }
 
+func (r *GuardianRuntime) LearnerPrivate(ctx context.Context, run, worker string) (statehome.Path, error) {
+	return r.store.LearnerPrivate(ctx, run, worker)
+}
+
 func NewGuardianRuntime(store *RuntimeStore, workerBinary, workerBuild, guardianBinary, guardianBuild string, startup, grace time.Duration) (*GuardianRuntime, error) {
 	if store == nil {
 		return nil, fmt.Errorf("initialized runtime store required")
@@ -43,6 +47,19 @@ func NewGuardianRuntime(store *RuntimeStore, workerBinary, workerBuild, guardian
 }
 
 func (r *GuardianRuntime) Open(ctx context.Context, job, attempt string) (*AttemptStore, Runner, error) {
+	return r.open(ctx, job, attempt, nil, statehome.Path{})
+}
+
+// OpenLearner adds only an opaque relay and an administrator-owned private
+// directory. Remote credentials and network policy never enter hosting.
+func (r *GuardianRuntime) OpenLearner(ctx context.Context, job, attempt string, relay Relay, private statehome.Path) (*AttemptStore, Runner, error) {
+	if relay == nil || private.Kind() != statehome.Worker {
+		return nil, nil, fmt.Errorf("local learner relay and private directory required")
+	}
+	return r.open(ctx, job, attempt, relay, private)
+}
+
+func (r *GuardianRuntime) open(ctx context.Context, job, attempt string, relay Relay, private statehome.Path) (*AttemptStore, Runner, error) {
 	p, err := r.store.Attempt(ctx, job, attempt)
 	if err != nil {
 		return nil, nil, err
@@ -55,6 +72,7 @@ func (r *GuardianRuntime) Open(ctx context.Context, job, attempt string) (*Attem
 	if err != nil {
 		return nil, nil, err
 	}
+	l.LearnerRelay, l.LearnerPrivateDirectory = relay, private
 	guardian, err := NewGuardianRunner(l, r.binary, r.build)
 	if err != nil {
 		return nil, nil, err

@@ -48,7 +48,7 @@ func ServeGuardian(file *os.File) error {
 	if err != nil {
 		return err
 	}
-	s, err := New(q.Binary, q.Approval.Assignment.BuildID)
+	s, err := New(q.Binary, q.Approval.BuildID())
 	if err != nil {
 		return err
 	}
@@ -56,8 +56,22 @@ func ServeGuardian(file *os.File) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(q.Approval.Assignment.RuntimeSeconds)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(q.Approval.RuntimeSeconds())*time.Second)
 	defer cancel()
+	if q.Approval.Learner != nil {
+		private, err := guardianPrivateDirectory(q)
+		if err != nil {
+			return err
+		}
+		relay, closeRelay, err := inheritedGuardianRelay(*q.Approval.Learner)
+		if err != nil {
+			return err
+		}
+		defer closeRelay()
+		r.LearnerRelay, r.LearnerPrivateDirectory = relay, private
+	} else if q.LearnerPrivateDirectory != "" {
+		return fmt.Errorf("DDP guardian received learner storage")
+	}
 	if err := transitionGuardian(ctx, dir, q.Claim, "pending", "owned"); err != nil {
 		return err
 	}

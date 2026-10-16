@@ -33,16 +33,38 @@ func (s *Supervisor) Probe(parent context.Context, directory statehome.Path) (wo
 }
 
 func (s *Supervisor) Plan(parent context.Context, directory statehome.Path, config []byte) (workerprobe.Plan, error) {
+	return s.numericalPlan(parent, directory, config, false)
+}
+
+func (s *Supervisor) LearnerProbe(parent context.Context, directory statehome.Path, config []byte) (workerprobe.Plan, error) {
+	return s.numericalPlan(parent, directory, config, true)
+}
+
+func (s *Supervisor) InitialLearnerModel(parent context.Context, directory statehome.Path, config []byte) ([]byte, error) {
+	if len(config) == 0 || len(config) > 256<<10 {
+		return nil, fmt.Errorf("bounded numerical config required")
+	}
+	return s.readOnlyCommand(parent, directory, "worker-initial-model", config, 1<<30)
+}
+
+func (s *Supervisor) numericalPlan(parent context.Context, directory statehome.Path, config []byte, learner bool) (workerprobe.Plan, error) {
 	if len(config) == 0 || len(config) > 256<<10 {
 		return workerprobe.Plan{}, fmt.Errorf("bounded numerical config required")
 	}
-	b, err := s.readOnlyCommand(parent, directory, "worker-plan", config, 4096)
+	mode := "worker-plan"
+	if learner {
+		mode = "worker-learner-probe"
+	}
+	b, err := s.readOnlyCommand(parent, directory, mode, config, 4096)
 	if err != nil {
 		return workerprobe.Plan{}, err
 	}
 	r, err := workerprobe.DecodePlan(b)
 	if err == nil && r.BuildID != s.build {
 		err = fmt.Errorf("plan self-reported another executable")
+	}
+	if err == nil && learner && (r.Learner == nil || r.Learner.Precision == nil) {
+		err = fmt.Errorf("learner probe omitted resolved device policy")
 	}
 	return r, err
 }

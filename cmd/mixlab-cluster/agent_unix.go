@@ -150,6 +150,9 @@ func serveInstalledAgent(ctx context.Context, path statehome.Path, listen, adver
 	jobs, err := clusterapp.NewNodeJobs(life, clusterapp.NodeJobOptions{Store: store, Node: i.Node, Anchor: anchor, CredentialRoot: credentialRoot, Workload: workload, RelayAddress: i.RelayAddress, CurrentTrust: current, Clock: time.Now,
 		Output:    runtime.Output,
 		InputRoot: path,
+		LearnerProbe: func(ctx context.Context, config []byte) (workerprobe.Plan, error) {
+			return host.LearnerProbe(ctx, probePath, config)
+		},
 		Preparation: nodeagent.PreparationPorts{Clock: time.Now, Probe: probe, DatasetID: data.DistributedDatasetIdentityContext, ArtifactPresent: func(context.Context, nodejob.ArtifactRef) error {
 			return fmt.Errorf("artifact requires the authenticated checkpoint input path")
 		}},
@@ -168,6 +171,7 @@ func serveInstalledAgent(ctx context.Context, path statehome.Path, listen, adver
 	}
 	defer func() { _ = ad.Close() }()
 	event := func(err error) { _, _ = fmt.Fprintln(stderr, "agent event:", err) }
+	learnerRuntime := clusterapp.NodeLearnerRuntime{Store: store, Principal: p, Runtime: runtime, Credentials: credentialRoot, Anchor: anchor, Clock: time.Now}
 	maintenance := func(ctx context.Context) error {
 		life, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -185,7 +189,7 @@ func serveInstalledAgent(ctx context.Context, path statehome.Path, listen, adver
 				event(err)
 			}
 		},
-		Execution: clusterapp.NodeExecutionPorts{Open: runtime.Open, Authorize: jobs.Authorize, Cleanup: jobs.Cleanup, Clock: time.Now, Event: event},
+		Execution: clusterapp.NodeExecutionPorts{Open: runtime.Open, OpenLearner: learnerRuntime.Open, Authorize: jobs.Authorize, Cleanup: jobs.Cleanup, Clock: time.Now, Event: event},
 	})
 	if err != nil {
 		return fail(err)

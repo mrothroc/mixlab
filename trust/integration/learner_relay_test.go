@@ -32,9 +32,23 @@ type relayClock struct{ f *tlsFixture }
 
 func (c relayClock) Unix() int64 { return c.f.clock().Unix() }
 
-type relayAllocations struct{}
+type relayAllocations struct {
+	repository coordinator.Repository
+	id         string
+}
 
-func (relayAllocations) Ready(context.Context, run.Slot) error { return nil }
+func (a relayAllocations) Ready(ctx context.Context, _ run.Slot) error {
+	if a.repository != nil {
+		s, err := a.repository.Load(ctx, a.id)
+		if err != nil {
+			return err
+		}
+		if s.Phase == coordinator.Complete || s.Phase == coordinator.Failed {
+			return fmt.Errorf("terminal allocation released")
+		}
+	}
+	return nil
+}
 
 type relayEvaluator struct{}
 
@@ -107,7 +121,7 @@ func newLearnerRelayModel(t *testing.T, model []optimizer.Tensor, precisionPolic
 	check(t, a.g.Repository.Save(ctx, p.Cohort.RunID, 0, coordinator.Change{Next: a.s}))
 	check(t, a.g.Store.PutVerified(ctx, p.BaseModel.Ref, bytes.NewReader(body.Bytes())))
 	x := &relayFixture{artifactFixture: a, body: body.Bytes()}
-	x.model = coordinator.Model{Repository: a.g.Repository, Artifacts: coordinatorlocal.Artifacts{Store: a.g.Store}, Allocations: relayAllocations{}, Clock: relayClock{f}, Evaluator: relayEvaluator{}}
+	x.model = coordinator.Model{Repository: a.g.Repository, Artifacts: coordinatorlocal.Artifacts{Store: a.g.Store}, Allocations: relayAllocations{a.g.Repository, p.Cohort.RunID}, Clock: relayClock{f}, Evaluator: relayEvaluator{}}
 	policy, err := learnerapi.NewPolicy(f.server, f.a, artifactTrust{f}, f.clock)
 	check(t, err)
 	a.g.Policy = policy

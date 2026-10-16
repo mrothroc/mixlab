@@ -33,6 +33,13 @@ func (s *Store) CheckExecutionTrust(ctx context.Context, anchor trust.Anchor, vi
 		if lease.Job == "" {
 			return nil
 		}
+		if lease.JobKind == "learner" {
+			_, j, err := s.loadLearner(lease.Job)
+			if err != nil {
+				return err
+			}
+			return checkLearnerExecutionTrust(anchor, view, j, now)
+		}
 		_, r, err := s.loadJob(lease.Job)
 		if err != nil {
 			return err

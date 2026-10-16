@@ -81,7 +81,7 @@ func (r *GuardianRunner) Run(parent context.Context, a contract.Approved, starte
 		return err
 	}
 	defer func() { _ = c.Close(); _ = child.Close() }()
-	ctx, cancel := context.WithTimeout(parent, time.Duration(a.Assignment.RuntimeSeconds)*time.Second+q.Startup+10*time.Second)
+	ctx, cancel := context.WithTimeout(parent, time.Duration(a.RuntimeSeconds())*time.Second+q.Startup+10*time.Second)
 	defer cancel()
 	stopClose := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stopClose()
@@ -89,6 +89,22 @@ func (r *GuardianRunner) Run(parent context.Context, a contract.Approved, starte
 	cmd.Dir = q.Directory
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + q.Directory, "TMPDIR=" + q.Directory}
 	cmd.ExtraFiles = []*os.File{child}
+	if a.Learner != nil {
+		if r.local.LearnerRelay == nil || r.local.LearnerPrivateDirectory.Dir() == "" {
+			return fmt.Errorf("learner guardian requires private storage and agent relay")
+		}
+		q.LearnerPrivateDirectory = r.local.LearnerPrivateDirectory.Dir()
+		relay, inherited, e := guardianSocketPair()
+		if e != nil {
+			return e
+		}
+		defer func() { _ = inherited.Close() }()
+		cmd.ExtraFiles = append(cmd.ExtraFiles, inherited)
+		relayCtx, stopRelay := context.WithCancel(ctx)
+		joined := make(chan struct{})
+		go func() { defer close(joined); serveGuardianRelay(relayCtx, relay, *a.Learner, r.local.LearnerRelay) }()
+		defer func() { stopRelay(); _ = relay.Close(); <-joined }()
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = time.Second
 	diagnostic := &probeBuffer{limit: 4096, cancel: func() { _ = c.Close() }}
@@ -142,7 +158,7 @@ func (r *GuardianRunner) Run(parent context.Context, a contract.Approved, starte
 			return err
 		}
 		sequence++
-		if err := c.SetReadDeadline(time.Now().Add(time.Duration(a.Assignment.RuntimeSeconds)*time.Second + 10*time.Second)); err != nil {
+		if err := c.SetReadDeadline(time.Now().Add(time.Duration(a.RuntimeSeconds())*time.Second + 10*time.Second)); err != nil {
 			return err
 		}
 		e, err = wc.ReadFrame(c, wc.MaxFrameBytes)

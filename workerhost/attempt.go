@@ -57,7 +57,7 @@ func (r Attempt) validate() error {
 	if err != nil || digest != r.Digest {
 		return fmt.Errorf("execution approval digest mismatch")
 	}
-	a := r.Approval.Assignment
+	a := r.Approval
 	for _, o := range []*contract.Outcome{r.Started, r.Terminal} {
 		if o == nil {
 			continue
@@ -65,7 +65,7 @@ func (r Attempt) validate() error {
 		if err := o.Validate(); err != nil {
 			return err
 		}
-		if o.JobID != a.JobID || o.AttemptID != a.AttemptID || o.ManifestHash != r.Approval.ManifestHash || o.ApprovalHash != digest {
+		if o.JobID != a.JobID() || o.AttemptID != a.AttemptID() || o.ManifestHash != r.Approval.ManifestHash || o.ApprovalHash != digest {
 			return fmt.Errorf("execution outcome binding mismatch")
 		}
 	}
@@ -141,6 +141,11 @@ func freezeApproval(a contract.Approved) (contract.Approved, string, error) {
 	if err := copy.Validate(); err != nil {
 		return copy, "", err
 	}
+	if copy.Learner != nil {
+		// RawMessage decodes JSON null as non-nil bytes. Its canonical wire
+		// value is the empty legacy variant, which the supervisor tests by value.
+		copy.Assignment = workerjob.Assignment{}
+	}
 	hash, err := workerjob.Digest(copy)
 	return copy, hash, err
 }
@@ -193,7 +198,7 @@ func (s *AttemptStore) Run(ctx context.Context, a contract.Approved, runner Runn
 			if r.Started != nil {
 				return fmt.Errorf("duplicate started outcome")
 			}
-			o := contract.Outcome{JobID: a.Assignment.JobID, AttemptID: a.Assignment.AttemptID, ManifestHash: a.ManifestHash, ApprovalHash: hash, Kind: contract.Started, Version: 1, PID: pid}
+			o := contract.Outcome{JobID: a.JobID(), AttemptID: a.AttemptID(), ManifestHash: a.ManifestHash, ApprovalHash: hash, Kind: contract.Started, Version: 1, PID: pid}
 			r.Started = &o
 			if err := s.save(old, r); err != nil {
 				return err
@@ -230,8 +235,8 @@ func (s *AttemptStore) Run(ctx context.Context, a contract.Approved, runner Runn
 }
 
 func terminalOutcome(r Attempt, kind string, failure error) contract.Outcome {
-	a := r.Approval.Assignment
-	o := contract.Outcome{JobID: a.JobID, AttemptID: a.AttemptID, ManifestHash: r.Approval.ManifestHash, ApprovalHash: r.Digest, Version: 1, Kind: kind, NoChild: true}
+	a := r.Approval
+	o := contract.Outcome{JobID: a.JobID(), AttemptID: a.AttemptID(), ManifestHash: r.Approval.ManifestHash, ApprovalHash: r.Digest, Version: 1, Kind: kind, NoChild: true}
 	if r.Started != nil {
 		o.PID = r.Started.PID
 		o.Version = 2

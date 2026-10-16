@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mrothroc/mixlab/diloco/optimizer"
+	"github.com/mrothroc/mixlab/diloco/run"
 	"github.com/mrothroc/mixlab/learner"
 	"github.com/mrothroc/mixlab/learneripc"
 	"github.com/mrothroc/mixlab/statehome"
@@ -101,7 +102,11 @@ func runManagedLearner(ctx context.Context, a workerjob.LearnerAssignment, peer 
 	}
 	r := learner.Runtime{Store: store, Peer: peer, Scope: learner.Scope{RunID: a.RunID, PlanHash: a.PlanHash, WorkerID: a.Member.WorkerID, PartitionID: a.Member.DatasetPartitionID, ParticipantID: a.Member.ParticipantID, IslandID: a.Member.IslandID, CohortHash: a.Cohort.CohortHash, Generation: a.Cohort.Generation, Contract: a.Contract, Coordinator: a.Coordinator, ExpectedPrivateHash: a.ExpectedPrivateHash}}
 	r.Factory = func(v []optimizer.Tensor) (learner.Engine, error) {
-		s, err := train.NewLocalLearnerSession(cfg, a.TrainPattern, identity, toLocalTensors(v))
+		model, err := train.LocalLearnerModelFromWire(v)
+		if err != nil {
+			return nil, err
+		}
+		s, err := train.NewLocalLearnerSession(cfg, a.TrainPattern, identity, model)
 		if err != nil {
 			return nil, err
 		}
@@ -131,7 +136,25 @@ func runManagedLearner(ctx context.Context, a workerjob.LearnerAssignment, peer 
 			}
 		}
 		if next.Evaluation != nil {
-			return fmt.Errorf("evaluation requires a locally configured validation dataset")
+			if a.Validation == nil {
+				return fmt.Errorf("evaluation requires a locally configured validation dataset")
+			}
+			if err := a.Validation.Match(*next.Evaluation); err != nil {
+				return err
+			}
+			result, err := r.Evaluate(ctx, *next.Evaluation, func(ctx context.Context, assignment run.EvaluationAssignment, model []optimizer.Tensor) (float64, uint64, error) {
+				local, err := train.LocalLearnerModelFromWire(model)
+				if err != nil {
+					return 0, 0, err
+				}
+				return train.EvaluateLocalLearnerModel(ctx, cfg, local, *a.Validation, assignment.Precision)
+			})
+			if err != nil {
+				return err
+			}
+			if err := peer.Evaluate(ctx, result); err != nil {
+				return err
+			}
 		}
 		timer := time.NewTimer(200 * time.Millisecond)
 		select {

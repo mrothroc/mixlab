@@ -115,6 +115,7 @@ func (s *Store) StartLearnerRetry(ctx context.Context, actor trust.Authenticated
 		j.Recovery = nil
 		j.Assignment = &out
 		j.Stopped = false
+		j.Outcome = nil
 		j.Workload = j.RetryWorkload
 		j.RetryWorkload = nil
 		j.Credential = &credential

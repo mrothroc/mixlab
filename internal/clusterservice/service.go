@@ -17,8 +17,8 @@ type Spec struct {
 }
 
 func (s Spec) Validate() error {
-	if s.Role != "agent" && s.Role != "authority" {
-		return fmt.Errorf("service role must be agent or authority")
+	if !validRole(s.Role) {
+		return fmt.Errorf("service role must be agent, authority or coordinator")
 	}
 	if !filepath.IsAbs(s.Binary) || filepath.Clean(s.Binary) != s.Binary {
 		return fmt.Errorf("canonical absolute service executable required")
@@ -30,6 +30,9 @@ func (s Spec) Validate() error {
 	}
 	if len(s.Arguments) == 0 || s.Arguments[0] != s.Role {
 		return fmt.Errorf("service arguments must start with its role")
+	}
+	if s.Role == "coordinator" {
+		return validateCoordinatorArguments(s.Arguments[1:])
 	}
 	args := s.Arguments[1:]
 	state := "-agent-state-dir"

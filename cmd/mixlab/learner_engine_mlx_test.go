@@ -128,7 +128,7 @@ func TestManagedLearnerMetalDurableRecovery(t *testing.T) {
 				v[j] = float32(rng.NormFloat64() * .05)
 			}
 		}
-		model[i] = optimizer.Tensor{Name: m.Name, Shape: m.Shape, Values: v}
+		model[i] = optimizer.Tensor{Name: fmt.Sprintf("w%d_%s", i, m.Name), Shape: m.Shape, Values: v}
 	}
 	fixture, err := os.ReadFile("../../diloco/testdata/assignment.json")
 	if err != nil {
@@ -172,7 +172,11 @@ func TestManagedLearnerMetalDurableRecovery(t *testing.T) {
 				fail, calls := replay, 0
 				r := learner.Runtime{Store: store, Peer: peer, Now: func() int64 { return 1300 }, Scope: learner.Scope{RunID: a.Binding.RunID, PlanHash: a.Binding.PlanHash, CohortHash: a.Binding.CohortHash, WorkerID: a.WorkerID, PartitionID: a.PartitionID, ParticipantID: fmt.Sprintf("n%d", worker), IslandID: fmt.Sprintf("i%d", worker), Contract: a.Contract, Coordinator: a.Coordinator}}
 				r.Factory = func(m []optimizer.Tensor) (learner.Engine, error) {
-					s, e := train.NewLocalLearnerSession(cfg, path, identity, toLocalTensors(m))
+					local, e := train.LocalLearnerModelFromWire(m)
+					if e != nil {
+						return nil, e
+					}
+					s, e := train.NewLocalLearnerSession(cfg, path, identity, local)
 					if e != nil {
 						return nil, e
 					}

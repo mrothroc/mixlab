@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,10 +14,8 @@ import (
 	"time"
 
 	"github.com/mrothroc/mixlab/internal/clusterapp"
-	"github.com/mrothroc/mixlab/internal/clusterdiagnostic"
 	"github.com/mrothroc/mixlab/nodeagent"
 	"github.com/mrothroc/mixlab/recruitment"
-	"github.com/mrothroc/mixlab/securekeys"
 	"github.com/mrothroc/mixlab/statehome"
 	"github.com/mrothroc/mixlab/trust"
 	"github.com/mrothroc/mixlab/trust/principal"
@@ -36,6 +33,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	home := f.String("state-home", "", "Mixlab state root")
 	agent := f.String("agent-state-dir", "", "inspect an existing local agent installation")
 	identity := f.String("principal-state-dir", "", "inspect this enrolled principal; inferred from agent when provided")
+	coordinator := f.String("coordinator-endpoint", "", "coordinator HTTPS origin to diagnose (requires coordinator-id)")
+	coordinatorID := f.String("coordinator-id", "", "exact enrolled coordinator principal ID")
 	var endpoints endpointFlags
 	f.Var(&endpoints, "node", "peer host:port to diagnose; repeatable")
 	if err := f.Parse(args); err != nil {
@@ -47,20 +46,21 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if f.NArg() != 0 {
 		return 2
 	}
+	if *coordinator != "" || *coordinatorID != "" {
+		if _, err := doctorCoordinatorTarget(*coordinator, *coordinatorID); err != nil {
+			_, _ = fmt.Fprintln(stderr, err)
+			return 2
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	checks := []doctorCheck{}
 	add := func(name, status, detail string) { checks = append(checks, doctorCheck{name, status, detail}) }
 	failed := func(name string, err error) {
-		if errors.Is(err, securekeys.ErrUnavailable) {
-			add(name, "failed", "keychain_or_backend_unavailable: use the enrolled backend in its authorized session; unlock the login Keychain at the console. No automatic file-backend fallback.")
-			return
-		}
-		d := clusterdiagnostic.Classify(err)
-		add(name, "failed", d.Reason+": "+d.Hint)
+		add(name, "failed", doctorFailure(err))
 	}
 	if m, err := serviceManager(); err == nil {
-		for _, role := range []string{"authority", "agent"} {
+		for _, role := range []string{"authority", "agent", "coordinator"} {
 			_, err := m.Control(ctx, role, "status")
 			if err != nil {
 				add(role+"_service", "unknown", "Not installed/running or service manager unavailable; use '"+role+" status' for details.")
@@ -68,6 +68,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 				add(role+"_service", "ok", "Service manager reports the job. Check trust and peer reachability for readiness.")
 			}
 		}
+	} else {
+		add("services", "unknown", "Local user service manager unavailable; no service readiness established.")
 	}
 	if runtime.GOOS == "darwin" {
 		add("local_network_permission", "unknown", "No supported BSD-socket permission query. Allow the signed LaunchAgent once at the console; a logged-in GUI session is required. EHOSTUNREACH can also mean a routing problem.")
@@ -131,6 +133,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 			doctorDial(ctx, endpoint, add, failed)
 		}
 	}
+	if *coordinator != "" {
+		doctorCoordinator(ctx, *home, *identity, *coordinator, *coordinatorID, add, failed)
+	}
 	add("clock", "info", "Local UTC: "+time.Now().UTC().Format(time.RFC3339)+". Certificate/trust windows are checked when a principal is supplied; absolute peer clock skew cannot be inferred from a failed handshake.")
 	result := struct {
 		Checks []doctorCheck            `json:"checks"`
@@ -181,7 +186,7 @@ func doctorPrincipal(ctx context.Context, home, identity string, endpoints []str
 		return nil
 	}
 	defer func() { _ = s.Close() }()
-	r, _, err := s.SnapshotReceiver(time.Now())
+	r, err := s.View(time.Now())
 	if err != nil {
 		failed("principal_or_keychain", err)
 		return nil

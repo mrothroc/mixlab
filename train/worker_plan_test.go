@@ -2,6 +2,7 @@ package train
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -21,6 +22,32 @@ func TestWorkerPlanMatchesManagedAssignment(t *testing.T) {
 	r, err := workerprobe.DecodePlan(out.Bytes())
 	if err != nil || r.ProgramHash != p.ProgramHash || r.OptimizerHash != p.OptimizerHash {
 		t.Fatal(r, err)
+	}
+}
+
+func TestWorkerPlanLearnerPureNumericalContract(t *testing.T) {
+	cfg, _, _, _ := learnerFixture(t, 2)
+	b, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := inspectWorkerConfig(b, strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Learner == nil || p.Learner.Precision != nil {
+		t.Fatal("pure plan resolved a device or omitted learner policy")
+	}
+	d := cfg.Training.Distributed
+	if p.Learner.Outer.InnerSteps != uint64(d.InnerSteps) || p.Learner.Outer.Accumulation != uint64(d.GradientAccumulationSteps) || p.Learner.BatchTokens != cfg.Training.BatchTokens || p.Learner.SequenceLength != cfg.SeqLen {
+		t.Fatal("learner recipe changed", p.Learner)
+	}
+	encoded, err := json.Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := workerprobe.DecodePlan(encoded); err != nil {
+		t.Fatal(err)
 	}
 }
 

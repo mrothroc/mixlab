@@ -19,6 +19,7 @@ Use this page to choose the shortest path for the task at hand. The root
 | Decide whether training across several machines will be faster | [When distributed training helps](distributed-when.md) | [Managed clusters](cluster-quickstart.md) |
 | Enroll Macs into a managed cluster and train across them (experimental) | [Managed clusters: getting started](cluster-quickstart.md) | [Node hosting](cluster-agent.md) and [enrollment](cluster-enrollment.md) |
 | Run cluster services without open terminals, upgrade, or diagnose unavailable nodes (experimental) | [Background services](cluster-services.md) | [Signed macOS distribution](macos-distribution.md) |
+| Configure a durable coordinator and submit a fixed-cohort DiLoCo run (experimental) | [Managed DiLoCo](cluster-diloco.md) | [Background services](cluster-services.md) and [config contract](config-reference.md#diloco-contract-preview) |
 | Evaluate or score checkpoints | [Count and eval CLI](cli-eval.md) | [Feature matrix](feature-matrix.md) |
 | Generate causal or diffusion samples | [Generation CLI](cli-generate.md) | [Grammar constraints](grammar-constrained-generation.md) |
 | Export to Hugging Face | [HF export workflow](hf-export.md) | [HF support matrix](hf-export-support-matrix.md) |

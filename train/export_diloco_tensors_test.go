@@ -12,13 +12,35 @@ import (
 // The coordinator's pure F32 reader must accept real native checkpoint headers
 // (including metadata and numerically ordered wN names), not only its own writer.
 func TestCoordinatorF32NativeCheckpointCompatibility(t *testing.T) {
-	cfg, err := ParseArchConfig([]byte(`{"model_dim":8,"vocab_size":16,"seq_len":4,"blocks":[{"type":"plain","heads":2},{"type":"swiglu"}]}`), "tensor_adapter")
+	for _, tc := range []struct {
+		name, config string
+		odd          bool
+	}{
+		{"even", `{"model_dim":8,"vocab_size":16,"seq_len":4,"blocks":[{"type":"plain","heads":2},{"type":"swiglu"}]}`, false},
+		{"odd", `{"model_dim":3,"vocab_size":5,"seq_len":4,"block_scales":true,"positional_embedding":"none","blocks":[{"type":"plain","heads":1},{"type":"swiglu"}]}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) { testCoordinatorF32NativeCheckpoint(t, tc.config, tc.odd) })
+	}
+}
+
+func testCoordinatorF32NativeCheckpoint(t *testing.T, config string, odd bool) {
+	t.Helper()
+	cfg, err := ParseArchConfig([]byte(config), "tensor_adapter")
 	if err != nil {
 		t.Fatal(err)
 	}
 	shapes, err := computeWeightShapes(cfg)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if odd {
+		interiorOdd := false
+		for _, shape := range shapes[:len(shapes)-1] {
+			interiorOdd = interiorOdd || shapeProduct(shape.Shape)%2 == 1
+		}
+		if !interiorOdd || shapeProduct(shapes[len(shapes)-1].Shape)%2 != 1 {
+			t.Fatalf("odd model must exercise both interior and trailing padding: interior=%v last=%+v", interiorOdd, shapes[len(shapes)-1])
+		}
 	}
 	weights := initWeightData(shapes, 19, cfg.Training.WeightInit, cfg.Training.WeightInitStd)
 	path := filepath.Join(t.TempDir(), "native.safetensors")

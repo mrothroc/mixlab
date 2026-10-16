@@ -24,6 +24,7 @@ import (
 	"github.com/mrothroc/mixlab/trust"
 	"github.com/mrothroc/mixlab/trust/internal/certificates"
 	"github.com/mrothroc/mixlab/trust/workload"
+	"github.com/mrothroc/mixlab/workerhost/contract"
 	"github.com/mrothroc/mixlab/workerprobe"
 )
 
@@ -174,6 +175,22 @@ func learnerAdmissionLifecycle(t *testing.T, expiredHandoff bool) {
 	if aHash != bHash {
 		t.Fatal("duplicate start changed binding")
 	}
+	x, err := s.ActiveExecution(ctx)
+	check(t, err)
+	if x == nil || x.Learner == nil || x.Approval == nil || x.Transport != nil || x.Approval.Learner == nil {
+		t.Fatal("learner did not resolve to its own hosting variant")
+	}
+	check(t, s.CheckExecutionTrust(ctx, f.a, f.view, f.now))
+	approvalHash, err := run.Digest(*x.Approval)
+	check(t, err)
+	started := contract.Outcome{JobID: assignment.JobID, AttemptID: assignment.AttemptID, ManifestHash: q.Digest, ApprovalHash: approvalHash, Version: 1, Kind: contract.Started, PID: 1234}
+	check(t, s.ApplyLearnerOutcome(ctx, started))
+	check(t, s.ApplyLearnerOutcome(ctx, started))
+	precommitLease, err := s.LeaseStatus(ctx, actor, lease.ID, f.now)
+	check(t, err)
+	if precommitLease.State != nodeagent.Prepared {
+		t.Fatal("process start bypassed coordinator commit")
+	}
 	var reg run.Registration
 	b, err = os.ReadFile("../../diloco/testdata/registration.json")
 	check(t, err)
@@ -229,6 +246,7 @@ func learnerAdmissionLifecycle(t *testing.T, expiredHandoff bool) {
 	if live.Coordinator != coordinatorID || live.State != nodeagent.Running {
 		t.Fatal("lease not handed off")
 	}
+	check(t, s.CheckExecutionTrust(ctx, f.a, f.view, f.now))
 	nodePolicy, err := managedtls.New(managedtls.Identity{Chain: nodeChain, Key: nodeKey}, func(chain [][]byte, now time.Time) (trust.AuthenticatedPrincipal, error) {
 		return trust.AuthenticatePrincipal(f.a, f.view, chain, now)
 	}, f.clock)
@@ -278,7 +296,18 @@ func learnerAdmissionLifecycle(t *testing.T, expiredHandoff bool) {
 	if s.ConfirmLearnerStopped(ctx, wrong) == nil {
 		t.Fatal("foreign child outcome accepted")
 	}
-	check(t, s.ConfirmLearnerStopped(ctx, aHash))
+	failed := started
+	failed.Version, failed.Kind, failed.NoChild, failed.Error = 2, contract.Failed, true, "synthetic child failure"
+	check(t, s.ApplyLearnerOutcome(ctx, failed))
+	check(t, s.ApplyLearnerOutcome(ctx, failed))
+	if s.ApplyLearnerOutcome(ctx, started) == nil {
+		t.Fatal("outcome rollback accepted")
+	}
+	afterFailure, err := s.LeaseStatus(ctx, coordinatorActor, lease.ID, f.now)
+	check(t, err)
+	if afterFailure.State != nodeagent.Running {
+		t.Fatal("child failure surrendered recovery allocation")
+	}
 	retry, err := s.AuthorizeLearnerRetry(ctx, coordinatorActor, allocation.JobID, id(t), strings.Repeat("d", 64), f.now)
 	check(t, err)
 	rq, err := retry.SigningRequest()
@@ -330,6 +359,14 @@ func learnerAdmissionLifecycle(t *testing.T, expiredHandoff bool) {
 	check(t, err)
 	if restarted.Member != assignment.Member || restarted.PlanHash != assignment.PlanHash || restarted.AttemptID == assignment.AttemptID || cleanupCount != 1 {
 		t.Fatal("retry changed semantic identity or reused attempt")
+	}
+	x, err = s.ActiveExecution(ctx)
+	check(t, err)
+	if x.Outcome != nil || x.Learner.Stopped || x.Approval.AttemptID() != restarted.AttemptID {
+		t.Fatal("retry retained old hosting evidence")
+	}
+	if s.ApplyLearnerOutcome(ctx, failed) == nil {
+		t.Fatal("old hosting outcome fenced retry")
 	}
 	_, err = s.StartLearnerRetry(ctx, coordinatorActor, allocation.JobID, f.a, f.view, ack, grant, credential, func(context.Context, workload.Scope) error {
 		t.Fatal("exact retry cleaned another credential")

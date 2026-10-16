@@ -15,12 +15,13 @@ import (
 // job/attempt state; Authorize checks current trust rather than saved admission.
 // Cleanup must stop and join the relay before destroying its workload key.
 type NodeExecutionPorts struct {
-	Open      func(context.Context, string, string) (*workerhost.AttemptStore, workerhost.Runner, error)
-	Authorize func(context.Context, nodeagent.LocalExecution) error
-	Cleanup   func(context.Context, nodeagent.CleanupRequest) error
-	Clock     func() time.Time
-	Ready     func()
-	Event     func(error)
+	Open        func(context.Context, string, string) (*workerhost.AttemptStore, workerhost.Runner, error)
+	OpenLearner func(context.Context, nodeagent.LocalExecution) (*workerhost.AttemptStore, workerhost.Runner, error)
+	Authorize   func(context.Context, nodeagent.LocalExecution) error
+	Cleanup     func(context.Context, nodeagent.CleanupRequest) error
+	Clock       func() time.Time
+	Ready       func()
+	Event       func(error)
 }
 
 type nodeExecutionRun struct {
@@ -139,6 +140,9 @@ func (l *nodeExecutionLoop) poll(ctx context.Context) error {
 		}
 		return nil
 	}
+	if x.Learner != nil {
+		return l.pollLearner(ctx, *x, stopping)
+	}
 	if x.Outcome != nil && x.Outcome.Terminal() {
 		// Replaying the outcome repairs job-first/lease-second publication.
 		if _, err := l.store.ApplyOutcome(ctx, *x.Outcome); err != nil {
@@ -230,8 +234,9 @@ func (l *nodeExecutionLoop) shutdown(ctx context.Context) error {
 
 type nodeOutcomeRunner struct {
 	workerhost.Runner
-	host  *workerhost.AttemptStore
-	store *nodeagent.Store
+	host    *workerhost.AttemptStore
+	store   *nodeagent.Store
+	learner bool
 }
 
 func (r nodeOutcomeRunner) Run(ctx context.Context, a contract.Approved, started func(int) error) error {
@@ -245,6 +250,9 @@ func (r nodeOutcomeRunner) Run(ctx context.Context, a contract.Approved, started
 		}
 		if s.Started == nil {
 			return fmt.Errorf("hosting start evidence missing")
+		}
+		if r.learner {
+			return r.store.ApplyLearnerOutcome(ctx, *s.Started)
 		}
 		_, err = r.store.ApplyOutcome(ctx, *s.Started)
 		return err

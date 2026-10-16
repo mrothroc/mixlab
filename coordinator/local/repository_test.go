@@ -259,6 +259,39 @@ func TestDurableCoordinatorRoundAndReceiptRecovery(t *testing.T) {
 	if e != nil || got.Phase != coordinator.Complete || got.Round != 1 {
 		t.Fatal(got.Phase, e)
 	}
+	t.Run("global_checkpoint_catalog_recovery", func(t *testing.T) {
+		cp := protected(t, t.TempDir())
+		catalog, err := OpenCheckpoints(cp)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id := s.Plan.Cohort.RunID
+		// No catalog writer ran during publication/evaluation. Reconstruct the
+		// durable global reference after process restart, without private data.
+		for range 2 {
+			if err = catalog.Sync(ctx, repo, id); err != nil {
+				t.Fatal(err)
+			}
+		}
+		k, _ := key(id)
+		b, err := cp.ReadFileLimit(fmt.Sprintf("%s-%020d.global.json", k, 0), maxRecord)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var published run.Round
+		if err = json.Unmarshal(b, &published); err != nil {
+			t.Fatal(err)
+		}
+		if got.Candidate == nil || !reflect.DeepEqual(published, *got.Candidate) {
+			t.Fatal("catalog differs from published global checkpoint")
+		}
+		if err = cp.WriteFile(k+".catalog.head", []byte(`{"revision":999999,"hash":"changed"}`)); err != nil {
+			t.Fatal(err)
+		}
+		if err = catalog.Sync(ctx, repo, id); err == nil {
+			t.Fatal("accepted catalog ahead of authoritative history")
+		}
+	})
 	for _, want := range receipts {
 		got, e := repo.Receipt(ctx, s.Plan.Cohort.RunID, want.UpdateID)
 		if e != nil || got != want {

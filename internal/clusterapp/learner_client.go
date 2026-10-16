@@ -154,38 +154,50 @@ func (c *LearnerClient) call(ctx context.Context, q private.RelayRequest) (learn
 	if len(b) > learnerapi.MaxMessage {
 		return out, fmt.Errorf("learner request too large")
 	}
+	return retryLearnerSemantic(ctx, func(attempt context.Context) (learnerapi.Response, bool, error) {
+		return c.callAttempt(attempt, q, b)
+	})
+}
+
+// Only the already-encoded semantic request is replayable. Stream transfers
+// have caller-owned cursors and deliberately do not use this retry path.
+func (c *LearnerClient) callAttempt(ctx context.Context, q private.RelayRequest, body []byte) (learnerapi.Response, bool, error) {
+	var out learnerapi.Response
 	h, p, err := c.httpClient(false)
 	if err != nil {
-		return out, err
+		return out, false, err
 	}
 	defer h.CloseIdleConnections()
-	r, err := http.NewRequestWithContext(ctx, http.MethodPost, c.options.Endpoint+learnerapi.Route, bytes.NewReader(b))
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, c.options.Endpoint+learnerapi.Route, bytes.NewReader(body))
 	if err != nil {
-		return out, err
+		return out, false, err
 	}
 	r.Header.Set("Content-Type", "application/json")
 	resp, err := h.Do(r)
 	if err != nil {
-		return out, err
+		return out, transientLearnerTransport(err), err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK || resp.TLS == nil {
-		return out, fmt.Errorf("learner operation rejected (HTTP %d)", resp.StatusCode)
-	}
-	b, err = io.ReadAll(io.LimitReader(resp.Body, learnerapi.MaxMessage+1))
-	if err != nil {
-		return out, err
+		return out, false, fmt.Errorf("learner operation rejected (HTTP %d)", resp.StatusCode)
 	}
 	if _, err = p.Authenticate(*resp.TLS); err != nil {
-		return out, err
+		return out, false, err
+	}
+	b, err := io.ReadAll(io.LimitReader(resp.Body, learnerapi.MaxMessage+1))
+	if err != nil {
+		return out, transientLearnerTransport(err), err
+	}
+	if _, err = p.Authenticate(*resp.TLS); err != nil {
+		return out, false, err
 	}
 	if err = authenticated.Decode(b, &out); err != nil {
-		return out, err
+		return out, false, err
 	}
 	if err = c.validateReply(q, out); err != nil {
-		return learnerapi.Response{}, err
+		return learnerapi.Response{}, false, err
 	}
-	return out, ctx.Err()
+	return out, false, ctx.Err()
 }
 func (c *LearnerClient) validateReply(q private.RelayRequest, r learnerapi.Response) error {
 	o := r.Reply

@@ -51,6 +51,9 @@ type Gateway struct {
 	Trust       artifactapi.CurrentTrust
 	Coordinator run.Coordinator
 	Model       coordinator.Model
+	// ModelForRun selects service-owned allocation ports for an accepted run.
+	// Repository and trust remain shared; request bodies cannot supply ports.
+	ModelForRun func(context.Context, string) (coordinator.Model, error)
 	Clock       func() time.Time
 	// Sign uses the coordinator's protected principal signer and current trust.
 	Sign    func(context.Context, trust.SignRequest) (trust.SignedProof, error)
@@ -110,6 +113,14 @@ func (g Gateway) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid learner request", http.StatusBadRequest)
 		return
 	}
+	if g.ModelForRun != nil {
+		model, err := g.ModelForRun(ctx, q.Call.Binding.RunID)
+		if err != nil || model.Repository == nil || model.Allocations == nil || model.Artifacts == nil || model.Clock == nil || model.Evaluator == nil {
+			http.Error(w, "run is not available", http.StatusForbidden)
+			return
+		}
+		g.Model = model
+	}
 	guard := guardedRepository{Repository: g.Model.Repository, check: func(ctx context.Context, s coordinator.State) error { return g.authorize(ctx, r, q, s) }}
 	s, err := guard.Load(ctx, q.Call.Binding.RunID)
 	if err != nil {
@@ -168,6 +179,17 @@ func (g Gateway) authorize(ctx context.Context, r *http.Request, q Request, s co
 	for _, reg := range s.Commit.Registrations {
 		slot := reg.Slot
 		if slot.Member.WorkerID == b.Worker && slot.Member.ParticipantID == b.Participant && slot.Allocation.NodeID == b.Participant && slot.Allocation.JobID == b.Job && slot.Allocation.LeaseID == b.Lease && reg.JobManifestHash == b.ManifestHash {
+			// A completed run releases its allocations. Exact final replies and
+			// receipt retries remain readable under current trust and attempt
+			// binding; they cannot authorize more work or artifact grants.
+			if s.Phase == coordinator.Complete || s.Phase == coordinator.Failed {
+				switch q.Call.Operation {
+				case "poll", "receipt", "evaluate":
+					return nil
+				default:
+					return fmt.Errorf("terminal run permits only status and receipt reads")
+				}
+			}
 			return g.Model.Allocations.Ready(ctx, slot)
 		}
 	}

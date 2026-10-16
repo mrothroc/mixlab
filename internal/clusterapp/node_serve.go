@@ -152,6 +152,7 @@ type nodeRequestGate struct {
 	clock    func() time.Time
 	window   time.Time
 	requests int
+	limit    int // zero preserves the node-agent default; coordinator polls need a larger budget
 }
 
 func (g *nodeRequestGate) enter(w http.ResponseWriter) bool {
@@ -165,7 +166,11 @@ func (g *nodeRequestGate) enter(w http.ResponseWriter) bool {
 	if g.window.IsZero() || now.Sub(g.window) >= time.Minute {
 		g.window, g.requests = now, 0
 	}
-	if g.requests >= 1024 {
+	limit := g.limit
+	if limit == 0 {
+		limit = 1024
+	}
+	if g.requests >= limit {
 		g.mu.Unlock()
 		http.Error(w, "node rate limit", http.StatusTooManyRequests)
 		return false

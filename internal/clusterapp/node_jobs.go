@@ -17,6 +17,7 @@ import (
 	"github.com/mrothroc/mixlab/transport/ringproxy"
 	"github.com/mrothroc/mixlab/transport/ringtls"
 	"github.com/mrothroc/mixlab/trust"
+	"github.com/mrothroc/mixlab/workerprobe"
 )
 
 // NodeJobOptions contains administrator-local ports, never HTTP input.
@@ -33,6 +34,7 @@ type NodeJobOptions struct {
 	Clock          func() time.Time
 	Output         func(context.Context, string, string) (statehome.Path, artifact.Ref, error)
 	InputRoot      statehome.Path
+	LearnerProbe   func(context.Context, []byte) (workerprobe.Plan, error)
 }
 
 // NodeJobs owns in-process relay lifetime. The durable node store owns launch

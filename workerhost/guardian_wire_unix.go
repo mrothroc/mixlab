@@ -19,13 +19,14 @@ import (
 const guardianCommand = "internal-worker-host"
 
 type guardianBegin struct {
-	Approval      contract.Approved `json:"approval"`
-	Directory     string            `json:"directory"`
-	Binary        string            `json:"binary"`
-	GuardianBuild string            `json:"guardian_build"`
-	Startup       time.Duration     `json:"startup"`
-	Grace         time.Duration     `json:"grace"`
-	Claim         guardianClaim     `json:"claim"`
+	Approval                contract.Approved `json:"approval"`
+	Directory               string            `json:"directory"`
+	Binary                  string            `json:"binary"`
+	GuardianBuild           string            `json:"guardian_build"`
+	Startup                 time.Duration     `json:"startup"`
+	Grace                   time.Duration     `json:"grace"`
+	Claim                   guardianClaim     `json:"claim"`
+	LearnerPrivateDirectory string            `json:"learner_private_directory,omitempty"`
 }
 
 type guardianEvent struct {
@@ -38,8 +39,8 @@ func guardianFrame(q guardianBegin, sequence uint64, kind wc.Kind, value any) (w
 	if err != nil {
 		return wc.Envelope{}, err
 	}
-	a := q.Approval.Assignment
-	return wc.Envelope{Version: wc.Version, JobID: a.JobID, AttemptID: a.AttemptID,
+	a := q.Approval
+	return wc.Envelope{Version: wc.Version, JobID: a.JobID(), AttemptID: a.AttemptID(),
 		Sequence: sequence, CorrelationID: q.Claim.Approval, Kind: kind,
 		PayloadKind: "guardian", PayloadVersion: 1, Payload: b}, nil
 }

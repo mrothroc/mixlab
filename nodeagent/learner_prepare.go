@@ -71,6 +71,24 @@ func (s *Store) PrepareLearnerChecked(ctx context.Context, actor trust.Authentic
 	if hash != m.Plan.Contract.DatasetHash {
 		return LearnerJob{}, fmt.Errorf("learner dataset content changed")
 	}
+	if m.Validation != nil {
+		validationPath := ""
+		for _, d := range profile.Datasets {
+			if d.Selector == m.Validation.Split && d.ID == m.Validation.Hash {
+				validationPath = d.TrainPattern
+			}
+		}
+		if validationPath == "" {
+			return LearnerJob{}, fmt.Errorf("validation split not registered")
+		}
+		hash, err := p.DatasetID(ctx, validationPath)
+		if err != nil {
+			return LearnerJob{}, err
+		}
+		if hash != m.Validation.Hash {
+			return LearnerJob{}, fmt.Errorf("validation dataset content changed")
+		}
+	}
 	if err = ctx.Err(); err != nil {
 		return LearnerJob{}, err
 	}

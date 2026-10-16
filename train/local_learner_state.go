@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/data"
 	"github.com/mrothroc/mixlab/gpu"
 )
@@ -115,35 +114,12 @@ func (s *LocalLearnerSession) EvaluateGlobal(model []LocalLearnerTensor, batches
 	defer eval.close()
 	var numerator, denominator float64
 	for _, b := range batches {
-		if len(b.X) != s.cfg.Training.BatchTokens || len(b.Y) != len(b.X) || b.SeqLen != s.cfg.SeqLen {
-			return 0, fmt.Errorf("evaluation batch shape mismatch")
-		}
-		if (s.cfg.Training.DatasetRecordFraming && len(b.LossMask) != len(b.X)) || (!s.cfg.Training.DatasetRecordFraming && len(b.LossMask) != 0) {
-			return 0, fmt.Errorf("evaluation loss mask differs from program contract")
-		}
-		for i, x := range b.X {
-			if x < 0 || x >= s.cfg.VocabSize || b.Y[i] < 0 || b.Y[i] >= s.cfg.VocabSize {
-				return 0, fmt.Errorf("evaluation token outside vocabulary")
-			}
-		}
-		for _, mask := range b.LossMask {
-			if mask != 0 && mask != 1 {
-				return 0, fmt.Errorf("evaluation loss mask must be binary")
-			}
-		}
-		p, e := prepareObjectiveBatch(s.cfg, trainBatchFromDataBatch(b, nil), int(s.attempt), arch.ObjectiveCausal)
+		loss, n, e := evaluateLocalBatch(s.cfg, eval, b, int(s.attempt))
 		if e != nil {
 			return 0, e
 		}
-		loss, e := eval.evaluate(p)
-		if e != nil {
-			return 0, e
-		}
-		if math.IsNaN(float64(loss)) || math.IsInf(float64(loss), 0) {
-			return 0, fmt.Errorf("non-finite global evaluation")
-		}
-		numerator += float64(loss) * float64(p.lossNormalizer)
-		denominator += float64(p.lossNormalizer)
+		numerator += loss * float64(n)
+		denominator += float64(n)
 	}
 	if denominator <= 0 {
 		return 0, fmt.Errorf("global evaluation has no valid targets")

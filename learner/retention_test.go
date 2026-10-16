@@ -4,10 +4,29 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	private "github.com/mrothroc/mixlab/diloco/learner"
 )
+
+func TestRuntimeRetentionRejectsHostIdentityInsidePrivateContext(t *testing.T) {
+	f := setup(t)
+	if err := f.r.Store.path.WriteFile("runtime-identity", []byte("host-owned")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := f.r.Execute(context.Background(), f.a)
+	if err == nil || !strings.Contains(err.Error(), `unexpected learner private file "runtime-identity"`) {
+		t.Fatal("expected ownership rejection", err)
+	}
+	if f.calls != 0 || len(f.p.starts) != 0 || len(f.p.updates) != 0 {
+		t.Fatal("ownership rejection performed work")
+	}
+	b, err := f.r.Store.path.ReadFileLimit("runtime-identity", 128)
+	if err != nil || string(b) != "host-owned" {
+		t.Fatal("retention changed foreign file", err)
+	}
+}
 
 func TestRuntimeRetentionBoundedAcrossRounds(t *testing.T) {
 	f := setup(t)

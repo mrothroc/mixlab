@@ -39,6 +39,16 @@ for an administrator-approved cluster hosting adapter. It accepts no training
 arguments, starts no distributed group, and reports an unavailable GPU explicitly.
 It is not a training workflow. The agent invokes the separate trainer executable
 for this probe rather than linking MLX into its control process.
+The internal `worker-learner-probe` mode reads a bounded DiLoCo config from
+stdin and reports the numerical contract plus the live Metal precision policy.
+It is used only by the approved worker host during preparation; it does not
+read data or credentials, create a trainer, or open network endpoints.
+The internal `worker-initial-model` mode reads one bounded DiLoCo config from
+stdin and writes the deterministic float32 safetensors initialization artifact.
+It accepts no other flags and uses no GPU, dataset, network or credentials.
+The approved worker host invokes it for a new run without `-initial-model`;
+it is not an exact-resume or standalone training entry point.
+
 The internal `worker-plan` mode reads one bounded config object from stdin and
 emits executable, config, IR, weight-layout and optimizer identities. It accepts
 no other flags and initializes no GPU, data loader or distributed group. It is
@@ -82,7 +92,10 @@ that managed worker launch or enrollment is available.
 
 The experimental `mixlab-cluster` binary supports `init`, `invite`, `enroll`,
 `enrollment serve`, `authority serve`, `revoke`, `nodes`, `submit`, `doctor`, and foreground `agent`
-with explicit `agent init` setup. Both `agent` and `authority` support per-user
+with explicit `agent init` setup. `coordinator init|install|serve` and
+`submit diloco` expose the experimental [managed DiLoCo workflow](cluster-diloco.md),
+including status, pre-commit cancel, and weights-only initial models.
+`agent`, `authority` and `coordinator` support per-user
 `install|uninstall|start|stop|status`; `agent reapprove` approves upgraded binaries
 without resetting node state. It also supports `-version` and
 `-help`. Its version report uses the same build metadata and worker protocol,

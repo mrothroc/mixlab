@@ -73,8 +73,10 @@ func Write(w io.Writer, ts []optimizer.Tensor) error {
 	return nil
 }
 
-// Read rejects gaps, overlaps, duplicate fields, unsupported dtypes, oversized
-// shapes, non-finite values, truncation and trailing bytes before returning.
+// Read accepts contiguous F32 payloads and native mixlab_v1 checkpoints whose
+// tensors (including the last) are zero-padded to eight-byte boundaries. Native
+// metadata selects a checked layout, not a trusted source. All other gaps,
+// overlaps, trailing bytes, malformed layouts and non-finite values are rejected.
 func Read(r io.Reader, size uint64) ([]optimizer.Tensor, error) {
 	if size < 10 || size > artifact.MaxBytes {
 		return nil, fmt.Errorf("invalid safetensors size")
@@ -99,16 +101,20 @@ func Read(r io.Reader, size uint64) ([]optimizer.Tensor, error) {
 		e    entry
 	}
 	entries := make([]named, 0, len(fields))
+	native := false
 	for name, raw := range fields {
 		if name == "__metadata__" {
 			m, err := object(raw)
 			if err != nil {
 				return nil, err
 			}
-			for _, v := range m {
+			for key, v := range m {
 				var s string
 				if err = json.Unmarshal(v, &s); err != nil || bytes.Equal(v, []byte("null")) {
 					return nil, fmt.Errorf("invalid metadata")
+				}
+				if key == "format" && s == "mixlab_v1" {
+					native = true
 				}
 			}
 			continue
@@ -141,18 +147,25 @@ func Read(r io.Reader, size uint64) ([]optimizer.Tensor, error) {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].e.Offsets[0] < entries[j].e.Offsets[0] })
 	var end uint64
+	contiguous, aligned := true, native
 	for _, t := range entries {
-		if t.e.Offsets[0] != end {
-			return nil, fmt.Errorf("tensor gap or overlap")
-		}
+		contiguous = contiguous && t.e.Offsets[0] == end
+		aligned = aligned && t.e.Offsets[0] == alignNativeOffset(end)
 		end = t.e.Offsets[1]
 	}
-	if end != size-8-length || len(entries) == 0 {
+	payloadSize := size - 8 - length
+	contiguous = contiguous && end == payloadSize
+	aligned = aligned && alignNativeOffset(end) == payloadSize
+	if len(entries) == 0 || (!contiguous && !aligned) {
 		return nil, fmt.Errorf("payload coverage mismatch")
 	}
 	out := make([]optimizer.Tensor, len(entries))
 	buffer := make([]byte, 64<<10)
+	var position uint64
 	for i, t := range entries {
+		if err := readNativePadding(r, t.e.Offsets[0]-position); err != nil {
+			return nil, err
+		}
 		n := int((t.e.Offsets[1] - t.e.Offsets[0]) / 4)
 		v := make([]float32, n)
 		for start := 0; start < n; {
@@ -166,6 +179,10 @@ func Read(r io.Reader, size uint64) ([]optimizer.Tensor, error) {
 			start += count
 		}
 		out[i] = optimizer.Tensor{Name: t.name, Shape: t.e.Shape, Values: v}
+		position = t.e.Offsets[1]
+	}
+	if err := readNativePadding(r, payloadSize-position); err != nil {
+		return nil, err
 	}
 	var tail [1]byte
 	if _, err := io.ReadFull(r, tail[:]); err != io.EOF {
@@ -175,6 +192,27 @@ func Read(r io.Reader, size uint64) ([]optimizer.Tensor, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// Offsets are already bounded by artifact.MaxBytes before alignment. F32
+// payloads need at most four bytes; never skip unchecked attacker-chosen gaps.
+func alignNativeOffset(offset uint64) uint64 { return (offset + 7) &^ 7 }
+
+func readNativePadding(r io.Reader, n uint64) error {
+	if n == 0 {
+		return nil
+	}
+	if n != 4 {
+		return fmt.Errorf("invalid native tensor padding length")
+	}
+	var padding [4]byte
+	if _, err := io.ReadFull(r, padding[:]); err != nil {
+		return err
+	}
+	if padding != [4]byte{} {
+		return fmt.Errorf("nonzero native tensor padding")
+	}
+	return nil
 }
 
 func object(b []byte) (map[string]json.RawMessage, error) {

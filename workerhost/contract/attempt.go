@@ -6,6 +6,7 @@ package contract
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 
 	"github.com/mrothroc/mixlab/executionlimits"
@@ -13,6 +14,7 @@ import (
 )
 
 const Version = "mixlab_execution_attempt_v1"
+const LearnerVersion = "mixlab_learner_execution_attempt_v1"
 
 type Limits struct {
 	CPUSeconds  int64 `json:"cpu_seconds"`
@@ -26,11 +28,12 @@ func (l Limits) Validate(runtimeSeconds int) error {
 }
 
 type Approved struct {
-	Version       string               `json:"version"`
-	ManifestHash  string               `json:"manifest_hash"`
-	TransportHash string               `json:"transport_hash"`
-	Assignment    workerjob.Assignment `json:"assignment"`
-	Limits        Limits               `json:"limits"`
+	Version       string                       `json:"version"`
+	ManifestHash  string                       `json:"manifest_hash"`
+	TransportHash string                       `json:"transport_hash"`
+	Assignment    workerjob.Assignment         `json:"assignment"`
+	Limits        Limits                       `json:"limits"`
+	Learner       *workerjob.LearnerAssignment `json:"learner,omitempty"`
 }
 
 func Hash(s string) bool {
@@ -39,6 +42,23 @@ func Hash(s string) bool {
 }
 
 func (a Approved) Validate() error {
+	if a.Learner != nil {
+		empty, _ := json.Marshal(workerjob.Assignment{})
+		actual, err := json.Marshal(a.Assignment)
+		if a.Version != LearnerVersion || !Hash(a.ManifestHash) || a.TransportHash != a.Learner.PlanHash || err != nil || string(actual) != string(empty) || a.Learner.Cohort == nil {
+			return fmt.Errorf("learner approval requires exclusive schema and bound plan")
+		}
+		if err := a.Learner.Validate(); err != nil {
+			return err
+		}
+		if err := a.Limits.Validate(a.Learner.RuntimeSeconds); err != nil {
+			return err
+		}
+		if a.Learner.PrivateMaxBytes > uint64(a.Limits.DiskBytes-a.Limits.LogBytes) {
+			return fmt.Errorf("learner private state exceeds approved disk allowance")
+		}
+		return nil
+	}
 	if a.Version != Version || !Hash(a.ManifestHash) || !Hash(a.TransportHash) {
 		return fmt.Errorf("execution approval requires exact manifest and secure transport identities")
 	}
@@ -49,6 +69,31 @@ func (a Approved) Validate() error {
 		return fmt.Errorf("output exceeds approved disk budget")
 	}
 	return a.Limits.Validate(a.Assignment.RuntimeSeconds)
+}
+
+func (a Approved) JobID() string {
+	if a.Learner != nil {
+		return a.Learner.JobID
+	}
+	return a.Assignment.JobID
+}
+func (a Approved) AttemptID() string {
+	if a.Learner != nil {
+		return a.Learner.AttemptID
+	}
+	return a.Assignment.AttemptID
+}
+func (a Approved) BuildID() string {
+	if a.Learner != nil {
+		return a.Learner.Contract.BuildHash
+	}
+	return a.Assignment.BuildID
+}
+func (a Approved) RuntimeSeconds() int {
+	if a.Learner != nil {
+		return a.Learner.RuntimeSeconds
+	}
+	return a.Assignment.RuntimeSeconds
 }
 
 const (

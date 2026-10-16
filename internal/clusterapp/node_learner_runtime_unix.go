@@ -1,0 +1,176 @@
+//go:build darwin || linux
+
+package clusterapp
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"time"
+
+	private "github.com/mrothroc/mixlab/diloco/learner"
+	"github.com/mrothroc/mixlab/diloco/run"
+	"github.com/mrothroc/mixlab/learneripc"
+	"github.com/mrothroc/mixlab/nodeagent"
+	"github.com/mrothroc/mixlab/nodecredentials"
+	"github.com/mrothroc/mixlab/statehome"
+	"github.com/mrothroc/mixlab/trust"
+	"github.com/mrothroc/mixlab/trust/principal"
+	wc "github.com/mrothroc/mixlab/workercontrol"
+	"github.com/mrothroc/mixlab/workerhost"
+	"github.com/mrothroc/mixlab/workerhost/contract"
+)
+
+// NodeLearnerRuntime composes protected node credentials with opaque hosting.
+// Every RPC rechecks the live attempt; no cached client can outlive fencing.
+type NodeLearnerRuntime struct {
+	Store       *nodeagent.Store
+	Principal   *principal.Store
+	Runtime     *workerhost.GuardianRuntime
+	Credentials statehome.Path
+	Anchor      trust.Anchor
+	Clock       func() time.Time
+}
+
+func (r NodeLearnerRuntime) Open(ctx context.Context, x nodeagent.LocalExecution) (*workerhost.AttemptStore, workerhost.Runner, error) {
+	if r.Store == nil || r.Principal == nil || r.Runtime == nil || r.Clock == nil || x.Learner == nil || x.Learner.Assignment == nil || x.Approval == nil {
+		return nil, nil, fmt.Errorf("approved learner and local runtime required")
+	}
+	a := x.Learner.Assignment
+	binding, err := a.Binding()
+	if err != nil {
+		return nil, nil, err
+	}
+	dir, err := r.Runtime.LearnerPrivate(ctx, a.RunID, a.Member.WorkerID)
+	if err != nil {
+		return nil, nil, err
+	}
+	remote := &nodeLearnerRemote{runtime: r, binding: binding}
+	server := &learneripc.Server{Remote: remote, MaxBytes: min(a.PrivateMaxBytes, 1<<30)}
+	relay := func(ctx context.Context, e wc.Envelope) (wc.Envelope, error) {
+		if e.JobID != binding.JobID || e.AttemptID != binding.AttemptID {
+			return wc.Envelope{}, fmt.Errorf("learner IPC attempt changed")
+		}
+		return server.Handle(ctx, e)
+	}
+	host, runner, err := r.Runtime.OpenLearner(ctx, a.JobID, a.AttemptID, relay, dir)
+	if err != nil {
+		server.Close()
+		return nil, nil, err
+	}
+	return host, learnerClosingRunner{Runner: runner, server: server}, nil
+}
+
+type learnerClosingRunner struct {
+	workerhost.Runner
+	server *learneripc.Server
+}
+
+func (r learnerClosingRunner) Run(ctx context.Context, a contract.Approved, started func(int) error) error {
+	defer r.server.Close()
+	return r.Runner.Run(ctx, a, started)
+}
+
+type nodeLearnerRemote struct {
+	runtime NodeLearnerRuntime
+	binding wc.Binding
+}
+
+func (r *nodeLearnerRemote) client(ctx context.Context) (*LearnerClient, func(), error) {
+	o := r.runtime
+	anchor, view, err := NodeCurrentTrust(o.Principal)(ctx, o.Clock())
+	if err != nil {
+		return nil, nil, err
+	}
+	if anchor.Fingerprint() != o.Anchor.Fingerprint() {
+		return nil, nil, fmt.Errorf("node trust pin changed")
+	}
+	if err := o.Store.CheckExecutionTrust(ctx, anchor, view, o.Clock()); err != nil {
+		return nil, nil, err
+	}
+	x, err := o.Store.ActiveExecution(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	if x == nil || x.Learner == nil || x.Learner.Assignment == nil || x.Learner.Stopped || x.Lease.State == nodeagent.Releasing {
+		return nil, nil, fmt.Errorf("learner attempt no longer live")
+	}
+	b, err := x.Learner.Assignment.Binding()
+	if err != nil || b != r.binding {
+		return nil, nil, fmt.Errorf("learner IPC belongs to another attempt")
+	}
+	if x.Learner.Commit == nil {
+		return nil, func() {}, nil
+	}
+	if x.Learner.Credential == nil {
+		return nil, nil, fmt.Errorf("learner credential missing")
+	}
+	dir, err := workloadDirectory(o.Credentials, x.Workload)
+	if err != nil {
+		return nil, nil, err
+	}
+	credential, err := nodecredentials.OpenTransport(dir, anchor, x.Workload)
+	if err != nil {
+		return nil, nil, err
+	}
+	close := func() { _ = credential.Close() }
+	client, err := NewLearnerClient(o.Principal, credential, x.Learner.Signed.Manifest.Plan, *x.Learner.Commit, x.Learner.Credential.Binding, o.Clock)
+	if err != nil {
+		close()
+		return nil, nil, err
+	}
+	return client, close, nil
+}
+func (r *nodeLearnerRemote) Poll(ctx context.Context) (private.RelayResponse, error) {
+	c, close, err := r.client(ctx)
+	if err != nil {
+		return private.RelayResponse{}, err
+	}
+	defer close()
+	// The admitted child may become ready before the atomic run commit.
+	// Return promptly so preparation cannot deadlock behind a pending poll.
+	if c == nil {
+		return private.RelayResponse{Format: "mixlab_learner_reply_v1"}, nil
+	}
+	return c.Poll(ctx)
+}
+func (r *nodeLearnerRemote) committed(ctx context.Context) (*LearnerClient, func(), error) {
+	c, close, err := r.client(ctx)
+	if err == nil && c == nil {
+		close()
+		return nil, nil, fmt.Errorf("learner is not committed")
+	}
+	return c, close, err
+}
+func (r *nodeLearnerRemote) Call(ctx context.Context, q private.RelayRequest) (private.RelayResponse, error) {
+	c, close, err := r.committed(ctx)
+	if err != nil {
+		return private.RelayResponse{}, err
+	}
+	defer close()
+	return c.Call(ctx, q)
+}
+func (r *nodeLearnerRemote) Read(ctx context.Context, a run.Assignment, b run.Blob, w io.Writer) error {
+	c, close, err := r.committed(ctx)
+	if err != nil {
+		return err
+	}
+	defer close()
+	return c.Read(ctx, a, b, w)
+}
+func (r *nodeLearnerRemote) Write(ctx context.Context, a run.Assignment, b run.Blob, rd io.Reader) error {
+	c, close, err := r.committed(ctx)
+	if err != nil {
+		return err
+	}
+	defer close()
+	return c.Write(ctx, a, b, rd)
+}
+func (r *nodeLearnerRemote) ReadEvaluation(ctx context.Context, a run.EvaluationAssignment, w io.Writer) error {
+	c, close, err := r.committed(ctx)
+	if err != nil {
+		return err
+	}
+	defer close()
+	return c.ReadEvaluation(ctx, a, w)
+}

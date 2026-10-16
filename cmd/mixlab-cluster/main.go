@@ -41,6 +41,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 			if len(args) > 1 && args[1] == "serve" {
 				return runAuthorityServe(args[2:], stdout, stderr)
 			}
+		case "coordinator":
+			return runCoordinator(args[1:], stdout, stderr)
 		case "revoke":
 			return runRevoke(args[1:], stdout, stderr)
 		case "agent":
@@ -66,6 +68,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster agent init -help | agent -help")
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster agent reapprove -help")
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster agent|authority install|uninstall|start|stop|status -help")
+		_, _ = fmt.Fprintln(w, "       mixlab-cluster coordinator init|serve|install|uninstall|start|stop|status -help")
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster nodes -help")
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster doctor -help")
 		_, _ = fmt.Fprintln(w, "       mixlab-cluster submit -help")

@@ -12,6 +12,7 @@ import (
 	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/data"
 	"github.com/mrothroc/mixlab/gpu"
+	"github.com/mrothroc/mixlab/workerjob"
 )
 
 func TestLocalLearnerMLXReplayInstallAndEvaluation(t *testing.T) {
@@ -92,6 +93,23 @@ func TestLocalLearnerMLXReplayInstallAndEvaluation(t *testing.T) {
 	}
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("evaluation mutated private state")
+	}
+	hash, e := data.DistributedDatasetIdentity(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	validation := workerjob.LearnerValidation{Pattern: path, Hash: hash, Split: "validation", BatchTokens: 8, SequenceLength: 4, Batches: 2}
+	loss, tokens, e := EvaluateLocalLearnerModel(ctx, cfg, w, validation, before.Precision)
+	if e != nil || math.IsNaN(loss) || math.IsInf(loss, 0) || tokens != 16 {
+		t.Fatal("managed global evaluation", loss, tokens, e)
+	}
+	otherLoss, otherTokens, e := EvaluateLocalLearnerModel(ctx, cfg, w, validation, before.Precision)
+	if e != nil || otherLoss != loss || otherTokens != tokens {
+		t.Fatal("global evaluation replay changed", e)
+	}
+	after, e = s.Snapshot()
+	if e != nil || !reflect.DeepEqual(before, after) {
+		t.Fatal("isolated global evaluation changed private state", e)
 	}
 	// Exercise native all-or-nothing installation, bypassing Go's preflight.
 	bad, _ := localModelData(w, s.shapes)

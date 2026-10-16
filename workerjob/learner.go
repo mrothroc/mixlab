@@ -33,9 +33,15 @@ type LearnerAssignment struct {
 	PrivateMaxBytes     uint64                               `json:"private_max_bytes"`
 	Cohort              *distributed.LearnerCohortMembership `json:"cohort,omitempty"`
 	ExpectedPrivateHash string                               `json:"expected_private_hash,omitempty"`
+	Validation          *LearnerValidation                   `json:"validation,omitempty"`
 }
 
 func (a LearnerAssignment) Validate() error {
+	if a.Validation != nil {
+		if err := a.Validation.Validate(); err != nil {
+			return err
+		}
+	}
 	if a.Cohort != nil {
 		if _, err := a.Cohort.Canonical(); err != nil {
 			return err

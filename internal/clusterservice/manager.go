@@ -24,7 +24,7 @@ type Manager struct {
 }
 
 func (m Manager) Paths(role string) (statehome.Path, string, error) {
-	if role != "agent" && role != "authority" {
+	if !validRole(role) {
 		return statehome.Path{}, "", fmt.Errorf("invalid service role")
 	}
 	p, err := statehome.Resolve(statehome.Options{ExactDir: filepath.Join(m.Home, ".mixlab", "services", role)}, statehome.Context{Kind: statehome.Agent})

@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"github.com/mrothroc/mixlab/arch"
+	"github.com/mrothroc/mixlab/diloco/run"
 	"github.com/mrothroc/mixlab/gpu"
 	"github.com/mrothroc/mixlab/internal/strictjson"
 	"github.com/mrothroc/mixlab/workerjob"
@@ -19,6 +20,16 @@ import (
 // RunWorkerPlan reads only bounded config bytes from stdin. It never probes a
 // device, reads datasets, loads weights, or opens a network/control endpoint.
 func RunWorkerPlan(in io.Reader, out io.Writer) error {
+	return runWorkerPlan(in, out, false)
+}
+
+// RunWorkerLearnerProbe additionally resolves device precision; it still never
+// reads datasets, model weights, or any credential/network endpoint.
+func RunWorkerLearnerProbe(in io.Reader, out io.Writer) error {
+	return runWorkerPlan(in, out, true)
+}
+
+func runWorkerPlan(in io.Reader, out io.Writer, device bool) error {
 	b, err := io.ReadAll(io.LimitReader(in, (256<<10)+1))
 	if err != nil {
 		return err
@@ -34,6 +45,23 @@ func RunWorkerPlan(in io.Reader, out io.Writer) error {
 	p, err := inspectWorkerConfig(b, build)
 	if err != nil {
 		return err
+	}
+	if device {
+		if p.Learner == nil {
+			return fmt.Errorf("learner probe requires DiLoCo config")
+		}
+		cfg, err := arch.ParseArchConfig(b, "learner precision probe")
+		if err != nil {
+			return err
+		}
+		policy, err := trainingPrecision(cfg)
+		if err != nil {
+			return err
+		}
+		p.Learner.Precision = &policy
+		if err := p.Validate(); err != nil {
+			return err
+		}
 	}
 	return json.NewEncoder(out).Encode(p)
 }
@@ -72,8 +100,9 @@ func inspectWorkerConfig(b []byte, build string) (workerprobe.Plan, error) {
 	if err := arch.ValidateDistributedConfig(cfg); err != nil {
 		return out, err
 	}
-	if cfg.Training.Distributed == nil || cfg.Training.Distributed.Backend != "ring" || cfg.CharVocabSize != 0 {
-		return out, fmt.Errorf("managed plan requires ring DDP without external char artifacts")
+	d := cfg.Training.Distributed
+	if d == nil || (d.Mode != "diloco" && d.Backend != "ring") || cfg.CharVocabSize != 0 {
+		return out, fmt.Errorf("managed plan requires ring DDP or DiLoCo without external char artifacts")
 	}
 	program, err := BuildIRProgramFromConfig(cfg)
 	if err != nil {
@@ -103,6 +132,9 @@ func inspectWorkerConfig(b []byte, build string) (workerprobe.Plan, error) {
 	}
 	digest := sha256.Sum256(compact.Bytes())
 	out = workerprobe.Plan{Version: workerprobe.PlanVersion, BuildID: build, ConfigHash: hex.EncodeToString(digest[:]), DType: "fp32"}
+	if d.Mode == "diloco" {
+		out.Learner = &workerprobe.LearnerPlan{Outer: run.Outer{Kind: d.OuterOptimizer, LR: d.OuterLR, Momentum: *d.OuterMomentum, Aggregation: d.Aggregation, InnerSteps: uint64(d.InnerSteps), TotalSteps: uint64(cfg.Training.Steps), Accumulation: uint64(d.GradientAccumulationSteps)}, BatchTokens: cfg.Training.BatchTokens, SequenceLength: cfg.SeqLen}
+	}
 	if cfg.Training.EffectiveComputeDType() == "bf16" {
 		out.DType = "bf16"
 	}

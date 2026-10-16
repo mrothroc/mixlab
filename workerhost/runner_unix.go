@@ -34,11 +34,13 @@ type physicalExit struct {
 // exit receipt remains fenced; after a host reboot, the changed boot identity
 // proves that all processes from the old attempt are gone.
 type LocalRunner struct {
-	supervisor *Supervisor
-	directory  statehome.Path
-	startup    time.Duration
-	grace      time.Duration
-	boot       func() (string, error)
+	supervisor              *Supervisor
+	directory               statehome.Path
+	startup                 time.Duration
+	grace                   time.Duration
+	boot                    func() (string, error)
+	LearnerRelay            Relay
+	LearnerPrivateDirectory statehome.Path
 }
 
 func NewLocalRunner(s *Supervisor, dir statehome.Path, startup, grace time.Duration) (*LocalRunner, error) {
@@ -48,7 +50,7 @@ func NewLocalRunner(s *Supervisor, dir statehome.Path, startup, grace time.Durat
 	if err := dir.Validate(); err != nil {
 		return nil, err
 	}
-	return &LocalRunner{s, dir, startup, grace, hostBootIdentity}, nil
+	return &LocalRunner{supervisor: s, directory: dir, startup: startup, grace: grace, boot: hostBootIdentity}, nil
 }
 
 func (r *LocalRunner) Run(ctx context.Context, a contract.Approved, started func(int) error) error {
@@ -74,7 +76,7 @@ func (r *LocalRunner) Run(ctx context.Context, a contract.Approved, started func
 		if err := r.directory.CompareAndSwap(physicalClaimFile, nil, b); err != nil {
 			return errors.Join(ErrReconciliationRequired, err)
 		}
-		result, runErr := r.supervisor.Run(ctx, LaunchPlan{Assignment: a.Assignment, Directory: r.directory, StartupTimeout: r.startup, ShutdownGrace: r.grace, Limits: a.Limits, Started: started})
+		result, runErr := r.supervisor.Run(ctx, LaunchPlan{Assignment: a.Assignment, Learner: a.Learner, Relay: r.LearnerRelay, LearnerPrivateDirectory: r.LearnerPrivateDirectory, Directory: r.directory, StartupTimeout: r.startup, ShutdownGrace: r.grace, Limits: a.Limits, Started: started})
 		if errors.Is(runErr, ErrReconciliationRequired) {
 			return runErr
 		}

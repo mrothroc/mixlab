@@ -97,10 +97,7 @@ type Saga struct{ path statehome.Path }
 
 func Begin(path statehome.Path, p recruitment.LaunchPlan, spec Specification, deadline int64) (*Saga, error) {
 	r := record{Format: version, Request: p, Specification: spec, Deadline: deadline, Nodes: make([]node, len(p.Selection.Selected))}
-	for i, c := range p.Selection.Selected {
-		h, _ := run.Digest(struct{ Run, Attempt, Node string }{p.Run, p.Attempt, c.Capabilities.Node})
-		r.Nodes[i].Reserve = nodeagent.Reserve{IdempotencyKey: h[:32], ExpectedNodeVersion: c.Capabilities.Availability.NodeVersion, CapabilityGeneration: c.Capabilities.Generation, Run: p.Run, TTLSeconds: p.TTLSeconds}
-	}
+	initializeReservations(&r)
 	if err := r.validate(); err != nil {
 		return nil, err
 	}
@@ -115,6 +112,14 @@ func Begin(path statehome.Path, p recruitment.LaunchPlan, spec Specification, de
 		return nil, err
 	}
 	return Open(path)
+}
+
+func initializeReservations(r *record) {
+	p := r.Request
+	for i, c := range p.Selection.Selected {
+		h, _ := run.Digest(struct{ Run, Attempt, Node string }{p.Run, p.Attempt, c.Capabilities.Node})
+		r.Nodes[i].Reserve = nodeagent.Reserve{IdempotencyKey: h[:32], ExpectedNodeVersion: c.Capabilities.Availability.NodeVersion, CapabilityGeneration: c.Capabilities.Generation, Run: p.Run, TTLSeconds: p.TTLSeconds}
+	}
 }
 func Open(path statehome.Path) (*Saga, error) {
 	if path.Kind() != statehome.Principal {

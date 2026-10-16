@@ -14,6 +14,7 @@ import (
 	"github.com/mrothroc/mixlab/trust"
 	"github.com/mrothroc/mixlab/trust/workload"
 	"github.com/mrothroc/mixlab/workercontrol"
+	"github.com/mrothroc/mixlab/workerhost/contract"
 	"github.com/mrothroc/mixlab/workerjob"
 )
 
@@ -34,6 +35,8 @@ type LearnerJob struct {
 	History               []nodejob.LearnerRecovery    `json:"attempt_history,omitempty"`
 	RetryAcknowledgements []trust.AcceptedProof        `json:"retry_acknowledgements,omitempty"`
 	RetryWorkload         *workloadIntent              `json:"retry_workload,omitempty"`
+	Outcome               *contract.Outcome            `json:"outcome,omitempty"`
+	SignedCommitProof     *trust.SignedProof           `json:"signed_commit_proof,omitempty"`
 }
 
 func learnerFile(id string) (string, error) {
@@ -100,6 +103,9 @@ func (s *Store) validateLearner(j LearnerJob) error {
 		if j.CommitProof.Generation == 0 {
 			return fmt.Errorf("unverified lease handoff")
 		}
+	}
+	if err := validateLearnerHosting(j); err != nil {
+		return err
 	}
 	if j.Recovery != nil {
 		if j.Commit == nil || !j.Stopped || j.Assignment == nil {
@@ -234,6 +240,12 @@ func (s *Store) PrepareLearner(ctx context.Context, actor trust.AuthenticatedPri
 	return out, err
 }
 func matchLearnerAssignment(m nodejob.LearnerManifest, a workerjob.LearnerAssignment) error {
+	if (m.Validation == nil) != (a.Validation == nil) {
+		return fmt.Errorf("learner validation policy changed")
+	}
+	if m.Validation != nil && *a.Validation != localLearnerValidation(*m.Validation, a.Validation.Pattern) {
+		return fmt.Errorf("learner validation policy changed")
+	}
 	if a.Cohort == nil || digest(a.Cohort) != digest(m.Plan.Cohort) {
 		return fmt.Errorf("local learner cohort differs from admission")
 	}
@@ -288,6 +300,17 @@ func (s *Store) StartLearner(ctx context.Context, actor trust.AuthenticatedPrinc
 		}
 		out = workerjob.LearnerAssignment{Version: workerjob.LearnerVersion, JobID: id, AttemptID: m.Attempt, RunID: m.Plan.Cohort.RunID, PlanHash: m.Plan.SHA256, Member: m.Slot.Member, Contract: m.Plan.Contract, Coordinator: m.Plan.Coordinator, Config: m.Config, DatasetSelector: m.DatasetSelector, TrainPattern: path, RuntimeSeconds: m.Limits.RuntimeSeconds, PrivateMaxBytes: min(uint64(8<<30), m.Limits.DiskBytes-m.Limits.LogBytes)}
 		out.Cohort = &m.Plan.Cohort
+		if m.Validation != nil {
+			for _, d := range profile.Datasets {
+				if d.Selector == m.Validation.Split && d.ID == m.Validation.Hash {
+					v := localLearnerValidation(*m.Validation, d.TrainPattern)
+					out.Validation = &v
+				}
+			}
+			if out.Validation == nil {
+				return fmt.Errorf("approved validation split is not in local catalog")
+			}
+		}
 		if e = out.Validate(); e != nil {
 			return e
 		}

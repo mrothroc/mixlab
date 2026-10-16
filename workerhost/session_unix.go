@@ -87,12 +87,9 @@ func (p LaunchPlan) prepareLearnerStorage() error {
 	if private.Kind() != statehome.Worker || private.Dir() == "" || pathsOverlap(private.Dir(), p.Directory.Dir()) {
 		return fmt.Errorf("learner private storage requires a separate worker-owned directory")
 	}
-	// A retry must not manufacture an empty replacement for missing private
-	// state. The learner application checks the expected hash after admission.
-	if p.Learner.ExpectedPrivateHash != "" {
-		return private.Validate()
-	}
-	return private.Ensure()
+	// Allocation owns creation. Launch must never replace missing published
+	// storage, even before the first private hash has been acknowledged.
+	return private.Validate()
 }
 
 func pathsOverlap(a, b string) bool {

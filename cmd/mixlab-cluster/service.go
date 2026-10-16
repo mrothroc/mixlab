@@ -101,28 +101,9 @@ func runService(role, action string, args []string, stdout, stderr io.Writer) in
 	if err != nil {
 		return fail(err)
 	}
-	self, err := os.Executable()
+	self, err := serviceExecutable(ctx, *launchBinary)
 	if err != nil {
 		return fail(err)
-	}
-	self, err = filepath.EvalSymlinks(self)
-	if err != nil {
-		return fail(err)
-	}
-	if *launchBinary != "" {
-		if !filepath.IsAbs(*launchBinary) || filepath.Clean(*launchBinary) != *launchBinary {
-			return fail(fmt.Errorf("cluster-binary must be a canonical absolute path"))
-		}
-		target, err := filepath.EvalSymlinks(*launchBinary)
-		if err != nil || target != self {
-			return fail(fmt.Errorf("cluster-binary must resolve to the currently running executable"))
-		}
-		self = *launchBinary
-	}
-	if runtime.GOOS == "darwin" {
-		if err := verifyServiceSignature(ctx, self); err != nil {
-			return fail(err)
-		}
 	}
 	if role == "agent" {
 		i, err := clusterapp.OpenNodeInstallation(p)
@@ -195,6 +176,9 @@ func runServiceProcess(args []string, stderr io.Writer) int {
 		return runAgentSupervised(ctx, s.Arguments[1:], log, log, func(attempt func() int) int {
 			return runServiceRetry(ctx, log, attempt)
 		})
+	}
+	if s.Role == "coordinator" {
+		return runServiceRetry(ctx, log, func() int { return runCoordinatorContext(ctx, "serve", s.Arguments[2:], log, log) })
 	}
 	return runServiceRetry(ctx, log, func() int {
 		return runAuthorityServeContext(ctx, s.Arguments[2:], log, log)

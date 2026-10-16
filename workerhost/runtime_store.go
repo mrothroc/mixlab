@@ -19,6 +19,7 @@ type runtimeEntry struct {
 	Job     string `json:"job"`
 	Attempt string `json:"attempt"`
 	Ready   bool   `json:"ready"`
+	Kind    string `json:"kind,omitempty"`
 }
 type runtimeIndex struct {
 	Version string         `json:"version"`
@@ -76,8 +77,8 @@ func (s *RuntimeStore) load() ([]byte, runtimeIndex, error) {
 	}
 	seen := make(map[string]bool)
 	for _, e := range index.Entries {
-		key := e.Job + "/" + e.Attempt
-		if !runtimeID(e.Job) || !runtimeID(e.Attempt) || seen[key] {
+		key := e.Kind + "/" + e.Job + "/" + e.Attempt
+		if (e.Kind != "" && e.Kind != "learner") || !runtimeID(e.Job) || !runtimeID(e.Attempt) || seen[key] {
 			return nil, index, fmt.Errorf("invalid runtime allocation entry")
 		}
 		seen[key] = true
@@ -88,6 +89,16 @@ func (s *RuntimeStore) load() ([]byte, runtimeIndex, error) {
 // Attempt publishes an empty child context once, before returning its path to
 // a launcher. Pending publication is retryable; a ready context is never rebuilt.
 func (s *RuntimeStore) Attempt(ctx context.Context, job, attempt string) (out statehome.Path, err error) {
+	return s.allocate(ctx, "", job, attempt)
+}
+
+// LearnerPrivate survives authorized attempts but never crosses run/worker
+// identities. The allocation journal makes a missing published path fatal.
+func (s *RuntimeStore) LearnerPrivate(ctx context.Context, run, worker string) (statehome.Path, error) {
+	return s.allocate(ctx, "learner", run, worker)
+}
+
+func (s *RuntimeStore) allocate(ctx context.Context, kind, job, attempt string) (out statehome.Path, err error) {
 	if !runtimeID(job) || !runtimeID(attempt) {
 		return out, fmt.Errorf("canonical job and attempt IDs required")
 	}
@@ -98,7 +109,7 @@ func (s *RuntimeStore) Attempt(ctx context.Context, job, attempt string) (out st
 		}
 		at := -1
 		for i, e := range index.Entries {
-			if e.Job == job && e.Attempt == attempt {
+			if e.Kind == kind && e.Job == job && e.Attempt == attempt {
 				at = i
 				break
 			}
@@ -108,7 +119,7 @@ func (s *RuntimeStore) Attempt(ctx context.Context, job, attempt string) (out st
 				return fmt.Errorf("runtime allocation history capacity reached")
 			}
 			at = len(index.Entries)
-			index.Entries = append(index.Entries, runtimeEntry{Job: job, Attempt: attempt})
+			index.Entries = append(index.Entries, runtimeEntry{Job: job, Attempt: attempt, Kind: kind})
 			b, err := json.Marshal(index)
 			if err != nil {
 				return err
@@ -118,13 +129,32 @@ func (s *RuntimeStore) Attempt(ctx context.Context, job, attempt string) (out st
 			}
 			old = b
 		}
-		p, err := statehome.Resolve(statehome.Options{ExactDir: filepath.Join(s.root.Dir(), job+"-"+attempt)}, statehome.Context{Kind: statehome.Worker})
+		name := job + "-" + attempt
+		if kind != "" {
+			name = kind + "-" + name
+		}
+		p, err := statehome.Resolve(statehome.Options{ExactDir: filepath.Join(s.root.Dir(), name)}, statehome.Context{Kind: statehome.Worker})
 		if err != nil {
 			return err
 		}
 		identity := []byte(job + "/" + attempt)
+		if kind != "" {
+			identity = []byte(kind + "/" + string(identity))
+		}
 		if !index.Entries[at].Ready {
-			err := p.Publish(func(p statehome.Path) error { return p.CompareAndSwap("runtime-identity", nil, identity) })
+			err := p.Publish(func(p statehome.Path) error {
+				if err := p.CompareAndSwap("runtime-identity", nil, identity); err != nil {
+					return err
+				}
+				if kind == "learner" {
+					private, err := learnerPrivatePath(p)
+					if err != nil {
+						return err
+					}
+					return private.Ensure()
+				}
+				return nil
+			})
 			if err != nil && !errors.Is(err, statehome.ErrExists) {
 				return err
 			}
@@ -136,6 +166,18 @@ func (s *RuntimeStore) Attempt(ctx context.Context, job, attempt string) (out st
 		if !bytes.Equal(found, identity) {
 			return fmt.Errorf("runtime identity changed")
 		}
+		out = p
+		if kind == "learner" {
+			// Publish both ownership contexts atomically. Recovery validates the
+			// learner child, never recreating lost private history.
+			out, err = learnerPrivatePath(p)
+			if err != nil {
+				return err
+			}
+			if err := out.Validate(); err != nil {
+				return fmt.Errorf("published learner private context missing or unsafe: %w", err)
+			}
+		}
 		if !index.Entries[at].Ready {
 			index.Entries[at].Ready = true
 			b, err := json.Marshal(index)
@@ -146,8 +188,11 @@ func (s *RuntimeStore) Attempt(ctx context.Context, job, attempt string) (out st
 				return err
 			}
 		}
-		out = p
 		return nil
 	})
 	return out, err
+}
+
+func learnerPrivatePath(parent statehome.Path) (statehome.Path, error) {
+	return statehome.Resolve(statehome.Options{ExactDir: filepath.Join(parent.Dir(), "private")}, statehome.Context{Kind: statehome.Worker})
 }

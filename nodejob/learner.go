@@ -16,15 +16,16 @@ const LearnerVersion = "mixlab_node_learner_job_v1"
 // LearnerManifest authorizes one local learner, never a synthetic DDP rank.
 // Local paths, credentials and executable selection are deliberately absent.
 type LearnerManifest struct {
-	Version            string          `json:"version"`
-	Controller         string          `json:"controller"`
-	Attempt            string          `json:"attempt"`
-	WorkloadGeneration uint64          `json:"workload_generation"`
-	Plan               run.Plan        `json:"plan"`
-	Slot               run.Slot        `json:"slot"`
-	Config             json.RawMessage `json:"config"`
-	DatasetSelector    string          `json:"dataset_selector"`
-	Limits             Limits          `json:"limits"`
+	Version            string                 `json:"version"`
+	Controller         string                 `json:"controller"`
+	Attempt            string                 `json:"attempt"`
+	WorkloadGeneration uint64                 `json:"workload_generation"`
+	Plan               run.Plan               `json:"plan"`
+	Slot               run.Slot               `json:"slot"`
+	Config             json.RawMessage        `json:"config"`
+	DatasetSelector    string                 `json:"dataset_selector"`
+	Limits             Limits                 `json:"limits"`
+	Validation         *run.ValidationDataset `json:"validation,omitempty"`
 }
 type SignedLearner struct {
 	Manifest LearnerManifest   `json:"manifest"`
@@ -32,6 +33,11 @@ type SignedLearner struct {
 }
 
 func (m LearnerManifest) Validate() error {
+	if m.Validation != nil {
+		if err := m.Validation.Validate(); err != nil {
+			return err
+		}
+	}
 	if m.Version != LearnerVersion || !hexID(m.Controller, 16) || !hexID(m.Attempt, 16) || m.WorkloadGeneration == 0 {
 		return fmt.Errorf("invalid learner job identity")
 	}

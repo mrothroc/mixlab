@@ -29,7 +29,7 @@ func (e *learnerEngine) Snapshot() (learner.Snapshot, error) {
 		return learner.Snapshot{}, err
 	}
 	id := v.Sampler.Identity
-	out := learner.Snapshot{Model: toOuterTensors(v.Model), Precision: v.Precision, Replay: private.Replay{Version: "mixlab_learner_rng_v1", RunID: id.RunID, WorkerID: id.WorkerID, PartitionID: id.PartitionID, Seed: id.Seed, AttemptStep: v.Attempt}}
+	out := learner.Snapshot{Model: train.LocalLearnerWireTensors(v.Model), Precision: v.Precision, Replay: private.Replay{Version: "mixlab_learner_rng_v1", RunID: id.RunID, WorkerID: id.WorkerID, PartitionID: id.PartitionID, Seed: id.Seed, AttemptStep: v.Attempt}}
 	for _, part := range []struct {
 		v   any
 		dst *[]byte
@@ -57,7 +57,11 @@ func (e *learnerEngine) Restore(v learner.Snapshot) error {
 	if contract != meta.Contract {
 		return fmt.Errorf("private schedule contract mismatch")
 	}
-	s := train.LocalLearnerSnapshot{Format: meta.Format, Contract: meta.Contract, Attempt: meta.Attempt, EffectiveTokens: meta.Tokens, EffectiveExamples: meta.Examples, Precision: v.Precision, Model: toLocalTensors(v.Model)}
+	model, err := train.LocalLearnerModelFromWire(v.Model)
+	if err != nil {
+		return err
+	}
+	s := train.LocalLearnerSnapshot{Format: meta.Format, Contract: meta.Contract, Attempt: meta.Attempt, EffectiveTokens: meta.Tokens, EffectiveExamples: meta.Examples, Precision: v.Precision, Model: model}
 	if err := json.Unmarshal(v.Optimizer, &s.Optimizer); err != nil {
 		return err
 	}
@@ -72,7 +76,11 @@ func (e *learnerEngine) Restore(v learner.Snapshot) error {
 	return e.session.Restore(s)
 }
 func (e *learnerEngine) Install(v []optimizer.Tensor) error {
-	return e.session.InstallGlobal(toLocalTensors(v))
+	model, err := train.LocalLearnerModelFromWire(v)
+	if err != nil {
+		return err
+	}
+	return e.session.InstallGlobal(model)
 }
 func (e *learnerEngine) Train(ctx context.Context, n uint64) (learner.Counts, error) {
 	if n > math.MaxInt {
@@ -82,17 +90,3 @@ func (e *learnerEngine) Train(ctx context.Context, n uint64) (learner.Counts, er
 	return learner.Counts{Attempted: v.Attempted, Committed: v.Committed, Skipped: v.Skipped, Tokens: v.EffectiveTokens, Examples: v.EffectiveExamples, Loss: v.Loss}, err
 }
 func (e *learnerEngine) Close() { e.session.Close() }
-func toOuterTensors(v []train.LocalLearnerTensor) []optimizer.Tensor {
-	out := make([]optimizer.Tensor, len(v))
-	for i, t := range v {
-		out[i] = optimizer.Tensor{Name: t.Name, Shape: t.Shape, Values: t.Data}
-	}
-	return out
-}
-func toLocalTensors(v []optimizer.Tensor) []train.LocalLearnerTensor {
-	out := make([]train.LocalLearnerTensor, len(v))
-	for i, t := range v {
-		out[i] = train.LocalLearnerTensor{Name: t.Name, Shape: t.Shape, Data: t.Values}
-	}
-	return out
-}

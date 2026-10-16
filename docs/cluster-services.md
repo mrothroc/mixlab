@@ -7,6 +7,10 @@
 Per-user service administration for the authority and node agent, added in
 v0.120.0. Services do not enroll nodes, change firewall rules, unlock Keychains,
 grant network permissions, or approve new executables automatically.
+The experimental DiLoCo coordinator reuses this lifecycle; see
+[Managed DiLoCo](cluster-diloco.md) for `coordinator init|install|serve`, its six
+independent context paths, submission and recovery limits. Its service label is
+`com.mixlab.cluster-coordinator` and its logs use the `coordinator` role directory.
 
 ## macOS
 
@@ -88,11 +92,13 @@ mixlab-cluster agent start
 mixlab-cluster agent uninstall
 ```
 
-The same actions are available under `authority`. There is one service per role
-per OS account. `install` accepts `-state-home`, the role's state-directory,
+The same actions are available under `authority` and `coordinator`. There is one service per role
+per OS account. Agent/authority `install` accepts `-state-home`, the role's state-directory,
 listener and advertise flags, and optional `-cluster-binary`. Other actions take
 no installation options. Repeating an identical install is safe; changing its
 settings requires uninstalling that registration first.
+Coordinator install instead requires all six explicit paths and
+`-coordinator-listen`; it also accepts optional `-cluster-binary`.
 `stop` pauses the current service but preserves automatic startup at macOS GUI
 login or Linux user-manager startup. `uninstall` removes that registration.
 
@@ -134,6 +140,8 @@ cohort, and an old checkpoint may not be compatible with a new numerical build.
 mixlab-cluster doctor -agent-state-dir ~/.mixlab/node-agent
 mixlab-cluster doctor -principal-state-dir "$CONTROLLER" \
   -node 192.168.1.10:7445 -node 192.168.1.20:7445
+mixlab-cluster doctor -principal-state-dir "$CONTROLLER" \
+  -coordinator-endpoint https://192.168.1.10:7446 -coordinator-id "$COORDINATOR_ID"
 ```
 
 `doctor` emits JSON checks for local service state, approved binaries, leases,
@@ -146,6 +154,11 @@ local credential windows but does not measure absolute peer clock skew.
 Busy or pending-cleanup leases are informational, not a doctor failure: a healthy
 busy node still exits zero. Read `lease_state` before upgrades; `agent reapprove`
 independently rejects every active or uncleared lease.
+Coordinator diagnostics separate the local service-manager observation, TCP
+reachability and the authenticated read-only Info route. The endpoint/ID flags
+must be supplied together. Only an enrolled controller can authenticate that
+route; no identity leaves the TLS/trust result unknown. A successful probe does
+not prove learner availability or the service's outbound network permission.
 
 `nodes` distinguishes connection refusal, timeout, DNS failure, route/permission
 failure, TLS rejection, stale capabilities and busy nodes when supported by the

@@ -64,6 +64,9 @@ func helperLearner(ctx context.Context, conn *local.Conn, initial wc.Envelope) i
 	if err != nil || private.Validate() != nil {
 		return 63
 	}
+	if a.DatasetSelector == "runtime-store-startup" {
+		return helperManagedLearnerRuntime(ctx, conn, a, private)
+	}
 	if a.ExpectedPrivateHash != "" {
 		if body, err := os.ReadFile(filepath.Join(private.Dir(), "retained")); err != nil || string(body) != "state" {
 			return 64
@@ -137,9 +140,6 @@ func TestLearnerLaunchOpaqueRelayAndPrivateRetry(t *testing.T) {
 	t.Setenv("MLX_RANK", "42")
 	t.Setenv("WORKERHOST_SECRET", "must-not-inherit")
 	s, p := learnerPlan(t, "success")
-	if err := os.Remove(p.LearnerPrivateDirectory.Dir()); err != nil {
-		t.Fatal(err)
-	}
 	var calls atomic.Int32
 	p.Relay = func(ctx context.Context, e wc.Envelope) (wc.Envelope, error) {
 		calls.Add(1)
@@ -252,7 +252,7 @@ func TestLearnerRelayDeadlineCancellationAndStartup(t *testing.T) {
 }
 
 func TestLearnerLaunchRejectsInvalidOwnership(t *testing.T) {
-	for _, mode := range []string{"mixed-schema", "no-relay", "no-cohort", "shared-directory", "nested-directory", "missing-retry", "wrong-kind", "negative-timeout"} {
+	for _, mode := range []string{"mixed-schema", "no-relay", "no-cohort", "shared-directory", "nested-directory", "missing-initial", "missing-retry", "wrong-kind", "negative-timeout"} {
 		t.Run(mode, func(t *testing.T) {
 			s, p := learnerPlan(t, mode)
 			switch mode {
@@ -270,11 +270,13 @@ func TestLearnerLaunchRejectsInvalidOwnership(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			case "missing-retry":
+			case "missing-initial", "missing-retry":
 				if err := os.Remove(p.LearnerPrivateDirectory.Dir()); err != nil {
 					t.Fatal(err)
 				}
-				p.Learner.ExpectedPrivateHash = strings.Repeat("a", 64)
+				if mode == "missing-retry" {
+					p.Learner.ExpectedPrivateHash = strings.Repeat("a", 64)
+				}
 			case "wrong-kind":
 				p.LearnerPrivateDirectory = statehome.Path{}
 			case "negative-timeout":
@@ -284,7 +286,7 @@ func TestLearnerLaunchRejectsInvalidOwnership(t *testing.T) {
 			if err == nil || r.PID != 0 {
 				t.Fatalf("invalid launch: %+v %v", r, err)
 			}
-			if mode == "missing-retry" {
+			if mode == "missing-initial" || mode == "missing-retry" {
 				if _, err := os.Stat(p.LearnerPrivateDirectory.Dir()); !errors.Is(err, os.ErrNotExist) {
 					t.Fatal("retry created missing private state")
 				}

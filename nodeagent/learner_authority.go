@@ -125,9 +125,20 @@ func (s *Store) FinalizeLearner(ctx context.Context, actor trust.AuthenticatedPr
 			if j.Commit.Binding != c.Body.Binding {
 				return fmt.Errorf("conflicting run commit")
 			}
+			// An authenticated exact commit replay upgrades pre-hosting journals
+			// without inventing missing proof or changing their authority.
+			if j.SignedCommitProof == nil {
+				j.SignedCommitProof = &c.Proof
+				j.CommitProof = proof
+				j.Version++
+				if err = s.saveLearner(old, j); err != nil {
+					return err
+				}
+			}
 		} else {
 			j.Commit = &c.Body
 			j.CommitProof = proof
+			j.SignedCommitProof = &c.Proof
 			j.Version++
 			if err = s.saveLearner(old, j); err != nil {
 				return err

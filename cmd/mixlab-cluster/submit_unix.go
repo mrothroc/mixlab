@@ -36,6 +36,9 @@ func runSubmit(args []string, stdout, stderr io.Writer) int {
 }
 
 func runSubmitContext(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "diloco" {
+		return runSubmitDiLoCoContext(ctx, args[1:], stdout, stderr)
+	}
 	f := flag.NewFlagSet("mixlab-cluster submit", flag.ContinueOnError)
 	f.SetOutput(stderr)
 	home := f.String("state-home", "", "Mixlab state root")
@@ -212,37 +215,45 @@ func inspectSubmission(ctx context.Context, config, binary string) ([]byte, work
 	if err != nil {
 		return nil, plan, probe, err
 	}
+	err = withSubmissionWorker(binary, func(host *workerhost.Supervisor, path statehome.Path) error {
+		var err error
+		plan, err = host.Plan(ctx, path, b)
+		if err == nil {
+			probe, err = host.Probe(ctx, path)
+		}
+		return err
+	})
+	return b, plan, probe, err
+}
+
+func withSubmissionWorker(binary string, use func(*workerhost.Supervisor, statehome.Path) error) error {
+	var err error
 	binary, err = filepath.EvalSymlinks(binary)
 	if err != nil {
-		return nil, plan, probe, err
+		return err
 	}
 	hash, err := workerjob.FileDigest(binary)
 	if err != nil {
-		return nil, plan, probe, err
+		return err
 	}
 	host, err := workerhost.New(binary, hash)
 	if err != nil {
-		return nil, plan, probe, err
+		return err
 	}
 	dir, err := os.MkdirTemp("", "mixlab-submit-probe-")
 	if err != nil {
-		return nil, plan, probe, err
+		return err
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
 	dir, err = filepath.EvalSymlinks(dir)
 	if err != nil {
-		return nil, plan, probe, err
+		return err
 	}
 	path, err := statehome.Resolve(statehome.Options{ExactDir: dir}, statehome.Context{Kind: statehome.Worker})
 	if err != nil {
-		return nil, plan, probe, err
+		return err
 	}
-	plan, err = host.Plan(ctx, path, b)
-	if err != nil {
-		return nil, plan, probe, err
-	}
-	probe, err = host.Probe(ctx, path)
-	return b, plan, probe, err
+	return use(host, path)
 }
 
 func submissionLoopbackPorts(count int) ([]int, error) {

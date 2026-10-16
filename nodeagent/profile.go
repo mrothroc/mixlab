@@ -231,7 +231,7 @@ func (s *Store) Capabilities(ctx context.Context, actor trust.AuthenticatedPrinc
 		if p.Generation != available.CapabilityGeneration {
 			return fmt.Errorf("profile publication needs reconciliation")
 		}
-		out = Capabilities{Version: CapabilityVersion, Node: s.node, DisplayName: p.DisplayName, Generation: p.Generation, ObservedAt: now.Unix(), Probe: p.Probe, ProbeObservedAt: p.ProbeObservedAt, ManifestVersions: []string{nodejob.Version}, Limits: p.Limits, Availability: available, Datasets: []Dataset{}}
+		out = Capabilities{Version: CapabilityVersion, Node: s.node, DisplayName: p.DisplayName, Generation: p.Generation, ObservedAt: now.Unix(), Probe: p.Probe, ProbeObservedAt: p.ProbeObservedAt, ManifestVersions: []string{nodejob.Version, nodejob.LearnerVersion}, Limits: p.Limits, Availability: available, Datasets: []Dataset{}}
 		out.TransportEndpoint = p.TransportEndpoint
 		for _, d := range p.Datasets {
 			out.Datasets = append(out.Datasets, d.Dataset)

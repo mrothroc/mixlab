@@ -22,6 +22,7 @@ type LocalExecution struct {
 	Outcome   *contract.Outcome
 	Workload  workload.Scope
 	Transport *grouptransport.Signed
+	Learner   *LearnerJob
 }
 
 func (s *Store) ActiveExecution(ctx context.Context) (out *LocalExecution, err error) {
@@ -40,6 +41,14 @@ func (s *Store) ActiveExecution(ctx context.Context) (out *LocalExecution, err e
 		out = &LocalExecution{Lease: *l}
 		if l.Job == "" {
 			return nil
+		}
+		if l.JobKind == "learner" {
+			_, j, err := s.loadLearner(l.Job)
+			if err != nil {
+				return err
+			}
+			out, err = learnerExecution(*l, j)
+			return err
 		}
 		_, r, err := s.loadJob(l.Job)
 		if err != nil {

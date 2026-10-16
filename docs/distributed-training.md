@@ -10,18 +10,13 @@ slower per token than one Mac.
 
 ## Status
 
-DiLoCo is currently a [validation-only contract preview](config-reference.md#diloco-contract-preview).
-Its required `inner_steps`, `outer_optimizer`, `outer_lr`, `outer_momentum`, and
-`aggregation` fields are checked, but no managed learner/coordinator runtime is
-exposed yet. Do not use `mode: "diloco"` to launch training at this stage.
-Contributors can exercise the [local learner engine](../train/local_learner.md)
-independently; this foundation does not enable distributed DiLoCo runs.
-The [durable coordinator adapters](../coordinator/local/README.md) and
-[authenticated artifact gateway](../coordinator/artifactapi/README.md) are also
-available for integration tests, not yet as an installed coordinator service.
-The [managed learner runtime](../learner/README.md) adds durable private replay
-and an authenticated agent relay for internal integration tests. Public service
-submission and validation-dataset wiring remain gated.
+DiLoCo has a separate experimental [managed service/submission workflow](cluster-diloco.md)
+and [config contract](config-reference.md#diloco-contract-preview). It uses a
+fixed cohort of single-process Metal learners, durable private replay and global
+validation; it is not launched through `mlx.launch` or ordinary `-mode arch`.
+Public source availability does not establish physical two-host acceptance,
+signed-release availability or a performance advantage. See that workflow for
+private-state retention, recovery limits and weights-only restart semantics.
 
 `training.distributed` now selects DDP through the ordinary `-mode arch`
 entrypoint. There is no separate DDP mode or Mixlab hostfile flag: `mlx.launch`

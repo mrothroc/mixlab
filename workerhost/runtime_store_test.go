@@ -100,3 +100,45 @@ func TestRuntimeStoreInterruptedAllocationAndValidation(t *testing.T) {
 		t.Fatal("ignored cancellation")
 	}
 }
+
+func TestRuntimeStoreLearnerPrivateStableAndSeparate(t *testing.T) {
+	s := runtimeStoreFixture(t)
+	ctx := context.Background()
+	run, worker := strings.Repeat("a", 32), strings.Repeat("b", 32)
+	p, err := s.LearnerPrivate(ctx, run, worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.WriteFile("learner-state", []byte("retained")); err != nil {
+		t.Fatal(err)
+	}
+	attempt, err := s.Attempt(ctx, run, worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attempt.Dir() == p.Dir() {
+		t.Fatal("private state aliases hosting journal")
+	}
+	reopened, err := OpenRuntimeStore(s.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := reopened.LearnerPrivate(ctx, run, worker)
+	if err != nil || again.Dir() != p.Dir() {
+		t.Fatal("private path changed", err)
+	}
+	b, err := again.ReadFileLimit("learner-state", 128)
+	if err != nil || string(b) != "retained" {
+		t.Fatal("private state lost", err)
+	}
+	other, err := reopened.LearnerPrivate(ctx, strings.Repeat("c", 32), worker)
+	if err != nil || other.Dir() == p.Dir() {
+		t.Fatal("new run reused private state", err)
+	}
+	if err := os.RemoveAll(p.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reopened.LearnerPrivate(ctx, run, worker); err == nil {
+		t.Fatal("recreated missing private history")
+	}
+}
