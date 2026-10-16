@@ -1,8 +1,10 @@
 # Local Learner Engine
 
 `NewLocalLearnerSession` is an internal integration foundation for a fixed-cohort
-DiLoCo learner. It is not a launch mode: DiLoCo CLI execution remains disabled
-until the coordinator and managed learner application are integrated.
+DiLoCo learner. It is not a launch mode: public DiLoCo submission remains
+disabled until coordinator-service integration is complete. The internal
+managed-worker entry point now composes the durable [learner](../learner/README.md)
+through an authenticated local dispatcher, outside this numerical package.
 
 The session takes validated causal/AdamW config, a local immutable dataset,
 immutable learner identity, and the complete initial global model. It creates

@@ -63,12 +63,22 @@ func TestDiLoCoApplicationEdges(t *testing.T) {
 }
 
 func TestDiLoCoDurableAdaptersRemainNumericsFree(t *testing.T) {
-	for _, target := range []string{"./coordinator/local", "./coordinator/artifactapi", "./artifact/tensors"} {
+	for _, target := range []string{"./coordinator/local", "./coordinator/artifactapi", "./coordinator/learnerapi", "./artifact/tensors", "./learneripc"} {
 		for _, p := range dependencies(t, "0", "", target) {
 			for _, forbidden := range []string{"train", "gpu", "arch", "learner", "admission"} {
 				if p.ImportPath == modulePath+forbidden || strings.HasPrefix(p.ImportPath, modulePath+forbidden+"/") {
 					t.Errorf("%s links %s", target, p.ImportPath)
 				}
+			}
+		}
+	}
+}
+
+func TestLearnerIPCDoesNotLinkRemoteAuthority(t *testing.T) {
+	for _, p := range dependencies(t, "0", "", "./learneripc") {
+		for _, forbidden := range []string{"coordinator", "trust", "transport", "securekeys", "nodeagent", "internal/clusterapp"} {
+			if p.ImportPath == modulePath+forbidden || strings.HasPrefix(p.ImportPath, modulePath+forbidden+"/") {
+				t.Errorf("local learner IPC links remote authority %s", p.ImportPath)
 			}
 		}
 	}

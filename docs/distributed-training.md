@@ -19,6 +19,9 @@ independently; this foundation does not enable distributed DiLoCo runs.
 The [durable coordinator adapters](../coordinator/local/README.md) and
 [authenticated artifact gateway](../coordinator/artifactapi/README.md) are also
 available for integration tests, not yet as an installed coordinator service.
+The [managed learner runtime](../learner/README.md) adds durable private replay
+and an authenticated agent relay for internal integration tests. Public service
+submission and validation-dataset wiring remain gated.
 
 `training.distributed` now selects DDP through the ordinary `-mode arch`
 entrypoint. There is no separate DDP mode or Mixlab hostfile flag: `mlx.launch`

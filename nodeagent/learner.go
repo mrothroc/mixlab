@@ -78,8 +78,13 @@ func (s *Store) validateLearner(j LearnerJob) error {
 			return err
 		}
 		expected := m
+		expectedPrivate := ""
 		if len(j.History) > 0 {
 			expected.Attempt = j.History[len(j.History)-1].Attempt.AttemptID
+			expectedPrivate = j.History[len(j.History)-1].Attempt.PrivateHash
+		}
+		if j.Assignment.ExpectedPrivateHash != expectedPrivate {
+			return fmt.Errorf("learner private recovery binding changed")
 		}
 		if err := matchLearnerAssignment(expected, *j.Assignment); err != nil {
 			return err
@@ -229,6 +234,9 @@ func (s *Store) PrepareLearner(ctx context.Context, actor trust.AuthenticatedPri
 	return out, err
 }
 func matchLearnerAssignment(m nodejob.LearnerManifest, a workerjob.LearnerAssignment) error {
+	if a.Cohort == nil || digest(a.Cohort) != digest(m.Plan.Cohort) {
+		return fmt.Errorf("local learner cohort differs from admission")
+	}
 	if a.JobID != m.Slot.Allocation.JobID || a.AttemptID != m.Attempt || a.RunID != m.Plan.Cohort.RunID || a.PlanHash != m.Plan.SHA256 || a.Member != m.Slot.Member || a.Contract != m.Plan.Contract || a.Coordinator != m.Plan.Coordinator || digest(a.Config) != digest(m.Config) || a.DatasetSelector != m.DatasetSelector || a.RuntimeSeconds != m.Limits.RuntimeSeconds || a.PrivateMaxBytes > m.Limits.DiskBytes-m.Limits.LogBytes {
 		return fmt.Errorf("local learner assignment differs from admission")
 	}
@@ -279,6 +287,7 @@ func (s *Store) StartLearner(ctx context.Context, actor trust.AuthenticatedPrinc
 			return fmt.Errorf("learner differs from local catalog")
 		}
 		out = workerjob.LearnerAssignment{Version: workerjob.LearnerVersion, JobID: id, AttemptID: m.Attempt, RunID: m.Plan.Cohort.RunID, PlanHash: m.Plan.SHA256, Member: m.Slot.Member, Contract: m.Plan.Contract, Coordinator: m.Plan.Coordinator, Config: m.Config, DatasetSelector: m.DatasetSelector, TrainPattern: path, RuntimeSeconds: m.Limits.RuntimeSeconds, PrivateMaxBytes: min(uint64(8<<30), m.Limits.DiskBytes-m.Limits.LogBytes)}
+		out.Cohort = &m.Plan.Cohort
 		if e = out.Validate(); e != nil {
 			return e
 		}

@@ -11,6 +11,9 @@ import (
 // Validate checks restored aggregate structure, not external trust or blob
 // integrity. Persistence adapters must not recover an unchecked partial state.
 func (s State) Validate() error {
+	if e := s.validateStarts(); e != nil {
+		return e
+	}
 	if e := s.validateAttempts(); e != nil {
 		return e
 	}

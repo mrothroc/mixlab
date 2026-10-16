@@ -18,22 +18,44 @@ const LearnerVersion = "mixlab_local_learner_assignment_v1"
 // LearnerAssignment is a separate advertised schema, not a singleton DDP view.
 // Admission validates it; managed hosting must explicitly support this schema.
 type LearnerAssignment struct {
-	Version         string                    `json:"version"`
-	JobID           string                    `json:"job_id"`
-	AttemptID       string                    `json:"attempt_id"`
-	RunID           string                    `json:"run_id"`
-	PlanHash        string                    `json:"run_plan_sha256"`
-	Member          distributed.LearnerMember `json:"member"`
-	Contract        run.Contract              `json:"contract"`
-	Coordinator     run.Coordinator           `json:"coordinator"`
-	Config          json.RawMessage           `json:"config"`
-	DatasetSelector string                    `json:"dataset_selector"`
-	TrainPattern    string                    `json:"local_train_pattern"`
-	RuntimeSeconds  int                       `json:"runtime_seconds"`
-	PrivateMaxBytes uint64                    `json:"private_max_bytes"`
+	Version             string                               `json:"version"`
+	JobID               string                               `json:"job_id"`
+	AttemptID           string                               `json:"attempt_id"`
+	RunID               string                               `json:"run_id"`
+	PlanHash            string                               `json:"run_plan_sha256"`
+	Member              distributed.LearnerMember            `json:"member"`
+	Contract            run.Contract                         `json:"contract"`
+	Coordinator         run.Coordinator                      `json:"coordinator"`
+	Config              json.RawMessage                      `json:"config"`
+	DatasetSelector     string                               `json:"dataset_selector"`
+	TrainPattern        string                               `json:"local_train_pattern"`
+	RuntimeSeconds      int                                  `json:"runtime_seconds"`
+	PrivateMaxBytes     uint64                               `json:"private_max_bytes"`
+	Cohort              *distributed.LearnerCohortMembership `json:"cohort,omitempty"`
+	ExpectedPrivateHash string                               `json:"expected_private_hash,omitempty"`
 }
 
 func (a LearnerAssignment) Validate() error {
+	if a.Cohort != nil {
+		if _, err := a.Cohort.Canonical(); err != nil {
+			return err
+		}
+		found := false
+		for _, m := range a.Cohort.OrderedLearners {
+			if m == a.Member {
+				found = true
+			}
+		}
+		if a.Cohort.RunID != a.RunID || !found {
+			return fmt.Errorf("learner outside assigned cohort")
+		}
+	}
+	if a.ExpectedPrivateHash != "" {
+		b, e := hex.DecodeString(a.ExpectedPrivateHash)
+		if e != nil || len(b) != 32 || hex.EncodeToString(b) != a.ExpectedPrivateHash {
+			return fmt.Errorf("invalid expected private hash")
+		}
+	}
 	if a.Version != LearnerVersion || a.DatasetSelector == "" || len(a.DatasetSelector) > 256 || !filepath.IsAbs(a.TrainPattern) || filepath.Clean(a.TrainPattern) != a.TrainPattern || len(a.TrainPattern) > 4096 || a.RuntimeSeconds < 1 || a.RuntimeSeconds > 7*24*3600 || a.PrivateMaxBytes == 0 || a.PrivateMaxBytes > 8<<30 {
 		return fmt.Errorf("invalid bounded learner assignment")
 	}

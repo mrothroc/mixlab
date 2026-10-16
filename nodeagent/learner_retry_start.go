@@ -106,6 +106,7 @@ func (s *Store) StartLearnerRetry(ctx context.Context, actor trust.Authenticated
 		}
 		out = *j.Assignment
 		out.AttemptID = ack.Body.AttemptID
+		out.ExpectedPrivateHash = ack.Body.PrivateHash
 		if e = out.Validate(); e != nil {
 			return e
 		}

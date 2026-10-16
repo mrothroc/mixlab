@@ -47,12 +47,17 @@ func New(binary, sha256 string) (*Supervisor, error) {
 }
 
 type LaunchPlan struct {
-	Assignment     workerjob.Assignment
-	Directory      statehome.Path // fresh private directory allocated by hosting
-	StartupTimeout time.Duration
-	ShutdownGrace  time.Duration
-	Limits         contract.Limits
-	Started        func(int) error // local durable publication, before assignment delivery
+	Assignment              workerjob.Assignment
+	Learner                 *workerjob.LearnerAssignment // mutually exclusive with Assignment
+	Relay                   Relay                        // caller-owned opaque request handler
+	RelayTimeout            time.Duration                // zero defaults to one minute; includes queueing
+	ControlLimits           local.Limits                 // optional lower session wire budget
+	LearnerPrivateDirectory statehome.Path               // persistent across hosting attempts
+	Directory               statehome.Path               // fresh private directory allocated by hosting
+	StartupTimeout          time.Duration
+	ShutdownGrace           time.Duration
+	Limits                  contract.Limits
+	Started                 func(int) error // local durable publication, before assignment delivery
 }
 
 type Result struct {
@@ -71,20 +76,15 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 	if p.StartupTimeout <= 0 || p.StartupTimeout > 10*time.Minute || p.ShutdownGrace <= 0 || p.ShutdownGrace > 30*time.Second {
 		return result, fmt.Errorf("invalid worker hosting limits")
 	}
-	if err := p.Limits.Validate(p.Assignment.RuntimeSeconds); err != nil {
-		return result, err
-	}
 	// Freeze all slices/raw JSON before the child starts.
-	binding, err := p.Assignment.Binding()
+	binding, assignment, runtimeSeconds, err := p.freezeAssignment()
 	if err != nil {
 		return result, err
 	}
-	blob, err := json.Marshal(p.Assignment)
-	if err != nil {
+	if err := p.Limits.Validate(runtimeSeconds); err != nil {
 		return result, err
 	}
-	p.Assignment, err = workerjob.Decode(blob, binding)
-	if err != nil || binding.BuildID != s.build {
+	if binding.BuildID != s.build {
 		return result, fmt.Errorf("launch build does not match approved executable")
 	}
 	if p.Directory.Kind() != statehome.Worker {
@@ -93,41 +93,61 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 	if err = p.Directory.Validate(); err != nil {
 		return result, err
 	}
-	if err = checkAttemptDisk(parent, p.Directory.Dir(), p.Limits.DiskBytes); err != nil {
+	if err = p.prepareLearnerStorage(); err != nil {
+		return result, err
+	}
+	if err = p.checkDisk(parent); err != nil {
 		return result, err
 	}
 	if current, e := workerjob.FileDigest(s.binary); e != nil || current != s.build {
 		return result, fmt.Errorf("approved worker executable changed")
 	}
-	ring, err := json.Marshal(p.Assignment.RingAddresses)
-	if err != nil {
-		return result, err
-	}
 	// Exclusive files ensure an attempt directory cannot accidentally be reused.
 	if _, err = os.Lstat(filepath.Join(p.Directory.Dir(), "ring.json")); !os.IsNotExist(err) {
 		return result, fmt.Errorf("worker attempt directory already contains ring.json")
 	}
-	if err = p.Directory.WriteFile("ring.json", ring); err != nil {
-		return result, err
+	if p.Learner == nil {
+		ring, marshalErr := json.Marshal(p.Assignment.RingAddresses)
+		if marshalErr != nil {
+			return result, marshalErr
+		}
+		if err = p.Directory.WriteFile("ring.json", ring); err != nil {
+			return result, err
+		}
 	}
 	log, err := os.OpenFile(filepath.Join(p.Directory.Dir(), "worker.log"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return result, err
 	}
 	defer func() { _ = log.Close() }()
-	server, credential, err := local.Listen(p.Directory, local.Limits{FrameBytes: wc.MaxFrameBytes, Bytes: workerjob.ControlByteBudget, Messages: workerjob.ControlMessageBudget})
+	controlLimits := p.ControlLimits
+	if controlLimits == (local.Limits{}) {
+		controlLimits = local.Limits{FrameBytes: wc.MaxFrameBytes, Bytes: workerjob.ControlByteBudget, Messages: workerjob.ControlMessageBudget}
+		if p.Learner != nil {
+			controlLimits.Bytes = 1 << 40
+			controlLimits.Messages = 16 << 20
+		}
+	}
+	if controlLimits.Bytes > 1<<40 || controlLimits.Messages > 16<<20 {
+		return result, fmt.Errorf("worker control budget exceeds managed session ceiling")
+	}
+	server, credential, err := local.Listen(p.Directory, controlLimits)
 	if err != nil {
 		return result, err
 	}
 	defer func() { _ = server.Close() }()
-	ctx, cancel := context.WithTimeout(parent, time.Duration(p.Assignment.RuntimeSeconds)*time.Second)
+	ctx, cancel := context.WithTimeout(parent, time.Duration(runtimeSeconds)*time.Second)
 	defer cancel()
 	logs := &boundedLog{file: log, remaining: p.Limits.LogBytes, cancel: cancel}
 	cmd := exec.Command(s.binary, "-mode", "managed-worker", "-worker-control-socket", server.Path(), "-worker-session-fd", "3")
 	cmd.Dir = p.Directory.Dir()
 	cmd.ExtraFiles = []*os.File{credential}
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + p.Directory.Dir(), "TMPDIR=" + p.Directory.Dir(),
-		"MLX_HOSTFILE=" + filepath.Join(p.Directory.Dir(), "ring.json"), "MLX_RANK=" + strconv.Itoa(p.Assignment.View.LocalRank)}
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + p.Directory.Dir(), "TMPDIR=" + p.Directory.Dir()}
+	if p.Learner == nil {
+		cmd.Env = append(cmd.Env, "MLX_HOSTFILE="+filepath.Join(p.Directory.Dir(), "ring.json"), "MLX_RANK="+strconv.Itoa(p.Assignment.View.LocalRank))
+	} else {
+		cmd.Env = append(cmd.Env, "MIXLAB_LEARNER_PRIVATE_DIR="+p.LearnerPrivateDirectory.Dir())
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stdout, cmd.Stderr = logs, logs
 	cmd.WaitDelay = p.ShutdownGrace
@@ -163,12 +183,12 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 			}
 		}
 	}()
-	stopResources = watchResources(ctx, cancel, process, p.Directory.Dir(), p.Limits, s.sample)
+	stopResources = watchResources(ctx, cancel, process, p.Directory.Dir(), p.Limits, p.resourceSampler(s.sample))
 	// A short job may exit between samples. Always check its retained output
 	// before reporting success, including output written during shutdown.
 	defer func() {
 		if err == nil {
-			err = checkAttemptDisk(parent, p.Directory.Dir(), p.Limits.DiskBytes)
+			err = p.checkDisk(parent)
 		}
 	}()
 	if p.Started != nil {
@@ -210,11 +230,12 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 		return result, fmt.Errorf("worker exited during admission: %w", exitErr)
 	default:
 	}
-	assignment, err := workerjob.Envelope(binding, 1, wc.KindAssignment, p.Assignment)
+	session, err := local.NewDispatcher(ctx, conn, local.DispatcherOptions{ReadTimeout: time.Duration(runtimeSeconds) * time.Second})
 	if err != nil {
 		return result, err
 	}
-	if err = conn.Send(startCtx, assignment); err != nil {
+	defer func() { _ = session.Close() }()
+	if err = session.Send(startCtx, assignment); err != nil {
 		return result, err
 	}
 	// One reader owns protocol state. Its final value is transferred by channel,
@@ -224,15 +245,23 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 		err   error
 	}
 	reports := make(chan outcome, 1)
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
+	defer stopMonitor()
 	go func() {
-		r, e := monitor(ctx, startCtx, conn, result, p)
+		if p.Learner != nil {
+			r, e := monitorLearner(monitorCtx, startCtx, session, result, p)
+			reports <- outcome{r, e}
+			return
+		}
+		r, e := monitor(monitorCtx, startCtx, session, result, p)
 		reports <- outcome{r, e}
 	}()
 	var report outcome
 	select {
 	case report = <-reports:
 	case <-ctx.Done():
-		_ = conn.Close()
+		stopMonitor()
+		_ = session.Close()
 		report = <-reports
 		report.err = ctx.Err()
 	case exitErr := <-wait:
@@ -241,7 +270,8 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 		select {
 		case report = <-reports:
 		case <-time.After(p.ShutdownGrace):
-			_ = conn.Close()
+			stopMonitor()
+			_ = session.Close()
 			report = <-reports
 			report.err = fmt.Errorf("worker exited without a terminal outcome")
 		}
@@ -272,13 +302,13 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 	return result, err
 }
 
-func monitor(ctx, start context.Context, conn *local.Conn, r Result, plan LaunchPlan) (Result, error) {
+func monitor(ctx, start context.Context, session *local.Dispatcher, r Result, plan LaunchPlan) (Result, error) {
 	for {
 		readCtx := ctx
 		if !r.Ready {
 			readCtx = start
 		}
-		e, err := conn.Receive(readCtx)
+		e, err := nextSessionEnvelope(readCtx, session)
 		if err != nil {
 			return r, err
 		}
@@ -289,7 +319,7 @@ func monitor(ctx, start context.Context, conn *local.Conn, r Result, plan Launch
 			if !r.Ready || r.Output.Bytes != 0 || plan.Assignment.View.LocalRank != 0 {
 				return r, fmt.Errorf("unapproved or duplicate output artifact")
 			}
-			r.Output, err = receiveOutputArtifact(ctx, plan.Directory, plan.Assignment.OutputMaxBytes, e, func() (wc.Envelope, error) { return conn.Receive(ctx) })
+			r.Output, err = receiveOutputArtifact(ctx, plan.Directory, plan.Assignment.OutputMaxBytes, e, func() (wc.Envelope, error) { return nextSessionEnvelope(ctx, session) })
 			if err != nil {
 				return r, err
 			}

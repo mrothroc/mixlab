@@ -75,6 +75,11 @@ func (m Model) BindAttempt(ctx context.Context, a run.AttemptBinding, auth Recov
 		return fmt.Errorf("unknown worker")
 	}
 	expectedPrivate := s.PrivateHashes[index]
+	for _, start := range s.Starts {
+		if start.WorkerID == a.WorkerID {
+			expectedPrivate = start.PrivateHash
+		}
+	}
 	for _, u := range s.Updates {
 		if u.WorkerID == a.WorkerID {
 			// A lost receipt is recoverable without repeating local work. The

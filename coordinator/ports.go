@@ -27,6 +27,12 @@ type Repository interface {
 	Save(context.Context, string, uint64, Change) error
 }
 
+// EvaluationReceipts retrieves committed evaluation results after advancement.
+// Adapters exposing evaluation over a retryable transport implement this port.
+type EvaluationReceipts interface {
+	EvaluationResult(context.Context, string, string) (run.EvaluationResult, error)
+}
+
 type Change struct {
 	Next       State
 	Receipt    *learner.Receipt
@@ -102,4 +108,5 @@ type State struct {
 	Evaluation    *run.EvaluationAssignment `json:"evaluation"`
 	Failure       string                    `json:"failure"`
 	Attempts      []run.AttemptBinding      `json:"attempts,omitempty"`
+	Starts        []learner.Start           `json:"starts,omitempty"`
 }

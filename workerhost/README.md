@@ -7,10 +7,36 @@ contexts; this package does not expose a remote job endpoint.
 
 The administrator-owned build registry constructs `Supervisor` with an absolute
 installed executable and its approved SHA256. Its `LaunchPlan` contains only a
-typed `workerjob.Assignment`, private worker directory and bounded hosting
+typed DDP or learner assignment, private worker directory and bounded hosting
 limits. There is no submitted executable path, shell command, argv, environment
 map, credential or dynamic-library path. Approval must happen before this API;
 matching a file hash does not approve an untrusted executable.
+
+## Learner Session Integration
+
+The internal `Supervisor` also accepts an exclusive
+`workerjob.LearnerAssignment`, a persistent worker-owned private directory, and
+an opaque relay callback. It writes no ring file and supplies no MLX rank or
+remote credential to this child. The existing DDP path remains unchanged.
+The persistent learner directory cannot overlap the fresh attempt directory;
+recovery requires the existing directory and an expected private-state hash.
+Persistent state and attempt scratch/logs are summed against the same approved
+disk budget, including the pre-launch and final checks. The learner's private
+sub-budget is enforced separately by both snapshot publication and hosting.
+
+One bounded dispatcher owns local reads and writes, correlations and sequence
+numbers. Relay requests run on a bounded queue with deadlines independently
+from readiness, heartbeat and cancellation handling. The callback owns payload
+authorization; hosting does not decode rounds, grants or tensors. Remote
+credentials remain with the caller's authenticated relay, not the child or
+hosting schema. A transport error fails the attempt; authoritative application
+errors are returned in typed replies so an unavailable receipt is not mistaken
+for a broken connection.
+
+This is a Supervisor integration port, not yet a complete DiLoCo launch service.
+The durable guardian, node-service composition, validation catalog and public
+submission flow still require the next integration phase. The DDP lifecycle and
+existing guardian behavior described below continue to apply to DDP launches.
 
 The current local assignment is deliberately separate from a future signed node
 manifest: its dataset selector has already been resolved to a local shard glob

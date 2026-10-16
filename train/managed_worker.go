@@ -27,6 +27,15 @@ type managedTraining struct {
 // socket. Authentication and assignment checks precede config/data/GPU use.
 // The hosting process owns hard deadlines and terminates stuck native calls.
 func RunManagedWorker(ctx context.Context, socket string, fd int) error {
+	return RunManagedWorkerWithLearner(ctx, socket, fd, nil)
+}
+
+// RunManagedWorkerWithLearner lets the executable compose a learner without
+// linking it into train. The callback receives the authenticated assignment and
+// sole dispatcher after strict envelope/schema/binding validation, owns learner
+// lifecycle events, and must honor ctx. A nil
+// callback permits only DDP. All connection resources close when it returns.
+func RunManagedWorkerWithLearner(ctx context.Context, socket string, fd int, learner func(context.Context, *local.Dispatcher, wc.Envelope) error) error {
 	if socket == "" || fd < 3 {
 		return fmt.Errorf("managed-worker requires a control socket and inherited session FD >= 3")
 	}
@@ -35,28 +44,68 @@ func RunManagedWorker(ctx context.Context, socket string, fd int) error {
 		return fmt.Errorf("invalid worker session descriptor")
 	}
 	authCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	conn, err := local.Connect(authCtx, socket, credential, local.Limits{FrameBytes: wc.MaxFrameBytes, Bytes: workerjob.ControlByteBudget, Messages: workerjob.ControlMessageBudget})
+	limits := local.Limits{FrameBytes: wc.MaxFrameBytes, Bytes: workerjob.ControlByteBudget, Messages: workerjob.ControlMessageBudget}
+	if learner != nil {
+		limits.Bytes = 1 << 40
+		limits.Messages = 16 << 20
+	}
+	conn, err := local.Connect(authCtx, socket, credential, limits)
 	cancel()
 	if err != nil {
 		return err
 	}
 	defer func() { _ = conn.Close() }()
-	return serveManagedWorker(ctx, conn, runManagedAssignment)
+	return serveManagedWorkerWithLearner(ctx, conn, runManagedAssignment, learner)
 }
 
 type managedRun func(context.Context, workerjob.Assignment, func() error, func(workerjob.Event) error) error
 
 func serveManagedWorker(parent context.Context, conn *local.Conn, run managedRun) error {
-	readCtx, stopRead := context.WithTimeout(parent, 30*time.Second)
-	e, err := conn.Receive(readCtx)
-	stopRead()
+	return serveManagedWorkerWithLearner(parent, conn, run, nil)
+}
+
+func serveManagedWorkerWithLearner(parent context.Context, conn *local.Conn, run managedRun, learner func(context.Context, *local.Dispatcher, wc.Envelope) error) error {
+	// The host need not send anything after assignment. Runtime cancellation,
+	// not a short idle-read timeout, bounds this DDP-side receive owner.
+	session, err := local.NewDispatcher(parent, conn, local.DispatcherOptions{ReadTimeout: 7 * 24 * time.Hour, RequestTimeout: 2 * time.Minute})
 	if err != nil {
 		return err
 	}
+	defer func() { _ = session.Close() }()
+	readCtx, stopRead := context.WithTimeout(parent, 30*time.Second)
+	defer stopRead()
+	select {
+	case e, ok := <-session.Events():
+		if !ok {
+			return session.Err()
+		}
+		if e.PayloadKind == workerjob.LearnerVersion {
+			if e.Kind != wc.KindAssignment || e.PayloadVersion != 1 || e.CorrelationID != session.Binding().AttemptID {
+				return fmt.Errorf("invalid managed learner assignment envelope")
+			}
+			if _, err := workerjob.DecodeLearner(e.Payload, session.Binding()); err != nil {
+				return fmt.Errorf("invalid managed learner assignment: %w", err)
+			}
+			if learner == nil {
+				return fmt.Errorf("managed learner schema is not composed")
+			}
+			return learner(parent, session, e)
+		}
+		return serveManagedDDP(parent, session, e, run)
+	case <-session.Controls():
+		return fmt.Errorf("control before managed assignment")
+	case <-readCtx.Done():
+		return readCtx.Err()
+	}
+}
+
+func serveManagedDDP(parent context.Context, session *local.Dispatcher, e wc.Envelope, run managedRun) error {
+	defer func() { _ = session.Close() }()
+	var err error
 	if err = workerjob.CheckPayload(e, wc.KindAssignment); err != nil {
 		return err
 	}
-	a, err := workerjob.Decode(e.Payload, conn.Binding())
+	a, err := workerjob.Decode(e.Payload, session.Binding())
 	if err != nil {
 		return err
 	}
@@ -70,19 +119,14 @@ func serveManagedWorker(parent context.Context, conn *local.Conn, run managedRun
 	}
 	ctx, cancel := context.WithTimeout(parent, time.Duration(a.RuntimeSeconds)*time.Second)
 	defer cancel()
-	var mu sync.Mutex
-	var seq uint64
 	send := func(kind wc.Kind, event any) error {
-		mu.Lock()
-		defer mu.Unlock()
-		seq++
-		msg, err := workerjob.Envelope(conn.Binding(), seq, kind, event)
+		msg, err := workerjob.Envelope(session.Binding(), 1, kind, event)
 		if err != nil {
 			return err
 		}
 		outCtx, done := context.WithTimeout(ctx, 5*time.Second)
 		defer done()
-		return conn.Send(outCtx, msg)
+		return session.Send(outCtx, msg)
 	}
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -90,12 +134,15 @@ func serveManagedWorker(parent context.Context, conn *local.Conn, run managedRun
 		defer wg.Done()
 		// Only cancellation is permitted after the immutable assignment. Any
 		// disconnect or protocol violation revokes this running attempt as well.
-		msg, err := conn.Receive(ctx)
-		if err == nil {
+		select {
+		case msg := <-session.Controls():
 			var event workerjob.Event
 			if workerjob.CheckPayload(msg, wc.KindCancellation) == nil {
 				_ = workerjob.DecodePayload(msg.Payload, &event)
 			}
+		case <-session.Events():
+		case <-session.Done():
+		case <-ctx.Done():
 		}
 		cancel()
 	}()
@@ -117,7 +164,6 @@ func serveManagedWorker(parent context.Context, conn *local.Conn, run managedRun
 	}()
 	defer func() {
 		cancel()
-		_ = conn.Close()
 		wg.Wait()
 	}()
 	err = run(ctx, a, func() error { return send(wc.KindReadiness, workerjob.Event{}) }, func(event workerjob.Event) error {

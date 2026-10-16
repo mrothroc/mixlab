@@ -3,8 +3,10 @@
 package workerhost
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,17 +53,28 @@ func TestMain(m *testing.M) {
 func helperWorker() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if len(os.Args) != 7 || os.Args[2] != "managed-worker" || os.Args[4] == "" || os.Args[6] != "3" {
+	if len(os.Args) != 7 || os.Args[1] != "-mode" || os.Args[2] != "managed-worker" || os.Args[3] != "-worker-control-socket" || os.Args[4] == "" || os.Args[5] != "-worker-session-fd" || os.Args[6] != "3" {
 		return 20
 	}
-	conn, err := local.Connect(ctx, os.Args[4], os.NewFile(3, "session"), local.Limits{FrameBytes: wc.MaxFrameBytes, Bytes: workerjob.ControlByteBudget, Messages: workerjob.ControlMessageBudget})
+	credential := os.NewFile(3, "session")
+	conn, err := local.Connect(ctx, os.Args[4], credential, local.Limits{FrameBytes: wc.MaxFrameBytes, Bytes: workerjob.ControlByteBudget, Messages: workerjob.ControlMessageBudget})
 	if err != nil {
 		return 21
 	}
 	defer func() { _ = conn.Close() }()
+	if _, err := credential.Stat(); !errors.Is(err, os.ErrClosed) {
+		return 38
+	}
 	e, err := conn.Receive(ctx)
 	if err != nil {
 		return 22
+	}
+	if err := checkChildLaunchBoundary(e); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 39
+	}
+	if e.PayloadKind == workerjob.LearnerVersion {
+		return helperLearner(ctx, conn, e)
 	}
 	a, err := workerjob.Decode(e.Payload, conn.Binding())
 	if err != nil {
@@ -158,6 +171,90 @@ func helperWorker() int {
 		return 33
 	}
 	return 0
+}
+
+const launchCredentialCanary = "test-only-parent-credential-canary"
+
+func checkChildLaunchBoundary(initial wc.Envelope) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	expected := map[string]string{"PATH": "/usr/bin:/bin", "HOME": cwd, "TMPDIR": cwd}
+	if initial.PayloadKind == workerjob.LearnerVersion {
+		private := os.Getenv("MIXLAB_LEARNER_PRIVATE_DIR")
+		if private == "" || !filepath.IsAbs(private) || pathsOverlap(private, cwd) {
+			return fmt.Errorf("invalid private directory environment")
+		}
+		expected["MIXLAB_LEARNER_PRIVATE_DIR"] = private
+	} else {
+		var assignment workerjob.Assignment
+		if err := json.Unmarshal(initial.Payload, &assignment); err != nil {
+			return err
+		}
+		expected["MLX_HOSTFILE"] = filepath.Join(cwd, "ring.json")
+		expected["MLX_RANK"] = strconv.Itoa(assignment.View.LocalRank)
+	}
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		want, allowed := expected[key]
+		if !ok || !allowed || value != want {
+			return fmt.Errorf("unexpected child environment key %q", key)
+		}
+		delete(expected, key)
+	}
+	if len(expected) != 0 {
+		return fmt.Errorf("missing child environment keys")
+	}
+	if bytes.Contains(initial.Payload, []byte(launchCredentialCanary)) || strings.Contains(strings.Join(os.Args, "\x00"), launchCredentialCanary) {
+		return fmt.Errorf("parent credential leaked into assignment or argv")
+	}
+	return nil
+}
+
+func TestSupervisedWorkerCredentialIsolation(t *testing.T) {
+	for _, key := range []string{"WORKERHOST_SECRET", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "MIXLAB_WORKLOAD_TOKEN", "SSL_CERT_FILE", "SSL_KEY_FILE", "DYLD_INSERT_LIBRARIES", "LD_PRELOAD", "MIXLAB_LEARNER_PRIVATE_DIR"} {
+		t.Setenv(key, launchCredentialCanary)
+	}
+	for _, mode := range []string{"ddp", "learner"} {
+		t.Run(mode, func(t *testing.T) {
+			s, p := plan(t, "success")
+			if mode == "learner" {
+				s, p = learnerPlan(t, "success")
+			}
+			result, err := s.Run(context.Background(), p)
+			if err != nil || !result.Ready {
+				t.Fatalf("credential isolation launch: %+v %v", result, err)
+			}
+			// The fake credentials are parent-only. No logs, assignment sidecars,
+			// or retained child output may contain them after either launch path.
+			roots := []string{p.Directory.Dir()}
+			if p.Learner != nil {
+				roots = append(roots, p.LearnerPrivateDirectory.Dir())
+			}
+			for _, root := range roots {
+				err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+					if err != nil {
+						return err
+					}
+					if !entry.Type().IsRegular() {
+						return nil
+					}
+					body, err := os.ReadFile(path)
+					if err != nil {
+						return err
+					}
+					if bytes.Contains(body, []byte(launchCredentialCanary)) {
+						return fmt.Errorf("parent credential leaked into %s", entry.Name())
+					}
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func privateDirectory(t *testing.T) statehome.Path {

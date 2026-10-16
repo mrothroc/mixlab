@@ -212,6 +212,7 @@ func (m Model) OpenRound(ctx context.Context, id string, seconds int64) ([]run.A
 	next.Phase = Open
 	next.Assignments = make([]run.Assignment, len(s.Plan.Slots))
 	next.Updates = nil
+	next.Starts = nil
 	next.Candidate = nil
 	next.Evaluation = nil
 	for i, r := range s.Commit.Registrations {

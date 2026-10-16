@@ -172,7 +172,7 @@ func main() {
 	}
 	if *mode == "managed-worker" {
 		must(validateManagedFlags(providedFlags, flag.Args()))
-		must(train.RunManagedWorker(context.Background(), *workerSocket, *workerFD))
+		must(train.RunManagedWorkerWithLearner(context.Background(), *workerSocket, *workerFD, serveManagedLearner))
 		return
 	}
 	if providedFlags["worker-control-socket"] || providedFlags["worker-session-fd"] {
