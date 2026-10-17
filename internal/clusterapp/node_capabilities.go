@@ -39,7 +39,7 @@ func NodeCapabilitiesHandler(store *nodeagent.Store, policy *managedtls.Policy, 
 			http.Error(w, "controller required", http.StatusForbidden)
 			return
 		}
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), recruitment.ProbeAttemptTimeout)
 		defer cancel()
 		c, err := store.Capabilities(ctx, peer, clock())
 		if err != nil || c.Validate() != nil {
@@ -61,7 +61,9 @@ func QueryNodeCapabilities(ctx context.Context, endpoint string, policy *managed
 	if _, err := (discovery.Explicit{Addresses: map[discovery.Service][]string{discovery.Node: {endpoint}}}).Browse(ctx, discovery.Node); err != nil {
 		return out, err
 	}
-	c, err := policy.HTTPClient(3 * time.Second)
+	// Recruitment bounds each attempt to 20s within one 30s scan. Do not
+	// silently shorten its TLS/dial/read budget with the former 3s client cap.
+	c, err := policy.HTTPClient(30 * time.Second)
 	if err != nil {
 		return out, err
 	}
@@ -76,7 +78,17 @@ func QueryNodeCapabilities(ctx context.Context, endpoint string, policy *managed
 		return out, err
 	}
 	defer func() { _ = response.Body.Close() }()
-	if response.StatusCode != http.StatusOK || response.TLS == nil {
+	if response.TLS == nil {
+		return out, fmt.Errorf("authenticated node TLS response required")
+	}
+	if _, err := policy.Authenticate(*response.TLS); err != nil {
+		return out, fmt.Errorf("%w: %w", managedtls.ErrPeerRejected, err)
+	}
+	if response.StatusCode != http.StatusOK {
+		switch response.StatusCode {
+		case http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return out, fmt.Errorf("%w (HTTP %d)", recruitment.ErrProbeUnavailable, response.StatusCode)
+		}
 		return out, fmt.Errorf("node capability query rejected (HTTP %d)", response.StatusCode)
 	}
 	b, err := io.ReadAll(io.LimitReader(response.Body, maxCapabilityBytes+1))
@@ -87,19 +99,19 @@ func QueryNodeCapabilities(ctx context.Context, endpoint string, policy *managed
 		return out, fmt.Errorf("node capabilities exceed response limit")
 	}
 	if err := strictjson.Validate(b, 16); err != nil {
-		return out, err
+		return out, fmt.Errorf("invalid node capabilities: %v", err)
 	}
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if err := d.Decode(&out.Capabilities); err != nil {
-		return out, err
+		return out, fmt.Errorf("invalid node capabilities: %v", err)
 	}
 	if err := out.Capabilities.Validate(); err != nil {
 		return out, err
 	}
 	out.Peer, err = policy.Authenticate(*response.TLS)
 	if err != nil {
-		return recruitment.Observation{}, err
+		return recruitment.Observation{}, fmt.Errorf("%w: %w", managedtls.ErrPeerRejected, err)
 	}
 	if out.Peer.Role != trust.Node || out.Peer.Principal != out.Capabilities.Node {
 		return recruitment.Observation{}, fmt.Errorf("capabilities do not belong to authenticated node")
@@ -123,7 +135,7 @@ func NodeLookup(p *principal.Store, clock func() time.Time) (recruitment.Lookup,
 		}
 		policy, err := managedPrincipalPolicy(p, trust.Node, clock)
 		if err != nil {
-			return recruitment.Observation{}, err
+			return recruitment.Observation{}, fmt.Errorf("%w: %w", clusterdiagnostic.ErrLocalIdentity, err)
 		}
 		return QueryNodeCapabilities(ctx, endpoint, policy)
 	}, nil

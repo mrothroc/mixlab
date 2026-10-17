@@ -1,7 +1,9 @@
 package clusterapp
 
 import (
+	"bufio"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -57,7 +59,7 @@ func TestManagedHTTPServerBudgets(t *testing.T) {
 				}
 				for range 2 {
 					w := &managedReadDeadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
-					s.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/", nil).WithContext(ctx))
+					s.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader("body")).WithContext(ctx))
 					if w.Code != http.StatusNoContent {
 						t.Fatalf("handler status = %d", w.Code)
 					}
@@ -99,12 +101,105 @@ func TestManagedHTTPServerReadDeadlineFailure(t *testing.T) {
 				w.WriteHeader(http.StatusNoContent)
 			}), 10*time.Second)
 			w := tc.writer()
-			s.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/", nil))
+			s.Handler.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/", strings.NewReader("body")))
 			if called != tc.allowed {
 				t.Fatalf("handler called = %v, want %v", called, tc.allowed)
 			}
 			if !tc.allowed && w.(*managedReadDeadlineRecorder).Code != http.StatusServiceUnavailable {
 				t.Fatal("deadline failure did not fail closed")
+			}
+		})
+	}
+}
+
+func TestManagedHTTPServerBodyDeadlineScope(t *testing.T) {
+	const bodyBudget = 100 * time.Millisecond
+	for _, tc := range []struct {
+		name, request     string
+		hasBody           bool
+		disableKeepAlives bool
+	}{
+		{name: "bodyless_lease_get_keepalive"},
+		{name: "bodyless_lease_get_no_keepalive", disableKeepAlives: true},
+		{name: "stalled_post", request: "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\nx", hasBody: true},
+		{name: "stalled_get", request: "GET / HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\nx", hasBody: true},
+		{name: "stalled_chunked_get", request: "GET / HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nx", hasBody: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type result struct {
+				err     error
+				elapsed time.Duration
+			}
+			observed := make(chan result, 1)
+			server := httptest.NewUnstartedServer(nil)
+			server.EnableHTTP2 = false
+			server.Config = newManagedHTTPServer(context.Background(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				started := time.Now()
+				if r.ProtoMajor != 1 || r.TLS == nil || !r.TLS.HandshakeComplete {
+					t.Error("regression requires HTTP/1 over completed TLS")
+				}
+				var err error
+				status := http.StatusNoContent
+				if tc.hasBody {
+					_, err = io.ReadAll(io.LimitReader(r.Body, 1024))
+					status = http.StatusRequestTimeout
+				} else {
+					if r.Method != http.MethodGet || r.ContentLength != 0 || len(r.TransferEncoding) != 0 || r.Close != tc.disableKeepAlives {
+						t.Errorf("unexpected lease GET framing: method=%s length=%d encoding=%v close=%v", r.Method, r.ContentLength, r.TransferEncoding, r.Close)
+					}
+					// The old unconditional deadline cancels this request at
+					// 100ms via net/http's background disconnect read.
+					timer := time.NewTimer(3 * bodyBudget)
+					defer timer.Stop()
+					select {
+					case <-r.Context().Done():
+					case <-timer.C:
+					}
+					err = r.Context().Err()
+					if err != nil {
+						status = http.StatusServiceUnavailable
+					}
+				}
+				observed <- result{err, time.Since(started)}
+				w.WriteHeader(status)
+			}), bodyBudget)
+			server.StartTLS()
+			defer server.Close()
+			var response *http.Response
+			if tc.hasBody {
+				// Retain the real TLS connection while withholding the
+				// remainder of each declared HTTP/1 body.
+				config := server.Client().Transport.(*http.Transport).TLSClientConfig.Clone()
+				conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 5 * time.Second}, "tcp", server.Listener.Addr().String(), config)
+				check(t, err)
+				defer func() { _ = conn.Close() }()
+				check(t, conn.SetDeadline(time.Now().Add(5*time.Second)))
+				_, err = io.WriteString(conn, tc.request)
+				check(t, err)
+				response, err = http.ReadResponse(bufio.NewReader(conn), nil)
+				check(t, err)
+			} else {
+				transport := server.Client().Transport.(*http.Transport).Clone()
+				transport.DisableKeepAlives = tc.disableKeepAlives
+				transport.ForceAttemptHTTP2 = false
+				transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+				defer transport.CloseIdleConnections()
+				client := &http.Client{Transport: transport, Timeout: 5 * time.Second}
+				// Same bodyless request/connection policy as managedtls,
+				// representing a lease GET whose operation may outlive 10s.
+				var err error
+				response, err = client.Get(server.URL + "/v1/agent/leases/" + strings.Repeat("a", 32))
+				check(t, err)
+			}
+			defer func() { _ = response.Body.Close() }()
+			got := <-observed
+			if tc.hasBody {
+				var timeout net.Error
+				if response.StatusCode != http.StatusRequestTimeout || !errors.As(got.err, &timeout) || !timeout.Timeout() {
+					t.Fatalf("body read was not bounded: status=%d result=%+v", response.StatusCode, got)
+				}
+			} else if response.StatusCode != http.StatusNoContent || got.err != nil || got.elapsed < 3*bodyBudget {
+				t.Fatalf("body deadline canceled bodyless operation: status=%d result=%+v", response.StatusCode, got)
 			}
 		})
 	}

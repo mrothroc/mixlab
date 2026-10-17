@@ -198,7 +198,13 @@ fail the run even though the service restarts successfully.
 
 The coordinator observes stopped learner processes and automatically attempts
 same-allocation recovery, capped at three replacement attempts per worker per
-run. Recovery intent, its fresh attempt identity and its five-minute deadline are
+run after admission and handoff complete. A genuine learner death during admission
+does not use this recovery path: before commit the saga compensates its original
+allocations; after commit, loss during handoff fails the run and reconciles cleanup.
+It does not replace the allocation or invent a private-state checkpoint. Transient
+observation failures instead leave admission pending within its existing authority
+deadline.
+Recovery intent, its fresh attempt identity and its five-minute deadline are
 durable, so restarting the coordinator does not reset the allowance. An unknown
 private-state hash (including failure before the first recorded start), a
 permanent authorization rejection, or exhausted recovery fails the run explicitly.
@@ -208,6 +214,19 @@ request fifteen-minute renewable leases for renewal headroom. Existing accepted
 submissions retain their signed lease settings, and expiry is never bypassed.
 Lease maintenance services independent allocations concurrently (at most eight
 at once), so a slow node does not prevent healthy peers from renewing.
+Admission lease calls allow up to 50 seconds within a 130-second maintenance
+turn. The enclosing three-minute service turn reserves 50 seconds for a saga
+effect; pre-commit work remains capped by the immutable admission deadline.
+Renewal starts early enough to cover the next service turn, polling interval
+and maintenance scan, without extending accepted lease or authority limits.
+When a bounded scan cannot finish every allocation, the next scan resumes at
+interrupted or unvisited work. A lost handoff acknowledgement remains uncertain
+until the current owner is observed; an expired controller admission window
+alone is not proof that a coordinator-owned lease was lost.
+
+Node selection uses the same bounded authenticated capability-probe policy as
+[node inventory](cluster-agent.md#inventory-and-submission).
+
 Status includes `recovery_worker` and `recovery_started_at` during recovery,
 or `learner_unavailable_since` while node status cannot be read. Exhaustion
 changes `run_phase` to `FAILED` with a sanitized `failure` reason.

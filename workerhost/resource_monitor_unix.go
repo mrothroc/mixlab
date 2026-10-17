@@ -33,7 +33,7 @@ func watchResourceMonitor(parent context.Context, cancel context.CancelFunc, p *
 	ctx, stop := context.WithCancel(parent)
 	done := make(chan error, 1)
 	go func() {
-		err := monitorResources(ctx, cancel, p, dir, limits, sample, control)
+		err := monitorResources(ctx, cancel, p, dir, limits, sample, control, time.Now)
 		if err != nil {
 			cancel()
 			err = fmt.Errorf("worker resource monitor: %w", err)
@@ -52,11 +52,11 @@ type resourceObservation struct {
 	probeErr error
 }
 
-func monitorResources(ctx context.Context, cancel context.CancelFunc, p *ownedProcess, dir string, limits contract.Limits, sample resourceSampler, control resourceProcessControl) error {
+func monitorResources(ctx context.Context, cancel context.CancelFunc, p *ownedProcess, dir string, limits contract.Limits, sample resourceSampler, control resourceProcessControl, now func() time.Time) error {
 	var meter resourceMeter
 	timeouts := 0
 	paused := false
-	lastHealthy := time.Now()
+	lastHealthy := now()
 	ticker := time.NewTicker(resourceInterval)
 	defer ticker.Stop()
 	freshness := time.NewTimer(resourceSampleGrace)
@@ -136,7 +136,7 @@ func monitorResources(ctx context.Context, cancel context.CancelFunc, p *ownedPr
 		}
 		// A result and the freshness timer may become runnable together after
 		// a scheduler stall. Do not let selecting the result skip suspension.
-		if !paused && time.Since(lastHealthy) >= resourceSampleGrace {
+		if !paused && now().Sub(lastHealthy) >= resourceSampleGrace {
 			if err := suspend(); err != nil {
 				return err
 			}
@@ -160,7 +160,7 @@ func monitorResources(ctx context.Context, cancel context.CancelFunc, p *ownedPr
 				paused = false
 			}
 			timeouts = 0
-			lastHealthy = time.Now()
+			lastHealthy = now()
 			freshness.Reset(resourceSampleGrace)
 			freshC = freshness.C
 		}

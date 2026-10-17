@@ -90,7 +90,8 @@ enforced separately from the monitored resource budgets below.
 Every launch requires the approved CPU, memory, disk and log budgets; none
 silently defaults to unlimited. The owner samples immediately after launch and
 then approximately once per second, with a two-second sampling deadline.
-Plain workers tolerate one confirmed deadline-killed `ps` sample; a second
+Plain workers tolerate one confirmed deadline-killed `ps` sample or a successful
+sampler whose output drain exceeded its allowance; a second
 consecutive timeout or six seconds without a complete healthy sample cancels
 supervision. Their disk-sampling deadlines remain fatal.
 
@@ -104,7 +105,10 @@ cannot authorize resume. Sampling slowness alone does not terminate or restart
 the learner. The suspended wait remains bounded by the existing approved job
 lifetime and parent cancellation; these clocks are never paused or extended.
 
-CPU accounting survives missed samples and suspension. Known budget breaches,
+CPU accounting survives missed samples and suspension. Incomplete output is never
+parsed or treated as a healthy observation. A normal command exit with an
+`exec.ErrWaitDelay` drain timeout and no writer error is a slow sample; nonzero
+exits and output-limit/I/O failures remain fatal. Known budget breaches,
 malformed output, permission errors, unproven/joined timeout errors and failed
 STOP/CONT signals remain fatal. Cancellation kills a suspended group without
 resuming unmeasured work. Sampling and signals retain the PID ownership/reap

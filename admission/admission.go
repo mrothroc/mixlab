@@ -260,6 +260,10 @@ func (r record) validate() error {
 	return nil
 }
 
+// StepTimeout bounds one replay-safe effect, including lock acquisition. Service
+// owners must leave this much headroom after lease maintenance.
+const StepTimeout = 50 * time.Second
+
 // Step performs at most one external effect. Its prior intent is durable, and
 // replay repeats the exact effect after a lost response or ambiguous local CAS.
 // The service, not the submitting terminal, repeatedly calls Step after restart.
@@ -267,7 +271,7 @@ func (s *Saga) Step(ctx context.Context, p Ports) (done bool, err error) {
 	if p.Reserve == nil || p.AbortReservation == nil || p.BuildPlan == nil || p.Stage == nil || p.Prepare == nil || p.Start == nil || p.Register == nil || p.Commit == nil || p.Abort == nil || p.Finalize == nil || p.Clock == nil {
 		return false, fmt.Errorf("complete admission ports required")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, StepTimeout)
 	defer cancel()
 	err = s.path.WithProcessLock(ctx, "admission.lock", func() error {
 		old, r, e := s.load()
@@ -284,6 +288,13 @@ func (s *Saga) Step(ctx context.Context, p Ports) (done bool, err error) {
 		}
 		if r.Aborting && !r.Committed {
 			return s.compensate(ctx, p, old, r)
+		}
+		if !r.Committed {
+			// Load tolerance does not extend admission authority. Compensation
+			// and committed handoff above/below still use the bounded step.
+			var stop context.CancelFunc
+			ctx, stop = context.WithTimeout(ctx, time.Duration(r.Deadline-p.Clock())*time.Second)
+			defer stop()
 		}
 		for i, n := range r.Nodes {
 			if !n.Touched {

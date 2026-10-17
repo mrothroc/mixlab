@@ -35,8 +35,8 @@ func (p *ownedProcess) sampleUsage(ctx context.Context) ([]processUsage, error) 
 	return parseProcessUsage(output, p.cmd.Process.Pid)
 }
 
-// Only a running sampler killed by its deadline is eligible for retry. A bare
-// context deadline (for example from a disk walk) is not this evidence.
+// A confirmed deadline kill or successful sampler with a delayed output drain
+// is eligible for timeout tolerance. A bare deadline is not this evidence.
 type processSampleTimeoutError struct{ cause error }
 
 func (e *processSampleTimeoutError) Error() string { return e.cause.Error() }
@@ -64,6 +64,8 @@ func processSampleOutput(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Run(); err != nil {
 		var exit *exec.ExitError
+		drainDelayed := err == exec.ErrWaitDelay && cmd.ProcessState != nil &&
+			cmd.ProcessState.Success() && out.err == nil && !killedByContext.Load()
 		canceledBeforeStart := ctx.Err() != nil && err == ctx.Err()
 		interrupted := killedByContext.Load() && out.err == nil &&
 			errors.As(err, &exit) && exit.Sys().(syscall.WaitStatus).Signal() == syscall.SIGKILL
@@ -74,7 +76,7 @@ func processSampleOutput(ctx context.Context, cmd *exec.Cmd) (string, error) {
 			err = errors.Join(err, ctx.Err())
 		}
 		err = fmt.Errorf("process resource sample failed: %w", err)
-		if interrupted && ctx.Err() == context.DeadlineExceeded {
+		if drainDelayed || interrupted && ctx.Err() == context.DeadlineExceeded {
 			return "", &processSampleTimeoutError{cause: err}
 		}
 		if (interrupted && ctx.Err() == context.Canceled) || canceledBeforeStart {

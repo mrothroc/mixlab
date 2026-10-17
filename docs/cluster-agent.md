@@ -63,10 +63,12 @@ Sampling can overshoot; short-lived processes can escape accounting. These
 limits are for trusted workloads on administrator-controlled hosts, not hostile
 process isolation. Local datasets must remain immutable during a job.
 
-Ordinary workers tolerate one confirmed process-sampler deadline timeout; a
-second timeout or six seconds without a complete healthy sample stops them.
+Ordinary workers tolerate one confirmed process-sampler deadline or normal-exit
+output-drain timeout; a second timeout or six seconds without a complete healthy
+sample stops them.
 DiLoCo learners instead suspend their owned process group when measurements are
 stale and resume only after a complete healthy sample begun after suspension.
+Incomplete sample output is discarded, never treated as a healthy measurement.
 This preserves the process and private state without allowing unbounded
 unmonitored execution. CPU accounting survives missed samples. Verified breaches,
 invalid evidence and permission errors still terminate the learner. Job expiry,
@@ -119,6 +121,14 @@ error. Runtime journals and bounded diagnostic logs are retained for recovery;
 do not delete them to make a busy node appear available.
 
 ## Inventory And Submission
+
+Selection and authenticated node inventory retry transient read-only probes,
+with up to eight concurrent probes and 20 seconds per attempt, including the
+server-side store-read bound. A 25-second probe phase leaves time for deterministic
+selection and freshness checks inside the existing 30-second total budget.
+Authentication, identity and malformed response failures are terminal, not
+retried. This also applies to the node inventory used by `doctor`; it does not
+change unauthenticated dial diagnostics.
 
 Use an enrolled controller identity, never node or authority keys, for remote
 operations. Explicit endpoints work without multicast:

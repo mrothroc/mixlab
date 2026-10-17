@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,11 +17,11 @@ import (
 func TestInventoryAuthenticatedBoundedDeterministic(t *testing.T) {
 	r, o := fixture()
 	hints := []discovery.Hint{{Service: discovery.Node, Endpoint: "z.local:1", Claims: discovery.Claims{Node: "forged"}}, {Service: discovery.Node, Endpoint: "a.local:1"}, {Service: discovery.Node, Endpoint: "z.local:1"}}
-	calls := 0
+	var calls atomic.Int32
 	lookup := func(ctx context.Context, e string) (Observation, error) {
-		calls++
-		if d, ok := ctx.Deadline(); !ok || time.Until(d) > 3*time.Second {
-			t.Fatal("unbounded lookup")
+		calls.Add(1)
+		if d, ok := ctx.Deadline(); !ok || time.Until(d) > 20*time.Second {
+			t.Error("unbounded lookup")
 		}
 		if e == "a.local:1" {
 			return Observation{}, errors.New("private key path must not leak")
@@ -28,8 +29,8 @@ func TestInventoryAuthenticatedBoundedDeterministic(t *testing.T) {
 		return o, nil
 	}
 	a, err := Inventory(context.Background(), hints, r.Cluster, lookup, func() time.Time { return selectionNow })
-	if err != nil || len(a) != 2 || calls != 2 || a[0].Reason != "unavailable_or_unauthenticated" || a[1].Reason != "available" {
-		t.Fatal(a, calls, err)
+	if err != nil || len(a) != 2 || calls.Load() != 2 || a[0].Reason != "unavailable_or_unauthenticated" || a[1].Reason != "available" {
+		t.Fatal(a, calls.Load(), err)
 	}
 	b, err := Inventory(context.Background(), hints, r.Cluster, lookup, func() time.Time { return selectionNow })
 	if err != nil || !reflect.DeepEqual(a, b) {

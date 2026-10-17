@@ -96,6 +96,11 @@ func helperLearner(ctx context.Context, conn *local.Conn, initial wc.Envelope) i
 		}
 	}
 	request := wc.Envelope{Kind: wc.KindRoundRequest, PayloadKind: "owner_opaque_v99", PayloadVersion: 99, Payload: []byte(`{"unknown_to_host":[1,2,3]}`)}
+	if a.DatasetSelector == "stopped-reply" {
+		// Larger than the Unix socket buffer: the host cannot finish its reply
+		// while this entire process (including the reader) is stopped.
+		request.Payload = []byte(`"` + strings.Repeat("x", 900<<10) + `"`)
+	}
 	result := make(chan error, 1)
 	go func() {
 		e, err := d.Request(ctx, request)

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,14 +43,14 @@ func TestSelectionDeterministicAuthenticatedIdentity(t *testing.T) {
 		hints = append(hints, discovery.Hint{Service: discovery.Node, Endpoint: endpoint, Claims: discovery.Claims{Cluster: "forged", Node: "forged"}})
 	}
 	hints = append(hints, hints[0], discovery.Hint{Service: discovery.Node, Endpoint: "bad/endpoint"}, discovery.Hint{Service: discovery.Authority, Endpoint: "ignored.local:1"})
-	calls := 0
+	var calls atomic.Int32
 	lookup := func(_ context.Context, endpoint string) (Observation, error) {
-		calls++
+		calls.Add(1)
 		return observations[endpoint], nil
 	}
 	a, err := Select(context.Background(), hints, r, lookup, func() time.Time { return selectionNow })
-	if err != nil || len(a.Selected) != 2 || calls != 4 || a.Selected[0].Endpoint != "z.local:1" || a.Selected[1].Endpoint != "a.local:1" {
-		t.Fatal(a, calls, err)
+	if err != nil || len(a.Selected) != 2 || calls.Load() != 4 || a.Selected[0].Endpoint != "z.local:1" || a.Selected[1].Endpoint != "a.local:1" {
+		t.Fatal(a, calls.Load(), err)
 	}
 	slices.Reverse(hints)
 	b, err := Select(context.Background(), hints, r, lookup, func() time.Time { return selectionNow })
@@ -59,6 +60,38 @@ func TestSelectionDeterministicAuthenticatedIdentity(t *testing.T) {
 	encoded, _ := json.Marshal(a)
 	if strings.Contains(string(encoded), "forged") {
 		t.Fatal("TXT identity reached decision evidence")
+	}
+}
+
+func TestSelectionFinalCancellationClearsSelectedDecisions(t *testing.T) {
+	r, first := fixture()
+	_, second := fixture()
+	second.Peer.Principal, second.Capabilities.Node = strings.Repeat("2", 32), strings.Repeat("2", 32)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	hints := []discovery.Hint{{Service: discovery.Node, Endpoint: "a.local:1"}, {Service: discovery.Node, Endpoint: "b.local:1"}}
+	clockCalls := 0
+	out, err := Select(ctx, hints, r, func(_ context.Context, endpoint string) (Observation, error) {
+		if endpoint == "a.local:1" {
+			return first, nil
+		}
+		return second, nil
+	}, func() time.Time {
+		// Probe clock calls are serialized; the third is the final freshness
+		// check, after the earlier cancellation checks have passed.
+		clockCalls++
+		if clockCalls == 3 {
+			cancel()
+		}
+		return selectionNow
+	})
+	if !errors.Is(err, context.Canceled) || len(out.Selected) != 0 || len(out.Decisions) != 2 || clockCalls != 3 {
+		t.Fatalf("selection=%+v error=%v clock calls=%d", out, err, clockCalls)
+	}
+	for _, decision := range out.Decisions {
+		if decision.Reason != "not_selected" {
+			t.Fatalf("canceled selection retained misleading decision: %+v", decision)
+		}
 	}
 }
 
@@ -185,9 +218,10 @@ func TestSelectionRechecksCredentialExpiryAtCommit(t *testing.T) {
 func TestSelectionUsesLiveMultiAddressObservation(t *testing.T) {
 	for _, expireCredential := range []bool{false, true} {
 		r, _ := fixture()
-		now := selectionNow
+		firstObserved, secondObserved := make(chan struct{}), make(chan struct{})
+		observations := 0
 		hints := []discovery.Hint{{Service: discovery.Node, Endpoint: "a.local:1"}, {Service: discovery.Node, Endpoint: "a.local:2"}, {Service: discovery.Node, Endpoint: "b.local:1"}}
-		out, err := Select(context.Background(), hints, r, func(_ context.Context, endpoint string) (Observation, error) {
+		out, err := Select(context.Background(), hints, r, func(ctx context.Context, endpoint string) (Observation, error) {
 			_, o := fixture()
 			switch endpoint {
 			case "a.local:1":
@@ -198,15 +232,38 @@ func TestSelectionUsesLiveMultiAddressObservation(t *testing.T) {
 					o.Capabilities.ProbeObservedAt -= 29
 				}
 			case "a.local:2":
-				now = selectionNow.Add(time.Second)
+				select {
+				case <-firstObserved:
+				case <-ctx.Done():
+					return Observation{}, ctx.Err()
+				}
+				now := selectionNow.Add(time.Second)
 				o.Capabilities.ObservedAt = now.Unix()
 				o.Capabilities.ProbeObservedAt = now.Unix()
 			case "b.local:1":
-				now = selectionNow.Add(2 * time.Second)
+				select {
+				case <-secondObserved:
+				case <-ctx.Done():
+					return Observation{}, ctx.Err()
+				}
 				o.Peer.Principal, o.Capabilities.Node = strings.Repeat("2", 32), strings.Repeat("2", 32)
 			}
 			return o, nil
-		}, func() time.Time { return now })
+		}, func() time.Time {
+			// Order the observation times, not network completion scheduling.
+			// The first address is live when observed and stale at commit.
+			observations++
+			switch observations {
+			case 1:
+				close(firstObserved)
+				return selectionNow
+			case 2:
+				close(secondObserved)
+				return selectionNow.Add(time.Second)
+			default:
+				return selectionNow.Add(2 * time.Second)
+			}
+		})
 		if err != nil || len(out.Selected) != 2 || out.Selected[0].Endpoint != "a.local:2" || out.Decisions[1].Reason != "selected" {
 			t.Fatal(expireCredential, out, err)
 		}

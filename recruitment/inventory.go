@@ -37,26 +37,25 @@ func Inventory(ctx context.Context, hints []discovery.Hint, cluster string, look
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, probeBudget)
 	defer cancel()
+	endpoints := make([]string, len(ordered))
+	for i, h := range ordered {
+		endpoints[i] = h.Endpoint
+	}
+	results := probeEndpoints(ctx, endpoints, lookup, clock)
 	out := make([]NodeStatus, 0, len(ordered))
-	for _, h := range ordered {
+	for i, h := range ordered {
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		query, stop := context.WithTimeout(ctx, 3*time.Second)
-		o, err := lookup(query, h.Endpoint)
-		queryErr := query.Err()
-		stop()
+		o, err := results[i].observation, results[i].err
 		s := NodeStatus{Endpoint: h.Endpoint, Reason: "unavailable_or_unauthenticated"}
-		if err != nil || queryErr != nil {
-			if queryErr != nil {
-				err = queryErr
-			}
+		if err != nil {
 			failure := clusterdiagnostic.Classify(err)
 			s.Reason, s.Hint = failure.Reason, failure.Hint
 		}
-		if err == nil && queryErr == nil {
+		if err == nil {
 			p, c, now := o.Peer, o.Capabilities, clock()
 			switch {
 			case p.Cluster != cluster || p.Role != trust.Node || !canonicalHex(p.Principal, 16) || p.Principal != c.Node || now.Before(p.NotBefore) || !now.Before(p.ExpiresAt):

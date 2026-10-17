@@ -10,6 +10,9 @@ import (
 	"github.com/mrothroc/mixlab/admission"
 )
 
+const diLoCoServiceBudget = 3 * time.Minute
+const diLoCoServiceMaxInterval = time.Minute
+
 // DiLoCoService composes lifecycle, not numerical or admission decisions.
 // Each callback must reconstruct its owner from the accepted immutable intent.
 // Work runs under the service lifetime, never an HTTP submission's context.
@@ -24,7 +27,7 @@ type DiLoCoService struct {
 }
 
 func (s DiLoCoService) validate() error {
-	if s.Inbox == nil || s.Admission == nil || s.Run == nil || s.Clock == nil || s.Interval < 10*time.Millisecond || s.Interval > time.Minute {
+	if s.Inbox == nil || s.Admission == nil || s.Run == nil || s.Clock == nil || s.Interval < 10*time.Millisecond || s.Interval > diLoCoServiceMaxInterval {
 		return fmt.Errorf("bounded durable coordinator service ports required")
 	}
 	return nil
@@ -51,14 +54,9 @@ func (s DiLoCoService) step(ctx context.Context, id string) error {
 	if v.Done && !v.Committed {
 		return nil
 	}
-	budget := 30 * time.Second
-	if v.Committed {
-		// Includes lease observations, renewal and status/recovery work. Each
-		// authenticated operation has its own shorter bound; the service turn
-		// must not truncate them solely because the host is slow.
-		budget = 3 * time.Minute
-	}
-	work, cancel := context.WithTimeout(ctx, budget)
+	// Admission maintenance needs the same liveness envelope as committed work.
+	// Its shorter budget leaves room for compensation or handoff in this turn.
+	work, cancel := context.WithTimeout(ctx, diLoCoServiceBudget)
 	var effect error
 	if !v.Done {
 		var maintenance error

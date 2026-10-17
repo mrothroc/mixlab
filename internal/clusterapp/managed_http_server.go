@@ -16,12 +16,15 @@ import (
 // Owners still control connection limits, authentication, and shutdown.
 func newManagedHTTPServer(ctx context.Context, handler http.Handler, bodyReadTimeout time.Duration) *http.Server {
 	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Handler entry is after TLS and headers. Use wall time for socket
-		// deadlines, independent of the owner's signed-trust clock.
-		err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(bodyReadTimeout))
-		if err != nil && !errors.Is(err, http.ErrNotSupported) {
-			http.Error(w, "request read deadline unavailable", http.StatusServiceUnavailable)
-			return
+		// Handler entry is after TLS and headers. Bodyless requests already
+		// have net/http's background disconnect read; a body deadline there
+		// would cancel the operation itself. Keep route/context bounds intact.
+		if r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+			err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(bodyReadTimeout))
+			if err != nil && !errors.Is(err, http.ErrNotSupported) {
+				http.Error(w, "request read deadline unavailable", http.StatusServiceUnavailable)
+				return
+			}
 		}
 		handler.ServeHTTP(w, r)
 	})

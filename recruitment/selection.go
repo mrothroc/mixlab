@@ -61,6 +61,9 @@ type Observation struct {
 	Peer         trust.AuthenticatedPrincipal
 	Capabilities nodeagent.Capabilities
 }
+
+// Lookup may be called concurrently for distinct endpoints and must honor its
+// context. Only read-only probes are retried; each call must reauthenticate.
 type Lookup func(context.Context, string) (Observation, error)
 
 type Candidate struct {
@@ -102,7 +105,7 @@ func selectFor(ctx context.Context, hints []discovery.Hint, r Requirements, look
 	if lookup == nil || clock == nil || len(hints) > discovery.MaxHints {
 		return out, fmt.Errorf("bounded discovery hints, authenticated lookup and clock required")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, probeBudget)
 	defer cancel()
 	// Discard all claims before validation/query. Even a forged cluster/node
 	// label cannot suppress or promote an otherwise valid authenticated endpoint.
@@ -127,19 +130,17 @@ func selectFor(ctx context.Context, hints []discovery.Hint, r Requirements, look
 	}
 	byNode := map[string][]observedCandidate{}
 	excluded := map[string]string{}
-	for _, endpoint := range ordered {
+	results := probeEndpoints(ctx, ordered, lookup, clock)
+	for i, endpoint := range ordered {
 		if err := ctx.Err(); err != nil {
 			return out, err
 		}
-		query, stop := context.WithTimeout(ctx, 3*time.Second)
-		o, err := lookup(query, endpoint)
-		queryErr := query.Err()
-		stop()
+		o, err := results[i].observation, results[i].err
 		d := Decision{Endpoint: endpoint}
-		if err != nil || queryErr != nil {
+		if err != nil {
 			d.Reason = "unavailable_or_unauthenticated"
 		} else {
-			d.Reason = rejectFor(o, r, clock(), learner)
+			d.Reason = rejectFor(o, r, results[i].at, learner)
 			if d.Reason != "wrong_identity" {
 				d.Node = o.Peer.Principal
 				if d.Reason != "" {
@@ -198,6 +199,15 @@ func selectFor(ctx context.Context, hints []discovery.Hint, r Requirements, look
 				}
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		out.Selected = []Candidate{}
+		for i := range out.Decisions {
+			if out.Decisions[i].Reason == "selected" {
+				out.Decisions[i].Reason = "not_selected"
+			}
+		}
+		return out, err
 	}
 	if len(candidates) < r.Count {
 		return out, fmt.Errorf("need %d compatible available nodes; found %d", r.Count, len(candidates))

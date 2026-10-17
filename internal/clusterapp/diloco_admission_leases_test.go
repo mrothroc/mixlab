@@ -147,7 +147,7 @@ func (c admissionLeaseTestClient) Renew(ctx context.Context, q nodeagent.LeaseCo
 	return l, nil
 }
 
-func admissionLeaseSetup(t *testing.T, count int) (DiLoCoAdmissionLeases, *admissionLeaseFixture) {
+func admissionLeaseSetup(t *testing.T, count int) (*DiLoCoAdmissionLeases, *admissionLeaseFixture) {
 	t.Helper()
 	f := &admissionLeaseFixture{nodes: map[string]*admissionLeaseNode{}}
 	f.now.Store(1000)
@@ -182,7 +182,7 @@ func admissionLeaseSetup(t *testing.T, count int) (DiLoCoAdmissionLeases, *admis
 	check(t, f.q.Validate())
 	f.plan, err = buildDiLoCoPlan(f.q, leases)
 	check(t, err)
-	k := DiLoCoAdmissionLeases{Repository: admissionLeaseRepository{f: f}, Clock: func() time.Time { return time.Unix(f.now.Load(), 0) }, Client: func(role trust.Role, c recruitment.Candidate) (AdmissionLeaseClient, error) {
+	k := &DiLoCoAdmissionLeases{Repository: admissionLeaseRepository{f: f}, Clock: func() time.Time { return time.Unix(f.now.Load(), 0) }, Client: func(role trust.Role, c recruitment.Candidate) (AdmissionLeaseClient, error) {
 		return admissionLeaseTestClient{f, c.Capabilities.Node, role}, nil
 	}}
 	return k, f
