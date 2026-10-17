@@ -106,20 +106,27 @@ const (
 // Outcome is immutable once published. A terminal outcome is issued only
 // after hosting has reaped/fenced the exact attempt and confirmed no child.
 type Outcome struct {
-	JobID        string `json:"job_id"`
-	AttemptID    string `json:"attempt_id"`
-	ManifestHash string `json:"manifest_hash"`
-	ApprovalHash string `json:"approval_hash"`
-	Version      uint64 `json:"version"`
-	Kind         string `json:"kind"`
-	PID          int    `json:"pid"`
-	NoChild      bool   `json:"no_child"`
-	Error        string `json:"error"`
+	JobID        string      `json:"job_id"`
+	AttemptID    string      `json:"attempt_id"`
+	ManifestHash string      `json:"manifest_hash"`
+	ApprovalHash string      `json:"approval_hash"`
+	Version      uint64      `json:"version"`
+	Kind         string      `json:"kind"`
+	PID          int         `json:"pid"`
+	NoChild      bool        `json:"no_child"`
+	Error        string      `json:"error"`
+	Exit         ProcessExit `json:"exit,omitzero"`
 }
 
 func (o Outcome) Terminal() bool { return o.Kind != Started }
 
 func (o Outcome) Validate() error {
+	if err := o.Exit.Validate(); err != nil {
+		return err
+	}
+	if (o.Kind == Started && o.Exit != (ProcessExit{})) || (o.Exit.Kind == ProcessNotStarted && o.PID != 0) {
+		return fmt.Errorf("OS process exit evidence conflicts with execution outcome")
+	}
 	if o.JobID == "" || o.AttemptID == "" || !Hash(o.ManifestHash) || o.Version == 0 || o.Version > 2 || o.PID < 0 || len(o.Error) > 4096 {
 		return fmt.Errorf("invalid execution outcome identity")
 	}

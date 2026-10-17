@@ -62,6 +62,7 @@ type LaunchPlan struct {
 
 type Result struct {
 	PID      int
+	Exit     contract.ProcessExit
 	Ready    bool
 	Progress workerjob.Event
 	Terminal workerjob.Event
@@ -73,6 +74,7 @@ type Result struct {
 // and kills any remaining process-group descendants. Log/ring files are retained
 // in the caller-owned attempt directory; capabilities/sockets are removed.
 func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, err error) {
+	result.Exit = contract.ProcessExit{Kind: contract.ProcessNotStarted}
 	if p.StartupTimeout <= 0 || p.StartupTimeout > 10*time.Minute || p.ShutdownGrace <= 0 || p.ShutdownGrace > 30*time.Second {
 		return result, fmt.Errorf("invalid worker hosting limits")
 	}
@@ -155,6 +157,7 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 		return result, err
 	}
 	result.PID = cmd.Process.Pid
+	result.Exit = contract.ProcessExit{}
 	process := ownProcess(cmd)
 	wait := process.wait
 	reaped := false
@@ -182,6 +185,9 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 				err = errors.Join(err, cleanupErr)
 			}
 		}
+		// Wait evidence is independent of protocol, resource and cleanup errors.
+		// Assign after monitoring and forced cleanup so neither can overwrite it.
+		result.Exit = process.exitStatus()
 	}()
 	stopResources = watchResources(ctx, cancel, process, p.Directory.Dir(), p.Limits, p.resourceSampler(s.sample))
 	// A short job may exit between samples. Always check its retained output

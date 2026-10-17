@@ -61,8 +61,9 @@ func (n serviceNodes) Release(ctx context.Context, a run.Allocation, q nodeagent
 	return c.Release(ctx, q)
 }
 
-// DiLoCoModels caches only immutable composition. Run decisions are always
-// reloaded from the durable repository; losing the cache changes no semantics.
+// DiLoCoModels caches immutable composition and confirmed terminal cleanup.
+// Run decisions are reloaded from the durable repository. Losing the cleanup
+// cache only repeats release confirmation; it never skips pending cleanup.
 type DiLoCoModels struct {
 	Inbox      *admission.Inbox
 	Principal  *principal.Store
@@ -71,6 +72,7 @@ type DiLoCoModels struct {
 	Clock      func() time.Time
 	Recover    func(context.Context, admission.Submission, coordinator.Model) (bool, error)
 	cache      sync.Map
+	released   sync.Map
 }
 type composedRun struct {
 	model  coordinator.Model
@@ -100,20 +102,58 @@ func (s *DiLoCoModels) Model(ctx context.Context, id string) (coordinator.Model,
 	v, e := s.get(ctx, id)
 	return v.model, e
 }
-func (s *DiLoCoModels) Tick(ctx context.Context, q admission.Submission, _ admission.Snapshot) error {
+func (s *DiLoCoModels) Tick(ctx context.Context, q admission.Submission, _ admission.Snapshot) (err error) {
+	stage := "compose"
+	defer func() { err = diLoCoStageError(stage, err) }()
 	v, e := s.get(ctx, q.Launch.Run)
 	if e != nil {
 		return e
 	}
-	if _, e = v.keeper.Tick(ctx); e != nil {
+	stage = "load run"
+	state, e := s.Repository.Load(ctx, q.Launch.Run)
+	if e != nil {
+		return e
+	}
+	terminal := state.Phase == coordinator.Complete || state.Phase == coordinator.Failed
+	if _, done := s.released.Load(q.Launch.Run); terminal && done {
+		return nil
+	}
+	stage = "allocation lease maintenance"
+	if terminal {
+		stage = "allocation release"
+	}
+	released, e := v.keeper.Tick(ctx)
+	if e != nil {
 		state, loadErr := s.Repository.Load(ctx, q.Launch.Run)
 		if loadErr != nil || state.Phase == coordinator.Complete || state.Phase == coordinator.Failed {
 			return errors.Join(e, loadErr)
 		}
 		return errors.Join((DiLoCoRecovery{Model: v.model}).failureWithReason(ctx, q.Launch.Run, state.Recovery != nil, e, "allocation lease maintenance permanently rejected"), v.model.Tick(ctx, q.Launch.Run, int64(q.Launch.Selection.Requirements.Limits.RuntimeSeconds)))
 	}
+	if released {
+		s.released.Store(q.Launch.Run, struct{}{})
+		return nil
+	}
+	// The keeper can itself fail a live run. Never poll learners after that
+	// transition, but keep retrying release until every node confirms it.
+	stage = "load run after lease maintenance"
+	state, e = s.Repository.Load(ctx, q.Launch.Run)
+	if e != nil {
+		return e
+	}
+	if state.Phase == coordinator.Complete || state.Phase == coordinator.Failed {
+		return nil
+	}
 	if s.Recover != nil {
 		_, e = s.Recover(ctx, q, v.model)
 	}
-	return errors.Join(e, v.model.Tick(ctx, q.Launch.Run, int64(q.Launch.Selection.Requirements.Limits.RuntimeSeconds)))
+	stage = "run progression"
+	return errors.Join(diLoCoStageError("learner recovery", e), v.model.Tick(ctx, q.Launch.Run, int64(q.Launch.Selection.Requirements.Limits.RuntimeSeconds)))
+}
+
+func diLoCoStageError(stage string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s: %w", stage, err)
 }

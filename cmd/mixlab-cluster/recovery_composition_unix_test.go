@@ -363,6 +363,14 @@ func TestInstalledLearnerRecoveryComposition(t *testing.T) {
 					if execution.Workload.Deadline != want.Unix() || execution.Learner.Credential == nil || execution.Learner.Credential.Binding.Attempt != a.AttemptID || len(execution.Learner.History) != 1 {
 						t.Fatal("retry did not retain original deadline and authority-issued scope")
 					}
+					history, err := node.LearnerOutcomes(x.ctx, execution.Job.ID)
+					compositionCheck(t, err)
+					if len(history) != 3 || !history[1].Terminal() || history[1].AttemptID == a.AttemptID || history[1].PID <= 0 || history[1].Exit.Kind == "" || history[2] != *execution.Outcome {
+						t.Fatalf("retry lost actual prior child exit evidence: %+v", history)
+					}
+					if !strings.Contains(x.diagnostics(), "learner exit:") {
+						t.Fatal("installed agent did not log the learner exit")
+					}
 					grantBytes, err := os.ReadFile(x.grantPath(execution.Workload))
 					compositionCheck(t, err)
 					var grant workload.Grant

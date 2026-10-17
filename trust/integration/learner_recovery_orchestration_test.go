@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -243,7 +244,7 @@ func TestProductionLearnerRecoveryLostResponsesAndCompletion(t *testing.T) {
 			f.fault = stage
 			for tick := 0; tick < 6; tick++ {
 				_, err := f.recovery(t).Tick(context.Background(), f.assignment.Binding.RunID)
-				if err != nil && err != io.ErrUnexpectedEOF {
+				if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
 					t.Fatal(err)
 				}
 				if s := f.state(t); s.Phase == coordinator.Failed {

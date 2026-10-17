@@ -119,7 +119,7 @@ func TestGuardianReconcilePhysicalReceiptCrashWindow(t *testing.T) {
 				if test.wrongClaim {
 					p.Approval = "foreign"
 				}
-				b, err := json.Marshal(physicalExit{p, 123})
+				b, err := json.Marshal(physicalExit{Claim: p, PID: 123})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -298,7 +298,7 @@ func TestGuardianReceiptMustMatchPublishedStart(t *testing.T) {
 			if err := s.path.WriteFile(guardianFile, b); err != nil {
 				t.Fatal(err)
 			}
-			b, err = json.Marshal(physicalExit{physicalClaim{hash, boot}, 0})
+			b, err = json.Marshal(physicalExit{Claim: physicalClaim{hash, boot}})
 			if err != nil {
 				t.Fatal(err)
 			}

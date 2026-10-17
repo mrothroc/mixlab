@@ -8,6 +8,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/mrothroc/mixlab/workerhost/contract"
 )
 
 // ownedProcess retains the unreaped leader while signaling its process group.
@@ -70,4 +72,23 @@ func (p *ownedProcess) signal(signal syscall.Signal) error {
 		return nil
 	}
 	return err
+}
+
+func (p *ownedProcess) exitStatus() contract.ProcessExit {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.reaped || p.cmd.ProcessState == nil {
+		return contract.ProcessExit{}
+	}
+	status, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus)
+	if !ok {
+		return contract.ProcessExit{}
+	}
+	if status.Exited() {
+		return contract.ProcessExit{Kind: contract.ProcessExited, Code: status.ExitStatus()}
+	}
+	if status.Signaled() {
+		return contract.ProcessExit{Kind: contract.ProcessSignaled, Signal: int(status.Signal())}
+	}
+	return contract.ProcessExit{}
 }

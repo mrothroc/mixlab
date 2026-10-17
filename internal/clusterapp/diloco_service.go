@@ -87,13 +87,12 @@ func (s DiLoCoService) step(ctx context.Context, id string) error {
 	if effect != nil && len(effect.Error()) > 4096 {
 		effect = fmt.Errorf("service effect failed; diagnostic exceeded limit")
 	}
-	if err := s.Inbox.Observe(ctx, id, s.Clock().Unix(), effect); err != nil {
-		return err
-	}
+	// Observation is replaceable operational evidence, not the local event log.
+	// A failed observation write must not hide the original effect diagnostic.
 	if effect != nil && s.Event != nil {
 		s.Event(id, effect)
 	}
-	return nil
+	return s.Inbox.Observe(ctx, id, s.Clock().Unix(), effect)
 }
 
 func (s DiLoCoService) Serve(ctx context.Context, ready func()) error {

@@ -209,6 +209,19 @@ changes `run_phase` to `FAILED` with a sanitized `failure` reason.
 Fresh credentials fence the old attempt; private optimizer, sampler and RNG
 state are restored, never replaced with newly initialized state.
 
+For exit diagnosis, the node retains started and terminal outcomes for each
+learner attempt in immutable local `learner-outcome-<job>-<attempt>-<version>.json`
+receipts, separate from the active learner journal, including observed process exit
+status or signal. Unobserved process status remains unknown; a protocol EOF is
+not evidence of a signal or a zero exit status. Retry does not erase earlier
+outcomes. Journals upgraded from older versions retain their latest available
+outcome but cannot reconstruct history that was already discarded.
+The agent service log records learner exits with job/attempt identity. The
+coordinator service log records recovery-stage errors locally; public run status
+keeps the sanitized failure reason. Inspect both service logs and the attempt's
+`physical-exit.json` when diagnosing unexpected termination. Recovery remains
+bounded per worker per run, not reset after each successful round or incident.
+
 The agent retries only semantic learner HTTP requests after transient connection
 refusal/reset, route unavailability, EOF or timeout, or authenticated HTTP 503
 while the coordinator is unavailable/draining or retryable state contention

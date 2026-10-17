@@ -64,7 +64,7 @@ func ServeNode(ctx context.Context, listener net.Listener, o NodeServerOptions) 
 			http.Error(w, "node identity unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		h, err := NodeManagementHandler(o.Store, current, o.Execution.Clock, o.Jobs)
+		h, err := nodeManagementHandler(o.Store, current, o.Execution.Clock, o.Jobs, o.Execution.Event)
 		if err != nil {
 			http.Error(w, "node management unavailable", http.StatusServiceUnavailable)
 			return

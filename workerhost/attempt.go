@@ -228,6 +228,9 @@ func (s *AttemptStore) Run(ctx context.Context, a contract.Approved, runner Runn
 			}
 		}
 		out = terminalOutcome(r, kind, runErr)
+		if err = s.attachProcessExit(r, &out); err != nil {
+			return errors.Join(err, ErrReconciliationRequired)
+		}
 		r.Terminal = &out
 		return s.save(old, r)
 	})
@@ -271,6 +274,9 @@ func (s *AttemptStore) Reconcile(ctx context.Context, runner Runner) (out contra
 			return ErrReconciliationRequired
 		}
 		out = terminalOutcome(r, contract.Failed, errors.New("execution supervisor interrupted; attempt will not restart"))
+		if err = s.attachProcessExit(r, &out); err != nil {
+			return errors.Join(err, ErrReconciliationRequired)
+		}
 		r.Terminal = &out
 		return s.save(old, r)
 	})

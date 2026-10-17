@@ -17,17 +17,6 @@ import (
 
 const physicalOwnerLock = "physical-owner.lock"
 const physicalClaimFile = "physical-attempt.json"
-const physicalExitFile = "physical-exit.json"
-
-type physicalClaim struct {
-	Approval string `json:"approval"`
-	Boot     string `json:"boot"`
-}
-
-type physicalExit struct {
-	Claim physicalClaim `json:"claim"`
-	PID   int           `json:"pid"`
-}
 
 // LocalRunner composes an approved execution with the physical supervisor.
 // It never guesses that a saved PID is dead. A hot restart without a durable
@@ -82,7 +71,7 @@ func (r *LocalRunner) Run(ctx context.Context, a contract.Approved, started func
 		}
 		// Supervisor returned only after fencing/reaping every owned child.
 		// Persist that evidence before AttemptStore publishes its terminal state.
-		b, err = json.Marshal(physicalExit{claim, result.PID})
+		b, err = json.Marshal(physicalExit{Claim: claim, PID: result.PID, Exit: result.Exit})
 		if err == nil {
 			err = r.directory.CompareAndSwap(physicalExitFile, nil, b)
 		}
@@ -129,39 +118,4 @@ func (r *LocalRunner) Reconcile(ctx context.Context, a Attempt) (noChild bool, e
 		return nil
 	})
 	return noChild, err
-}
-
-// Receipts are immutable and published only after owned-process cleanup. They
-// can be read without taking the physical lock, even if its owner died before
-// publishing the higher-level guardian result.
-func readPhysicalExit(dir statehome.Path, claim physicalClaim) (physicalExit, error) {
-	b, err := dir.ReadFileLimit(physicalExitFile, 2048)
-	if err != nil {
-		return physicalExit{}, err
-	}
-	var exit physicalExit
-	if err := json.Unmarshal(b, &exit); err != nil {
-		return exit, err
-	}
-	canonical, _ := json.Marshal(exit)
-	if !bytes.Equal(b, canonical) || exit.Claim != claim || exit.PID < 0 {
-		return exit, fmt.Errorf("physical exit evidence changed")
-	}
-	return exit, nil
-}
-
-func validBootIdentity(s string) bool {
-	if len(s) != 36 {
-		return false
-	}
-	for i, c := range s {
-		if i == 8 || i == 13 || i == 18 || i == 23 {
-			if c != '-' {
-				return false
-			}
-		} else if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
 }

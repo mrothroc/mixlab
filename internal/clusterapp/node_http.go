@@ -47,6 +47,10 @@ type NodeJobOperations interface {
 // Closed canonical schemas deliberately reject extra credential envelopes in
 // R1.1, including envelope fields nested within signed manifests.
 func NodeManagementHandler(store *nodeagent.Store, policy *managedtls.Policy, clock func() time.Time, jobs NodeJobOperations) (http.Handler, error) {
+	return nodeManagementHandler(store, policy, clock, jobs, nil)
+}
+
+func nodeManagementHandler(store *nodeagent.Store, policy *managedtls.Policy, clock func() time.Time, jobs NodeJobOperations, event func(error)) (http.Handler, error) {
 	if store == nil || policy == nil || clock == nil || jobs == nil {
 		return nil, fmt.Errorf("node store, TLS policy, clock and job operations required")
 	}
@@ -54,7 +58,7 @@ func NodeManagementHandler(store *nodeagent.Store, policy *managedtls.Policy, cl
 	if err != nil {
 		return nil, err
 	}
-	h := &nodeHTTP{store, policy, clock, jobs}
+	h := &nodeHTTP{store: store, policy: policy, clock: clock, jobs: jobs, event: event}
 	mutating := policy.AuthenticateHTTP(http.HandlerFunc(h.serve))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == nodeCapabilityRoute {
@@ -70,6 +74,7 @@ type nodeHTTP struct {
 	policy *managedtls.Policy
 	clock  func() time.Time
 	jobs   NodeJobOperations
+	event  func(error)
 }
 
 func nodeRouteID(id string) bool {

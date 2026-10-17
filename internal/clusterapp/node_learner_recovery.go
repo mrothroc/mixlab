@@ -46,7 +46,7 @@ func (h *nodeHTTP) learnerRecovery(w http.ResponseWriter, r *http.Request, actor
 			return
 		}
 		out, err := h.store.LearnerStatus(r.Context(), actor, id, h.clock())
-		nodeResponse(w, out, err)
+		h.recoveryResponse(w, id, parts[2], out, err)
 		return
 	}
 	owner, ok := h.jobs.(interface {
@@ -63,14 +63,27 @@ func (h *nodeHTTP) learnerRecovery(w http.ResponseWriter, r *http.Request, actor
 			return
 		}
 		out, err := owner.AuthorizeLearnerRetry(r.Context(), actor, id, q)
-		nodeResponse(w, out, err)
+		h.recoveryResponse(w, id, parts[2], out, err)
 	} else {
 		var q NodeLearnerRetryStart
 		if !h.decode(w, r, &q, 2<<20, &actor) {
 			return
 		}
-		nodeResponse(w, NodeLearnerAck{id}, owner.StartLearnerRetry(r.Context(), actor, id, q))
+		h.recoveryResponse(w, id, parts[2], NodeLearnerAck{id}, owner.StartLearnerRetry(r.Context(), actor, id, q))
 	}
+}
+
+func (h *nodeHTTP) recoveryResponse(w http.ResponseWriter, job, operation string, out any, err error) {
+	if err != nil && h.event != nil {
+		diagnostic := err.Error()
+		if len(diagnostic) > 4096 {
+			diagnostic = diagnostic[:4096]
+		}
+		// Keep private diagnostics on the node. The coordinator sees stage and
+		// HTTP status, never credential payloads or local paths from the body.
+		h.event(fmt.Errorf("learner recovery job=%s operation=%s error=%q", job, operation, diagnostic))
+	}
+	nodeResponse(w, out, err)
 }
 
 func (a *NodeJobs) AuthorizeLearnerRetry(ctx context.Context, actor trust.AuthenticatedPrincipal, id string, q NodeLearnerRetryRequest) (out NodeLearnerRetryPrepared, err error) {

@@ -92,6 +92,9 @@ func helperWorker() int {
 		return err == nil && conn.Send(ctx, e) == nil
 	}
 	switch a.DatasetSelector {
+	case "exit-signal":
+		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+		select {}
 	case "exit":
 		return 25
 	case "stall":

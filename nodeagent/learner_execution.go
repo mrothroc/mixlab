@@ -121,6 +121,12 @@ func (s *Store) ApplyLearnerOutcome(ctx context.Context, o contract.Outcome) err
 				return fmt.Errorf("learner outcome rollback or conflict")
 			}
 		}
+		if err := s.retainLearnerOutcome(j.Outcome); err != nil {
+			return err
+		}
+		if err := s.retainLearnerOutcome(&o); err != nil {
+			return err
+		}
 		j.Outcome = &o
 		if o.Terminal() {
 			j.Stopped = true

@@ -200,11 +200,7 @@ func ServeInstalledDiLoCo(ctx context.Context, l net.Listener, o DiLoCoCoordinat
 		}
 		return checkpoints.Sync(ctx, repository, q.Launch.Run)
 	}
-	service.Event = func(id string, err error) {
-		if o.Event != nil {
-			o.Event(fmt.Errorf("run %s: %w", id, err))
-		}
-	}
+	service.Event = o.runEvent
 	policy := func() (*managedtls.Policy, error) {
 		return managedPrincipalPolicyRoles(p, o.Clock, trust.Worker, trust.Node, trust.Controller)
 	}
@@ -247,6 +243,12 @@ func ServeInstalledDiLoCo(ctx context.Context, l net.Listener, o DiLoCoCoordinat
 		return errors.Join(<-done, <-done)
 	}
 	return ServeDiLoCo(ctx, l, DiLoCoServerOptions{Service: service, Policy: policy, Handler: handler, Maintenance: maintenance, Ready: o.Ready})
+}
+
+func (o DiLoCoCoordinatorOptions) runEvent(id string, err error) {
+	if o.Event != nil {
+		o.Event(fmt.Errorf("run %s: %w", id, err))
+	}
 }
 
 // Restart may follow a public-snapshot expiry. Refresh from a pinned source

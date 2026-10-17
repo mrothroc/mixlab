@@ -110,6 +110,9 @@ func (s *Store) StartLearnerRetry(ctx context.Context, actor trust.Authenticated
 		if e = out.Validate(); e != nil {
 			return e
 		}
+		if e = s.retainLearnerOutcome(j.Outcome); e != nil {
+			return e
+		}
 		j.History = append(j.History, *j.Recovery)
 		j.RetryAcknowledgements = append(j.RetryAcknowledgements, accepted)
 		j.Recovery = nil

@@ -298,6 +298,7 @@ func learnerAdmissionLifecycle(t *testing.T, expiredHandoff bool) {
 	}
 	failed := started
 	failed.Version, failed.Kind, failed.NoChild, failed.Error = 2, contract.Failed, true, "synthetic child failure"
+	failed.Exit = contract.ProcessExit{Kind: contract.ProcessExited, Code: 7}
 	check(t, s.ApplyLearnerOutcome(ctx, failed))
 	check(t, s.ApplyLearnerOutcome(ctx, failed))
 	if s.ApplyLearnerOutcome(ctx, started) == nil {
@@ -365,6 +366,11 @@ func learnerAdmissionLifecycle(t *testing.T, expiredHandoff bool) {
 	if x.Outcome != nil || x.Learner.Stopped || x.Approval.AttemptID() != restarted.AttemptID {
 		t.Fatal("retry retained old hosting evidence")
 	}
+	history, err := s.LearnerOutcomes(ctx, allocation.JobID)
+	check(t, err)
+	if len(history) != 2 || history[0] != started || history[1] != failed {
+		t.Fatal("retry lost or duplicated the prior attempt's started/terminal outcomes")
+	}
 	if s.ApplyLearnerOutcome(ctx, failed) == nil {
 		t.Fatal("old hosting outcome fenced retry")
 	}
@@ -375,6 +381,41 @@ func learnerAdmissionLifecycle(t *testing.T, expiredHandoff bool) {
 	check(t, err)
 	if s.ConfirmLearnerStopped(ctx, aHash) == nil {
 		t.Fatal("old outcome fenced new child")
+	}
+	newStarted := started
+	newStarted.AttemptID, newStarted.PID = restarted.AttemptID, 5678
+	newStarted.ApprovalHash, err = run.Digest(*x.Approval)
+	check(t, err)
+	check(t, s.ApplyLearnerOutcome(ctx, newStarted))
+	newFailed := newStarted
+	newFailed.Version, newFailed.Kind, newFailed.NoChild = 2, contract.Failed, true
+	newFailed.Error = "second child failure"
+	newFailed.Exit = contract.ProcessExit{Kind: contract.ProcessSignaled, Signal: 9}
+	check(t, s.ApplyLearnerOutcome(ctx, newFailed))
+	check(t, s.ApplyLearnerOutcome(ctx, newFailed))
+	history, err = s.LearnerOutcomes(ctx, allocation.JobID)
+	check(t, err)
+	if got := history; len(got) != 4 || got[0] != started || got[1] != failed || got[2] != newStarted || got[3] != newFailed {
+		t.Fatal("persisted attempt history lost exit codes/signals or duplicated a receipt")
+	}
+	receiptName := "learner-outcome-" + allocation.JobID + "-" + started.AttemptID + "-1.json"
+	originalReceipt, err := nodePath.ReadFileLimit(receiptName, 32<<10)
+	check(t, err)
+	for _, mutate := range []func(*contract.Outcome){
+		func(o *contract.Outcome) { o.ApprovalHash = strings.Repeat("0", 64) },
+		func(o *contract.Outcome) { o.Version = 2 },
+		func(o *contract.Outcome) { o.AttemptID = restarted.AttemptID },
+	} {
+		bad := started
+		mutate(&bad)
+		b, e := json.Marshal(bad)
+		check(t, e)
+		check(t, nodePath.CompareAndSwap(receiptName, originalReceipt, b))
+		_, readErr := s.LearnerOutcomes(ctx, allocation.JobID)
+		check(t, nodePath.CompareAndSwap(receiptName, b, originalReceipt))
+		if readErr == nil {
+			t.Fatal("corrupt learner outcome history accepted")
+		}
 	}
 	newBinding, err := restarted.Binding()
 	check(t, err)

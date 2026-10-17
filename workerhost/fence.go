@@ -58,6 +58,7 @@ func (s *AttemptStore) FencePreparation(ctx context.Context, f contract.Fence) (
 			return err
 		}
 		out = contract.Outcome{JobID: f.JobID, AttemptID: f.AttemptID, ManifestHash: f.ManifestHash, Version: 1, Kind: contract.Canceled, NoChild: true}
+		out.Exit = contract.ProcessExit{Kind: contract.ProcessNotStarted}
 		r = Attempt{Version: contract.Version, Fence: &f, Digest: hash, Terminal: &out}
 		return s.publishUnstartedFence(r)
 	})
@@ -89,6 +90,7 @@ func (s *AttemptStore) FenceApproved(ctx context.Context, a contract.Approved) (
 		}
 		r = Attempt{Version: contract.Version, Approval: a, Digest: hash}
 		out = terminalOutcome(r, contract.Canceled, nil)
+		out.Exit = contract.ProcessExit{Kind: contract.ProcessNotStarted}
 		r.Terminal = &out
 		return s.publishUnstartedFence(r)
 	})

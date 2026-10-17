@@ -87,9 +87,12 @@ func checkLearnerStatus(s coordinator.State, slot run.Slot, status nodeagent.Lea
 // Tick returns busy while recovery owns progression. Lease maintenance and the
 // model's original deadlines still run on every service tick.
 func (r DiLoCoRecovery) Tick(ctx context.Context, id string) (busy bool, err error) {
+	stage := "recovery ports"
+	defer func() { err = diLoCoStageError(stage, err) }()
 	if r.Node == nil || r.Current == nil || r.Clock == nil || r.Sign == nil || r.Grant == nil || r.Issue == nil {
 		return false, fmt.Errorf("complete learner recovery ports required")
 	}
+	stage = "recovery state"
 	s, err := r.Model.Repository.Load(ctx, id)
 	if err != nil {
 		return false, err
@@ -98,16 +101,19 @@ func (r DiLoCoRecovery) Tick(ctx context.Context, id string) (busy bool, err err
 		return false, nil
 	}
 	if s.Recovery != nil && r.Clock().Unix()-s.Recovery.Started >= coordinator.LearnerRecoverySeconds {
+		stage = "recovery deadline"
 		return true, r.Model.Fail(ctx, id, "learner same-allocation recovery budget exhausted")
 	}
 	for _, slot := range s.Plan.Slots {
 		if s.Recovery != nil && s.Recovery.WorkerID != slot.Member.WorkerID {
 			continue
 		}
+		stage = "recovery node client"
 		node, e := r.Node(slot.Allocation)
 		if e != nil {
 			return true, r.failure(ctx, id, s.Recovery != nil, e)
 		}
+		stage = "recovery learner status"
 		status, e := node.LearnerStatus(ctx, slot.Allocation.JobID)
 		if e == nil {
 			e = checkLearnerStatus(s, slot, status)
@@ -115,44 +121,55 @@ func (r DiLoCoRecovery) Tick(ctx context.Context, id string) (busy bool, err err
 		if e != nil {
 			return true, r.failure(ctx, id, s.Recovery != nil, e)
 		}
+		stage = "recovery current attempt"
 		current, _, e := s.CurrentAttempt(slot.Member.WorkerID)
 		if e != nil {
 			return true, r.failure(ctx, id, s.Recovery != nil, e)
 		}
 		if s.Recovery == nil {
+			stage = "recovery fence"
 			if status.Attempt != current || status.Recovery != nil {
 				return true, r.failure(ctx, id, false, fmt.Errorf("unowned node recovery fence"))
 			}
 			if !status.Stopped {
 				continue
 			}
+			stage = "recovery begin"
 			return true, r.Model.BeginLearnerRecovery(ctx, id, slot.Member.WorkerID)
 		}
 		intent := *s.Recovery
 		if status.Attempt == intent.Attempt && current == intent.Attempt && status.Recovery == nil {
 			// Includes a new child that already exited: the next tick counts another
 			// retry, never replays Start against that terminal attempt.
+			stage = "recovery finish"
 			return true, r.Model.FinishLearnerRecovery(ctx, id, intent.Attempt)
 		}
+		stage = "recovery fence"
 		if status.Attempt != intent.Previous || !status.Stopped {
 			return true, r.failure(ctx, id, true, fmt.Errorf("old learner is not fenced"))
 		}
+		stage = "recovery resume"
 		e = r.resume(ctx, s, slot, node)
 		if e != nil {
 			return true, r.failure(ctx, id, true, e)
 		}
 		return true, nil
 	}
+	stage = "recovery availability"
 	return false, r.Model.ObserveLearnerAvailability(ctx, id, false)
 }
 
-func (r DiLoCoRecovery) resume(ctx context.Context, s coordinator.State, slot run.Slot, node LearnerRecoveryNode) error {
+func (r DiLoCoRecovery) resume(ctx context.Context, s coordinator.State, slot run.Slot, node LearnerRecoveryNode) (err error) {
+	stage := "authorize retry"
+	// Log only stage and returned errors, never request/proof/credential objects.
+	defer func() { err = diLoCoStageError(stage, err) }()
 	intent := *s.Recovery
 	id := s.Plan.Cohort.RunID
 	prepared, err := node.AuthorizeLearnerRetry(ctx, slot.Allocation.JobID, NodeLearnerRetryRequest{Attempt: intent.Attempt, PrivateHash: intent.PrivateHash})
 	if err != nil {
 		return err
 	}
+	stage = "validate retry intent"
 	b := prepared.Evidence.Body
 	if b.Attempt.PreviousAttemptID != intent.Previous || b.Attempt.AttemptID != intent.Attempt || b.Attempt.PrivateHash != intent.PrivateHash || b.Attempt.Allocation != slot.Allocation || b.Attempt.WorkerID != intent.WorkerID || b.Attempt.Binding != s.Commit.Binding {
 		return fmt.Errorf("node recovery changed intent")
@@ -170,9 +187,11 @@ func (r DiLoCoRecovery) resume(ctx context.Context, s coordinator.State, slot ru
 		}
 		return nil
 	}}
+	stage = "bind attempt"
 	if err = r.Model.BindAttempt(ctx, b.Attempt, auth); err != nil {
 		return err
 	}
+	stage = "validate workload scope"
 	scope := prepared.Request.Request.Scope
 	// Reconstruct the entire allowed scope rather than signing fields chosen by
 	// the remote node. Only its fresh public workload identity is node-selected.
@@ -188,10 +207,12 @@ func (r DiLoCoRecovery) resume(ctx context.Context, s coordinator.State, slot ru
 	}
 	// The original manifest's runtime deadline is checked by the production
 	// grant adapter, which owns the accepted submission and manifest evidence.
+	stage = "refresh recovery trust"
 	view, err := r.Current(ctx)
 	if err != nil {
 		return err
 	}
+	stage = "verify workload request"
 	request, err := prepared.Request.Request.SigningRequest()
 	if err != nil {
 		return err
@@ -199,14 +220,17 @@ func (r DiLoCoRecovery) resume(ctx context.Context, s coordinator.State, slot ru
 	if _, err = trust.VerifyProof(r.Anchor, view, prepared.Request.Proof, request, r.Clock()); err != nil {
 		return err
 	}
+	stage = "grant workload"
 	grant, err := r.Grant(ctx, prepared.Request)
 	if err != nil {
 		return err
 	}
+	stage = "issue workload credential"
 	credential, err := r.Issue(ctx, grant)
 	if err != nil {
 		return err
 	}
+	stage = "sign recovery acknowledgement"
 	h, err := run.Digest(b.Attempt)
 	if err != nil {
 		return err
@@ -215,5 +239,6 @@ func (r DiLoCoRecovery) resume(ctx context.Context, s coordinator.State, slot ru
 	if err != nil {
 		return err
 	}
+	stage = "start retry"
 	return node.StartLearnerRetry(ctx, slot.Allocation.JobID, NodeLearnerRetryStart{Acknowledgement: authenticated.Recovery{Body: b.Attempt, Coordinator: s.Plan.Coordinator, Proof: proof}, Grant: grant, Credential: credential})
 }
