@@ -51,6 +51,26 @@ func NodeCurrentTrust(p *principal.Store) func(context.Context, time.Time) (trus
 	}
 }
 
+// RefreshNodeTrust fetches only from locally pinned authority endpoints. Peer
+// evidence is never installed directly and cannot select a network destination.
+func RefreshNodeTrust(ctx context.Context, p *principal.Store, clock func() time.Time) error {
+	if p == nil || clock == nil {
+		return fmt.Errorf("node principal and clock required")
+	}
+	s, err := p.View(clock())
+	if err != nil {
+		return err
+	}
+	if s.Role != trust.Node {
+		return fmt.Errorf("node principal required")
+	}
+	if err := refreshPrincipalTrust(ctx, p, clock); err != nil {
+		return err
+	}
+	_, _, err = p.Active(clock())
+	return err
+}
+
 // MaintainNodeTrust tries only root-authorized endpoints. Temporary authority
 // outages retain the installed snapshot, which still expires normally; neither
 // TLS nor execution may keep using stale trust while refresh is retried.
@@ -98,8 +118,13 @@ func maintainPrincipalTrust(ctx context.Context, path statehome.Path, p *princip
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
-		if err := refresh(ctx, false); err != nil && event != nil && ctx.Err() == nil {
-			event(fmt.Errorf("%s trust refresh: %w", role, err))
+		before, beforeErr := p.View(clock())
+		if err := refresh(ctx, false); event != nil && ctx.Err() == nil {
+			if err != nil {
+				event(fmt.Errorf("%s trust refresh: %w", role, err))
+			} else if s, _, err := p.Active(clock()); err == nil && beforeErr == nil && s.Snapshot.Payload.Generation > before.Snapshot.Payload.Generation {
+				event(fmt.Errorf("%s trust refresh generation=%d time=%s source=maintenance", role, s.Snapshot.Payload.Generation, clock().UTC().Format(time.RFC3339Nano)))
+			}
 		}
 		if ctx.Err() != nil {
 			return nil

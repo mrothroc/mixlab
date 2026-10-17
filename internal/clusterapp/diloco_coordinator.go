@@ -127,6 +127,7 @@ func ServeInstalledDiLoCo(ctx context.Context, l net.Listener, o DiLoCoCoordinat
 		nodes := serviceNodes{q, p, o.Clock}
 		recovery := DiLoCoRecovery{Model: m, Anchor: anchor, Clock: o.Clock, Sign: sign,
 			Current: func(ctx context.Context) (trust.VerifiedSnapshot, error) { return current.Current(ctx, o.Clock()) },
+			Refresh: func(ctx context.Context) error { return refreshPrincipalTrust(ctx, p, o.Clock) },
 			Node:    func(a run.Allocation) (LearnerRecoveryNode, error) { return nodes.client(a) },
 			Grant: func(ctx context.Context, request workload.SignedRequest) (workload.Grant, error) {
 				scope := request.Request.Scope
@@ -206,11 +207,12 @@ func ServeInstalledDiLoCo(ctx context.Context, l net.Listener, o DiLoCoCoordinat
 	}
 	base := coordinator.Model{Repository: repository, Artifacts: artifacts, Allocations: unselectedAllocations{}, Clock: serviceClock{o.Clock}, Evaluator: remoteEvaluation{}}
 	handler := func(policy *managedtls.Policy) (http.Handler, error) {
-		learner, err := (learnerapi.Gateway{Policy: policy, Anchor: anchor, Trust: current, Coordinator: owner, Model: base, ModelForRun: models.Model, Clock: o.Clock, Sign: sign, Grants: grants, Timeout: 30 * time.Second}).Handler()
+		refresh := func(ctx context.Context) error { return refreshPrincipalTrust(ctx, p, o.Clock) }
+		learner, err := (learnerapi.Gateway{Policy: policy, Anchor: anchor, Trust: current, RefreshTrust: refresh, Coordinator: owner, Model: base, ModelForRun: models.Model, Clock: o.Clock, Sign: sign, Grants: grants, Timeout: 30 * time.Second}).Handler()
 		if err != nil {
 			return nil, err
 		}
-		artifact, err := (artifactapi.Gateway{Policy: policy, Anchor: anchor, Trust: current, Coordinator: owner, Repository: repository, Store: store, Ledger: ledger, Clock: o.Clock, TransferTimeout: time.Minute}).Handler()
+		artifact, err := (artifactapi.Gateway{Policy: policy, Anchor: anchor, Trust: current, RefreshTrust: refresh, Coordinator: owner, Repository: repository, Store: store, Ledger: ledger, Clock: o.Clock, TransferTimeout: time.Minute}).Handler()
 		if err != nil {
 			return nil, err
 		}

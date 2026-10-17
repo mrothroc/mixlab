@@ -46,11 +46,12 @@ func (r Response) Validate() error {
 }
 
 type Gateway struct {
-	Policy      *managedtls.Policy
-	Anchor      trust.Anchor
-	Trust       artifactapi.CurrentTrust
-	Coordinator run.Coordinator
-	Model       coordinator.Model
+	Policy       *managedtls.Policy
+	Anchor       trust.Anchor
+	Trust        artifactapi.CurrentTrust
+	RefreshTrust func(context.Context) error
+	Coordinator  run.Coordinator
+	Model        coordinator.Model
 	// ModelForRun selects service-owned allocation ports for an accepted run.
 	// Repository and trust remain shared; request bodies cannot supply ports.
 	ModelForRun func(context.Context, string) (coordinator.Model, error)
@@ -134,7 +135,7 @@ func (g Gateway) serve(w http.ResponseWriter, r *http.Request) {
 	m := g.Model
 	m.Repository = guard
 	out, err := g.dispatch(ctx, m, s, q)
-	if errors.Is(err, coordinator.ErrConcurrent) {
+	if errors.Is(err, coordinator.ErrConcurrent) || errors.Is(err, trust.ErrTrustBehind) {
 		learnerError(w, ctx, "learner service unavailable", http.StatusServiceUnavailable)
 		return
 	}
@@ -403,10 +404,11 @@ func (g Gateway) grant(ctx context.Context, s coordinator.State, q Request) (aut
 	if err != nil {
 		return out, err
 	}
-	v, err = g.Trust.Current(ctx, g.Clock())
-	if err != nil {
-		return out, err
-	}
-	_, err = trust.VerifyProof(g.Anchor, v, out.Proof, out.Proof.Request, g.Clock())
+	_, err = trust.CurrentForEvidence(ctx, g.Anchor, out.Proof.Evidence.Snapshot,
+		func(ctx context.Context) (trust.VerifiedSnapshot, error) { return g.Trust.Current(ctx, g.Clock()) },
+		g.RefreshTrust, g.Clock, func(v trust.VerifiedSnapshot) error {
+			_, err := trust.VerifyProof(g.Anchor, v, out.Proof, out.Proof.Request, g.Clock())
+			return err
+		})
 	return out, err
 }

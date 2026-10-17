@@ -101,7 +101,22 @@ func (h *nodeHTTP) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	connection, original := r.TLS, actor
+	ctx = context.WithValue(ctx, nodeCallerCheckKey{}, func() error {
+		if connection == nil {
+			return fmt.Errorf("authenticated node caller required")
+		}
+		current, err := h.policy.Authenticate(*connection)
+		if err != nil {
+			return err
+		}
+		if current != original {
+			return fmt.Errorf("node caller identity changed")
+		}
+		return nil
+	})
 	r = r.WithContext(ctx)
+	w = &nodeResponseContext{ResponseWriter: w, ctx: ctx}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/v1/agent/"), "/")
 	if !strings.HasPrefix(r.URL.Path, "/v1/agent/") {
 		http.NotFound(w, r)
@@ -293,10 +308,24 @@ func (h *nodeHTTP) decode(w http.ResponseWriter, r *http.Request, dst any, limit
 	return true
 }
 
+type nodeResponseContext struct {
+	http.ResponseWriter
+	ctx context.Context
+}
+
+func (w *nodeResponseContext) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func nodeResponse(w http.ResponseWriter, value any, err error) {
 	if err != nil {
 		// Local paths and key-store details must not enter remote error bodies.
-		http.Error(w, "node operation rejected; inspect local agent diagnostics", http.StatusConflict)
+		status := http.StatusConflict
+		if errors.Is(err, trust.ErrTrustBehind) {
+			status = http.StatusServiceUnavailable
+		}
+		if request, ok := w.(*nodeResponseContext); ok && request.ctx.Err() != nil && errors.Is(err, request.ctx.Err()) {
+			status = http.StatusServiceUnavailable
+		}
+		http.Error(w, "node operation rejected; inspect local agent diagnostics", status)
 		return
 	}
 	writeJSON(w, value)

@@ -147,7 +147,19 @@ func serveInstalledAgent(ctx context.Context, path statehome.Path, listen, adver
 	// lifetime alive through that ordered shutdown, then cancel on return.
 	life, done := context.WithCancel(context.WithoutCancel(ctx))
 	defer done()
+	event := func(err error) { _, _ = fmt.Fprintln(stderr, "agent event:", err) }
+	refreshTrust := func(ctx context.Context) error {
+		before, _, beforeErr := p.Active(time.Now())
+		if err := clusterapp.RefreshNodeTrust(ctx, p, time.Now); err != nil {
+			return err
+		}
+		if after, _, err := p.Active(time.Now()); err == nil && beforeErr == nil && after.Snapshot.Payload.Generation > before.Snapshot.Payload.Generation {
+			event(fmt.Errorf("node trust refresh generation=%d time=%s source=on-demand", after.Snapshot.Payload.Generation, time.Now().UTC().Format(time.RFC3339Nano)))
+		}
+		return nil
+	}
 	jobs, err := clusterapp.NewNodeJobs(life, clusterapp.NodeJobOptions{Store: store, Node: i.Node, Anchor: anchor, CredentialRoot: credentialRoot, Workload: workload, RelayAddress: i.RelayAddress, CurrentTrust: current, Clock: time.Now,
+		RefreshTrust: refreshTrust,
 		SignRecovery: clusterapp.NodeRecoverySigner(p, time.Now),
 		Output:       runtime.Output,
 		InputRoot:    path,
@@ -171,7 +183,6 @@ func serveInstalledAgent(ctx context.Context, path statehome.Path, listen, adver
 		return fail(err)
 	}
 	defer func() { _ = ad.Close() }()
-	event := func(err error) { _, _ = fmt.Fprintln(stderr, "agent event:", err) }
 	learnerRuntime := clusterapp.NodeLearnerRuntime{Store: store, Principal: p, Runtime: runtime, Credentials: credentialRoot, Anchor: anchor, Clock: time.Now}
 	maintenance := func(ctx context.Context) error {
 		life, cancel := context.WithCancel(ctx)

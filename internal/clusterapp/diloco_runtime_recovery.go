@@ -30,21 +30,36 @@ type DiLoCoRecovery struct {
 	Node    func(run.Allocation) (LearnerRecoveryNode, error)
 	Anchor  trust.Anchor
 	Current func(context.Context) (trust.VerifiedSnapshot, error)
+	// Refresh fetches from locally pinned authority endpoints, never from proof
+	// evidence. It must persist trust monotonically before Current is re-read.
+	Refresh func(context.Context) error
 	Clock   func() time.Time
 	Sign    func(context.Context, trust.SignRequest) (trust.SignedProof, error)
 	Grant   func(context.Context, workload.SignedRequest) (workload.Grant, error)
 	Issue   func(context.Context, workload.Grant) (workload.Result, error)
 }
 
+func (r DiLoCoRecovery) currentForRecoveryEvidence(ctx context.Context, proof trust.SignedProof, verify func(trust.VerifiedSnapshot) error) (trust.VerifiedSnapshot, error) {
+	return trust.CurrentForEvidence(ctx, r.Anchor, proof.Evidence.Snapshot, r.Current, r.Refresh, r.Clock, verify)
+}
+
 func recoveryTransient(err error) bool {
-	if errors.Is(err, coordinator.ErrConflict) {
+	if errors.Is(err, coordinator.ErrConflict) || errors.Is(err, trust.ErrTrustBehind) {
 		return true
 	}
 	var h *NodeHTTPError
 	if errors.As(err, &h) {
-		return h.Status == http.StatusServiceUnavailable || h.Status == http.StatusBadGateway || h.Status == http.StatusGatewayTimeout || h.Status == http.StatusTooManyRequests
+		return recoveryHTTPTransient(h.Status)
+	}
+	var authority *enrollmentHTTPError
+	if errors.As(err, &authority) {
+		return recoveryHTTPTransient(authority.Status)
 	}
 	return transientLearnerTransport(err)
+}
+
+func recoveryHTTPTransient(status int) bool {
+	return status == http.StatusServiceUnavailable || status == http.StatusBadGateway || status == http.StatusGatewayTimeout || status == http.StatusTooManyRequests
 }
 
 func (r DiLoCoRecovery) failure(ctx context.Context, id string, pending bool, err error) error {
@@ -165,6 +180,9 @@ func (r DiLoCoRecovery) resume(ctx context.Context, s coordinator.State, slot ru
 	defer func() { err = diLoCoStageError(stage, err) }()
 	intent := *s.Recovery
 	id := s.Plan.Cohort.RunID
+	remaining := time.Duration(coordinator.LearnerRecoverySeconds-(r.Clock().Unix()-intent.Started)) * time.Second
+	ctx, cancel := context.WithTimeout(ctx, remaining)
+	defer cancel()
 	prepared, err := node.AuthorizeLearnerRetry(ctx, slot.Allocation.JobID, NodeLearnerRetryRequest{Attempt: intent.Attempt, PrivateHash: intent.PrivateHash})
 	if err != nil {
 		return err
@@ -174,7 +192,11 @@ func (r DiLoCoRecovery) resume(ctx context.Context, s coordinator.State, slot ru
 	if b.Attempt.PreviousAttemptID != intent.Previous || b.Attempt.AttemptID != intent.Attempt || b.Attempt.PrivateHash != intent.PrivateHash || b.Attempt.Allocation != slot.Allocation || b.Attempt.WorkerID != intent.WorkerID || b.Attempt.Binding != s.Commit.Binding {
 		return fmt.Errorf("node recovery changed intent")
 	}
-	auth := recoveryauth.Authorization{Anchor: r.Anchor, Current: r.Current, Clock: r.Clock, Coordinator: s.Plan.Coordinator, Evidence: prepared.Evidence, Confirm: func(ctx context.Context, want nodejob.LearnerRecovery) error {
+	auth := recoveryauth.Authorization{Anchor: r.Anchor, Current: func(ctx context.Context) (trust.VerifiedSnapshot, error) {
+		return r.currentForRecoveryEvidence(ctx, prepared.Evidence.Proof, func(v trust.VerifiedSnapshot) error {
+			return prepared.Evidence.Verify(r.Anchor, v, r.Clock())
+		})
+	}, Clock: r.Clock, Coordinator: s.Plan.Coordinator, Evidence: prepared.Evidence, Confirm: func(ctx context.Context, want nodejob.LearnerRecovery) error {
 		status, err := node.LearnerStatus(ctx, slot.Allocation.JobID)
 		if err != nil {
 			return err
@@ -207,17 +229,20 @@ func (r DiLoCoRecovery) resume(ctx context.Context, s coordinator.State, slot ru
 	}
 	// The original manifest's runtime deadline is checked by the production
 	// grant adapter, which owns the accepted submission and manifest evidence.
-	stage = "refresh recovery trust"
-	view, err := r.Current(ctx)
-	if err != nil {
-		return err
-	}
 	stage = "verify workload request"
 	request, err := prepared.Request.Request.SigningRequest()
 	if err != nil {
 		return err
 	}
-	if _, err = trust.VerifyProof(r.Anchor, view, prepared.Request.Proof, request, r.Clock()); err != nil {
+	verifyRequest := func(v trust.VerifiedSnapshot) error {
+		_, err := trust.VerifyProof(r.Anchor, v, prepared.Request.Proof, request, r.Clock())
+		return err
+	}
+	view, err := r.currentForRecoveryEvidence(ctx, prepared.Request.Proof, verifyRequest)
+	if err != nil {
+		return err
+	}
+	if err = verifyRequest(view); err != nil {
 		return err
 	}
 	stage = "grant workload"

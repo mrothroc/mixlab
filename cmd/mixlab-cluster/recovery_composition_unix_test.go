@@ -81,6 +81,8 @@ type installedRecoveryFixture struct {
 	anchor     trust.Anchor
 	proxies    []*compositionDeadlineProxy
 	pollGate   string
+	rollover   func(*testing.T, string) uint64
+	trustPaths map[string]statehome.Path
 }
 
 // Completion is broadcast, with the result published before close. Readiness
@@ -164,7 +166,7 @@ func newInstalledRecoveryFixture(t *testing.T, tamperDeadline bool) *installedRe
 	controller, err := principal.Open(config.Principals[1].Final, time.Now())
 	compositionCheck(t, err)
 	t.Cleanup(func() { compositionCheck(t, controller.Close()) })
-	x := &installedRecoveryFixture{ctx: ctx, nodes: map[string]*nodeagent.Store{}, agentPaths: map[string]string{}, anchor: authority.Anchor, authority: ca}
+	x := &installedRecoveryFixture{ctx: ctx, nodes: map[string]*nodeagent.Store{}, agentPaths: map[string]string{}, anchor: authority.Anchor, authority: ca, trustPaths: map[string]statehome.Path{ids.Coordinator: config.Principals[2].Final}}
 	exe, err := os.Executable()
 	compositionCheck(t, err)
 	exe, err = filepath.EvalSymlinks(exe)
@@ -178,6 +180,7 @@ func newInstalledRecoveryFixture(t *testing.T, tamperDeadline bool) *installedRe
 	compositionCheck(t, err)
 	limits := nodejob.Limits{RuntimeSeconds: 180, CPUSeconds: 300, MemoryBytes: 1 << 30, DiskBytes: 1 << 30, LogBytes: 1 << 20}
 	var hints []discovery.Hint
+	var nodePrincipals []statehome.Path
 	for index := range 2 {
 		now := time.Now()
 		view, err := authority.Current(ctx, now)
@@ -185,6 +188,7 @@ func newInstalledRecoveryFixture(t *testing.T, tamperDeadline bool) *installedRe
 		invite, err := authority.Enrollment.Invite(ctx, enrollment.NodeEnrollment, config.Endpoint, "authority", time.Minute, view, now)
 		compositionCheck(t, err)
 		np := path(fmt.Sprintf("node-%d-principal", index), statehome.Principal)
+		nodePrincipals = append(nodePrincipals, np)
 		candidate, err := enrollee.Prepare(ctx, path(fmt.Sprintf("node-%d-stage", index), statehome.Enrollment), np, authority.Anchor, trust.Node, "file", now)
 		compositionCheck(t, err)
 		key, envelope, err := candidate.Keys()
@@ -209,6 +213,7 @@ func newInstalledRecoveryFixture(t *testing.T, tamperDeadline bool) *installedRe
 		compositionCheck(t, err)
 		x.nodes[identity.Principal] = store
 		x.agentPaths[identity.Principal] = ap.Dir()
+		x.trustPaths[identity.Principal] = np
 		address := availableAddress(t)
 		log := &compositionLog{ready: make(chan struct{})}
 		x.logs = append(x.logs, log)
@@ -239,6 +244,31 @@ func newInstalledRecoveryFixture(t *testing.T, tamperDeadline bool) *installedRe
 		return clusterapp.ServeInstalledDiLoCo(ctx, cl, o)
 	})
 	service.awaitReady(t, ctx, ready, log)
+	x.rollover = func(t *testing.T, direction string) uint64 {
+		t.Helper()
+		// Publish a signed generation immediately without advancing test clocks
+		// or revoking a real fixture participant. Refresh only one side.
+		unused, err := submissionID()
+		compositionCheck(t, err)
+		next, err := authority.Snapshots.Revoke(ctx, "principal", unused, "prospective", "rollover fixture", time.Now())
+		compositionCheck(t, err)
+		ahead, behind := nodePrincipals, []statehome.Path{o.Principal}
+		if direction == "node_behind" {
+			ahead, behind = behind, ahead
+		}
+		for _, path := range ahead {
+			p, err := principal.Open(path, time.Now())
+			compositionCheck(t, err)
+			compositionCheck(t, p.Refresh(ctx, next, time.Now()))
+			compositionCheck(t, p.Close())
+		}
+		for _, path := range behind {
+			if compositionTrustGeneration(t, path) >= next.Payload.Generation {
+				t.Fatal("lagging principal already refreshed before rollover recovery fixture", direction)
+			}
+		}
+		return next.Payload.Generation
+	}
 	client, err := clusterapp.NewDiLoCoClient(controller, o.Endpoint, ids.Coordinator, time.Now)
 	compositionCheck(t, err)
 	lookup, err := clusterapp.NodeLookup(controller, time.Now)
@@ -333,14 +363,31 @@ func (b *compositionBudget) wait(t *testing.T, x *installedRecoveryFixture, phas
 
 // This exercises production installation wiring, not numerical checkpoint replay.
 func TestInstalledLearnerRecoveryComposition(t *testing.T) {
+	testInstalledLearnerRecoveryComposition(t, "")
+}
+
+func TestInstalledLearnerRecoverySnapshotRollover(t *testing.T) {
+	for _, direction := range []string{"coordinator_behind", "node_behind"} {
+		t.Run(direction, func(t *testing.T) {
+			testInstalledLearnerRecoveryComposition(t, direction)
+		})
+	}
+}
+
+func testInstalledLearnerRecoveryComposition(t *testing.T, direction string) {
 	x := newInstalledRecoveryFixture(t, false)
 	budget := newCompositionBudget(t)
+	var rolloverGeneration uint64
 	var before *coordinator.State
 	var last coordinator.State
 	for {
 		s, err := x.repo.Load(x.ctx, x.submission.Launch.Run)
 		if err == nil {
 			last = s
+			if direction != "" && rolloverGeneration == 0 && s.Phase == coordinator.Open {
+				// Do this before opening the synthetic learner's poll/exit gate.
+				rolloverGeneration = x.rollover(t, direction)
+			}
 			budget.observe(t, x, s.Phase)
 			if s.Phase == coordinator.Failed {
 				t.Fatalf("installed recovery failed: %s; logs=%s", s.Failure, x.diagnostics())
@@ -375,6 +422,20 @@ func TestInstalledLearnerRecoveryComposition(t *testing.T) {
 					compositionCheck(t, err)
 					var grant workload.Grant
 					compositionCheck(t, json.Unmarshal(grantBytes, &grant))
+					if direction != "" {
+						if grant.Proof.Evidence.Snapshot.Payload.Generation < rolloverGeneration || execution.Learner.Credential.Snapshot.Payload.Generation < rolloverGeneration {
+							t.Fatal("installed recovery did not use rolled-over coordinator and authority trust")
+						}
+						nodeGeneration := grant.Request.Proof.Evidence.Snapshot.Payload.Generation
+						if direction == "coordinator_behind" && nodeGeneration < rolloverGeneration || direction == "node_behind" && nodeGeneration >= rolloverGeneration {
+							t.Fatal("recovery workload request did not preserve the intended rollover ordering", direction, nodeGeneration, rolloverGeneration)
+						}
+						for _, principalID := range []string{s.Plan.Coordinator.PrincipalID, a.Allocation.NodeID} {
+							if compositionTrustGeneration(t, x.trustPaths[principalID]) < rolloverGeneration {
+								t.Fatal("recovery accepted peer evidence without refreshing local trust", principalID)
+							}
+						}
+					}
 					credential := *execution.Learner.Credential
 					compositionCheck(t, workload.ValidateResult(x.anchor, grant, credential, time.Now()))
 					cert, err := x509.ParseCertificate(credential.Chain[0])
@@ -398,6 +459,16 @@ func TestInstalledLearnerRecoveryComposition(t *testing.T) {
 		}
 		budget.wait(t, x, last.Phase)
 	}
+}
+
+func compositionTrustGeneration(t *testing.T, path statehome.Path) uint64 {
+	t.Helper()
+	p, err := principal.Open(path, time.Now())
+	compositionCheck(t, err)
+	defer func() { compositionCheck(t, p.Close()) }()
+	current, _, err := p.Active(time.Now())
+	compositionCheck(t, err)
+	return current.Snapshot.Payload.Generation
 }
 
 func (x *installedRecoveryFixture) grantPath(s workload.Scope) string {

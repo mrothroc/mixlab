@@ -1,14 +1,17 @@
 package clusterapp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mrothroc/mixlab/trust"
 	"github.com/mrothroc/mixlab/workerhost/contract"
 	"github.com/mrothroc/mixlab/workerjob"
 )
@@ -50,6 +53,54 @@ func TestLearnerExitDiagnostic(t *testing.T) {
 				}
 			} else if record.Error != tc.err.Error() || record.Outcome != nil {
 				t.Fatal("invented outcome or lost hosting error")
+			}
+		})
+	}
+}
+
+func TestNodeResponseRequiresActualRequestExpiry(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		ctx := context.Background()
+		if expired {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, time.Now().Add(-time.Second))
+			defer cancel()
+		}
+		for _, timeout := range []bool{false, true} {
+			err := errors.New("invalid evidence")
+			if timeout {
+				err = fmt.Errorf("private fetch: %w", context.DeadlineExceeded)
+			}
+			w := httptest.NewRecorder()
+			nodeResponse(&nodeResponseContext{ResponseWriter: w, ctx: ctx}, nil, err)
+			want := http.StatusConflict
+			if expired && timeout {
+				want = http.StatusServiceUnavailable
+			}
+			if w.Code != want || strings.Contains(w.Body.String(), "private") {
+				t.Fatalf("expired=%v timeout=%v status=%d", expired, timeout, w.Code)
+			}
+		}
+	}
+}
+
+func TestNodeTrustBehindHTTPStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{"behind", trust.ErrTrustBehind, http.StatusServiceUnavailable},
+		{"wrapped", fmt.Errorf("private refresh endpoint: %w", trust.ErrTrustBehind), http.StatusServiceUnavailable},
+		{"invalid", errors.New("private invalid proof"), http.StatusConflict},
+		{"unclassified", errors.New(trust.ErrTrustBehind.Error()), http.StatusConflict},
+		{"success", nil, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			nodeResponse(w, NodeLearnerAck{"job"}, tc.err)
+			if w.Code != tc.status || strings.Contains(w.Body.String(), "private") {
+				t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
 			}
 		})
 	}

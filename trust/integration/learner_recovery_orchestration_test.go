@@ -78,6 +78,10 @@ func newRecoveryFixture(t *testing.T) *recoveryFixture {
 }
 
 func newRecoveryFixtureWithBuild(t *testing.T, build string, recordStart bool) *recoveryFixture {
+	return newRecoveryFixtureWithNodeTrust(t, build, recordStart, nil)
+}
+
+func newRecoveryFixtureWithNodeTrust(t *testing.T, build string, recordStart bool, nodeTrust *recoveryNodeTrust) *recoveryFixture {
 	t.Helper()
 	ctx := context.Background()
 	blobs, err := artifactlocal.Open(learnerHTTPPath(t, statehome.Principal))
@@ -86,6 +90,9 @@ func newRecoveryFixtureWithBuild(t *testing.T, build string, recordStart bool) *
 	base, err := artifacts.Put(ctx, "model_f32", []optimizer.Tensor{{Name: "w0", Shape: []int{1}, Values: []float32{4}}})
 	check(t, err)
 	x := newLearnerHTTPWithBuild(t, func(p *run.Plan) { p.BaseModel = base; p.Outer.TotalSteps = p.Outer.InnerSteps }, build)
+	if nodeTrust != nil {
+		installRecoveryNodeTrust(t, x, nodeTrust)
+	}
 	controller, _ := x.client(t, x.f.client)
 	node, _ := x.client(t, x.coordinator)
 	prepared, err := controller.PrepareLearner(ctx, x.prepare)

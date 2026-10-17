@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,14 +38,15 @@ type CurrentTrust interface {
 	Current(context.Context, time.Time) (trust.VerifiedSnapshot, error)
 }
 type Gateway struct {
-	Policy      *managedtls.Policy
-	Anchor      trust.Anchor
-	Trust       CurrentTrust
-	Coordinator run.Coordinator
-	Repository  coordinator.Repository
-	Store       *artifactlocal.Store
-	Ledger      *Ledger
-	Clock       func() time.Time
+	Policy       *managedtls.Policy
+	Anchor       trust.Anchor
+	Trust        CurrentTrust
+	RefreshTrust func(context.Context) error
+	Coordinator  run.Coordinator
+	Repository   coordinator.Repository
+	Store        *artifactlocal.Store
+	Ledger       *Ledger
+	Clock        func() time.Time
 	// TransferTimeout bounds network/disk work; grants may expire sooner.
 	TransferTimeout time.Duration
 }
@@ -124,7 +126,18 @@ func (g Gateway) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	proof, err := g.authorize(ctx, peer, q, r.URL.Path)
 	if err != nil {
+		if errors.Is(err, trust.ErrTrustBehind) {
+			http.Error(w, "authority trust unavailable", http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, "artifact access rejected", http.StatusForbidden)
+		return
+	}
+	// Evidence catch-up may have learned revocation of the transport caller,
+	// independently of the grant signer. Recheck before reserving a ledger use.
+	currentPeer, err := g.Policy.Authenticate(*r.TLS)
+	if err != nil || currentPeer != peer {
+		http.Error(w, "artifact caller no longer trusted", http.StatusForbidden)
 		return
 	}
 	remaining := time.Unix(q.Grant.Body.ExpiresAt, 0).Sub(g.Clock())
@@ -167,7 +180,11 @@ func (g Gateway) serve(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if !wrote {
-			http.Error(w, "artifact transfer failed", http.StatusConflict)
+			status := http.StatusConflict
+			if errors.Is(err, trust.ErrTrustBehind) {
+				status = http.StatusServiceUnavailable
+			}
+			http.Error(w, "artifact transfer failed", status)
 		}
 		return
 	}
@@ -189,14 +206,6 @@ func (g Gateway) authorize(ctx context.Context, peer trust.AuthenticatedPrincipa
 	if (route == ReadRoute && b.Operation != "read") || (route == CreateRoute && b.Operation != "create") {
 		return zero, fmt.Errorf("unsupported artifact operation")
 	}
-	v, err := g.Trust.Current(ctx, now)
-	if err != nil {
-		return zero, err
-	}
-	proof, err := trust.VerifyProof(g.Anchor, v, q.Grant.Proof, q.Grant.Proof.Request, now)
-	if err != nil {
-		return zero, err
-	}
 	s, err := g.Repository.Load(ctx, b.Binding.RunID)
 	if err != nil {
 		return zero, err
@@ -217,7 +226,7 @@ func (g Gateway) authorize(ctx context.Context, peer trust.AuthenticatedPrincipa
 		return zero, fmt.Errorf("grant worker/participant mismatch")
 	}
 	if s.Phase == coordinator.Evaluating && b.Operation == "read" && s.Evaluation != nil && b.AssignmentID == s.Evaluation.ID && b.WorkerID == s.Evaluation.WorkerID && b.Artifact == s.Evaluation.Model && now.Unix() >= s.Evaluation.IssuedAt && now.Unix() < s.Evaluation.ExpiresAt && b.ExpiresAt <= s.Evaluation.ExpiresAt {
-		return proof, nil
+		return g.verifyGrant(ctx, q)
 	}
 	if s.Phase != coordinator.Open {
 		return zero, fmt.Errorf("no open artifact assignment")
@@ -227,8 +236,27 @@ func (g Gateway) authorize(ctx context.Context, peer trust.AuthenticatedPrincipa
 			if b.Operation == "read" && b.Artifact != a.BaseModel && b.Artifact != a.OuterState {
 				return zero, fmt.Errorf("unassigned read artifact")
 			}
-			return proof, nil
+			return g.verifyGrant(ctx, q)
 		}
 	}
 	return zero, fmt.Errorf("stale artifact assignment")
+}
+
+// Called only after the owning run/assignment has accepted the grant scope.
+func (g Gateway) verifyGrant(ctx context.Context, q Request) (trust.AcceptedProof, error) {
+	var proof trust.AcceptedProof
+	_, err := trust.CurrentForEvidence(ctx, g.Anchor, q.Grant.Proof.Evidence.Snapshot,
+		func(ctx context.Context) (trust.VerifiedSnapshot, error) { return g.Trust.Current(ctx, g.Clock()) },
+		g.RefreshTrust, g.Clock, func(v trust.VerifiedSnapshot) error {
+			if g.Clock().Unix() >= q.Grant.Body.ExpiresAt {
+				return fmt.Errorf("artifact grant expired during trust refresh")
+			}
+			var err error
+			proof, err = trust.VerifyProof(g.Anchor, v, q.Grant.Proof, q.Grant.Proof.Request, g.Clock())
+			return err
+		})
+	if err != nil {
+		return trust.AcceptedProof{}, err
+	}
+	return proof, nil
 }

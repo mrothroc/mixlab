@@ -17,11 +17,16 @@ func (a *NodeJobs) PrepareLearner(ctx context.Context, actor trust.Authenticated
 	if a.options.LearnerProbe == nil {
 		return out, fmt.Errorf("learner numerical probe unavailable")
 	}
-	v, err := a.current(ctx)
-	if err != nil {
+	m := q.Signed.Manifest
+	if err := a.preparationScope(ctx, actor, m.Slot.Allocation.LeaseID, m.Plan.Cohort.RunID, m.Slot.Allocation.JobID, "learner", q.ExpectedLeaseVersion); err != nil {
 		return out, err
 	}
-	accepted, err := nodejob.AcceptLearner(a.options.Anchor, v, actor, a.options.Node, q.Signed, a.options.Clock())
+	var accepted nodejob.AcceptedLearner
+	_, err = a.currentForEvidence(ctx, q.Signed.Proof.Evidence.Snapshot, func(v trust.VerifiedSnapshot) error {
+		var err error
+		accepted, err = nodejob.AcceptLearner(a.options.Anchor, v, actor, a.options.Node, q.Signed, a.options.Clock())
+		return err
+	})
 	if err != nil {
 		return out, err
 	}
@@ -29,7 +34,7 @@ func (a *NodeJobs) PrepareLearner(ctx context.Context, actor trust.Authenticated
 	if err != nil {
 		return out, err
 	}
-	m := j.Signed.Manifest
+	m = j.Signed.Manifest
 	p, err := a.options.LearnerProbe(ctx, m.Config)
 	if err != nil {
 		return out, err
@@ -70,7 +75,12 @@ func (a *NodeJobs) PrepareLearner(ctx context.Context, actor trust.Authenticated
 func (a *NodeJobs) CredentialLearner(ctx context.Context, actor trust.AuthenticatedPrincipal, id string, q NodeLearnerCredentialRequest) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	v, err := a.current(ctx)
+	if err := a.options.Store.CheckLearnerCredential(ctx, actor, id, q.Grant, q.Credential, a.options.Clock()); err != nil {
+		return err
+	}
+	v, err := a.currentForEvidence(ctx, q.Credential.Snapshot, func(v trust.VerifiedSnapshot) error {
+		return a.verifyCredential(v, q.Grant, q.Credential)
+	})
 	if err != nil {
 		return err
 	}
@@ -108,7 +118,16 @@ func (a *NodeJobs) StartLearner(ctx context.Context, actor trust.AuthenticatedPr
 func (a *NodeJobs) FinalizeLearner(ctx context.Context, actor trust.AuthenticatedPrincipal, id string, q authenticated.Commit) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	v, err := a.current(ctx)
+	if err := a.options.Store.CheckLearnerCommit(ctx, actor, id, q, a.options.Clock()); err != nil {
+		return err
+	}
+	v, err := a.currentForEvidence(ctx, q.Proof.Evidence.Snapshot, func(v trust.VerifiedSnapshot) error {
+		if err := q.Validate(); err != nil {
+			return err
+		}
+		_, err := trust.VerifyProof(a.options.Anchor, v, q.Proof, q.Proof.Request, a.options.Clock())
+		return err
+	})
 	if err != nil {
 		return err
 	}

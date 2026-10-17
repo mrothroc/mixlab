@@ -267,7 +267,7 @@ func (o RecruitmentOptions) jobs(ctx context.Context, p recruitment.LaunchPlan, 
 }
 
 func (o RecruitmentOptions) grant(ctx context.Context, r workload.SignedRequest) (workload.Grant, error) {
-	a, v, err := controllerTrust(o.Principal, o.Clock())
+	a, _, err := controllerTrust(o.Principal, o.Clock())
 	if err != nil {
 		return workload.Grant{}, err
 	}
@@ -275,10 +275,7 @@ func (o RecruitmentOptions) grant(ctx context.Context, r workload.SignedRequest)
 	if err != nil {
 		return workload.Grant{}, err
 	}
-	if _, err := trust.VerifyProof(a, v, r.Proof, q, o.Clock()); err != nil {
-		return workload.Grant{}, err
-	}
-	q, err = r.GrantRequest()
+	grantRequest, err := r.GrantRequest()
 	if err != nil {
 		return workload.Grant{}, err
 	}
@@ -289,7 +286,19 @@ func (o RecruitmentOptions) grant(ctx context.Context, r workload.SignedRequest)
 	if r.Request.Scope.Controller != s.Principal || r.Request.Scope.Cluster != s.Cluster {
 		return workload.Grant{}, fmt.Errorf("workload grant targets another controller")
 	}
-	proof, err := o.sign(ctx, q)
+	_, err = trust.CurrentForEvidence(ctx, a, r.Proof.Evidence.Snapshot,
+		func(context.Context) (trust.VerifiedSnapshot, error) {
+			_, v, err := controllerTrust(o.Principal, o.Clock())
+			return v, err
+		}, func(ctx context.Context) error { return refreshPrincipalTrust(ctx, o.Principal, o.Clock) }, o.Clock,
+		func(v trust.VerifiedSnapshot) error {
+			_, err := trust.VerifyProof(a, v, r.Proof, q, o.Clock())
+			return err
+		})
+	if err != nil {
+		return workload.Grant{}, err
+	}
+	proof, err := o.sign(ctx, grantRequest)
 	return workload.Grant{Request: r, Proof: proof}, err
 }
 

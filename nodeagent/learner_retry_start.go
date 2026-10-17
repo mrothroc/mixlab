@@ -58,6 +58,9 @@ func (s *Store) StartLearnerRetry(ctx context.Context, actor trust.Authenticated
 	if err = workload.ValidateResult(a, grant, credential, now); err != nil {
 		return out, err
 	}
+	if a.Cluster() != s.cluster {
+		return out, fmt.Errorf("retry coordinator mismatch")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	err = s.path.WithProcessLock(ctx, nodeLock, func() error {
@@ -66,37 +69,18 @@ func (s *Store) StartLearnerRetry(ctx context.Context, actor trust.Authenticated
 			return e
 		}
 		m := j.Signed.Manifest
-		if a.Cluster() != s.cluster || actor.Principal != m.Plan.Coordinator.PrincipalID || ack.Coordinator != m.Plan.Coordinator {
-			return fmt.Errorf("retry coordinator mismatch")
-		}
 		_, ls, e := s.load()
 		if e != nil {
 			return e
 		}
 		l := findLease(&ls, m.Slot.Allocation.LeaseID)
-		if l == nil || l.Job != id || ls.Active != l.ID || l.State != Running || !ownsLease(actor, *l) || now.Unix() >= l.Expires {
-			return fmt.Errorf("retry allocation no longer live")
-		}
-		if j.Recovery == nil {
-			if len(j.History) > 0 && j.History[len(j.History)-1].Attempt == ack.Body && j.Assignment != nil && !j.Stopped && j.Credential != nil && j.Credential.GrantHash == credential.GrantHash {
-				out = *j.Assignment
-				return nil
-			}
-			return fmt.Errorf("no pending node recovery authorization")
-		}
-		if j.Recovery.Attempt != ack.Body || now.Unix() >= j.Recovery.Expires || !j.Stopped || j.RetryWorkload == nil || !j.RetryWorkload.Initialized || j.Assignment == nil || j.Commit == nil || ack.Body.Binding != j.Commit.Binding {
-			return fmt.Errorf("retry fence or coordinator acknowledgement mismatch")
-		}
-		scope, e := learnerScope(j, j.RetryWorkload.Principal, true)
+		oldScope, replay, e := guardLearnerRetryStart(j, l, ls.Active, actor, id, ack, grant, credential, now)
 		if e != nil {
 			return e
 		}
-		if grant.Request.Request.Scope != scope {
-			return fmt.Errorf("new workload credential changed retry scope")
-		}
-		oldScope, e := learnerScope(j, j.Workload.Principal, false)
-		if e != nil {
-			return e
+		if replay {
+			out = *j.Assignment
+			return nil
 		}
 		if e = cleanup(ctx, oldScope); e != nil {
 			return e

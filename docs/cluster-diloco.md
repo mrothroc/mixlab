@@ -222,6 +222,21 @@ keeps the sanitized failure reason. Inspect both service logs and the attempt's
 `physical-exit.json` when diagnosing unexpected termination. Recovery remains
 bounded per worker per run, not reset after each successful round or incident.
 
+Signed evidence can arrive before either peer's local trust snapshot catches
+up after an authority rollover. Nodes and coordinators first validate that
+evidence, refresh only from their locally pinned authority endpoints, then
+verify again against independently loaded local trust. This applies to learner
+preparation, commits, retry acknowledgements, workload credentials and artifact
+grants, as well as recovery authorization. Peer evidence is never installed as
+current trust. Invalid, expired or revoked evidence remains rejected.
+
+A valid ahead-of-local proof that cannot yet be verified against local trust
+produces a retryable, sanitized HTTP 503 rather than a permanent rejection.
+Recovery retains its original 60-second budget; relay semantic requests retain
+their existing 20-second budget. Refresh does not restart either deadline or
+automatically replay artifact byte streams. Agent/coordinator service logs
+record successful trust-generation changes and their timestamps.
+
 The agent retries only semantic learner HTTP requests after transient connection
 refusal/reset, route unavailability, EOF or timeout, or authenticated HTTP 503
 while the coordinator is unavailable/draining or retryable state contention

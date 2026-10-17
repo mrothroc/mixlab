@@ -53,6 +53,14 @@ func dialEnrollment(ctx context.Context, endpoint string, accept enrollmenttls.A
 	return conn, client, nil
 }
 
+// Keep status separate from the sanitized message so callers can distinguish
+// authority backpressure from a permanent rejection without reading its body.
+type enrollmentHTTPError struct{ Status int }
+
+func (e *enrollmentHTTPError) Error() string {
+	return fmt.Sprintf("enrollment endpoint rejected request (HTTP %d)", e.Status)
+}
+
 func enrollmentJSON(ctx context.Context, client *http.Client, method, target string, body, dst any) error {
 	var b []byte
 	var err error
@@ -74,7 +82,7 @@ func enrollmentJSON(ctx context.Context, client *http.Client, method, target str
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("enrollment endpoint rejected request (HTTP %d)", res.StatusCode)
+		return &enrollmentHTTPError{Status: res.StatusCode}
 	}
 	b, err = io.ReadAll(io.LimitReader(res.Body, 2*trust.MaxTrustBytes+1))
 	if err != nil {

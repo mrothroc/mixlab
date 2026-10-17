@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,15 +27,16 @@ import (
 // cross its local IPC adapter; neither this object nor credentials enter MLX.
 type LearnerClient struct{ options LearnerClientOptions }
 type LearnerClientOptions struct {
-	Plan       run.Plan
-	Commit     run.Commit
-	Workload   trust.WorkloadBinding
-	Endpoint   string
-	Anchor     trust.Anchor
-	Trust      artifactapi.CurrentTrust
-	Clock      func() time.Time
-	Policy     func() (*managedtls.Policy, error)
-	NodePolicy func() (*managedtls.Policy, error)
+	Plan         run.Plan
+	Commit       run.Commit
+	Workload     trust.WorkloadBinding
+	Endpoint     string
+	Anchor       trust.Anchor
+	Trust        artifactapi.CurrentTrust
+	RefreshTrust func(context.Context) error
+	Clock        func() time.Time
+	Policy       func() (*managedtls.Policy, error)
+	NodePolicy   func() (*managedtls.Policy, error)
 }
 type learnerTrust func(context.Context, time.Time) (trust.VerifiedSnapshot, error)
 
@@ -84,7 +86,7 @@ func NewLearnerClient(p *principal.Store, credential *nodecredentials.Transport,
 			return trust.AuthenticatePrincipal(anchor, v, chain, now)
 		}, clock)
 	}
-	return NewLearnerClientWithPolicy(LearnerClientOptions{Plan: plan, Commit: commit, Workload: binding, Endpoint: plan.Endpoint, Anchor: anchor, Trust: current, Clock: clock, Policy: policy, NodePolicy: func() (*managedtls.Policy, error) { return managedPrincipalPolicy(p, trust.Coordinator, clock) }})
+	return NewLearnerClientWithPolicy(LearnerClientOptions{Plan: plan, Commit: commit, Workload: binding, Endpoint: plan.Endpoint, Anchor: anchor, Trust: current, RefreshTrust: func(ctx context.Context) error { return refreshPrincipalTrust(ctx, p, clock) }, Clock: clock, Policy: policy, NodePolicy: func() (*managedtls.Policy, error) { return managedPrincipalPolicy(p, trust.Coordinator, clock) }})
 }
 
 // WithPolicy is the composition/test port, equivalent to NodeClient's policy
@@ -199,12 +201,15 @@ func (c *LearnerClient) callAttempt(ctx context.Context, q private.RelayRequest,
 	if err = authenticated.Decode(b, &out); err != nil {
 		return out, false, err
 	}
-	if err = c.validateReply(q, out); err != nil {
-		return learnerapi.Response{}, false, err
+	if err = c.validateReply(ctx, q, out); err != nil {
+		return learnerapi.Response{}, errors.Is(err, trust.ErrTrustBehind) || ctx.Err() != nil, err
+	}
+	if err = c.verifyResponsePrincipals(ctx, p, *resp.TLS); err != nil {
+		return learnerapi.Response{}, ctx.Err() != nil, err
 	}
 	return out, false, ctx.Err()
 }
-func (c *LearnerClient) validateReply(q private.RelayRequest, r learnerapi.Response) error {
+func (c *LearnerClient) validateReply(ctx context.Context, q private.RelayRequest, r learnerapi.Response) error {
 	o := r.Reply
 	if (q.Operation == "artifact") != (r.Grant != nil) || ((q.Operation == "submit" || q.Operation == "receipt") != (o.Receipt != nil)) || (q.Operation != "poll" && (o.Assignment != nil || o.Evaluation != nil || o.Done)) {
 		return fmt.Errorf("unexpected learner reply")
@@ -237,6 +242,9 @@ func (c *LearnerClient) validateReply(q private.RelayRequest, r learnerapi.Respo
 		}
 	}
 	if r.Grant != nil {
+		if err := r.Grant.Validate(); err != nil {
+			return err
+		}
 		g := r.Grant.Body
 		a := q.Artifact.Assignment
 		if e := q.Artifact.Evaluation; e != nil {
@@ -246,11 +254,17 @@ func (c *LearnerClient) validateReply(q private.RelayRequest, r learnerapi.Respo
 		if g.Binding != q.Binding || g.WorkerID != q.WorkerID || g.PrincipalID != c.options.Workload.Participant || g.ParticipantID != c.options.Workload.Participant || g.Coordinator != c.options.Plan.Coordinator || g.AssignmentID != a.ID || g.Artifact != q.Artifact.Blob || g.Operation != q.Artifact.Operation || g.ExpiresAt > a.ExpiresAt || c.options.Clock().Unix() < g.IssuedAt || c.options.Clock().Unix() >= g.ExpiresAt {
 			return fmt.Errorf("artifact grant mismatch")
 		}
-		v, err := c.options.Trust.Current(context.Background(), c.options.Clock())
-		if err != nil {
-			return err
-		}
-		_, err = trust.VerifyProof(c.options.Anchor, v, r.Grant.Proof, r.Grant.Proof.Request, c.options.Clock())
+		_, err := trust.CurrentForEvidence(ctx, c.options.Anchor, r.Grant.Proof.Evidence.Snapshot,
+			func(ctx context.Context) (trust.VerifiedSnapshot, error) {
+				return c.options.Trust.Current(ctx, c.options.Clock())
+			},
+			c.options.RefreshTrust, c.options.Clock, func(v trust.VerifiedSnapshot) error {
+				if c.options.Clock().Unix() >= g.ExpiresAt {
+					return fmt.Errorf("artifact grant expired during trust refresh")
+				}
+				_, err := trust.VerifyProof(c.options.Anchor, v, r.Grant.Proof, r.Grant.Proof.Request, c.options.Clock())
+				return err
+			})
 		return err
 	}
 	return nil

@@ -30,6 +30,7 @@ type NodeJobOptions struct {
 	Workload       nodeagent.WorkloadPorts
 	Preparation    nodeagent.PreparationPorts
 	CurrentTrust   func(context.Context, time.Time) (trust.Anchor, trust.VerifiedSnapshot, error)
+	RefreshTrust   func(context.Context) error
 	RelayAddress   string
 	Clock          func() time.Time
 	Output         func(context.Context, string, string) (statehome.Path, artifact.Ref, error)
@@ -80,11 +81,16 @@ func (a *NodeJobs) current(ctx context.Context) (trust.VerifiedSnapshot, error) 
 func (a *NodeJobs) Prepare(ctx context.Context, actor trust.AuthenticatedPrincipal, q NodePrepareRequest) (nodeagent.PreparedWorkload, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	v, err := a.current(ctx)
-	if err != nil {
+	m := q.Signed.Manifest
+	if err := a.preparationScope(ctx, actor, m.Lease, m.Membership.RunID, m.Job, "", q.ExpectedLeaseVersion); err != nil {
 		return nodeagent.PreparedWorkload{}, err
 	}
-	accepted, err := nodejob.Accept(a.options.Anchor, v, actor, a.options.Node, q.Signed, a.options.Clock())
+	var accepted nodejob.Accepted
+	_, err := a.currentForEvidence(ctx, q.Signed.Proof.Evidence.Snapshot, func(v trust.VerifiedSnapshot) error {
+		var err error
+		accepted, err = nodejob.Accept(a.options.Anchor, v, actor, a.options.Node, q.Signed, a.options.Clock())
+		return err
+	})
 	if err != nil {
 		return nodeagent.PreparedWorkload{}, err
 	}
@@ -119,10 +125,6 @@ func (a *NodeJobs) active(ctx context.Context, actor trust.AuthenticatedPrincipa
 func (a *NodeJobs) Transport(ctx context.Context, actor trust.AuthenticatedPrincipal, job string, q NodeTransportRequest) (out nodeagent.Job, err error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	v, err := a.current(ctx)
-	if err != nil {
-		return out, err
-	}
 	x, err := a.active(ctx, actor, job)
 	if err != nil {
 		return out, err
@@ -130,7 +132,15 @@ func (a *NodeJobs) Transport(ctx context.Context, actor trust.AuthenticatedPrinc
 	if x.Workload.Node != a.options.Node || x.Workload != q.Grant.Request.Request.Scope {
 		return out, fmt.Errorf("transport grant differs from locally prepared workload")
 	}
-	accepted, err := grouptransport.Accept(a.options.Anchor, v, actor, x.Manifest, q.Credential.Chain, q.Signed, a.options.Clock())
+	var accepted grouptransport.Accepted
+	v, err := a.currentForEvidence(ctx, nodeEvidenceSnapshot(q.Signed.Proof.Evidence.Snapshot, q.Credential.Snapshot), func(v trust.VerifiedSnapshot) error {
+		if err := a.verifyCredential(v, q.Grant, q.Credential); err != nil {
+			return err
+		}
+		var err error
+		accepted, err = grouptransport.Accept(a.options.Anchor, v, actor, x.Manifest, q.Credential.Chain, q.Signed, a.options.Clock())
+		return err
+	})
 	if err != nil {
 		return out, err
 	}

@@ -33,34 +33,24 @@ func (s *Store) ActivateLearnerCredential(ctx context.Context, actor trust.Authe
 	if err := workload.ValidateResult(a, g, result, now); err != nil {
 		return err
 	}
+	if a.Cluster() != s.cluster {
+		return fmt.Errorf("credential scope differs from learner")
+	}
 	return s.path.WithProcessLock(ctx, nodeLock, func() error {
 		old, j, err := s.loadLearner(id)
 		if err != nil {
 			return err
 		}
 		m := j.Signed.Manifest
-		if j.Workload == nil || !j.Workload.Initialized || j.Stopped || m.Controller != actor.Principal {
-			return fmt.Errorf("prepared learner credential required")
-		}
-		scope, err := m.WorkloadScope(j.Workload.Principal)
-		if err != nil {
-			return err
-		}
-		if g.Request.Request.Scope != scope || a.Cluster() != s.cluster {
-			return fmt.Errorf("credential scope differs from learner")
-		}
 		_, ls, err := s.load()
 		if err != nil {
 			return err
 		}
 		l := findLease(&ls, m.Slot.Allocation.LeaseID)
-		if l == nil || l.ID != ls.Active || l.State != Prepared || l.Job != id || now.Unix() >= l.Expires || now.Unix() >= m.Plan.ExpiresAt {
-			return fmt.Errorf("learner lease expired")
+		if err := guardLearnerCredential(j, l, ls.Active, actor, id, g, result, now); err != nil {
+			return err
 		}
 		if j.Credential != nil {
-			if j.Credential.Binding != result.Binding || j.Credential.GrantHash != result.GrantHash {
-				return fmt.Errorf("credential changed")
-			}
 			return nil
 		}
 		j.Credential = &result
@@ -92,39 +82,15 @@ func (s *Store) FinalizeLearner(ctx context.Context, actor trust.AuthenticatedPr
 			return err
 		}
 		m := j.Signed.Manifest
-		controller := actor.Role == trust.Controller && actor.Principal == m.Controller
-		coordinator := actor.Role == trust.Coordinator && actor.Principal == m.Plan.Coordinator.PrincipalID
-		if !controller && !coordinator {
-			return fmt.Errorf("handoff actor mismatch")
-		}
-		if err = c.Body.ValidateFor(m.Plan); err != nil {
-			return err
-		}
-		if j.Assignment == nil || j.Credential == nil {
-			return fmt.Errorf("learner is not started")
-		}
-		found := false
-		for _, r := range c.Body.Registrations {
-			if r.Slot == m.Slot {
-				q, _ := m.SigningRequest()
-				found = r.AttemptID == m.Attempt && r.WorkloadGeneration == m.WorkloadGeneration && r.JobManifestHash == q.Digest
-			}
-		}
-		if !found {
-			return fmt.Errorf("commit changed prepared learner")
-		}
 		lb, ls, err := s.load()
 		if err != nil {
 			return err
 		}
 		l := findLease(&ls, m.Slot.Allocation.LeaseID)
-		if l == nil || (l.State != Released && l.ID != ls.Active) || l.Job != id || l.JobKind != "learner" || (l.State != Prepared && l.State != Running && l.State != Releasing && l.State != Released) {
-			return fmt.Errorf("original learner allocation no longer live")
+		if err := guardLearnerCommit(j, l, ls.Active, actor, id, c); err != nil {
+			return err
 		}
 		if j.Commit != nil {
-			if j.Commit.Binding != c.Body.Binding {
-				return fmt.Errorf("conflicting run commit")
-			}
 			// An authenticated exact commit replay upgrades pre-hosting journals
 			// without inventing missing proof or changing their authority.
 			if j.SignedCommitProof == nil {

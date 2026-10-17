@@ -115,7 +115,18 @@ func (a *NodeJobs) AuthorizeLearnerRetry(ctx context.Context, actor trust.Authen
 func (a *NodeJobs) StartLearnerRetry(ctx context.Context, actor trust.AuthenticatedPrincipal, id string, q NodeLearnerRetryStart) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	v, err := a.current(ctx)
+	if err := a.options.Store.CheckLearnerRetryStart(ctx, actor, id, q.Acknowledgement, q.Grant, q.Credential, a.options.Clock()); err != nil {
+		return err
+	}
+	v, err := a.currentForEvidence(ctx, nodeEvidenceSnapshot(q.Acknowledgement.Proof.Evidence.Snapshot, q.Credential.Snapshot), func(v trust.VerifiedSnapshot) error {
+		if err := q.Acknowledgement.Validate(); err != nil {
+			return err
+		}
+		if _, err := trust.VerifyProof(a.options.Anchor, v, q.Acknowledgement.Proof, q.Acknowledgement.Proof.Request, a.options.Clock()); err != nil {
+			return err
+		}
+		return a.verifyCredential(v, q.Grant, q.Credential)
+	})
 	if err != nil {
 		return err
 	}
