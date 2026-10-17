@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -58,6 +59,12 @@ func TestManagedLearnerPartialArtifactRecovery(t *testing.T) {
 	}
 	wire.armed.Store(true)
 	readErrors := make(chan error, 2)
+	type diagnostic struct {
+		operation string
+		err       error
+	}
+	var diagnosticsMu sync.Mutex
+	var diagnostics []diagnostic
 	type outcome struct {
 		value contract.Outcome
 		err   error
@@ -71,7 +78,11 @@ func TestManagedLearnerPartialArtifactRecovery(t *testing.T) {
 		local, e := workerhost.NewLocalRunner(supervisor, directory, 5*time.Second, 2*time.Second)
 		check(t, e)
 		peer := &partialArtifactPeer{partialArtifactClient(t, f, *x, endpoint), f, readErrors}
-		ipc := &learneripc.Server{Remote: peer, MaxBytes: 1 << 20}
+		ipc := &learneripc.Server{Remote: peer, MaxBytes: 1 << 20, OnError: func(operation string, err error) {
+			diagnosticsMu.Lock()
+			defer diagnosticsMu.Unlock()
+			diagnostics = append(diagnostics, diagnostic{operation, err})
+		}}
 		local.LearnerRelay, local.LearnerPrivateDirectory = ipc.Handle, privatePath
 		guardian, e := workerhost.NewGuardianRunner(local, exe, build)
 		check(t, e)
@@ -128,13 +139,34 @@ func TestManagedLearnerPartialArtifactRecovery(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+	var rawReadError error
 	select {
-	case err := <-readErrors:
-		if !errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, private.ErrUnavailable) {
-			t.Fatal("wrong raw stream failure classification", err)
+	case rawReadError = <-readErrors:
+		if !errors.Is(rawReadError, io.ErrUnexpectedEOF) || errors.Is(rawReadError, private.ErrUnavailable) {
+			t.Fatal("wrong raw stream failure classification", rawReadError)
 		}
 	default:
 		t.Fatal("missing agent-side raw stream error")
+	}
+	diagnosticsMu.Lock()
+	logged := append([]diagnostic(nil), diagnostics...)
+	diagnosticsMu.Unlock()
+	readDiagnostics := 0
+	for _, d := range logged {
+		if d.operation == "read_begin" {
+			readDiagnostics++
+			if d.err != rawReadError || !errors.Is(d.err, io.ErrUnexpectedEOF) || errors.Is(d.err, private.ErrUnavailable) {
+				t.Fatal("local IPC diagnostic changed raw stream error", d.err)
+			}
+		}
+	}
+	if readDiagnostics != 1 {
+		t.Fatal("partial artifact failure was not diagnosed exactly once locally", readDiagnostics)
+	}
+	childLog, err := os.ReadFile(workerLog)
+	check(t, err)
+	if strings.Contains(string(childLog), io.ErrUnexpectedEOF.Error()) || strings.Contains(failed.Error, io.ErrUnexpectedEOF.Error()) {
+		t.Fatal("local artifact diagnostic leaked into child log or public outcome")
 	}
 	if wire.reads.Load() != 2 {
 		t.Fatal("caller-owned artifact stream was replayed", wire.reads.Load())

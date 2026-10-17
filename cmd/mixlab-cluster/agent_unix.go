@@ -183,7 +183,7 @@ func serveInstalledAgent(ctx context.Context, path statehome.Path, listen, adver
 		return fail(err)
 	}
 	defer func() { _ = ad.Close() }()
-	learnerRuntime := clusterapp.NodeLearnerRuntime{Store: store, Principal: p, Runtime: runtime, Credentials: credentialRoot, Anchor: anchor, Clock: time.Now}
+	learnerRuntime := clusterapp.NodeLearnerRuntime{Store: store, Principal: p, Runtime: runtime, Credentials: credentialRoot, Anchor: anchor, Clock: time.Now, Event: event}
 	maintenance := func(ctx context.Context) error {
 		life, cancel := context.WithCancel(ctx)
 		defer cancel()

@@ -31,8 +31,12 @@ type evaluationReader interface {
 type Server struct {
 	Remote   Remote
 	MaxBytes uint64
-	mu       sync.Mutex
-	stream   *transfer
+	// OnError receives local diagnostics before the wire error is sanitized.
+	// Only validated operation names and the error are passed, never request
+	// payloads, artifact bytes or credentials. It must not reenter this server.
+	OnError func(operation string, err error)
+	mu      sync.Mutex
+	stream  *transfer
 }
 type transfer struct {
 	id       string
@@ -70,6 +74,15 @@ func (s *Server) Handle(ctx context.Context, e wc.Envelope) (wc.Envelope, error)
 	r, err := s.handle(ctx, q)
 	if err != nil {
 		s.closeStream()
+		if s.OnError != nil {
+			operation := q.Operation
+			if q.Call != nil {
+				operation += "/" + q.Call.Operation
+			} else if q.Artifact != nil && q.Artifact.Evaluation != nil {
+				operation += "/evaluation"
+			}
+			s.OnError(operation, err)
+		}
 		// A semantic rejection (notably receipt-not-yet-present) is not a
 		// transport failure. Never return remote credential diagnostics.
 		r = response{Error: "operation rejected", ErrorCode: "rejected"}

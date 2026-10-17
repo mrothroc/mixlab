@@ -21,6 +21,32 @@ func TestProcessSampleDeadlineIdentity(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("lost sampler deadline identity: %v", err)
 	}
+	if _, ok := err.(*processSampleTimeoutError); !ok {
+		t.Fatalf("actual deadline kill was not eligible for bounded tolerance: %v", err)
+	}
+}
+
+func TestProcessSampleIndependentKillIsNotTransient(t *testing.T) {
+	ctx := context.Background()
+	_, err := processSampleOutput(ctx, exec.CommandContext(ctx, "/bin/sh", "-c", "kill -KILL $$"))
+	if err == nil {
+		t.Fatal("expected killed sampler")
+	}
+	if _, ok := err.(*processSampleTimeoutError); ok {
+		t.Fatalf("independent kill became a transient timeout: %v", err)
+	}
+}
+
+func TestProcessSampleCanceledBeforeStart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := processSampleOutput(ctx, exec.CommandContext(ctx, "/bin/sleep", "30"))
+	if !errors.Is(err, context.Canceled) || !resourceSampleInterrupted(err) {
+		t.Fatalf("shutdown before sample start became a permanent error: %v", err)
+	}
+	if _, ok := err.(*processSampleTimeoutError); ok {
+		t.Fatalf("unstarted sample became a transient timeout: %v", err)
+	}
 }
 
 func TestProcessSampleNonContextFailure(t *testing.T) {

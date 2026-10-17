@@ -216,8 +216,11 @@ status or signal. Unobserved process status remains unknown; a protocol EOF is
 not evidence of a signal or a zero exit status. Retry does not erase earlier
 outcomes. Journals upgraded from older versions retain their latest available
 outcome but cannot reconstruct history that was already discarded.
-The agent service log records learner exits with job/attempt identity. The
-coordinator service log records recovery-stage errors locally; public run status
+The agent service log records learner exits with job/attempt identity. It also
+records underlying relay failures with timestamp, operation and job/attempt
+identity before sanitizing the learner IPC response. Partial artifact-transfer
+errors therefore remain diagnosable without exposing local details to the child.
+The coordinator service log records recovery-stage errors locally; public run status
 keeps the sanitized failure reason. Inspect both service logs and the attempt's
 `physical-exit.json` when diagnosing unexpected termination. Recovery remains
 bounded per worker per run, not reset after each successful round or incident.
@@ -238,7 +241,7 @@ automatically replay artifact byte streams. Agent/coordinator service logs
 record successful trust-generation changes and their timestamps.
 
 The agent retries only semantic learner HTTP requests after transient connection
-refusal/reset, route unavailability, EOF or timeout, or authenticated HTTP 503
+refusal/reset/closure, route unavailability, EOF or timeout, or authenticated HTTP 503
 while the coordinator is unavailable/draining or retryable state contention
 occurs, using the exact encoded request and fresh pinned
 trust policy for each attempt. Retries fit within the caller's deadline and a

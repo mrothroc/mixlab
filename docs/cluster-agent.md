@@ -63,8 +63,13 @@ Sampling can overshoot; short-lived processes can escape accounting. These
 limits are for trusted workloads on administrator-controlled hosts, not hostile
 process isolation. Local datasets must remain immutable during a job.
 
-Resource sampling fails closed: an unreadable sample or a sampling deadline
-stops the worker and cancels its cohort, even if no budget overage was observed.
+Resource sampling tolerates one confirmed process-sampler deadline timeout.
+A second consecutive timeout, or six seconds without a complete healthy sample,
+stops the worker. CPU accounting is retained across a missed sample; a healthy
+sample resets the tolerance. Known limit breaches, malformed or unreadable
+samples, disk-sampling deadlines and other errors still fail immediately.
+On macOS, process sampling selects only the owned process group; Linux retains
+its process-table snapshot with process-group filtering.
 For `worker resource monitor` errors, inspect the reported cause and host load;
 raising the worker's memory or CPU budget does not fix a stalled sampler.
 Normal shutdown cancellation is not itself a resource-monitor failure.

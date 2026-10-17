@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -25,7 +26,7 @@ func (p *ownedProcess) sampleUsage(ctx context.Context) ([]processUsage, error) 
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, "/bin/ps", "-axo", "pid=,pgid=,time=,rss=,lstart=")
+	cmd := exec.CommandContext(ctx, "/bin/ps", processSampleArgs(p.cmd.Process.Pid)...)
 	cmd.Env = []string{"PATH=/usr/bin:/bin", "LC_ALL=C", "TZ=UTC"}
 	output, err := processSampleOutput(ctx, cmd)
 	if err != nil {
@@ -33,6 +34,18 @@ func (p *ownedProcess) sampleUsage(ctx context.Context) ([]processUsage, error) 
 	}
 	return parseProcessUsage(output, p.cmd.Process.Pid)
 }
+
+// Only a running sampler killed by its deadline is eligible for retry. A bare
+// context deadline (for example from a disk walk) is not this evidence.
+type processSampleTimeoutError struct{ cause error }
+
+func (e *processSampleTimeoutError) Error() string { return e.cause.Error() }
+func (e *processSampleTimeoutError) Unwrap() error { return e.cause }
+
+type processSampleCanceledError struct{ cause error }
+
+func (e *processSampleCanceledError) Error() string { return e.cause.Error() }
+func (e *processSampleCanceledError) Unwrap() error { return e.cause }
 
 func processSampleOutput(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	// CommandContext normally returns ExitError after killing a running process.
@@ -50,21 +63,39 @@ func processSampleOutput(ctx context.Context, cmd *exec.Cmd) (string, error) {
 	out := &sampleBuffer{}
 	cmd.Stdout, cmd.Stderr = out, out
 	if err := cmd.Run(); err != nil {
+		var exit *exec.ExitError
+		canceledBeforeStart := ctx.Err() != nil && err == ctx.Err()
+		interrupted := killedByContext.Load() && out.err == nil &&
+			errors.As(err, &exit) && exit.Sys().(syscall.WaitStatus).Signal() == syscall.SIGKILL
+		if out.err != nil {
+			err = errors.Join(err, out.err)
+		}
 		if killedByContext.Load() {
 			err = errors.Join(err, ctx.Err())
 		}
-		return "", fmt.Errorf("process resource sample failed: %w", err)
+		err = fmt.Errorf("process resource sample failed: %w", err)
+		if interrupted && ctx.Err() == context.DeadlineExceeded {
+			return "", &processSampleTimeoutError{cause: err}
+		}
+		if (interrupted && ctx.Err() == context.Canceled) || canceledBeforeStart {
+			return "", &processSampleCanceledError{cause: err}
+		}
+		return "", err
 	}
 	return out.String(), nil
 }
 
-type sampleBuffer struct{ buffer bytes.Buffer }
+type sampleBuffer struct {
+	buffer bytes.Buffer
+	err    error
+}
 
 func (b *sampleBuffer) String() string { return b.buffer.String() }
 
 func (b *sampleBuffer) Write(p []byte) (int, error) {
 	if len(p) > (8<<20)-b.buffer.Len() {
-		return 0, fmt.Errorf("process resource sample exceeds 8 MiB")
+		b.err = fmt.Errorf("process resource sample exceeds 8 MiB")
+		return 0, b.err
 	}
 	return b.buffer.Write(p)
 }

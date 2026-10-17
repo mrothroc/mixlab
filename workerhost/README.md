@@ -90,8 +90,15 @@ enforced separately from the monitored resource budgets below.
 Every launch requires the approved CPU, memory, disk and log budgets; none
 silently defaults to unlimited. The owner samples immediately after launch and
 then approximately once per second, with a two-second sampling deadline.
-Exceeding a budget or failing to obtain a sample cancels supervision and invokes
-the same process-group termination/reaping path as other worker failures.
+One process-sampler timeout is tolerated only when its deadline actually kills
+the running `ps` command. A second consecutive timeout, or six seconds without a
+complete healthy sample since launch/the last success, cancels supervision and
+invokes the same process-group termination/reaping path as other worker failures.
+Only a complete healthy sample resets this tolerance. CPU accounting is retained
+across a skipped sample. Known budget breaches, malformed output, permission
+errors, disk-sampling deadlines and other sampler failures remain immediately
+fatal. An independent freshness timer initiates cleanup even if sampling stalls;
+it does not make blocked kernel I/O interruptible.
 
 - CPU is cumulative observed user/system CPU time across the owned process
   group, not a CPU-utilization percentage. Observed consumption is retained
@@ -107,6 +114,8 @@ the same process-group termination/reaping path as other worker failures.
 - The sampler bounds process output to 8 MiB, entries to 100,000 and directory
   depth to 128. Exceeding a sampler bound fails the attempt rather than silently
   disabling monitoring. Process sampling shares the PID ownership/reap fence.
+  Darwin selects the owned process group with `ps -g`; Linux retains a full
+  snapshot followed by PGID filtering because its `-g` semantics differ.
 
 These are monitored termination budgets, **not hard OS quotas**. Brief spikes
 can be missed, and sampling plus shutdown grace permits overshoot. Local

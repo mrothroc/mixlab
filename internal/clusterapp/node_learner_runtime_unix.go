@@ -30,6 +30,8 @@ type NodeLearnerRuntime struct {
 	Credentials statehome.Path
 	Anchor      trust.Anchor
 	Clock       func() time.Time
+	// Event is a protected agent-local diagnostic sink, never a child reply.
+	Event func(error)
 }
 
 func (r NodeLearnerRuntime) Open(ctx context.Context, x nodeagent.LocalExecution) (*workerhost.AttemptStore, workerhost.Runner, error) {
@@ -45,8 +47,7 @@ func (r NodeLearnerRuntime) Open(ctx context.Context, x nodeagent.LocalExecution
 	if err != nil {
 		return nil, nil, err
 	}
-	remote := &nodeLearnerRemote{runtime: r, binding: binding}
-	server := &learneripc.Server{Remote: remote, MaxBytes: min(a.PrivateMaxBytes, 1<<30)}
+	server := r.relayServer(binding, min(a.PrivateMaxBytes, 1<<30))
 	relay := func(ctx context.Context, e wc.Envelope) (wc.Envelope, error) {
 		if e.JobID != binding.JobID || e.AttemptID != binding.AttemptID {
 			return wc.Envelope{}, fmt.Errorf("learner IPC attempt changed")
@@ -59,6 +60,23 @@ func (r NodeLearnerRuntime) Open(ctx context.Context, x nodeagent.LocalExecution
 		return nil, nil, err
 	}
 	return host, learnerClosingRunner{Runner: runner, server: server}, nil
+}
+
+func (r NodeLearnerRuntime) relayServer(binding wc.Binding, maxBytes uint64) *learneripc.Server {
+	server := &learneripc.Server{Remote: &nodeLearnerRemote{runtime: r, binding: binding}, MaxBytes: maxBytes}
+	if r.Event != nil {
+		server.OnError = func(operation string, err error) {
+			// Context comes from the admitted attempt, not a request body. Quote
+			// the diagnostic so joined errors remain a single local log record.
+			message := err.Error()
+			const limit, truncated = 2048, " [truncated]"
+			if len(message) > limit {
+				message = message[:limit-len(truncated)] + truncated
+			}
+			r.Event(fmt.Errorf("learner relay error: time=%s operation=%q job=%q attempt=%q error=%q", r.Clock().UTC().Format(time.RFC3339Nano), operation, binding.JobID, binding.AttemptID, message))
+		}
+	}
+	return server
 }
 
 type learnerClosingRunner struct {

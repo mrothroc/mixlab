@@ -17,7 +17,10 @@ import (
 
 const resourceInterval = time.Second
 const resourceSampleTimeout = 2 * time.Second
+const resourceSampleGrace = 6 * time.Second
 const resourceEntryLimit = 100000
+
+var errResourceSampleStale = errors.New("worker resource sample freshness expired")
 
 // ResourceLimitError identifies a failed monitored budget, not an OS quota.
 type ResourceLimitError struct {
@@ -105,41 +108,104 @@ func watchResources(parent context.Context, cancel context.CancelFunc, p *ownedP
 	ctx, stop := context.WithCancel(parent)
 	done := make(chan error, 1)
 	go func() {
-		var meter resourceMeter
-		ticker := time.NewTicker(resourceInterval)
-		defer ticker.Stop()
-		for {
-			probeCtx, stopProbe := context.WithTimeout(ctx, resourceSampleTimeout)
-			u, err := sample(probeCtx, p, dir)
-			if err == nil {
-				// A completed observation is evidence even when shutdown races
-				// its return. Never erase a known breach on the success path.
-				err = meter.check(u, limits)
-			}
-			if err == nil {
-				err = probeCtx.Err()
-			}
-			stopProbe()
-			if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-				done <- nil
-				return
-			}
-			if err != nil {
-				cancel()
-				done <- fmt.Errorf("worker resource monitor: %w", err)
-				return
-			}
-			select {
-			case <-ctx.Done():
-				done <- nil
-				return
-			case <-ticker.C:
-			}
+		err := monitorResources(ctx, cancel, p, dir, limits, sample)
+		if err != nil {
+			cancel()
+			err = fmt.Errorf("worker resource monitor: %w", err)
 		}
+		done <- err
 	}()
 	return func() error {
 		stop()
 		return <-done
+	}
+}
+
+func monitorResources(ctx context.Context, cancel context.CancelFunc, p *ownedProcess, dir string, limits contract.Limits, sample resourceSampler) error {
+	var meter resourceMeter
+	timeouts := 0
+	ticker := time.NewTicker(resourceInterval)
+	defer ticker.Stop()
+	graceCtx, stopGrace := resourceGrace(ctx, cancel)
+	defer func() { stopGrace() }()
+	stale := func() error {
+		return fmt.Errorf("no healthy resource sample within %s: %w", resourceSampleGrace, context.DeadlineExceeded)
+	}
+	for {
+		probeCtx, stopProbe := context.WithTimeout(graceCtx, resourceSampleTimeout)
+		u, err := sample(probeCtx, p, dir)
+		if err == nil {
+			// Completed evidence remains authoritative even during shutdown.
+			err = meter.check(u, limits)
+		}
+		if err == nil {
+			err = probeCtx.Err()
+		}
+		stopProbe()
+		if context.Cause(graceCtx) == errResourceSampleStale {
+			if err == nil || resourceSampleInterrupted(err) {
+				return stale()
+			}
+			return err
+		}
+		if ctx.Err() != nil && resourceSampleInterrupted(err) {
+			return nil
+		}
+		if err != nil {
+			// Do not use errors.As here: a joined permanent failure must not
+			// become retryable just because it also contains a sampler timeout.
+			if _, ok := err.(*processSampleTimeoutError); !ok || timeouts != 0 {
+				return err
+			}
+			timeouts++
+			// Keep both the CPU baseline and freshness deadline across the gap.
+		} else {
+			if stopGrace() {
+				return stale()
+			}
+			graceCtx, stopGrace = resourceGrace(ctx, cancel)
+			timeouts = 0
+		}
+		select {
+		case <-ctx.Done():
+			if context.Cause(graceCtx) == errResourceSampleStale {
+				return stale()
+			}
+			return nil
+		case <-ticker.C:
+		}
+	}
+}
+
+func resourceSampleInterrupted(err error) bool {
+	switch err.(type) {
+	case *processSampleTimeoutError, *processSampleCanceledError:
+		return true
+	default:
+		return err == context.Canceled || err == context.DeadlineExceeded
+	}
+}
+
+// The independent freshness deadline cancels supervision even if filesystem
+// sampling stalls. Join its callback on reset so it cannot cancel a later window.
+func resourceGrace(ctx context.Context, cancel context.CancelFunc) (context.Context, func() bool) {
+	grace, stop := context.WithTimeoutCause(ctx, resourceSampleGrace, errResourceSampleStale)
+	done := make(chan struct{})
+	stopCallback := context.AfterFunc(grace, func() {
+		if context.Cause(grace) == errResourceSampleStale {
+			cancel()
+		}
+		close(done)
+	})
+	return grace, func() bool {
+		stopped := stopCallback()
+		stop()
+		if stopped {
+			close(done)
+		} else {
+			<-done
+		}
+		return context.Cause(grace) == errResourceSampleStale
 	}
 }
 

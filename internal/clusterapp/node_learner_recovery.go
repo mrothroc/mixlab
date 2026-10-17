@@ -87,7 +87,9 @@ func (h *nodeHTTP) recoveryResponse(w http.ResponseWriter, job, operation string
 }
 
 func (a *NodeJobs) AuthorizeLearnerRetry(ctx context.Context, actor trust.AuthenticatedPrincipal, id string, q NodeLearnerRetryRequest) (out NodeLearnerRetryPrepared, err error) {
-	a.mu.Lock()
+	if err = a.lockRecovery(ctx); err != nil {
+		return out, err
+	}
 	defer a.mu.Unlock()
 	if a.options.SignRecovery == nil {
 		return out, fmt.Errorf("node recovery signer unavailable")
@@ -113,7 +115,9 @@ func (a *NodeJobs) AuthorizeLearnerRetry(ctx context.Context, actor trust.Authen
 }
 
 func (a *NodeJobs) StartLearnerRetry(ctx context.Context, actor trust.AuthenticatedPrincipal, id string, q NodeLearnerRetryStart) error {
-	a.mu.Lock()
+	if err := a.lockRecovery(ctx); err != nil {
+		return err
+	}
 	defer a.mu.Unlock()
 	if err := a.options.Store.CheckLearnerRetryStart(ctx, actor, id, q.Acknowledgement, q.Grant, q.Credential, a.options.Clock()); err != nil {
 		return err
