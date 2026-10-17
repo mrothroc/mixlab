@@ -90,15 +90,27 @@ enforced separately from the monitored resource budgets below.
 Every launch requires the approved CPU, memory, disk and log budgets; none
 silently defaults to unlimited. The owner samples immediately after launch and
 then approximately once per second, with a two-second sampling deadline.
-One process-sampler timeout is tolerated only when its deadline actually kills
-the running `ps` command. A second consecutive timeout, or six seconds without a
-complete healthy sample since launch/the last success, cancels supervision and
-invokes the same process-group termination/reaping path as other worker failures.
-Only a complete healthy sample resets this tolerance. CPU accounting is retained
-across a skipped sample. Known budget breaches, malformed output, permission
-errors, disk-sampling deadlines and other sampler failures remain immediately
-fatal. An independent freshness timer initiates cleanup even if sampling stalls;
-it does not make blocked kernel I/O interruptible.
+Plain workers tolerate one confirmed deadline-killed `ps` sample; a second
+consecutive timeout or six seconds without a complete healthy sample cancels
+supervision. Their disk-sampling deadlines remain fatal.
+
+Learners instead enter degraded supervision: the second consecutive sampling
+deadline, or six seconds without a complete healthy sample since launch/the last
+success, suspends the owned process group with `SIGSTOP`. This includes disk
+sampling that reaches its actual probe deadline. The monitor keeps at most one
+sampler active, retries at the existing cadence, and sends `SIGCONT` only after a
+complete healthy sample begun after suspension. A sample that straddles STOP
+cannot authorize resume. Sampling slowness alone does not terminate or restart
+the learner. The suspended wait remains bounded by the existing approved job
+lifetime and parent cancellation; these clocks are never paused or extended.
+
+CPU accounting survives missed samples and suspension. Known budget breaches,
+malformed output, permission errors, unproven/joined timeout errors and failed
+STOP/CONT signals remain fatal. Cancellation kills a suspended group without
+resuming unmeasured work. Sampling and signals retain the PID ownership/reap
+fence. STOP may wait for the canceled process sampler to release that fence;
+kernel I/O and scheduler starvation are not made interruptible. Group suspension
+also does not promise to halt already submitted GPU work or escaped descendants.
 
 - CPU is cumulative observed user/system CPU time across the owned process
   group, not a CPU-utilization percentage. Observed consumption is retained

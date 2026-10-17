@@ -22,6 +22,10 @@ func TestNodeCheckpointOperationDeadline(t *testing.T) {
 		{http.MethodGet, job + "/input", 10 * time.Second},
 		{http.MethodPut, "/v1/agent/jobs/bad/input", 10 * time.Second},
 		{http.MethodPost, "/v1/agent/leases", 10 * time.Second},
+		{http.MethodGet, "/v1/agent/leases/" + strings.Repeat("a", 32), 50 * time.Second},
+		{http.MethodPut, "/v1/agent/leases/" + strings.Repeat("a", 32) + "/renew", 50 * time.Second},
+		{http.MethodGet, "/v1/agent/learners/" + strings.Repeat("a", 32), 50 * time.Second},
+		{http.MethodPut, "/v1/agent/learners/" + strings.Repeat("a", 32) + "/retry-start", 50 * time.Second},
 	} {
 		if got := nodeOperationTimeout(tc.method, tc.path); got != tc.want {
 			t.Fatal(tc, got)

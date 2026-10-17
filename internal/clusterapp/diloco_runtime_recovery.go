@@ -2,8 +2,11 @@ package clusterapp
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 	"github.com/mrothroc/mixlab/diloco/run"
 	"github.com/mrothroc/mixlab/nodeagent"
 	"github.com/mrothroc/mixlab/nodejob"
+	"github.com/mrothroc/mixlab/transport/managedtls"
 	"github.com/mrothroc/mixlab/trust"
 	"github.com/mrothroc/mixlab/trust/workload"
 )
@@ -44,6 +48,37 @@ func (r DiLoCoRecovery) currentForRecoveryEvidence(ctx context.Context, proof tr
 }
 
 func recoveryTransient(err error) bool {
+	// Inspect each wrapper before descending: certificate/remote rejection
+	// remains terminal even when its cause joins otherwise transient failures.
+	switch e := err.(type) {
+	case nil, tls.AlertError, *tls.CertificateVerificationError,
+		x509.CertificateInvalidError, x509.UnknownAuthorityError, x509.HostnameError:
+		return false
+	case *net.OpError:
+		if e.Op == "remote error" {
+			return false
+		}
+	}
+	if err == context.Canceled || err == managedtls.ErrPeerRejected {
+		return false
+	}
+	// Lease maintenance can report several independent peers. One retryable
+	// timeout must never hide another peer's permanent authorization rejection.
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !recoveryTransient(cause) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		return recoveryTransient(wrapped.Unwrap())
+	}
 	if errors.Is(err, coordinator.ErrConflict) || errors.Is(err, trust.ErrTrustBehind) {
 		return true
 	}

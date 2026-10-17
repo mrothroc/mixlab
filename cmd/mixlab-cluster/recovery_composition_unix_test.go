@@ -70,19 +70,20 @@ func (l *compositionLog) String() string {
 }
 
 type installedRecoveryFixture struct {
-	ctx        context.Context
-	repo       *coordinatorlocal.Repository
-	submission admission.Submission
-	nodes      map[string]*nodeagent.Store
-	logs       []*compositionLog
-	agentPaths map[string]string
-	admission  statehome.Path
-	authority  statehome.Path
-	anchor     trust.Anchor
-	proxies    []*compositionDeadlineProxy
-	pollGate   string
-	rollover   func(*testing.T, string) uint64
-	trustPaths map[string]statehome.Path
+	ctx          context.Context
+	repo         *coordinatorlocal.Repository
+	submission   admission.Submission
+	nodes        map[string]*nodeagent.Store
+	logs         []*compositionLog
+	agentPaths   map[string]string
+	admission    statehome.Path
+	authority    statehome.Path
+	anchor       trust.Anchor
+	proxies      []*compositionDeadlineProxy
+	pollGate     string
+	rollover     func(*testing.T, string) uint64
+	trustPaths   map[string]statehome.Path
+	networkPause *compositionNetworkPause
 }
 
 // Completion is broadcast, with the result published before close. Readiness
@@ -130,6 +131,10 @@ func (s *compositionService) awaitReady(t *testing.T, ctx context.Context, ready
 }
 
 func newInstalledRecoveryFixture(t *testing.T, tamperDeadline bool) *installedRecoveryFixture {
+	return newInstalledRecoveryFixtureMode(t, tamperDeadline, false)
+}
+
+func newInstalledRecoveryFixtureMode(t *testing.T, tamperDeadline, load bool) *installedRecoveryFixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
@@ -176,6 +181,9 @@ func newInstalledRecoveryFixture(t *testing.T, tamperDeadline bool) *installedRe
 	dataset := filepath.Join(root, "train.bin")
 	x.pollGate = dataset + ".composition-open"
 	compositionCheck(t, os.WriteFile(dataset, []byte("composition dataset identity only"), 0600))
+	if load {
+		compositionCheck(t, os.WriteFile(dataset+".composition-no-exit", []byte("keep original attempt"), 0600))
+	}
 	datasetID, err := data.DistributedDatasetIdentity(dataset)
 	compositionCheck(t, err)
 	limits := nodejob.Limits{RuntimeSeconds: 180, CPUSeconds: 300, MemoryBytes: 1 << 30, DiskBytes: 1 << 30, LogBytes: 1 << 20}
@@ -225,8 +233,11 @@ func newInstalledRecoveryFixture(t *testing.T, tamperDeadline bool) *installedRe
 		})
 		service.awaitReady(t, ctx, log.ready, log)
 		endpoint := address
-		if tamperDeadline {
+		if tamperDeadline || load {
 			proxy := newCompositionDeadlineProxy(t, np, config.Principals[1].Final, config.Principals[2].Final, address)
+			proxy.mu.Lock()
+			proxy.passthrough = load
+			proxy.mu.Unlock()
 			x.proxies = append(x.proxies, proxy)
 			endpoint = proxy.endpoint
 		}
@@ -240,8 +251,15 @@ func newInstalledRecoveryFixture(t *testing.T, tamperDeadline bool) *installedRe
 	x.logs = append(x.logs, log)
 	o.Ready = func() { close(ready) }
 	o.Event = func(err error) { _, _ = fmt.Fprintln(log, err) }
+	if load {
+		x.networkPause = &compositionNetworkPause{}
+	}
 	service := startCompositionService(t, ctx, "coordinator", func(ctx context.Context) error {
-		return clusterapp.ServeInstalledDiLoCo(ctx, cl, o)
+		listener := cl
+		if load {
+			listener = &compositionPausedListener{Listener: cl, pause: x.networkPause, ctx: ctx}
+		}
+		return clusterapp.ServeInstalledDiLoCo(ctx, listener, o)
 	})
 	service.awaitReady(t, ctx, ready, log)
 	x.rollover = func(t *testing.T, direction string) uint64 {

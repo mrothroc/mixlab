@@ -5,8 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -71,7 +69,7 @@ func ServeNode(ctx context.Context, listener net.Listener, o NodeServerOptions) 
 		}
 		h.ServeHTTP(w, r)
 	})
-	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10, BaseContext: func(net.Listener) context.Context { return requests }, ErrorLog: log.New(io.Discard, "", 0)}
+	server := newManagedHTTPServer(requests, handler, 10*time.Second)
 	config := policy.ServerConfig()
 	if o.Snapshots != nil {
 		config = policy.SnapshotServerConfig()

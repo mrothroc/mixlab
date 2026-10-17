@@ -35,6 +35,22 @@ type Response struct {
 	Grant *authenticated.Grant  `json:"grant,omitempty"`
 }
 
+const ReceiptPendingCode = "receipt_pending"
+
+// ReceiptPendingResponse is returned only with HTTP 202 after an authorized
+// receipt lookup and a final trust/attempt recheck. Other errors retain their
+// ordinary rejection status; a generic HTTP 409 never means pending.
+type ReceiptPendingResponse struct {
+	Code string `json:"code"`
+}
+
+func (r ReceiptPendingResponse) Validate() error {
+	if r.Code != ReceiptPendingCode {
+		return fmt.Errorf("invalid receipt pending response")
+	}
+	return nil
+}
+
 func (r Response) Validate() error {
 	if err := r.Reply.Validate(); err != nil {
 		return err
@@ -135,11 +151,12 @@ func (g Gateway) serve(w http.ResponseWriter, r *http.Request) {
 	m := g.Model
 	m.Repository = guard
 	out, err := g.dispatch(ctx, m, s, q)
+	pending := q.Call.Operation == "receipt" && errors.Is(err, private.ErrReceiptPending)
 	if errors.Is(err, coordinator.ErrConcurrent) || errors.Is(err, trust.ErrTrustBehind) {
 		learnerError(w, ctx, "learner service unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	if ctx.Err() != nil || err != nil {
+	if ctx.Err() != nil || (err != nil && !pending) {
 		learnerError(w, ctx, "learner operation rejected", http.StatusConflict)
 		return
 	}
@@ -148,12 +165,19 @@ func (g Gateway) serve(w http.ResponseWriter, r *http.Request) {
 		learnerError(w, ctx, "learner access changed", http.StatusForbidden)
 		return
 	}
-	b, err = json.Marshal(out)
+	status := http.StatusOK
+	if pending {
+		status = http.StatusAccepted
+		b, err = json.Marshal(ReceiptPendingResponse{Code: ReceiptPendingCode})
+	} else {
+		b, err = json.Marshal(out)
+	}
 	if ctx.Err() != nil || err != nil || len(b) > MaxMessage || out.Validate() != nil {
 		learnerError(w, ctx, "invalid learner result", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
 	_, _ = w.Write(b)
 }
 
@@ -296,6 +320,9 @@ func (g Gateway) dispatch(ctx context.Context, m coordinator.Model, s coordinato
 			receipt, err = m.AcceptSubmission(ctx, private.Submission{Format: "mixlab_update_submission_v1", Update: u, PrincipalID: b.Principal, AttemptID: b.Attempt, WorkloadGeneration: b.Generation, Allocation: allocation})
 		} else {
 			receipt, err = m.Repository.Receipt(ctx, b.Run, u.ID)
+			if errors.Is(err, coordinator.ErrNotFound) {
+				return out, private.ErrReceiptPending
+			}
 		}
 		if err != nil {
 			return out, err

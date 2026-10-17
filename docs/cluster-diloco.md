@@ -198,11 +198,16 @@ fail the run even though the service restarts successfully.
 
 The coordinator observes stopped learner processes and automatically attempts
 same-allocation recovery, capped at three replacement attempts per worker per
-run. Recovery intent, its fresh attempt identity and its 60-second deadline are
+run. Recovery intent, its fresh attempt identity and its five-minute deadline are
 durable, so restarting the coordinator does not reset the allowance. An unknown
 private-state hash (including failure before the first recorded start), a
 permanent authorization rejection, or exhausted recovery fails the run explicitly.
-An unavailable node-status endpoint also has a persisted 60-second budget.
+An unavailable node-status endpoint has a separate persisted five-minute budget;
+unavailability does not itself create a replacement attempt. New CLI submissions
+request fifteen-minute renewable leases for renewal headroom. Existing accepted
+submissions retain their signed lease settings, and expiry is never bypassed.
+Lease maintenance services independent allocations concurrently (at most eight
+at once), so a slow node does not prevent healthy peers from renewing.
 Status includes `recovery_worker` and `recovery_started_at` during recovery,
 or `learner_unavailable_since` while node status cannot be read. Exhaustion
 changes `run_phase` to `FAILED` with a sanitized `failure` reason.
@@ -235,8 +240,8 @@ current trust. Invalid, expired or revoked evidence remains rejected.
 
 A valid ahead-of-local proof that cannot yet be verified against local trust
 produces a retryable, sanitized HTTP 503 rather than a permanent rejection.
-Recovery retains its original 60-second budget; relay semantic requests retain
-their existing 20-second budget. Refresh does not restart either deadline or
+Recovery retains its persisted five-minute budget; each relay semantic call retains
+its 55-second network retry budget. Refresh does not restart either deadline or
 automatically replay artifact byte streams. Agent/coordinator service logs
 record successful trust-generation changes and their timestamps.
 
@@ -245,17 +250,37 @@ refusal/reset/closure, route unavailability, EOF or timeout, or authenticated HT
 while the coordinator is unavailable/draining or retryable state contention
 occurs, using the exact encoded request and fresh pinned
 trust policy for each attempt. Retries fit within the caller's deadline and a
-20-second total cap, with at most five seconds per attempt and 100 ms to one
+55-second total cap, with at most 50 seconds per attempt and 100 ms to one
 second backoff. Authentication, certificate, scope, other HTTP-status and malformed
 response failures are not retried. Lost acknowledgments use the coordinator's
-existing idempotency records, not extra inner training. This is a short-outage
-allowance, not indefinite restart tolerance. Raw artifact reads/writes are not
+existing idempotency records, not extra inner training. When this network retry
+budget expires, the learner waits and repeats the same semantic operation without
+exiting, rerunning inner steps or consuming a process restart. Its assignment/job
+context and the coordinator's durable outage policy still bound this wait. Local
+learner IPC and guardian channels use supervised runtime bounds so scheduler
+stalls or resource suspension do not independently destroy framed connections.
+This does not extend signed authority or guarantee progress under indefinite host
+starvation. Raw artifact reads/writes are not
 automatically replayed: their caller-owned streams have no implicit rewind or
 destination reset, so an interruption can still fail the learner attempt.
 That failure uses the same bounded, private-state-preserving recovery path;
 it is not a claim that every interrupted transfer preserves the original PID.
 The local IPC boundary distinguishes exhausted transient unavailability from
 terminal rejection without disclosing remote credential diagnostics.
+
+Controller startup retries the pinned, read-only trust snapshot fetch for up to
+two minutes, with at most 50 seconds per attempt. It reloads current trust and
+time after waits; it never replays the submission itself. A still-valid cached
+identity can be used after transient exhaustion, but never after a permanent
+authentication/signature rejection or caller cancellation.
+Managed authority, coordinator and node HTTP servers allow a bounded 55-second
+TLS/header envelope. Body-read budgets begin after TLS and headers: 55 seconds
+for authority, 30 seconds for coordinator and 10 seconds for node requests.
+Route deadlines, authentication and connection limits remain independently
+enforced; slower handshakes do not grant longer application authority.
+An authenticated receipt lookup that has not yet been committed returns an
+explicit pending result, not an error-level relay log. Other conflicts and
+authorization failures remain errors.
 
 To start a **new weights-only run**, optionally pass
 `-initial-model /absolute/path/model.safetensors` with the new-run flags. It must

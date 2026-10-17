@@ -4,28 +4,33 @@ package workerhost
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
 )
 
+type diskSampler func(context.Context, string) (int64, error)
+
 // A learner's persistent state is deliberately outside its fresh attempt
 // directory, but both belong to the same approved disk allowance.
 func (p LaunchPlan) withPrivateDisk(ctx context.Context, attempt int64) (int64, error) {
+	return p.withPrivateDiskSample(ctx, attempt, attemptDiskBytes)
+}
+
+func (p LaunchPlan) withPrivateDiskSample(ctx context.Context, attempt int64, sample diskSampler) (int64, error) {
 	if p.Learner == nil {
 		return attempt, nil
 	}
-	private, err := attemptDiskBytes(ctx, p.LearnerPrivateDirectory.Dir())
-	if err != nil {
-		return 0, err
+	private, err := sample(ctx, p.LearnerPrivateDirectory.Dir())
+	if attempt < 0 || private < 0 || private > math.MaxInt64-attempt {
+		return 0, errors.Join(fmt.Errorf("combined learner disk usage overflows"), err)
 	}
+	total := attempt + private
 	if private > int64(p.Learner.PrivateMaxBytes) {
-		return 0, &ResourceLimitError{"learner_private_bytes", private, int64(p.Learner.PrivateMaxBytes)}
+		return total, errors.Join(&ResourceLimitError{"learner_private_bytes", private, int64(p.Learner.PrivateMaxBytes)}, err)
 	}
-	if attempt < 0 || private > math.MaxInt64-attempt {
-		return 0, fmt.Errorf("combined learner disk usage overflows")
-	}
-	return attempt + private, nil
+	return total, err
 }
 
 func (p LaunchPlan) resourceSampler(base resourceSampler) resourceSampler {
@@ -50,16 +55,28 @@ func (p LaunchPlan) checkDisk(parent context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
-	n, err := attemptDiskBytes(ctx, p.Directory.Dir())
-	if err != nil {
+	return p.checkLearnerDisk(ctx, attemptDiskBytes)
+}
+
+// The caller chooses the lifetime: prelaunch uses its short probe, while final
+// verification uses the original supervision context and its remaining budget.
+func (p LaunchPlan) checkLearnerDisk(ctx context.Context, sample diskSampler) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	n, err = p.withPrivateDisk(ctx, n)
-	if err != nil {
-		return err
-	}
+	n, err := sample(ctx, p.Directory.Dir())
 	if n > p.Limits.DiskBytes {
-		return &ResourceLimitError{"disk_bytes", n, p.Limits.DiskBytes}
+		return errors.Join(&ResourceLimitError{"disk_bytes", n, p.Limits.DiskBytes}, err)
 	}
-	return nil
+	if err != nil {
+		return err
+	}
+	n, err = p.withPrivateDiskSample(ctx, n, sample)
+	if n > p.Limits.DiskBytes {
+		return errors.Join(&ResourceLimitError{"disk_bytes", n, p.Limits.DiskBytes}, err)
+	}
+	if err != nil {
+		return err
+	}
+	return ctx.Err()
 }

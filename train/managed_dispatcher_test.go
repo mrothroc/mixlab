@@ -23,6 +23,10 @@ import (
 )
 
 func managedConnectionPair(t *testing.T, binding wc.Binding) (*local.Conn, *local.Dispatcher) {
+	return managedConnectionPairWithOptions(t, binding, local.DispatcherOptions{})
+}
+
+func managedConnectionPairWithOptions(t *testing.T, binding wc.Binding, options local.DispatcherOptions) (*local.Conn, *local.Dispatcher) {
 	t.Helper()
 	limits := local.Limits{FrameBytes: wc.MaxFrameBytes, Bytes: workerjob.ControlByteBudget, Messages: workerjob.ControlMessageBudget}
 	server, credential, err := local.Listen(managedPrivateDir(t), limits)
@@ -56,7 +60,7 @@ func managedConnectionPair(t *testing.T, binding wc.Binding) (*local.Conn, *loca
 	if parent.err != nil {
 		t.Fatal(parent.err)
 	}
-	d, err := local.NewDispatcher(context.Background(), parent.conn, local.DispatcherOptions{})
+	d, err := local.NewDispatcher(context.Background(), parent.conn, options)
 	if err != nil {
 		t.Fatal(err)
 	}

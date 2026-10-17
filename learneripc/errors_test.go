@@ -101,9 +101,6 @@ func TestLearnerIPCUnavailableDoesNotCloseDispatcher(t *testing.T) {
 		done <- nil
 	}()
 	c := &Client{Session: worker}
-	if _, err := c.Poll(ctx); !errors.Is(err, private.ErrUnavailable) {
-		t.Fatalf("lost transient classification: %v", err)
-	}
 	if r, err := c.Poll(ctx); err != nil || !r.Done {
 		t.Fatalf("semantic error closed local dispatcher: %+v %v", r, err)
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/mrothroc/mixlab/coordinator"
 	"github.com/mrothroc/mixlab/diloco/run"
 	"github.com/mrothroc/mixlab/internal/clusterapp"
+	"github.com/mrothroc/mixlab/nodeagent"
 )
 
 type closedConnectionRecoveryNode struct {
@@ -47,11 +48,28 @@ func setClosedRecoveryTime(f *recoveryFixture, unix int64) {
 	f.x.f.now = time.Unix(unix, 0)
 }
 
+func renewRecoveryLeaseThroughBudget(t *testing.T, f *recoveryFixture) {
+	t.Helper()
+	ctx := context.Background()
+	allocation := f.x.prepare.Signed.Manifest.Slot.Allocation
+	lease, err := f.node.LeaseStatus(ctx, allocation.LeaseID)
+	check(t, err)
+	// These tests tick recovery directly, without the service's lease keeper.
+	// Replace the admission-clipped lease through the real post-handoff API.
+	ttl := int(coordinator.LearnerRecoverySeconds) + 60
+	renewed, err := f.node.Renew(ctx, nodeagent.LeaseCommand{IdempotencyKey: id(t), Lease: lease.ID, ExpectedVersion: lease.Version, TTLSeconds: ttl})
+	check(t, err)
+	if renewed.Expires <= f.x.f.clock().Unix()+coordinator.LearnerRecoverySeconds || renewed.WorkloadDeadline != lease.WorkloadDeadline || renewed.Expires > lease.WorkloadDeadline {
+		t.Fatal("recovery fixture needs lease headroom within the original workload deadline")
+	}
+}
+
 func TestProductionLearnerRecoveryRetryStartClosedConnection(t *testing.T) {
 	for _, mode := range []string{"unapplied_bare", "unapplied_wrapped", "applied_response_lost"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			f := newRecoveryFixture(t)
+			renewRecoveryLeaseThroughBudget(t, f)
 			before := f.state(t)
 			f.stop(t)
 			_, err := f.recovery(t).Tick(ctx, f.assignment.Binding.RunID)
@@ -126,6 +144,7 @@ func TestProductionLearnerRecoveryRetryStartClosedConnection(t *testing.T) {
 func TestProductionLearnerRecoveryRetryStartClosedConnectionBudget(t *testing.T) {
 	ctx := context.Background()
 	f := newRecoveryFixture(t)
+	renewRecoveryLeaseThroughBudget(t, f)
 	f.stop(t)
 	_, err := f.recovery(t).Tick(ctx, f.assignment.Binding.RunID)
 	check(t, err)
@@ -149,7 +168,7 @@ func TestProductionLearnerRecoveryRetryStartClosedConnectionBudget(t *testing.T)
 		return closedRecoveryConnectionError(f, job)
 	}
 	// Leave ample real time for signed HTTP/issuance work on slow race builds;
-	// the next tick still probes the exact original 60-second cutoff.
+	// the next tick still probes the exact persisted recovery cutoff.
 	for _, elapsed := range []int64{0, coordinator.LearnerRecoverySeconds / 2} {
 		setClosedRecoveryTime(f, intent.Started+elapsed)
 		_, err = closedConnectionRecovery(t, f, start).Tick(ctx, f.assignment.Binding.RunID)
@@ -166,7 +185,7 @@ func TestProductionLearnerRecoveryRetryStartClosedConnectionBudget(t *testing.T)
 	check(t, err)
 	s := f.state(t)
 	if s.Phase != coordinator.Failed || !strings.Contains(s.Failure, "budget exhausted") || len(requests) != 2 || len(s.Attempts) != 1 || s.Attempts[0].AttemptID != intent.Attempt {
-		t.Fatal("closed connection extended the original 60-second budget", s.Failure)
+		t.Fatal("closed connection extended the persisted recovery budget", s.Failure)
 	}
 	x, err := f.x.store.ActiveExecution(ctx)
 	check(t, err)

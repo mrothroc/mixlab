@@ -386,18 +386,35 @@ func TestLearnerRelayArtifactGrantRolloverRefreshAttemptDeadline(t *testing.T) {
 	endpoint, wire := observeRolloverRelay(t, x)
 	o := x.options[0]
 	o.Endpoint, o.Trust = endpoint, local
-	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Second)
+	// Keep the parent outside the production 55-second semantic budget so
+	// only the 50-second attempt deadline can end the first refresh.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	deadline, _ := ctx.Deadline()
 	refreshes := 0
+	var started time.Time
+	var firstDeadline time.Time
+	var firstTimeout error
 	o.RefreshTrust = func(attempt context.Context) error {
 		refreshes++
-		if d, ok := attempt.Deadline(); !ok || d.After(deadline) || (refreshes == 1 && !d.Before(deadline)) {
+		d, ok := attempt.Deadline()
+		if !ok || !d.Before(deadline) {
 			t.Error("refresh lacks a bounded per-attempt deadline")
 		}
 		if refreshes == 1 {
+			firstDeadline = d
+			if d.Before(started.Add(50*time.Second)) || time.Until(d) > 50*time.Second {
+				t.Error("first refresh does not use the 50-second attempt budget")
+			}
 			<-attempt.Done()
-			return attempt.Err()
+			firstTimeout = attempt.Err()
+			if !errors.Is(firstTimeout, context.DeadlineExceeded) || ctx.Err() != nil {
+				t.Errorf("first refresh ended without its own timeout: attempt=%v parent=%v", firstTimeout, ctx.Err())
+			}
+			return firstTimeout
+		}
+		if !d.After(firstDeadline) || d.After(firstDeadline.Add(5*time.Second)) {
+			t.Error("retry reused the expired deadline or extended the original 55-second budget")
 		}
 		local.install(peer)
 		return nil
@@ -405,12 +422,14 @@ func TestLearnerRelayArtifactGrantRolloverRefreshAttemptDeadline(t *testing.T) {
 	c, err := clusterapp.NewLearnerClientWithPolicy(o)
 	check(t, err)
 	var out bytes.Buffer
+	started = time.Now()
 	err = c.Read(ctx, x.s.Assignments[0], x.s.Assignments[0].BaseModel, &out)
+	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("refresh attempt timeout became permanent with overall budget remaining: parent=%v refreshes=%d err=%v", ctx.Err(), refreshes, err)
 	}
-	if refreshes != 2 || !bytes.Equal(out.Bytes(), x.body) {
-		t.Fatalf("retry did not catch up after refresh timeout: refreshes=%d bytes=%d", refreshes, out.Len())
+	if refreshes != 2 || !errors.Is(firstTimeout, context.DeadlineExceeded) || ctx.Err() != nil || elapsed < 50*time.Second || elapsed >= 55*time.Second || !bytes.Equal(out.Bytes(), x.body) {
+		t.Fatalf("retry did not catch up within the original budget: refreshes=%d elapsed=%v parent=%v bytes=%d", refreshes, elapsed, ctx.Err(), out.Len())
 	}
 	wire.assert(t, 2, 1, peer.Generation())
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -23,10 +24,10 @@ func TestResourceTimeoutHealthyRecoveryPreservesCPU(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		calls := 0
+		var calls atomic.Int64
 		sample := func(ctx context.Context, _ *ownedProcess, _ string) (resourceUsage, error) {
-			calls++
-			switch calls {
+			call := calls.Add(1)
+			switch call {
 			case 1:
 				return resourceUsage{Processes: []processUsage{
 					{Identity: "worker", CPU: 2 * time.Second},
@@ -35,15 +36,15 @@ func TestResourceTimeoutHealthyRecoveryPreservesCPU(t *testing.T) {
 			case 2:
 				return sampleTimeout(ctx)
 			default:
-				return resourceUsage{Processes: []processUsage{{Identity: "worker", CPU: time.Duration(calls) * time.Second}}}, nil
+				return resourceUsage{Processes: []processUsage{{Identity: "worker", CPU: time.Duration(call) * time.Second}}}, nil
 			}
 		}
 		stop := watchResources(ctx, cancel, nil, "", contract.Limits{CPUSeconds: 4, MemoryBytes: 100, DiskBytes: 100}, sample)
 		time.Sleep(3500 * time.Millisecond)
 		synctest.Wait()
-		if ctx.Err() != nil || calls != 3 {
+		if ctx.Err() != nil || calls.Load() != 3 {
 			_ = stop()
-			t.Fatalf("isolated timeout did not recover: calls=%d err=%v", calls, ctx.Err())
+			t.Fatalf("isolated timeout did not recover: calls=%d err=%v", calls.Load(), ctx.Err())
 		}
 		// The healthy sample after the gap observes 3s + the exited child's 1s.
 		// Dropping the CPU baseline double-counts it; resetting consumed CPU

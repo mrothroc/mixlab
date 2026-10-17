@@ -5,8 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net"
 	"net/http"
 	"sync"
@@ -91,7 +89,7 @@ func ServeAuthorityWithEvents(ctx context.Context, l net.Listener, a *Authority,
 		}
 		secure.ServeHTTP(w, r)
 	})
-	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10, BaseContext: func(net.Listener) context.Context { return life }, ErrorLog: log.New(io.Discard, "", 0)}
+	server := newManagedHTTPServer(life, h, 55*time.Second)
 	stop := context.AfterFunc(life, func() { _ = server.Close() })
 	defer stop()
 	config := policy.SnapshotServerConfig()

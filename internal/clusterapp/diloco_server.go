@@ -5,8 +5,6 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"net"
 	"net/http"
 	"time"
@@ -59,7 +57,7 @@ func ServeDiLoCo(ctx context.Context, l net.Listener, o DiLoCoServerOptions) (re
 		}
 		h.ServeHTTP(w, r)
 	})
-	server := &http.Server{Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10, BaseContext: func(net.Listener) context.Context { return requests }, ErrorLog: log.New(io.Discard, "", 0)}
+	server := newManagedHTTPServer(requests, h, 30*time.Second)
 	tlsConfig := p.ServerConfig()
 	tlsConfig.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
 		p, e := o.Policy()

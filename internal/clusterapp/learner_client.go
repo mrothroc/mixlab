@@ -186,7 +186,10 @@ func (c *LearnerClient) callAttempt(ctx context.Context, q private.RelayRequest,
 	if _, err = p.Authenticate(*resp.TLS); err != nil {
 		return out, false, err
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode == http.StatusAccepted && q.Operation != "receipt" {
+		return out, false, fmt.Errorf("unexpected receipt pending response")
+	}
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		// Only an authenticated service-unavailable response is replayable.
 		// 4xx, unexpected 5xx and malformed successes remain fail-closed.
 		return out, resp.StatusCode == http.StatusServiceUnavailable, fmt.Errorf("learner operation rejected (HTTP %d)", resp.StatusCode)
@@ -197,6 +200,19 @@ func (c *LearnerClient) callAttempt(ctx context.Context, q private.RelayRequest,
 	}
 	if _, err = p.Authenticate(*resp.TLS); err != nil {
 		return out, false, err
+	}
+	if resp.StatusCode == http.StatusAccepted {
+		var pending learnerapi.ReceiptPendingResponse
+		if err = authenticated.Decode(b, &pending); err != nil {
+			return out, false, err
+		}
+		if err = c.verifyResponsePrincipals(ctx, p, *resp.TLS); err != nil {
+			return out, ctx.Err() != nil, err
+		}
+		if err = ctx.Err(); err != nil {
+			return out, true, err
+		}
+		return out, false, private.ErrReceiptPending
 	}
 	if err = authenticated.Decode(b, &out); err != nil {
 		return out, false, err

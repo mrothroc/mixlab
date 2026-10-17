@@ -94,8 +94,16 @@ func TestLearnerStatusOutageBudgetSurvivesRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	start := h.state(t).LearnerUnavailableAt
-	h.clock.now.Add(LearnerRecoverySeconds)
+	// A slow management request is not a stopped child and spends no attempt.
+	h.clock.now.Add(120)
 	restarted := h.m
+	if err := restarted.ObserveLearnerAvailability(ctx, id, true); err != nil {
+		t.Fatal(err)
+	}
+	if s := h.state(t); s.Phase == Failed || s.Recovery != nil || len(s.Attempts) != 0 || s.LearnerUnavailableAt != start {
+		t.Fatal("slowness triggered recovery or reset outage", s)
+	}
+	h.clock.now.Add(LearnerRecoverySeconds - 120)
 	if err := restarted.ObserveLearnerAvailability(ctx, id, true); err != nil {
 		t.Fatal(err)
 	}

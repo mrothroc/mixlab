@@ -3,6 +3,7 @@ package learner
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -296,6 +297,8 @@ func (r *Runtime) submit(ctx context.Context, old []byte, j journal) (private.Re
 				return private.Receipt{}, e
 			}
 			return receipt, nil
+		} else if !errors.Is(e, private.ErrReceiptPending) {
+			return private.Receipt{}, e
 		}
 	}
 	if err = r.Peer.Write(ctx, j.Assignment, j.Update.Delta, f); err != nil {

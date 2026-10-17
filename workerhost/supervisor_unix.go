@@ -50,7 +50,7 @@ type LaunchPlan struct {
 	Assignment              workerjob.Assignment
 	Learner                 *workerjob.LearnerAssignment // mutually exclusive with Assignment
 	Relay                   Relay                        // caller-owned opaque request handler
-	RelayTimeout            time.Duration                // zero defaults to one minute; includes queueing
+	RelayTimeout            time.Duration                // zero defaults to learner runtime; includes queueing
 	ControlLimits           local.Limits                 // optional lower session wire budget
 	LearnerPrivateDirectory statehome.Path               // persistent across hosting attempts
 	Directory               statehome.Path               // fresh private directory allocated by hosting
@@ -189,12 +189,22 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 		// Assign after monitoring and forced cleanup so neither can overwrite it.
 		result.Exit = process.exitStatus()
 	}()
-	stopResources = watchResources(ctx, cancel, process, p.Directory.Dir(), p.Limits, p.resourceSampler(s.sample))
+	watch := watchResources
+	if p.Learner != nil {
+		watch = watchLearnerResources
+	}
+	stopResources = watch(ctx, cancel, process, p.Directory.Dir(), p.Limits, p.resourceSampler(s.sample))
 	// A short job may exit between samples. Always check its retained output
 	// before reporting success, including output written during shutdown.
 	defer func() {
 		if err == nil {
-			err = p.checkDisk(parent)
+			if p.Learner != nil {
+				// Retain the original runtime deadline and parent cancellation;
+				// a successful exit does not grant a fresh verification budget.
+				err = p.checkLearnerDisk(ctx, attemptDiskBytes)
+			} else {
+				err = p.checkDisk(parent)
+			}
 		}
 	}()
 	if p.Started != nil {
@@ -236,7 +246,11 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 		return result, fmt.Errorf("worker exited during admission: %w", exitErr)
 	default:
 	}
-	session, err := local.NewDispatcher(ctx, conn, local.DispatcherOptions{ReadTimeout: time.Duration(runtimeSeconds) * time.Second})
+	options := local.DispatcherOptions{ReadTimeout: time.Duration(runtimeSeconds) * time.Second}
+	if p.Learner != nil {
+		options = local.LifetimeOptions(time.Duration(runtimeSeconds) * time.Second)
+	}
+	session, err := local.NewDispatcher(ctx, conn, options)
 	if err != nil {
 		return result, err
 	}

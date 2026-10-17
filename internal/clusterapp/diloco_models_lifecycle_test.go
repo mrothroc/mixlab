@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,22 +18,29 @@ import (
 )
 
 type terminalLeaseNodes struct {
+	mu                        sync.Mutex
 	leases                    map[string]nodeagent.Lease
 	statusErr, releaseErr     error
 	reads, renewals, releases int
 }
 
 func (n *terminalLeaseNodes) Status(_ context.Context, a run.Allocation) (nodeagent.Lease, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	n.reads++
 	return n.leases[a.LeaseID], n.statusErr
 }
 
 func (n *terminalLeaseNodes) Renew(context.Context, run.Allocation, nodeagent.LeaseCommand) (nodeagent.Lease, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	n.renewals++
 	return nodeagent.Lease{}, errors.New("unexpected renewal")
 }
 
 func (n *terminalLeaseNodes) Release(_ context.Context, a run.Allocation, q nodeagent.LeaseCommand) (nodeagent.Lease, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
 	n.releases++
 	l := n.leases[a.LeaseID]
 	if q.ExpectedVersion != l.Version || q.Lease != l.ID || q.TTLSeconds != 0 {

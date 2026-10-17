@@ -74,7 +74,7 @@ func helperLearner(ctx context.Context, conn *local.Conn, initial wc.Envelope) i
 	} else if private.WriteFile("retained", []byte("state")) != nil {
 		return 65
 	}
-	d, err := local.NewDispatcher(ctx, conn, local.DispatcherOptions{})
+	d, err := local.NewDispatcher(ctx, conn, local.LifetimeOptions(time.Duration(a.RuntimeSeconds)*time.Second))
 	if err != nil {
 		return 66
 	}

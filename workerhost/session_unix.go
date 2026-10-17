@@ -52,11 +52,11 @@ func (p *LaunchPlan) freezeAssignment() (wc.Binding, wc.Envelope, int, error) {
 	if !reflect.ValueOf(p.Assignment).IsZero() || p.Relay == nil || p.Learner.Cohort == nil {
 		return binding, envelope, 0, fmt.Errorf("learner launch requires exclusive schema, cohort and session callback")
 	}
-	if p.RelayTimeout < 0 || p.RelayTimeout > 10*time.Minute {
+	if p.RelayTimeout < 0 || p.RelayTimeout > time.Duration(p.Learner.RuntimeSeconds)*time.Second {
 		return binding, envelope, 0, fmt.Errorf("invalid relay timeout")
 	}
 	if p.RelayTimeout == 0 {
-		p.RelayTimeout = time.Minute
+		p.RelayTimeout = time.Duration(p.Learner.RuntimeSeconds) * time.Second
 	}
 	b, err := p.Learner.Binding()
 	if err != nil {

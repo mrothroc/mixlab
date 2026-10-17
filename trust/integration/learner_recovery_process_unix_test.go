@@ -85,6 +85,9 @@ func (p *recoveryProcessPeer) Call(ctx context.Context, q private.RelayRequest) 
 	case "receipt":
 		var receipt private.Receipt
 		receipt, err = p.f.model.Repository.Receipt(ctx, q.Binding.RunID, q.Update.ID)
+		if errors.Is(err, coordinator.ErrNotFound) {
+			err = private.ErrReceiptPending
+		}
 		if err == nil {
 			out.Receipt = &receipt
 		}

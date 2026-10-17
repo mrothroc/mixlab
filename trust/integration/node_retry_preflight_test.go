@@ -23,6 +23,11 @@ type nodePreflightRecovery struct {
 }
 
 func TestNodeRetryRequestDeadlinePreservesRecoveryAndCatchesUp(t *testing.T) {
+	const (
+		nodeBudget    = 50 * time.Second
+		clientBudget  = nodeBudget + 5*time.Second
+		refreshBudget = 15 * time.Second
+	)
 	var f *recoveryFixture
 	var refreshes atomic.Int32
 	type refreshDeadline struct {
@@ -38,8 +43,9 @@ func TestNodeRetryRequestDeadlinePreservesRecoveryAndCatchesUp(t *testing.T) {
 				return errors.New("node refresh has no deadline")
 			}
 			remaining := time.Until(deadline)
-			// Use the real HTTP route deadline, not a shortened test timeout or
-			// a synthetic refresh error. The coordinator still has its 60s budget.
+			// With the 50s route and 55s client budgets, the inner 15s trust
+			// refresh deadline expires first. Exercise that real deadline,
+			// not a shortened test timeout or synthetic refresh error.
 			<-ctx.Done()
 			expired <- refreshDeadline{remaining: remaining, err: ctx.Err()}
 			return ctx.Err()
@@ -51,7 +57,8 @@ func TestNodeRetryRequestDeadlinePreservesRecoveryAndCatchesUp(t *testing.T) {
 	f.stop(t)
 	n.pin(f.x.f.view)
 	advanceRecoverySnapshot(t, f)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), clientBudget+5*time.Second)
+	defer cancel()
 	runID := f.assignment.Binding.RunID
 	_, err := f.recovery(t).Tick(ctx, runID)
 	check(t, err)
@@ -77,15 +84,15 @@ func TestNodeRetryRequestDeadlinePreservesRecoveryAndCatchesUp(t *testing.T) {
 	_, err = r.Tick(ctx, runID)
 	var remote *clusterapp.NodeHTTPError
 	if !errors.As(err, &remote) || remote.Status != http.StatusServiceUnavailable {
-		t.Fatalf("node request expiry returned %v, want HTTP 503", err)
+		t.Fatalf("node refresh expiry returned %v, want HTTP 503", err)
 	}
 	select {
 	case result := <-expired:
-		if !errors.Is(result.err, context.DeadlineExceeded) || result.remaining < 9*time.Second || result.remaining > 10*time.Second {
-			t.Fatalf("refresh did not exhaust actual 10s node deadline: %+v", result)
+		if !errors.Is(result.err, context.DeadlineExceeded) || result.remaining < refreshBudget-time.Second || result.remaining > refreshBudget {
+			t.Fatalf("refresh did not exhaust actual 15s deadline within 50s node/55s client budgets: %+v", result)
 		}
 	default:
-		t.Fatal("node returned before refresh exhausted request deadline")
+		t.Fatal("node returned before refresh exhausted its deadline")
 	}
 	waiting := f.state(t)
 	afterStart, err := f.x.store.ActiveExecution(ctx)
@@ -93,9 +100,9 @@ func TestNodeRetryRequestDeadlinePreservesRecoveryAndCatchesUp(t *testing.T) {
 	if waiting.Phase == coordinator.Failed || waiting.Recovery == nil || *waiting.Recovery != intent || len(waiting.Attempts) != 1 || waiting.Attempts[0].AttemptID != intent.Attempt || beforeStart == nil || !reflect.DeepEqual(beforeStart, afterStart) || !afterStart.Learner.Stopped || refreshes.Load() != 1 {
 		t.Fatal("request timeout failed permanently, changed intent or mutated pending node retry")
 	}
-	// Charge the elapsed node request to the same recovery budget before retry.
+	// Charge the exhausted refresh budget to the same recovery before retry.
 	f.x.f.mu.Lock()
-	f.x.f.now = time.Unix(intent.Started+10, 0)
+	f.x.f.now = time.Unix(intent.Started+int64(refreshBudget/time.Second), 0)
 	f.x.f.mu.Unlock()
 	for range 3 {
 		_, err = f.recovery(t).Tick(ctx, runID)

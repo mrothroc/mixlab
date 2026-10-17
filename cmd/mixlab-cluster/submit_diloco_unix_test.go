@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mrothroc/mixlab/admission"
+	"github.com/mrothroc/mixlab/internal/clusterapp"
 	"github.com/mrothroc/mixlab/statehome"
 	"github.com/mrothroc/mixlab/trust"
 )
@@ -174,13 +177,50 @@ func TestSubmitDiLoCoRejectsPortableWorkerBeforeRecruitment(t *testing.T) {
 	root, serviceArgs, report := coordinatorCLIFixture(t)
 	binary := filepath.Join(root, "mixlab-stub")
 	goCommand(t, "0", "build", "-tags=", "-o", binary, "./cmd/mixlab")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	// Startup refresh must reach the real authority advertised by bootstrap
+	// before this test can exercise portable-worker rejection.
+	authorityPath, err := statehome.Resolve(statehome.Options{ExactDir: report.AuthorityDir}, statehome.Context{Kind: statehome.Authority})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority, err := clusterapp.OpenAuthority(ctx, authorityPath, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := authority.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	view, err := authority.Principal.View(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := url.Parse(view.Snapshot.Payload.Endpoints.Payload.URLs[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", endpoint.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	authorityCtx, stopAuthority := context.WithCancel(ctx)
+	authorityDone := make(chan error, 1)
+	go func() { authorityDone <- clusterapp.ServeAuthority(authorityCtx, listener, authority, time.Now) }()
+	defer func() {
+		stopAuthority()
+		if err := <-authorityDone; err != nil {
+			t.Errorf("authority serve: %v", err)
+		}
+	}()
 	serviceArgs[len(serviceArgs)-1] = availableAddress(t)
 	var initOut, initErr bytes.Buffer
 	if code := runCoordinatorContext(context.Background(), "init", serviceArgs, &initOut, &initErr); code != 0 {
 		t.Fatalf("init %d: %s", code, &initErr)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	reader, writer := io.Pipe()
 	defer func() { _ = reader.Close() }()
 	done := make(chan int, 1)

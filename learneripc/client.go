@@ -2,6 +2,7 @@ package learneripc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -39,6 +40,12 @@ func (c *Client) request(ctx context.Context, q request) (response, error) {
 		return out, err
 	}
 	if out.Error != "" {
+		if out.ErrorCode == receiptPendingCode {
+			if q.Operation != "call" || q.Call.Operation != "receipt" {
+				return out, fmt.Errorf("unexpected receipt pending result")
+			}
+			return out, private.ErrReceiptPending
+		}
 		if out.ErrorCode == "unavailable" {
 			return out, private.ErrUnavailable
 		}
@@ -50,7 +57,7 @@ func (c *Client) Poll(ctx context.Context) (private.RelayResponse, error) {
 	return c.call(ctx, request{Operation: "poll"})
 }
 func (c *Client) call(ctx context.Context, q request) (private.RelayResponse, error) {
-	r, err := c.request(ctx, q)
+	r, err := waitSemantic(ctx, func() (response, error) { return c.request(ctx, q) })
 	if err != nil {
 		return private.RelayResponse{}, err
 	}
@@ -58,6 +65,28 @@ func (c *Client) call(ctx context.Context, q request) (private.RelayResponse, er
 		return private.RelayResponse{}, fmt.Errorf("missing semantic reply")
 	}
 	return *r.Reply, nil
+}
+
+// Network-attempt exhaustion is not process loss. Retain the same semantic
+// payload and private state until the owning assignment/job is canceled.
+// Never use this loop for partially consumed artifact byte streams.
+func waitSemantic(ctx context.Context, call func() (response, error)) (response, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return response{}, err
+		}
+		r, err := call()
+		if !errors.Is(err, private.ErrUnavailable) {
+			return r, err
+		}
+		timer := time.NewTimer(time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return response{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 func (c *Client) Start(ctx context.Context, s private.Start) error {
 	_, err := c.call(ctx, request{Operation: "call", Call: &private.RelayRequest{Format: "mixlab_learner_relay_v1", Binding: s.Binding, WorkerID: s.WorkerID, Operation: "start", Start: &s}})
@@ -93,7 +122,7 @@ func (c *Client) read(ctx context.Context, q *private.ArtifactRequest, w io.Writ
 	b := q.Blob
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	ctx, cancel := localTransferContext(ctx)
 	defer cancel()
 	r, err := c.request(ctx, request{Operation: "read_begin", Artifact: q})
 	if err != nil {
@@ -140,7 +169,7 @@ func (r *chunkReader) Read(b []byte) (int, error) {
 func (c *Client) Write(ctx context.Context, a run.Assignment, b run.Blob, reader io.Reader) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	ctx, cancel := localTransferContext(ctx)
 	defer cancel()
 	r, err := c.request(ctx, request{Operation: "write_begin", Artifact: artifactRequest(a, b, "create")})
 	if err != nil {
@@ -155,6 +184,15 @@ func (c *Client) Write(ctx context.Context, a run.Assignment, b run.Blob, reader
 	}
 	_, err = c.request(ctx, request{Operation: "write_end", Transfer: r.Transfer, Offset: b.Ref.Bytes})
 	return err
+}
+
+// Supervised callers already carry the immutable assignment/job deadline. Do
+// not shorten it while a staged local transfer is suspended by the supervisor.
+func localTransferContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, bounded := ctx.Deadline(); bounded {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, time.Minute)
 }
 
 type chunkWriter struct {

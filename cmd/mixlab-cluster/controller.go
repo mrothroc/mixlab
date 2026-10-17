@@ -84,12 +84,9 @@ func withController(parent context.Context, home, exact, ca, endpoint string, st
 		go func() { done <- clusterapp.ServeAuthority(ctx, l, a, time.Now); cancel() }()
 		defer func() { cancel(); result = errors.Join(result, <-done) }()
 	}
-	if err := clusterapp.RefreshRemoteTrust(ctx, p, endpoint, time.Now); err != nil {
-		// A current cached snapshot remains valid during an authority outage.
-		// This matters especially for cancellation of an already running job.
+	if err := clusterapp.RefreshControllerStartup(ctx, p, endpoint, time.Now, func(err error) {
 		_, _ = fmt.Fprintln(stderr, "controller trust refresh:", err)
-	}
-	if _, _, err := p.Active(time.Now()); err != nil {
+	}); err != nil {
 		return err
 	}
 	maintenance := make(chan error, 1)

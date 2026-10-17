@@ -5,9 +5,12 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,6 +19,135 @@ import (
 	"github.com/mrothroc/mixlab/trust"
 	"github.com/mrothroc/mixlab/trust/principal"
 )
+
+// Delay the first TLS write on every accepted connection, not just the first
+// request. Retrying a too-short timeout cannot bypass this consistently slow
+// authority. Close interrupts the delay just as it interrupts a socket write.
+type delayedAuthorityListener struct {
+	net.Listener
+	delay    time.Duration
+	accepted atomic.Int32
+	started  chan struct{}
+	once     sync.Once
+}
+
+func (l *delayedAuthorityListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.accepted.Add(1)
+	return &delayedAuthorityConn{Conn: c, listener: l, closed: make(chan struct{})}, nil
+}
+
+type delayedAuthorityConn struct {
+	net.Conn
+	listener  *delayedAuthorityListener
+	writeOnce sync.Once
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func (c *delayedAuthorityConn) Write(b []byte) (int, error) {
+	var err error
+	c.writeOnce.Do(func() {
+		c.listener.once.Do(func() { close(c.listener.started) })
+		timer := time.NewTimer(c.listener.delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-c.closed:
+			err = net.ErrClosed
+		}
+	})
+	if err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(b)
+}
+
+func (c *delayedAuthorityConn) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return c.Conn.Close()
+}
+
+func TestAuthorityHTTPControllerStartupSlowTLS(t *testing.T) {
+	for _, cancelDuringTLS := range []bool{false, true} {
+		name := "signed_snapshot_after_twenty_seconds"
+		if cancelDuringTLS {
+			name = "cancellation_interrupts_tls"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+			defer cancel()
+			l, err := net.Listen("tcp", "127.0.0.1:0")
+			check(t, err)
+			defer func() { _ = l.Close() }()
+			endpoint := "https://" + l.Addr().String()
+			p := initializedAt(t, endpoint)
+			check(t, InitializeAuthority(ctx, p, testNow))
+			a, err := OpenAuthority(ctx, p, testNow)
+			check(t, err)
+			defer func() { check(t, a.Close()) }()
+			now := testNow.Add(24 * time.Hour)
+			clock := func() time.Time { return now }
+			cp, err := statehome.Resolve(statehome.Options{ExactDir: filepath.Join(filepath.Dir(p.Dir()), "controller")}, statehome.Context{Kind: statehome.Principal})
+			check(t, err)
+			c, err := principal.Open(cp, now)
+			check(t, err)
+			defer func() { check(t, c.Close()) }()
+			if _, _, err := c.Active(now); err == nil {
+				t.Fatal("fixture must start with expired cached trust")
+			}
+			old, err := c.View(now)
+			check(t, err)
+			// Real HTTPS intentionally uses wall time: the production HTTP and
+			// socket deadlines, signed response, and root pin all remain active.
+			slow := &delayedAuthorityListener{Listener: l, delay: 20 * time.Second, started: make(chan struct{})}
+			served := make(chan error, 1)
+			go func() { served <- ServeAuthority(ctx, slow, a, clock) }()
+			defer func() { cancel(); check(t, <-served) }()
+			result := make(chan error, 1)
+			started := time.Now()
+			go func() { result <- RefreshControllerStartup(ctx, c, endpoint, clock, nil) }()
+			if cancelDuringTLS {
+				select {
+				case <-slow.started:
+					cancel()
+				case <-ctx.Done():
+					<-result
+					t.Fatal("TLS write never started")
+				}
+			}
+			err = <-result
+			if cancelDuringTLS {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancelled startup: %v", err)
+				}
+				if _, _, err := c.Active(now); err == nil {
+					t.Fatal("cancelled startup installed trust")
+				}
+				return
+			}
+			check(t, err)
+			if time.Since(started) < slow.delay {
+				t.Fatal("startup bypassed the delayed TLS write")
+			}
+			if slow.accepted.Load() != 1 {
+				t.Fatalf("slow fetch needed %d connections, want one", slow.accepted.Load())
+			}
+			current, _, err := c.Active(now)
+			check(t, err)
+			before, err := json.Marshal(old.Snapshot)
+			check(t, err)
+			after, err := json.Marshal(current.Snapshot)
+			check(t, err)
+			if bytes.Equal(before, after) || current.Fingerprint != old.Fingerprint || current.Principal != old.Principal || !bytes.Equal(current.Chain[0], old.Chain[0]) {
+				t.Fatal("startup did not refresh signed trust while preserving the pinned identity")
+			}
+		})
+	}
+}
 
 func TestAuthorityHTTPRefreshRenewalAndRevocation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -5,13 +5,16 @@ package nodeleases
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/mrothroc/mixlab/coordinator"
 	"github.com/mrothroc/mixlab/diloco/run"
 	"github.com/mrothroc/mixlab/nodeagent"
 )
 
+// Nodes must support concurrent calls for different allocations and honor ctx.
 type Nodes interface {
 	Status(context.Context, run.Allocation) (nodeagent.Lease, error)
 	Renew(context.Context, run.Allocation, nodeagent.LeaseCommand) (nodeagent.Lease, error)
@@ -82,44 +85,80 @@ func (k Keeper) Tick(ctx context.Context) (released bool, err error) {
 	}
 	terminal := s.Phase == coordinator.Failed || s.Phase == coordinator.Complete
 	released = terminal
-	for _, slot := range s.Plan.Slots {
-		l, e := k.Nodes.Status(ctx, slot.Allocation)
-		if e != nil {
-			return false, e
-		}
-		if e = match(s, slot, l); e != nil {
-			return false, e
-		}
-		if !terminal && (k.Clock.Unix() >= l.Expires || l.State != nodeagent.Running) {
-			return false, k.Fail(ctx, k.RunID, "original learner allocation expired or stopped; replacement forbidden")
-		}
-		if terminal && l.State == nodeagent.Released {
-			continue
-		}
-		if terminal {
-			released = false
-		}
-		action := "renew"
-		ttl := k.TTLSeconds
-		if terminal {
-			action = "release"
-			ttl = 0
-		} else if k.Clock.Unix() < l.RenewBy {
-			continue
-		}
-		h, _ := run.Digest(struct {
-			Commit, Lease, Action string
-			Version               uint64
-		}{s.Commit.Binding.CommitHash, l.ID, action, l.Version})
-		q := nodeagent.LeaseCommand{IdempotencyKey: h[:32], Lease: l.ID, ExpectedVersion: l.Version, TTLSeconds: ttl}
-		if terminal {
-			_, e = k.Nodes.Release(ctx, slot.Allocation, q)
-		} else {
-			_, e = k.Nodes.Renew(ctx, slot.Allocation, q)
-		}
-		if e != nil {
-			return false, e
-		}
+	lost := false
+	for _, result := range k.maintainSlots(ctx, s, terminal) {
+		released = released && result.released
+		lost = lost || result.lost
+		err = errors.Join(err, result.err)
 	}
-	return released, nil
+	// Serialize the run transition after joining all allocation effects.
+	if lost {
+		err = errors.Join(err, k.Fail(ctx, k.RunID, "original learner allocation expired or stopped; replacement forbidden"))
+	}
+	return released && err == nil, err
+}
+
+type leaseResult struct {
+	released bool
+	lost     bool
+	err      error
+}
+
+func (k Keeper) maintainSlots(ctx context.Context, s coordinator.State, terminal bool) []leaseResult {
+	results := make([]leaseResult, len(s.Plan.Slots))
+	workers := min(8, len(results))
+	work := make(chan int, len(results))
+	for i := range results {
+		work <- i
+	}
+	close(work)
+	var wg sync.WaitGroup
+	for range workers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range work {
+				if err := ctx.Err(); err != nil {
+					results[i].err = err
+					continue
+				}
+				results[i] = k.maintainSlot(ctx, s, s.Plan.Slots[i], terminal)
+			}
+		}()
+	}
+	wg.Wait()
+	return results
+}
+
+func (k Keeper) maintainSlot(ctx context.Context, s coordinator.State, slot run.Slot, terminal bool) leaseResult {
+	l, err := k.Nodes.Status(ctx, slot.Allocation)
+	if err != nil {
+		return leaseResult{err: err}
+	}
+	if err = match(s, slot, l); err != nil {
+		return leaseResult{err: err}
+	}
+	if !terminal && (k.Clock.Unix() >= l.Expires || l.State != nodeagent.Running) {
+		return leaseResult{lost: true}
+	}
+	if terminal && l.State == nodeagent.Released {
+		return leaseResult{released: true}
+	}
+	action, ttl := "renew", k.TTLSeconds
+	if terminal {
+		action, ttl = "release", 0
+	} else if k.Clock.Unix() < l.RenewBy {
+		return leaseResult{}
+	}
+	h, _ := run.Digest(struct {
+		Commit, Lease, Action string
+		Version               uint64
+	}{s.Commit.Binding.CommitHash, l.ID, action, l.Version})
+	q := nodeagent.LeaseCommand{IdempotencyKey: h[:32], Lease: l.ID, ExpectedVersion: l.Version, TTLSeconds: ttl}
+	if terminal {
+		_, err = k.Nodes.Release(ctx, slot.Allocation, q)
+	} else {
+		_, err = k.Nodes.Renew(ctx, slot.Allocation, q)
+	}
+	return leaseResult{err: err}
 }

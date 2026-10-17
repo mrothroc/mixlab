@@ -3,6 +3,7 @@
 package workerhost
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"sync"
@@ -20,6 +21,8 @@ type ownedProcess struct {
 	cmd    *exec.Cmd
 	reaped bool
 	wait   chan error
+	paused bool
+	ending bool
 }
 
 func ownProcess(cmd *exec.Cmd) *ownedProcess {
@@ -67,11 +70,51 @@ func (p *ownedProcess) signal(signal syscall.Signal) error {
 	if p.reaped {
 		return nil
 	}
+	if signal == syscall.SIGTERM || signal == syscall.SIGKILL {
+		p.ending = true
+		if p.paused {
+			// A stopped process cannot handle TERM. Never resume unmeasured
+			// work merely to terminate it; KILL also wakes a stopped group.
+			signal = syscall.SIGKILL
+		}
+	}
 	err := syscall.Kill(-p.cmd.Process.Pid, signal)
 	if errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
 	return err
+}
+
+func (p *ownedProcess) suspend(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.reaped || p.ending || p.paused || ctx.Err() != nil {
+		return nil
+	}
+	if err := syscall.Kill(-p.cmd.Process.Pid, syscall.SIGSTOP); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+	p.paused = true
+	return nil
+}
+
+func (p *ownedProcess) resume(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.reaped || p.ending || !p.paused || ctx.Err() != nil {
+		return nil
+	}
+	if err := syscall.Kill(-p.cmd.Process.Pid, syscall.SIGCONT); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		return err
+	}
+	p.paused = false
+	return nil
 }
 
 func (p *ownedProcess) exitStatus() contract.ProcessExit {

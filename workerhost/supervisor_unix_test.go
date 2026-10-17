@@ -51,7 +51,11 @@ func TestMain(m *testing.M) {
 }
 
 func helperWorker() int {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	bootstrap := 10 * time.Second
+	if os.Getenv("MIXLAB_LEARNER_PRIVATE_DIR") != "" {
+		bootstrap = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), bootstrap)
 	defer cancel()
 	if len(os.Args) != 7 || os.Args[1] != "-mode" || os.Args[2] != "managed-worker" || os.Args[3] != "-worker-control-socket" || os.Args[4] == "" || os.Args[5] != "-worker-session-fd" || os.Args[6] != "3" {
 		return 20
@@ -74,7 +78,14 @@ func helperWorker() int {
 		return 39
 	}
 	if e.PayloadKind == workerjob.LearnerVersion {
-		return helperLearner(ctx, conn, e)
+		// The bootstrap timeout is not the approved learner lifetime.
+		a, err := workerjob.DecodeLearner(e.Payload, conn.Binding())
+		if err != nil {
+			return 60
+		}
+		life, stop := context.WithTimeout(context.Background(), time.Duration(a.RuntimeSeconds)*time.Second)
+		defer stop()
+		return helperLearner(life, conn, e)
 	}
 	a, err := workerjob.Decode(e.Payload, conn.Binding())
 	if err != nil {

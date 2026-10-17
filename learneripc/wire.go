@@ -14,6 +14,9 @@ import (
 const PayloadKind = "mixlab_learner_ipc"
 const ChunkBytes = 64 << 10
 
+const receiptPendingCode = "receipt_pending"
+const receiptPendingMessage = "receipt not yet available"
+
 type request struct {
 	Operation string                   `json:"operation"`
 	Call      *private.RelayRequest    `json:"call,omitempty"`
@@ -84,8 +87,11 @@ func (r response) Validate() error {
 	if len(r.Transfer) > 64 || len(r.Data) > ChunkBytes || len(r.Error) > 1024 {
 		return fmt.Errorf("unbounded learner IPC response")
 	}
-	if r.ErrorCode != "" && r.ErrorCode != "unavailable" && r.ErrorCode != "rejected" {
+	if r.ErrorCode != "" && r.ErrorCode != "unavailable" && r.ErrorCode != "rejected" && r.ErrorCode != receiptPendingCode {
 		return fmt.Errorf("unknown learner IPC error code")
+	}
+	if r.ErrorCode == receiptPendingCode && r.Error != receiptPendingMessage {
+		return fmt.Errorf("invalid receipt pending result")
 	}
 	if r.Error != "" {
 		if r.Reply != nil || r.Transfer != "" || len(r.Data) != 0 {

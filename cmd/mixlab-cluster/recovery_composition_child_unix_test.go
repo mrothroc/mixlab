@@ -98,7 +98,7 @@ func compositionLearnerChild() error {
 	if err != nil {
 		return err
 	}
-	d, err := local.NewDispatcher(ctx, c, local.DispatcherOptions{ReadTimeout: time.Minute})
+	d, err := local.NewDispatcher(ctx, c, local.LifetimeOptions(time.Duration(a.RuntimeSeconds)*time.Second))
 	if err != nil {
 		return err
 	}
@@ -134,6 +134,7 @@ func compositionLearnerChild() error {
 	peer := &learneripc.Client{Session: d}
 	started := false
 	admitted := false
+	_, loadFixture := os.Stat(a.TrainPattern + ".composition-no-exit")
 	poll := time.NewTimer(0)
 	defer poll.Stop()
 	for {
@@ -147,6 +148,18 @@ func compositionLearnerChild() error {
 		case <-poll.C:
 		}
 		if started {
+			if loadFixture == nil {
+				if _, err := peer.Poll(ctx); err != nil {
+					return err
+				}
+				if _, err := os.Stat(a.TrainPattern + ".composition-resume"); err == nil {
+					if err := os.WriteFile(a.TrainPattern+".composition-after-"+a.Member.WorkerID, []byte(a.AttemptID), 0600); err != nil {
+						return err
+					}
+				}
+				poll.Reset(200 * time.Millisecond)
+				continue
+			}
 			// Numerical work is deliberately idle in this composition fixture.
 			// The independent heartbeat keeps hosting live without more polls.
 			continue
@@ -189,10 +202,14 @@ func compositionLearnerChild() error {
 				return err
 			}
 		}
-		if a.Member.DatasetPartitionID == "partition-0" && a.ExpectedPrivateHash == "" {
+		_, keepOriginal := os.Stat(a.TrainPattern + ".composition-no-exit")
+		if a.Member.DatasetPartitionID == "partition-0" && a.ExpectedPrivateHash == "" && os.IsNotExist(keepOriginal) {
 			_ = send(wc.KindTerminalOutcome, workerjob.Event{Error: "composition fixture stopped learner"})
 			return fmt.Errorf("composition fixture stopped learner")
 		}
 		started = true
+		if loadFixture == nil {
+			poll.Reset(200 * time.Millisecond)
+		}
 	}
 }

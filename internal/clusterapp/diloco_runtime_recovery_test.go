@@ -3,11 +3,13 @@ package clusterapp
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"syscall"
 	"testing"
 	"time"
@@ -24,6 +26,14 @@ import (
 )
 
 func TestRecoveryTransientKeepsAuthenticationTerminal(t *testing.T) {
+	for _, codes := range [][2]int{{503, 403}, {403, 503}, {503, 409}} {
+		if recoveryTransient(errors.Join(&NodeHTTPError{Status: codes[0]}, &NodeHTTPError{Status: codes[1]})) {
+			t.Fatal("mixed peer failures hid a permanent rejection", codes)
+		}
+	}
+	if !recoveryTransient(errors.Join(&NodeHTTPError{Status: 503}, context.DeadlineExceeded)) {
+		t.Fatal("independent transient peer failures became terminal")
+	}
 	for _, err := range []error{managedtls.ErrPeerRejected, errors.Join(managedtls.ErrPeerRejected, io.EOF), tls.AlertError(42), &net.OpError{Op: "remote error", Err: io.EOF}, &NodeHTTPError{Status: http.StatusForbidden}, &NodeHTTPError{Status: http.StatusConflict}, context.Canceled} {
 		if recoveryTransient(err) {
 			t.Fatalf("retried terminal error %v", err)
@@ -33,6 +43,43 @@ func TestRecoveryTransientKeepsAuthenticationTerminal(t *testing.T) {
 		if !recoveryTransient(err) {
 			t.Fatalf("rejected transient error %v", err)
 		}
+	}
+}
+
+func TestRecoveryTransientPreservesWrappersAroundJoinedCauses(t *testing.T) {
+	transient := errors.Join(io.EOF, context.DeadlineExceeded)
+	remote := &net.OpError{Op: "remote error", Err: transient}
+	verification := &tls.CertificateVerificationError{Err: transient}
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"certificate", verification, false},
+		{"remote", remote, false},
+		{"url-certificate", &url.Error{Op: "Put", URL: "https://node.invalid", Err: verification}, false},
+		{"nested-remote", &net.OpError{Op: "read", Err: remote}, false},
+		{"joined-certificate-first", errors.Join(verification, transient), false},
+		{"joined-certificate-last", errors.Join(transient, verification), false},
+		{"joined-remote-last", errors.Join(transient, remote), false},
+		{"peer-rejected", fmt.Errorf("%w: %w", managedtls.ErrPeerRejected, transient), false},
+		{"canceled", fmt.Errorf("%w: %w", context.Canceled, transient), false},
+		{"tls-alert", errors.Join(transient, tls.AlertError(42)), false},
+		{"unknown-authority", errors.Join(transient, x509.UnknownAuthorityError{}), false},
+		{"invalid-certificate", errors.Join(transient, x509.CertificateInvalidError{}), false},
+		{"hostname", errors.Join(transient, x509.HostnameError{}), false},
+		{"wrapped-permanent-http", fmt.Errorf("maintenance: %w", errors.Join(transient, &NodeHTTPError{Status: http.StatusForbidden})), false},
+		{"nested-permanent-authority", errors.Join(transient, fmt.Errorf("authority: %w", &enrollmentHTTPError{Status: http.StatusUnauthorized})), false},
+		{"all-transient", transient, true},
+		{"wrapped-transient", fmt.Errorf("maintenance: %w", transient), true},
+		{"transport-transient", &net.OpError{Op: "read", Err: transient}, true},
+		{"nested-transient-http", errors.Join(&NodeHTTPError{Status: http.StatusServiceUnavailable}, fmt.Errorf("authority: %w", errors.Join(&enrollmentHTTPError{Status: http.StatusBadGateway}, transient))), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := recoveryTransient(tc.err); got != tc.want {
+				t.Fatalf("recoveryTransient(%v)=%v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -59,16 +106,20 @@ func (r *recoveryTestRepository) Save(ctx context.Context, _ string, revision ui
 }
 
 type outageLeaseNodes struct {
-	lease nodeagent.Lease
-	renew bool
-	err   error
+	leases map[run.Allocation]nodeagent.Lease
+	renew  bool
+	err    error
 }
 
-func (n outageLeaseNodes) Status(context.Context, run.Allocation) (nodeagent.Lease, error) {
+func (n outageLeaseNodes) Status(_ context.Context, allocation run.Allocation) (nodeagent.Lease, error) {
 	if !n.renew {
 		return nodeagent.Lease{}, n.err
 	}
-	return n.lease, nil
+	lease, ok := n.leases[allocation]
+	if !ok {
+		return nodeagent.Lease{}, fmt.Errorf("unknown outage fixture allocation")
+	}
+	return lease, nil
 }
 func (n outageLeaseNodes) Renew(context.Context, run.Allocation, nodeagent.LeaseCommand) (nodeagent.Lease, error) {
 	return nodeagent.Lease{}, n.err
@@ -84,15 +135,21 @@ func TestDiLoCoModelsBoundsKeeperOutageBeforeRecoveryPolling(t *testing.T) {
 				t.Run(fmt.Sprintf("renew=%v/pending=%v/expired=%v", renew, pending, expiredCall), func(t *testing.T) {
 					_, f := admissionLeaseSetup(t, 2)
 					f.committed(t)
-					f.handedOff(0, true)
 					f.now.Store(1100)
+					leases := make(map[run.Allocation]nodeagent.Lease, len(f.plan.Slots))
+					for index, slot := range f.plan.Slots {
+						f.handedOff(index, true)
+						lease := f.nodes[slot.Allocation.NodeID].lease
+						lease.RenewBy = 1000
+						// Exercise outage exhaustion before any lease expires.
+						lease.Expires = f.now.Load() + coordinator.LearnerRecoverySeconds + 300
+						leases[slot.Allocation] = lease
+					}
 					repo := &recoveryTestRepository{state: f.state}
 					artifacts := coordinatorlocal.Artifacts{}
 					clock := serviceClock{func() time.Time { return time.Unix(f.now.Load(), 0) }}
 					model := coordinator.Model{Repository: repo, Artifacts: artifacts, Clock: clock, Evaluator: remoteEvaluation{}}
-					lease := f.nodes[f.plan.Slots[0].Allocation.NodeID].lease
-					lease.RenewBy = 1000
-					keeper := nodeleases.Keeper{Repository: repo, Nodes: outageLeaseNodes{lease: lease, renew: renew, err: context.DeadlineExceeded}, Clock: clock, RunID: f.q.Launch.Run, TTLSeconds: 300, Fail: model.Fail}
+					keeper := nodeleases.Keeper{Repository: repo, Nodes: outageLeaseNodes{leases: leases, renew: renew, err: context.DeadlineExceeded}, Clock: clock, RunID: f.q.Launch.Run, TTLSeconds: 300, Fail: model.Fail}
 					model.Allocations = &keeper
 					if pending {
 						repo.state.PrivateHashes[0] = f.plan.Contract.ConfigHash
@@ -134,15 +191,19 @@ func TestDiLoCoModelsReportsPermanentLeaseFailure(t *testing.T) {
 		t.Run(fmt.Sprintf("renew=%v", renew), func(t *testing.T) {
 			_, f := admissionLeaseSetup(t, 2)
 			f.committed(t)
-			f.handedOff(0, true)
 			f.now.Store(1100)
+			leases := make(map[run.Allocation]nodeagent.Lease, len(f.plan.Slots))
+			for index, slot := range f.plan.Slots {
+				f.handedOff(index, true)
+				lease := f.nodes[slot.Allocation.NodeID].lease
+				lease.RenewBy = 1000
+				leases[slot.Allocation] = lease
+			}
 			repo := &recoveryTestRepository{state: f.state}
 			artifacts := coordinatorlocal.Artifacts{}
 			clock := serviceClock{func() time.Time { return time.Unix(f.now.Load(), 0) }}
 			model := coordinator.Model{Repository: repo, Artifacts: artifacts, Clock: clock, Evaluator: remoteEvaluation{}}
-			lease := f.nodes[f.plan.Slots[0].Allocation.NodeID].lease
-			lease.RenewBy = 1000
-			keeper := nodeleases.Keeper{Repository: repo, Nodes: outageLeaseNodes{lease: lease, renew: renew, err: &NodeHTTPError{Status: http.StatusForbidden}}, Clock: clock, RunID: f.q.Launch.Run, TTLSeconds: 300, Fail: model.Fail}
+			keeper := nodeleases.Keeper{Repository: repo, Nodes: outageLeaseNodes{leases: leases, renew: renew, err: &NodeHTTPError{Status: http.StatusForbidden}}, Clock: clock, RunID: f.q.Launch.Run, TTLSeconds: 300, Fail: model.Fail}
 			model.Allocations = &keeper
 			models := DiLoCoModels{Inbox: &admission.Inbox{}, Principal: &principal.Store{}, Repository: repo, Artifacts: artifacts, Clock: clock.now, Recover: func(context.Context, admission.Submission, coordinator.Model) (bool, error) {
 				t.Fatal("rejected lease reached learner polling")

@@ -13,12 +13,23 @@ import (
 	"github.com/mrothroc/mixlab/trust/principal"
 )
 
+const remoteTrustRefreshTimeout = 15 * time.Second
+
 // RefreshRemoteTrust authenticates the authority to the existing pin, verifies
 // the public snapshot signature, then installs it monotonically. It cannot
 // enroll, renew, revive an expired identity, or replace a root.
 func RefreshRemoteTrust(ctx context.Context, p *principal.Store, endpoint string, clock func() time.Time) error {
+	// Existing renewal, maintenance, and admission callers keep their original
+	// timeout. Controller startup opts into a longer read-only fetch separately.
+	return refreshRemoteTrustWithTimeout(ctx, p, endpoint, clock, remoteTrustRefreshTimeout)
+}
+
+func refreshRemoteTrustWithTimeout(ctx context.Context, p *principal.Store, endpoint string, clock func() time.Time, timeout time.Duration) error {
 	if p == nil || clock == nil {
 		return fmt.Errorf("principal and clock required")
+	}
+	if timeout <= 0 || timeout > time.Minute {
+		return fmt.Errorf("trust refresh timeout must be positive and at most one minute")
 	}
 	s, err := p.View(clock())
 	if err != nil {
@@ -33,7 +44,7 @@ func RefreshRemoteTrust(ctx context.Context, p *principal.Store, endpoint string
 	}
 	c, err := snapshottls.HTTPClient(endpoint, func(chain [][]byte, now time.Time) error {
 		return trust.VerifyProvisionalSource(a, chain, trust.Authority, now)
-	}, clock, 15*time.Second)
+	}, clock, timeout)
 	if err != nil {
 		return err
 	}

@@ -123,6 +123,7 @@ func TestProductionLearnerRecoveryMirrorRolloverWaitIsBounded(t *testing.T) {
 				}
 			}
 			f := newRecoveryFixtureWithNodeTrust(t, strings.Repeat("a", 64), true, n)
+			renewRecoveryLeaseThroughBudget(t, f)
 			f.stop(t)
 			n.pin(f.x.f.view)
 			advanceRecoverySnapshot(t, f)
@@ -149,7 +150,7 @@ func TestProductionLearnerRecoveryMirrorRolloverWaitIsBounded(t *testing.T) {
 			check(t, err)
 			s := f.state(t)
 			if s.Phase != coordinator.Failed || !strings.Contains(s.Failure, "budget exhausted") || refreshes.Load() != before {
-				t.Fatal("node trust wait extended original 60-second recovery budget", s.Failure)
+				t.Fatal("node trust wait extended persisted recovery budget", s.Failure)
 			}
 			if mode == "no_refresh_port" && before != 0 || mode != "no_refresh_port" && before != 2 {
 				t.Fatal("unexpected node refresh count", before)

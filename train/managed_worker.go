@@ -43,7 +43,7 @@ func RunManagedWorkerWithLearner(ctx context.Context, socket string, fd int, lea
 	if credential == nil {
 		return fmt.Errorf("invalid worker session descriptor")
 	}
-	authCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	authCtx, cancel := context.WithTimeout(ctx, managedBootstrapTimeout())
 	limits := local.Limits{FrameBytes: wc.MaxFrameBytes, Bytes: workerjob.ControlByteBudget, Messages: workerjob.ControlMessageBudget}
 	if learner != nil {
 		limits.Bytes = 1 << 40
@@ -65,38 +65,37 @@ func serveManagedWorker(parent context.Context, conn *local.Conn, run managedRun
 }
 
 func serveManagedWorkerWithLearner(parent context.Context, conn *local.Conn, run managedRun, learner func(context.Context, *local.Dispatcher, wc.Envelope) error) error {
-	// The host need not send anything after assignment. Runtime cancellation,
-	// not a short idle-read timeout, bounds this DDP-side receive owner.
-	session, err := local.NewDispatcher(parent, conn, local.DispatcherOptions{ReadTimeout: 7 * 24 * time.Hour, RequestTimeout: 2 * time.Minute})
+	// Read the authenticated assignment before choosing session lifetimes.
+	// Only learner sessions may intentionally suspend while awaiting resources.
+	readCtx, stopRead := context.WithTimeout(parent, managedBootstrapTimeout())
+	e, err := conn.Receive(readCtx)
+	stopRead()
+	if err != nil {
+		return err
+	}
+	options := local.DispatcherOptions{ReadTimeout: 7 * 24 * time.Hour, RequestTimeout: 2 * time.Minute}
+	if e.PayloadKind == workerjob.LearnerVersion {
+		if e.Kind != wc.KindAssignment || e.PayloadVersion != 1 || e.CorrelationID != conn.Binding().AttemptID {
+			return fmt.Errorf("invalid managed learner assignment envelope")
+		}
+		a, err := workerjob.DecodeLearner(e.Payload, conn.Binding())
+		if err != nil {
+			return fmt.Errorf("invalid managed learner assignment: %w", err)
+		}
+		if learner == nil {
+			return fmt.Errorf("managed learner schema is not composed")
+		}
+		options = local.LifetimeOptions(time.Duration(a.RuntimeSeconds) * time.Second)
+	}
+	session, err := local.NewDispatcher(parent, conn, options)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = session.Close() }()
-	readCtx, stopRead := context.WithTimeout(parent, 30*time.Second)
-	defer stopRead()
-	select {
-	case e, ok := <-session.Events():
-		if !ok {
-			return session.Err()
-		}
-		if e.PayloadKind == workerjob.LearnerVersion {
-			if e.Kind != wc.KindAssignment || e.PayloadVersion != 1 || e.CorrelationID != session.Binding().AttemptID {
-				return fmt.Errorf("invalid managed learner assignment envelope")
-			}
-			if _, err := workerjob.DecodeLearner(e.Payload, session.Binding()); err != nil {
-				return fmt.Errorf("invalid managed learner assignment: %w", err)
-			}
-			if learner == nil {
-				return fmt.Errorf("managed learner schema is not composed")
-			}
-			return learner(parent, session, e)
-		}
-		return serveManagedDDP(parent, session, e, run)
-	case <-session.Controls():
-		return fmt.Errorf("control before managed assignment")
-	case <-readCtx.Done():
-		return readCtx.Err()
+	if e.PayloadKind == workerjob.LearnerVersion {
+		return learner(parent, session, e)
 	}
+	return serveManagedDDP(parent, session, e, run)
 }
 
 func serveManagedDDP(parent context.Context, session *local.Dispatcher, e wc.Envelope, run managedRun) error {

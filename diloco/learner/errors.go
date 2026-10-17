@@ -2,6 +2,10 @@ package learner
 
 import "errors"
 
+// ErrReceiptPending is an authenticated receipt lookup with no committed
+// receipt yet. It permits the normal submission path, not a transport retry.
+var ErrReceiptPending = errors.New("learner receipt pending")
+
 // ErrUnavailable marks a bounded transport outage, never an authorization or
 // protocol rejection. The agent owns retries; exhaustion lets hosting recover
 // the same allocation without exposing remote credential diagnostics to MLX.

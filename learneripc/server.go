@@ -31,6 +31,9 @@ type evaluationReader interface {
 type Server struct {
 	Remote   Remote
 	MaxBytes uint64
+	// SessionLifetime is supplied by the local hosting owner from the approved
+	// job. Zero retains the standalone one-minute bound used by small callers.
+	SessionLifetime time.Duration
 	// OnError receives local diagnostics before the wire error is sanitized.
 	// Only validated operation names and the error are passed, never request
 	// payloads, artifact bytes or credentials. It must not reenter this server.
@@ -64,16 +67,19 @@ func (s *Server) Handle(ctx context.Context, e wc.Envelope) (wc.Envelope, error)
 	if err := private.Decode(e.Payload, &q); err != nil {
 		return wc.Envelope{}, err
 	}
-	if s.Remote == nil || s.MaxBytes == 0 || s.MaxBytes > 1<<30 {
+	if s.Remote == nil || s.MaxBytes == 0 || s.MaxBytes > 1<<30 || s.SessionLifetime < 0 || s.SessionLifetime > 7*24*time.Hour {
 		return wc.Envelope{}, fmt.Errorf("bounded learner relay required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, s.lifetime())
 	defer cancel()
 	r, err := s.handle(ctx, q)
 	if err != nil {
 		s.closeStream()
+		if ctx.Err() == nil && q.Operation == "call" && q.Call.Operation == "receipt" && errors.Is(err, private.ErrReceiptPending) && !errors.Is(err, private.ErrUnavailable) {
+			return envelope(wc.KindRoundResponse, response{Error: receiptPendingMessage, ErrorCode: receiptPendingCode})
+		}
 		if s.OnError != nil {
 			operation := q.Operation
 			if q.Call != nil {
@@ -83,14 +89,21 @@ func (s *Server) Handle(ctx context.Context, e wc.Envelope) (wc.Envelope, error)
 			}
 			s.OnError(operation, err)
 		}
-		// A semantic rejection (notably receipt-not-yet-present) is not a
-		// transport failure. Never return remote credential diagnostics.
+		// Other semantic rejections are not transport failures. Never return
+		// remote credential diagnostics.
 		r = response{Error: "operation rejected", ErrorCode: "rejected"}
 		if errors.Is(err, private.ErrUnavailable) {
 			r = response{Error: "coordinator unavailable after bounded retry", ErrorCode: "unavailable"}
 		}
 	}
 	return envelope(wc.KindRoundResponse, r)
+}
+
+func (s *Server) lifetime() time.Duration {
+	if s.SessionLifetime == 0 {
+		return time.Minute
+	}
+	return s.SessionLifetime
 }
 func (s *Server) handle(ctx context.Context, q request) (response, error) {
 	var out response
@@ -128,7 +141,8 @@ func (s *Server) handle(ctx context.Context, q request) (response, error) {
 			_ = f.Close()
 			return out, err
 		}
-		s.stream = &transfer{id: hex.EncodeToString(id[:]), file: f, request: a, deadline: time.Now().Add(time.Minute)}
+		deadline, _ := ctx.Deadline()
+		s.stream = &transfer{id: hex.EncodeToString(id[:]), file: f, request: a, deadline: deadline}
 		if a.Operation == "read" {
 			w := &limitedWriter{writer: f, remaining: a.Blob.Ref.Bytes}
 			if a.Evaluation != nil {

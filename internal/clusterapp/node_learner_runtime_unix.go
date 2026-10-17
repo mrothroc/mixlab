@@ -48,6 +48,7 @@ func (r NodeLearnerRuntime) Open(ctx context.Context, x nodeagent.LocalExecution
 		return nil, nil, err
 	}
 	server := r.relayServer(binding, min(a.PrivateMaxBytes, 1<<30))
+	server.SessionLifetime = time.Duration(a.RuntimeSeconds) * time.Second
 	relay := func(ctx context.Context, e wc.Envelope) (wc.Envelope, error) {
 		if e.JobID != binding.JobID || e.AttemptID != binding.AttemptID {
 			return wc.Envelope{}, fmt.Errorf("learner IPC attempt changed")

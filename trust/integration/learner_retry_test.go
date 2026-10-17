@@ -272,20 +272,32 @@ func TestLearnerSemanticRetryTLSAttemptTimeout(t *testing.T) {
 	x := newLearnerRelay(t)
 	h := retryRelayHandler(t, x)
 	var calls atomic.Int32
+	firstClosed := make(chan struct{})
 	server := serveCapabilities(t, x.g.Policy, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) == 1 {
 			_, _ = io.Copy(io.Discard, r.Body)
 			<-r.Context().Done()
+			close(firstClosed)
 			return
 		}
 		h.ServeHTTP(w, r)
 	}))
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	// Real HTTPS must remain pending for the production 50-second attempt,
+	// then retry within its original 55-second budget, not a shorter parent.
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	r, err := retryRelayClient(t, x, server.URL, nil).Poll(ctx)
+	c := retryRelayClient(t, x, server.URL, nil)
+	started := time.Now()
+	r, err := c.Poll(ctx)
+	elapsed := time.Since(started)
 	check(t, err)
-	if r.Assignment == nil || calls.Load() != 2 {
-		t.Fatal(r, calls.Load())
+	select {
+	case <-firstClosed:
+	case <-ctx.Done():
+		t.Fatal("timed-out attempt did not close its HTTP request")
+	}
+	if r.Assignment == nil || *r.Assignment != x.s.Assignments[0] || calls.Load() != 2 || ctx.Err() != nil || elapsed < 50*time.Second || elapsed >= 55*time.Second {
+		t.Fatalf("attempt timeout/retry changed assignment or budget: reply=%+v calls=%d elapsed=%v parent=%v", r, calls.Load(), elapsed, ctx.Err())
 	}
 }
 

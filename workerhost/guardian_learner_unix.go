@@ -38,7 +38,7 @@ func serveGuardianRelay(ctx context.Context, c net.Conn, a workerjob.LearnerAssi
 			return
 		}
 		sequence = q.Sequence
-		call, cancel := context.WithTimeout(ctx, time.Minute)
+		call, cancel := context.WithTimeout(ctx, time.Duration(a.RuntimeSeconds)*time.Second)
 		out, err := relay(call, q)
 		cancel()
 		if err != nil {
@@ -47,7 +47,7 @@ func serveGuardianRelay(ctx context.Context, c net.Conn, a workerjob.LearnerAssi
 		out.Version, out.JobID, out.AttemptID = wc.Version, a.JobID, a.AttemptID
 		out.Sequence, out.CorrelationID = q.Sequence, q.CorrelationID
 		bytes += uint64(len(q.Payload) + len(out.Payload) + 2048)
-		if bytes > 1<<40 || c.SetWriteDeadline(time.Now().Add(5*time.Second)) != nil || wc.WriteFrame(c, out, wc.MaxFrameBytes) != nil {
+		if bytes > 1<<40 || c.SetWriteDeadline(time.Now().Add(time.Duration(a.RuntimeSeconds)*time.Second)) != nil || wc.WriteFrame(c, out, wc.MaxFrameBytes) != nil {
 			return
 		}
 	}
@@ -74,7 +74,7 @@ func inheritedGuardianRelay(a workerjob.LearnerAssignment) (Relay, func(), error
 		if q.JobID != a.JobID || q.AttemptID != a.AttemptID {
 			return wc.Envelope{}, wc.ErrBinding
 		}
-		deadline := time.Now().Add(time.Minute)
+		deadline := time.Now().Add(time.Duration(a.RuntimeSeconds) * time.Second)
 		if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 			deadline = d
 		}

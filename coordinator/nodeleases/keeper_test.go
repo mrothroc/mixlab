@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/mrothroc/mixlab/coordinator"
@@ -14,6 +15,7 @@ import (
 )
 
 type fake struct {
+	mu                   sync.Mutex
 	s                    coordinator.State
 	leases               map[string]nodeagent.Lease
 	now                  int64
@@ -30,9 +32,13 @@ func (f *fake) Receipt(context.Context, string, string) (learner.Receipt, error)
 	return learner.Receipt{}, errors.New("unexpected receipt")
 }
 func (f *fake) Status(_ context.Context, a run.Allocation) (nodeagent.Lease, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return f.leases[a.LeaseID], nil
 }
 func (f *fake) Renew(_ context.Context, a run.Allocation, q nodeagent.LeaseCommand) (nodeagent.Lease, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	l := f.leases[a.LeaseID]
 	if l.Version != q.ExpectedVersion {
 		return l, errors.New("stale lease")
@@ -49,6 +55,8 @@ func (f *fake) Renew(_ context.Context, a run.Allocation, q nodeagent.LeaseComma
 	return l, nil
 }
 func (f *fake) Release(_ context.Context, a run.Allocation, q nodeagent.LeaseCommand) (nodeagent.Lease, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	l := f.leases[a.LeaseID]
 	l.State = nodeagent.Releasing
 	l.Version++

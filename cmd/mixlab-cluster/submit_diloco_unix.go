@@ -168,7 +168,7 @@ func runSubmitDiLoCoContext(ctx context.Context, args []string, stdout, stderr i
 			return err
 		}
 		now := time.Now().Unix()
-		q := admission.Submission{Owner: s.Principal, Launch: recruitment.LaunchPlan{Cluster: s.Cluster, Controller: info.Controller, Run: id, Attempt: attempt, Selection: selection, TTLSeconds: 300}, Deadline: now + 1800,
+		q := admission.Submission{Owner: s.Principal, Launch: recruitment.LaunchPlan{Cluster: s.Cluster, Controller: info.Controller, Run: id, Attempt: attempt, Selection: selection, TTLSeconds: 900}, Deadline: now + 1800,
 			Specification: admission.Specification{
 				Config: b, CreatedAt: now, BaseModel: model, Outer: plan.Learner.Outer, Endpoint: info.Endpoint, ArtifactStoreID: "coordinator-" + info.Coordinator,
 				Coordinator: runcontract.Coordinator{ClusterID: s.Cluster, PrincipalID: info.Coordinator, Role: "coordinator", Audience: "learner-run"},

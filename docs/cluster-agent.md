@@ -63,11 +63,15 @@ Sampling can overshoot; short-lived processes can escape accounting. These
 limits are for trusted workloads on administrator-controlled hosts, not hostile
 process isolation. Local datasets must remain immutable during a job.
 
-Resource sampling tolerates one confirmed process-sampler deadline timeout.
-A second consecutive timeout, or six seconds without a complete healthy sample,
-stops the worker. CPU accounting is retained across a missed sample; a healthy
-sample resets the tolerance. Known limit breaches, malformed or unreadable
-samples, disk-sampling deadlines and other errors still fail immediately.
+Ordinary workers tolerate one confirmed process-sampler deadline timeout; a
+second timeout or six seconds without a complete healthy sample stops them.
+DiLoCo learners instead suspend their owned process group when measurements are
+stale and resume only after a complete healthy sample begun after suspension.
+This preserves the process and private state without allowing unbounded
+unmonitored execution. CPU accounting survives missed samples. Verified breaches,
+invalid evidence and permission errors still terminate the learner. Job expiry,
+revocation and cancellation still apply while suspended; already submitted GPU
+work is not guaranteed to stop with the host process.
 On macOS, process sampling selects only the owned process group; Linux retains
 its process-table snapshot with process-group filtering.
 For `worker resource monitor` errors, inspect the reported cause and host load;

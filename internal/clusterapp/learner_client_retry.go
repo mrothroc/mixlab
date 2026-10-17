@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	learnerRetryBudget   = 20 * time.Second
-	learnerAttemptBudget = 5 * time.Second
+	learnerRetryBudget   = 55 * time.Second
+	learnerAttemptBudget = 50 * time.Second
 )
 
 func retryLearnerSemantic(parent context.Context, attempt func(context.Context) (learnerapi.Response, bool, error)) (learnerapi.Response, error) {

@@ -32,11 +32,14 @@ import (
 // connection. Only retry-authorize responses are modified, never recovery
 // evidence. Neither production TLS verification nor application auth is relaxed.
 type compositionDeadlineProxy struct {
-	endpoint string
-	mu       sync.Mutex
-	prepared *clusterapp.NodeLearnerRetryPrepared
-	starts   int
-	err      error
+	endpoint    string
+	mu          sync.Mutex
+	prepared    *clusterapp.NodeLearnerRetryPrepared
+	starts      int
+	err         error
+	passthrough bool
+	latency     time.Duration
+	delayed     int
 }
 
 func compositionNodeHTTPClient(t *testing.T, p *principal.Store, node string) *http.Client {
@@ -134,6 +137,24 @@ func (x *compositionDeadlineProxy) forward(r *http.Request, clients map[string]*
 	}
 	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(response.Body, 2<<20))
+	x.mu.Lock()
+	latency, passthrough := x.latency, x.passthrough
+	if latency > 0 {
+		x.delayed++
+	}
+	x.mu.Unlock()
+	if latency > 0 {
+		timer := time.NewTimer(latency)
+		defer timer.Stop()
+		select {
+		case <-r.Context().Done():
+			return nil, 0, r.Context().Err()
+		case <-timer.C:
+		}
+	}
+	if passthrough {
+		return body, response.StatusCode, err
+	}
 	if err != nil || response.StatusCode != http.StatusOK || !strings.HasSuffix(r.URL.Path, "/retry-authorize") {
 		return body, response.StatusCode, err
 	}

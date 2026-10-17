@@ -8,7 +8,11 @@ import (
 )
 
 const LearnerRestartLimit = 3
-const LearnerRecoverySeconds int64 = 60
+
+// A network-attempt timeout is not evidence of a dead process. This durable
+// window spans multiple slow attempts; signed lease and assignment expiry
+// remain independent upper bounds.
+const LearnerRecoverySeconds int64 = 300
 
 // LearnerRecovery is persisted before remote effects. Restart never resets its
 // deadline or chooses another attempt after an ambiguous response.

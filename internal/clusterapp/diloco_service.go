@@ -51,7 +51,14 @@ func (s DiLoCoService) step(ctx context.Context, id string) error {
 	if v.Done && !v.Committed {
 		return nil
 	}
-	work, cancel := context.WithTimeout(ctx, 30*time.Second)
+	budget := 30 * time.Second
+	if v.Committed {
+		// Includes lease observations, renewal and status/recovery work. Each
+		// authenticated operation has its own shorter bound; the service turn
+		// must not truncate them solely because the host is slow.
+		budget = 3 * time.Minute
+	}
+	work, cancel := context.WithTimeout(ctx, budget)
 	var effect error
 	if !v.Done {
 		var maintenance error
