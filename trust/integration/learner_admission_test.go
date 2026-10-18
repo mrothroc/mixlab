@@ -235,7 +235,7 @@ func learnerAdmissionLifecycle(t *testing.T, expiredHandoff bool) {
 			t.Fatal("expired handoff revived allocation")
 		}
 		check(t, s.ConfirmLearnerStopped(ctx, aHash))
-		check(t, s.CleanupLearner(ctx, allocation.JobID, func(context.Context, workload.Scope) error { return nil }))
+		check(t, s.CleanupLearner(ctx, allocation.JobID, func(context.Context, nodeagent.CleanupRequest) error { return nil }))
 		av, e := s.Availability(handoffNow)
 		check(t, e)
 		if !av.Available {
@@ -430,9 +430,9 @@ func learnerAdmissionLifecycle(t *testing.T, expiredHandoff bool) {
 		t.Fatal("expired allocation authorized retry")
 	}
 	cleaned := false
-	check(t, s.CleanupLearner(ctx, allocation.JobID, func(_ context.Context, scope workload.Scope) error {
+	check(t, s.CleanupLearner(ctx, allocation.JobID, func(_ context.Context, cleanup nodeagent.CleanupRequest) error {
 		cleaned = true
-		if scope.Workload != request.Request.Scope.Workload {
+		if cleanup.Workload.Workload != request.Request.Scope.Workload || !cleanup.WorkloadInitialized {
 			t.Fatal("wrong key cleanup")
 		}
 		return nil

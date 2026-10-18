@@ -15,13 +15,14 @@ import (
 // job/attempt state; Authorize checks current trust rather than saved admission.
 // Cleanup must stop and join the relay before destroying its workload key.
 type NodeExecutionPorts struct {
-	Open        func(context.Context, string, string) (*workerhost.AttemptStore, workerhost.Runner, error)
-	OpenLearner func(context.Context, nodeagent.LocalExecution) (*workerhost.AttemptStore, workerhost.Runner, error)
-	Authorize   func(context.Context, nodeagent.LocalExecution) error
-	Cleanup     func(context.Context, nodeagent.CleanupRequest) error
-	Clock       func() time.Time
-	Ready       func()
-	Event       func(error)
+	Open            func(context.Context, string, string) (*workerhost.AttemptStore, workerhost.Runner, error)
+	OpenLearner     func(context.Context, nodeagent.LocalExecution) (*workerhost.AttemptStore, workerhost.Runner, error)
+	Authorize       func(context.Context, nodeagent.LocalExecution) error
+	Cleanup         func(context.Context, nodeagent.CleanupRequest) error
+	StopPreparation func(context.Context, string) error
+	Clock           func() time.Time
+	Ready           func()
+	Event           func(error)
 }
 
 type nodeExecutionRun struct {
@@ -136,7 +137,7 @@ func (l *nodeExecutionLoop) poll(ctx context.Context) error {
 	}
 	if x.Job == nil {
 		if stopping {
-			return l.store.ReleaseUnprepared(ctx, x.Lease.ID)
+			return l.cleanupUnprepared(ctx, x.Lease.ID)
 		}
 		return nil
 	}

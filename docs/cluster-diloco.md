@@ -151,6 +151,27 @@ remain pending while required services or cleanup operations are unavailable. A 
 run is not canceled when the terminal exits. Query before resubmitting after an
 ambiguous response; a fresh submission creates a different run.
 
+Learner preparation is owned by the node service, not by one HTTP request.
+An identical authenticated retry joins existing work; completed device, dataset
+identity and numerical-plan checks are journaled for the exact signed manifest
+and approved node profile. Slow initialization therefore does not restart after
+every network timeout. Lease control remains available while those checks run.
+Preparation is still bounded by admission and identity expiry, live trust and
+the original reservation. Cancellation joins credential writers before cleanup;
+it never permits late launch or credential recreation after release. Agent
+restart retains its existing interruption/fencing policy, not automatic job
+resumption. A caller timeout does not discard in-flight preparation; an explicit
+pending response is retryable. Invalid evidence, expired admission and failed
+probe validation remain rejections. Inspect the agent log for local preparation
+errors, including the underlying reason for background cancellation.
+Completed-stage caching does not extend signed credential evidence validity.
+When cached workload-request or grant proofs expire before credential issuance, the node and
+controller supply fresh, versioned authorization for the exact original key
+request and persisted grant. This does not replace either object or relax live
+trust, lease or admission checks. The authority records the proofs it actually
+accepted, so a lost-response retry returns the same certificate. Ordinary
+workload issuance and previously recorded grants retain their existing path.
+
 ```bash
 mixlab-cluster submit diloco "${service_args[@]}" -status -run-id "$RUN_ID"
 mixlab-cluster submit diloco "${service_args[@]}" -cancel -run-id "$RUN_ID"
@@ -256,6 +277,10 @@ verify again against independently loaded local trust. This applies to learner
 preparation, commits, retry acknowledgements, workload credentials and artifact
 grants, as well as recovery authorization. Peer evidence is never installed as
 current trust. Invalid, expired or revoked evidence remains rejected.
+An already journaled learner admission can continue after its embedded snapshot
+expires, using the node's own historical acceptance receipt and fresh current
+trust. This does not accept previously unrecorded old evidence, extend admission,
+or bypass current caller authentication or compromise revocation.
 
 A valid ahead-of-local proof that cannot yet be verified against local trust
 produces a retryable, sanitized HTTP 503 rather than a permanent rejection.
@@ -292,6 +317,16 @@ two minutes, with at most 50 seconds per attempt. It reloads current trust and
 time after waits; it never replays the submission itself. A still-valid cached
 identity can be used after transient exhaustion, but never after a permanent
 authentication/signature rejection or caller cancellation.
+Background public trust refresh uses up to three minutes with 50-second
+attempts and bounded backoff, always capped by its owning operation. It reloads
+pinned authority endpoints and verifies signatures, revocation and freshness;
+failure does not make stale trust usable. Compensation rotates across pending
+reservations, retaining each abort until release is confirmed, so one unavailable
+node cannot indefinitely prevent cleanup on other nodes.
+Service startup can use still-valid cached trust after a transient refresh
+failure without exhausting the retry budget. If the cache is stale, bounded
+refresh must succeed; permanent authentication failures and caller cancellation
+never permit cached fallback.
 Managed authority, coordinator and node HTTP servers allow a bounded 55-second
 TLS/header envelope. Body-read budgets begin after TLS and headers: 55 seconds
 for authority, 30 seconds for coordinator and 10 seconds for node requests.

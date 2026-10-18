@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -258,6 +259,7 @@ func TestCoordinatorRestartRefreshesStalePublicTrust(t *testing.T) {
 					t.Fatal("fixture public trust must be stale")
 				}
 			}
+			var attempted chan error
 			if online {
 				a, err := clusterapp.OpenAuthority(ctx, ca, past)
 				check(err)
@@ -266,7 +268,25 @@ func TestCoordinatorRestartRefreshesStalePublicTrust(t *testing.T) {
 				go func() { done <- clusterapp.ServeAuthority(ctx, authorityListener, a, time.Now) }()
 				defer func() { cancel(); check(<-done) }()
 			} else {
-				check(authorityListener.Close())
+				// Accept the pinned authority connection but never complete TLS.
+				// Cancel only after observing the attempt, not after a wall-clock
+				// race against startup's longer bounded retry policy.
+				attempted = make(chan error, 1)
+				probeDone := make(chan struct{})
+				go func() {
+					defer close(probeDone)
+					conn, err := authorityListener.Accept()
+					attempted <- err
+					if err == nil {
+						defer func() { _ = conn.Close() }()
+						<-ctx.Done()
+					}
+				}()
+				defer func() {
+					cancel()
+					_ = authorityListener.Close()
+					<-probeDone
+				}()
 			}
 			ready := make(chan struct{})
 			o.Clock = time.Now
@@ -275,6 +295,33 @@ func TestCoordinatorRestartRefreshesStalePublicTrust(t *testing.T) {
 			defer stop()
 			done := make(chan error, 1)
 			go func() { done <- clusterapp.ServeInstalledDiLoCo(service, listener, o) }()
+			if !online {
+				select {
+				case err := <-attempted:
+					check(err)
+				case err := <-done:
+					t.Fatalf("startup exited before authority attempt: %v", err)
+				case <-ctx.Done():
+					stop()
+					<-done
+					t.Fatal("authority attempt watchdog expired")
+				}
+				stop()
+				select {
+				case err := <-done:
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("startup ignored explicit cancellation: %v", err)
+					}
+				case <-ctx.Done():
+					t.Fatal("canceled startup did not terminate before watchdog")
+				}
+				select {
+				case <-ready:
+					t.Fatal("offline stale service reported ready")
+				default:
+				}
+				return
+			}
 			select {
 			case err := <-done:
 				if online || err == nil {

@@ -2,6 +2,7 @@ package clusterapp
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 
 	"github.com/mrothroc/mixlab/diloco/authenticated"
@@ -16,8 +17,9 @@ type NodeLearnerPrepareRequest struct {
 	Signed               nodejob.SignedLearner `json:"signed"`
 }
 type NodeLearnerPrepared struct {
-	Registration run.Registration       `json:"registration"`
-	Request      workload.SignedRequest `json:"request"`
+	Registration  run.Registration              `json:"registration"`
+	Request       workload.SignedRequest        `json:"request"`
+	Authorization workload.RequestAuthorization `json:"authorization"`
 }
 type NodeLearnerCredentialRequest struct {
 	Grant      workload.Grant  `json:"grant"`
@@ -65,7 +67,7 @@ func (h *nodeHTTP) learner(w http.ResponseWriter, r *http.Request, actor trust.A
 			return
 		}
 		out, err := owner.PrepareLearner(r.Context(), actor, q)
-		nodeResponse(w, out, err)
+		h.preparationResponse(w, id, out, err)
 	case parts[2] == "credential" && r.Method == http.MethodPut:
 		var q NodeLearnerCredentialRequest
 		if !h.decode(w, r, &q, 1<<20, &actor) {
@@ -91,4 +93,15 @@ func (h *nodeHTTP) learner(w http.ResponseWriter, r *http.Request, actor trust.A
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (h *nodeHTTP) preparationResponse(w http.ResponseWriter, job string, out any, err error) {
+	if err != nil && h.event != nil {
+		diagnostic := err.Error()
+		if len(diagnostic) > 4096 {
+			diagnostic = diagnostic[:4096]
+		}
+		h.event(fmt.Errorf("learner preparation job=%q operation=prepare error=%q", job, diagnostic))
+	}
+	nodeResponse(w, out, err)
 }

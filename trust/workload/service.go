@@ -41,11 +41,12 @@ type Service struct {
 	a     Authority
 }
 type entry struct {
-	Grant       Grant               `json:"grant"`
-	NodeCommit  trust.AcceptedProof `json:"node_commit"`
-	GrantCommit trust.AcceptedProof `json:"grant_commit"`
-	IssuedAt    int64               `json:"issued_at"`
-	Result      *Result             `json:"result"`
+	Grant         Grant                  `json:"grant"`
+	NodeCommit    trust.AcceptedProof    `json:"node_commit"`
+	GrantCommit   trust.AcceptedProof    `json:"grant_commit"`
+	IssuedAt      int64                  `json:"issued_at"`
+	Result        *Result                `json:"result"`
+	Authorization *authorizationEvidence `json:"authorization,omitempty"`
 }
 type record struct {
 	Version    string  `json:"version"`
@@ -201,6 +202,9 @@ func (s *Service) validate(r record) error {
 		if err != nil || g.Proof.Request != q || g.Proof.Evidence.Principal != scope.Controller || g.Proof.Evidence.Role != scope.GrantRole() || scope.Cluster != r.Cluster || e.IssuedAt < scope.Created || e.IssuedAt >= scope.AdmitUntil || !hexSize(e.NodeCommit.Digest, 32) || !hexSize(e.GrantCommit.Digest, 32) || e.NodeCommit.Generation == 0 || e.GrantCommit.Generation == 0 || e.NodeCommit.Generation > r.Generation || e.GrantCommit.Generation > r.Generation {
 			return fmt.Errorf("invalid workload issuance entry")
 		}
+		if err := e.validateAcceptance(); err != nil {
+			return err
+		}
 		public, _ := g.Request.Request.PublicKey()
 		job := scope.Job + "/" + scope.Attempt
 		if jobs[job] || keys[string(public)] || principals[scope.Workload] {
@@ -240,6 +244,10 @@ func (j commitJournal) AcceptedGeneration(digest string) (uint64, bool, error) {
 // A signed grant is not a bearer credential. The node's key proof and the
 // controller's exact admission grant must both be accepted before using the CA.
 func (s *Service) Issue(ctx context.Context, callerChain [][]byte, g Grant, view trust.VerifiedSnapshot, now time.Time) (Result, error) {
+	return s.issue(ctx, callerChain, g, nil, view, now)
+}
+
+func (s *Service) issue(ctx context.Context, callerChain [][]byte, g Grant, authorization *authorizationEvidence, view trust.VerifiedSnapshot, now time.Time) (Result, error) {
 	var out Result
 	b, err := json.Marshal(g)
 	if err != nil || len(b) > 2*trust.MaxTrustBytes+8192 {
@@ -261,12 +269,19 @@ func (s *Service) Issue(ctx context.Context, callerChain [][]byte, g Grant, view
 	}
 	// Historical commit evidence preserves an exact retry's signatures, but
 	// cannot make a revoked/expired node eligible for credential delivery.
-	node, err := trust.AuthenticatePrincipal(s.a.Anchor, view, g.Request.Proof.Evidence.Chain, now)
+	nodeChain := g.Request.Proof.Evidence.Chain
+	if authorization != nil {
+		nodeChain = authorization.Node.Proof.Evidence.Chain
+	}
+	node, err := trust.AuthenticatePrincipal(s.a.Anchor, view, nodeChain, now)
 	if err != nil || node.Role != trust.Node || node.Principal != scope.Node {
 		return out, fmt.Errorf("current enrolled node required for workload issuance")
 	}
 	nodeQ, _ := g.Request.Request.SigningRequest()
 	err = s.store.WithProcessLock(ctx, lockFile, func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := s.checkAuthority(view, now); err != nil {
 			return err
 		}
@@ -304,18 +319,22 @@ func (s *Service) Issue(ctx context.Context, callerChain [][]byte, g Grant, view
 			if len(r.Entries) >= maxEntries {
 				return fmt.Errorf("workload issuer journal capacity reached")
 			}
-			nc, err := trust.VerifyProof(s.a.Anchor, view, g.Request.Proof, nodeQ, now)
+			var nc, gc trust.AcceptedProof
+			if authorization == nil {
+				nc, err = trust.VerifyProof(s.a.Anchor, view, g.Request.Proof, nodeQ, now)
+				if err == nil {
+					gc, err = trust.VerifyProof(s.a.Anchor, view, g.Proof, q, now)
+				}
+			} else {
+				nc, gc, err = verifyAuthorizedGrant(s.a.Anchor, view, authorization.grant(g), now)
+			}
 			if err != nil {
 				return err
 			}
-			gc, err := trust.VerifyProof(s.a.Anchor, view, g.Proof, q, now)
-			if err != nil {
+			if err := checkIssuanceKey(s.a.Anchor, view, g, callerChain, nodeChain, now, authorization); err != nil {
 				return err
 			}
-			if err := checkNewKey(s.a.Anchor, view, g, callerChain, now); err != nil {
-				return err
-			}
-			r.Entries = append(r.Entries, entry{Grant: g, NodeCommit: nc, GrantCommit: gc, IssuedAt: now.Unix()})
+			r.Entries = append(r.Entries, entry{Grant: g, NodeCommit: nc, GrantCommit: gc, IssuedAt: now.Unix(), Authorization: authorization})
 			index = len(r.Entries) - 1
 			// Validate enforces job/key/principal uniqueness before CA side effects.
 			if err := s.save(old, r); err != nil {
@@ -327,17 +346,19 @@ func (s *Service) Issue(ctx context.Context, callerChain [][]byte, g Grant, view
 			}
 		} else {
 			e := r.Entries[index]
-			if err := trust.VerifyHistoricalProof(s.a.Anchor, view, g.Request.Proof, nodeQ, commitJournal{e}, now); err != nil {
+			if err := e.verifyHistory(s.a.Anchor, view, now); err != nil {
 				return err
 			}
-			if err := trust.VerifyHistoricalProof(s.a.Anchor, view, g.Proof, q, commitJournal{e}, now); err != nil {
-				return err
+			if authorization != nil {
+				if err := e.verifyReplacement(s.a.Anchor, view, authorization, now); err != nil {
+					return err
+				}
 			}
 		}
 		e := &r.Entries[index]
 		// Purpose eligibility can change between accepted intent and a retry,
 		// including the actual caller's renewed TLS certificate.
-		if err := checkNewKey(s.a.Anchor, view, g, callerChain, now); err != nil {
+		if err := checkIssuanceKey(s.a.Anchor, view, g, callerChain, nodeChain, now, authorization, e.Authorization); err != nil {
 			return err
 		}
 		if e.Result != nil {
@@ -367,12 +388,12 @@ func (s *Service) Issue(ctx context.Context, callerChain [][]byte, g Grant, view
 	return out, nil
 }
 
-func checkNewKey(a trust.Anchor, view trust.VerifiedSnapshot, g Grant, callerChain [][]byte, now time.Time) error {
+func checkIssuanceKey(a trust.Anchor, view trust.VerifiedSnapshot, g Grant, callerChain, nodeChain [][]byte, now time.Time, authorizations ...*authorizationEvidence) error {
 	public, err := g.Request.Request.PublicKey()
 	if err != nil {
 		return err
 	}
-	nodeEnvelope, err := trust.NodeEnvelopeKey(a, view, g.Request.Proof.Evidence.Chain, g.Request.Request.Scope.Node, now)
+	nodeEnvelope, err := trust.NodeEnvelopeKey(a, view, nodeChain, g.Request.Request.Scope.Node, now)
 	if err != nil {
 		return err
 	}
@@ -388,12 +409,19 @@ func checkNewKey(a trust.Anchor, view trust.VerifiedSnapshot, g Grant, callerCha
 	certs = append(certs, g.Request.Proof.Evidence.Chain...)
 	certs = append(certs, g.Proof.Evidence.Chain...)
 	certs = append(certs, callerChain...)
+	certs = append(certs, nodeChain...)
+	for _, auth := range authorizations {
+		if auth != nil {
+			certs = append(certs, auth.Node.Proof.Evidence.Chain...)
+			certs = append(certs, auth.Controller.Evidence.Chain...)
+		}
+	}
 	for _, der := range certs {
-		c, _, err := certificates.Parse(der)
+		c, id, err := certificates.Parse(der)
 		if err != nil {
 			return err
 		}
-		if bytes.Equal(public, c.PublicKey.(ed25519.PublicKey)) {
+		if bytes.Equal(public, c.PublicKey.(ed25519.PublicKey)) || bytes.Equal(public, id.EnvelopeKey) {
 			return fmt.Errorf("workload transport key must be purpose-separated")
 		}
 	}

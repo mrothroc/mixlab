@@ -41,9 +41,17 @@ type learnerRuntimeFixture struct {
 	controller  *principal.Store
 	coordinator *principal.Store
 	ports       nodeagent.WorkloadPorts
+	prepare     NodeLearnerPrepareRequest
+	actor       trust.AuthenticatedPrincipal
+	root        statehome.Path
+	probe       workerprobe.Report
 }
 
 func newLearnerRuntimeFixture(t *testing.T) learnerRuntimeFixture {
+	return newLearnerRuntimeFixtureMode(t, true)
+}
+
+func newLearnerRuntimeFixtureMode(t *testing.T, start bool) learnerRuntimeFixture {
 	t.Helper()
 	ctx := context.Background()
 	p := initialized(t)
@@ -128,12 +136,15 @@ func newLearnerRuntimeFixture(t *testing.T) learnerRuntimeFixture {
 	check(t, err)
 	accepted, err := nodejob.AcceptLearner(a.Anchor, v, actor, caps.Node, nodejob.SignedLearner{Manifest: m, Proof: proof}, testNow)
 	check(t, err)
-	_, err = s.PrepareLearner(ctx, actor, accepted, lease.Version, testNow)
-	check(t, err)
 	root := resolve("learner-credentials", statehome.Agent)
 	check(t, root.Ensure())
 	clock := func() time.Time { return testNow }
 	ports, err := NodeWorkloadPorts(node, root, clock)
+	check(t, err)
+	if !start {
+		return learnerRuntimeFixture{remote: &nodeLearnerRemote{runtime: NodeLearnerRuntime{Store: s, Principal: node, Anchor: a.Anchor, Clock: clock}}, authority: a, controller: controller, coordinator: coordinator, ports: ports, prepare: NodeLearnerPrepareRequest{ExpectedLeaseVersion: lease.Version, Signed: nodejob.SignedLearner{Manifest: m, Proof: proof}}, actor: actor, root: root, probe: probe}
+	}
+	_, err = s.PrepareLearner(ctx, actor, accepted, lease.Version, testNow)
 	check(t, err)
 	workloadRequest, err := s.PrepareLearnerWorkload(ctx, actor, allocation.JobID, ports)
 	check(t, err)

@@ -10,10 +10,12 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,7 +28,44 @@ import (
 )
 
 func TestWorkloadIssuanceOverManagedTLS(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	workloadIssuanceOverManagedTLS(t, 0, false)
+}
+
+func TestWorkloadAuthorizedIssuanceOverManagedTLS(t *testing.T) {
+	workloadIssuanceOverManagedTLS(t, 0, false, true)
+}
+
+func TestWorkloadIssuanceSlowTLSAndCallerDeadline(t *testing.T) {
+	for _, bounded := range []bool{false, true} {
+		name := "twenty_second_issuance"
+		if bounded {
+			name = "caller_deadline"
+		}
+		t.Run(name, func(t *testing.T) {
+			workloadIssuanceOverManagedTLS(t, 20*time.Second, bounded)
+		})
+	}
+}
+
+// IssueRemoteWorkload opens a snapshot connection, then a separate mutual-TLS
+// issuance connection. Delay only the latter so the old issuance-only 15s cap
+// is tested independently of the public trust refresh budget.
+type workloadIssuanceDelayListener struct{ *delayedAuthorityListener }
+
+func (l *workloadIssuanceDelayListener) Accept() (net.Conn, error) {
+	c, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	if l.accepted.Add(1) == 2 && l.delay > 0 {
+		return &delayedAuthorityConn{Conn: c, listener: l.delayedAuthorityListener, closed: make(chan struct{})}, nil
+	}
+	return c, nil
+}
+
+func workloadIssuanceOverManagedTLS(t *testing.T, delay time.Duration, callerBounded bool, authorized ...bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	check(t, err)
@@ -36,9 +75,12 @@ func TestWorkloadIssuanceOverManagedTLS(t *testing.T) {
 	a, err := OpenAuthority(ctx, p, testNow)
 	check(t, err)
 	defer func() { _ = a.Close() }()
-	clock := func() time.Time { return testNow }
+	var currentTime atomic.Int64
+	currentTime.Store(testNow.Unix())
+	clock := func() time.Time { return time.Unix(currentTime.Load(), 0) }
+	slow := &workloadIssuanceDelayListener{&delayedAuthorityListener{Listener: l, delay: delay, started: make(chan struct{})}}
 	done := make(chan error, 1)
-	go func() { done <- ServeAuthority(ctx, l, a, clock) }()
+	go func() { done <- ServeAuthority(ctx, slow, a, clock) }()
 	defer func() { cancel(); check(t, <-done) }()
 	cp, err := statehome.Resolve(statehome.Options{ExactDir: filepath.Join(filepath.Dir(p.Dir()), "controller")}, statehome.Context{Kind: statehome.Principal})
 	check(t, err)
@@ -66,7 +108,7 @@ func TestWorkloadIssuanceOverManagedTLS(t *testing.T) {
 		check(t, err)
 		return hex.EncodeToString(b)
 	}
-	scope := workload.Scope{Cluster: a.Anchor.Cluster(), Controller: cs.Principal, Node: node.Approval.Principal, Lease: id(), Run: id(), Job: id(), Attempt: id(), Group: id(), Member: id(), Workload: id(), Generation: 1, Rank: 0, MembershipHash: strings.Repeat("a", 64), ManifestHash: strings.Repeat("b", 64), Created: testNow.Unix(), AdmitUntil: testNow.Add(time.Minute).Unix(), Deadline: testNow.Add(3 * 24 * time.Hour).Unix()}
+	scope := workload.Scope{Cluster: a.Anchor.Cluster(), Controller: cs.Principal, Node: node.Approval.Principal, Lease: id(), Run: id(), Job: id(), Attempt: id(), Group: id(), Member: id(), Workload: id(), Generation: 1, Rank: 0, MembershipHash: strings.Repeat("a", 64), ManifestHash: strings.Repeat("b", 64), Created: testNow.Unix(), AdmitUntil: testNow.Add(30 * time.Minute).Unix(), Deadline: testNow.Add(3 * 24 * time.Hour).Unix()}
 	transportPath, err := statehome.Resolve(statehome.Options{ExactDir: filepath.Join(filepath.Dir(p.Dir()), "node-job-key")}, statehome.Context{Kind: statehome.Agent})
 	check(t, err)
 	credential, err := nodecredentials.InitializeTransport(ctx, transportPath, a.Anchor, scope, "file")
@@ -95,17 +137,68 @@ func TestWorkloadIssuanceOverManagedTLS(t *testing.T) {
 	grantProof, err := trust.SignPrincipalProof(a.Anchor, cs.Chain, ck, v, sign, testNow)
 	check(t, err)
 	grant := workload.Grant{Request: signed, Proof: grantProof}
-	first, err := IssueRemoteWorkload(ctx, controller, endpoint, grant, clock)
+	issue := func(call context.Context) (workload.Result, error) {
+		return IssueRemoteWorkload(call, controller, endpoint, grant, clock)
+	}
+	route := workloadIssueRoute
+	if len(authorized) != 0 && authorized[0] {
+		// The original request and grant both expire before first authority
+		// acceptance. Fresh authorization must not replace either object.
+		currentTime.Store(testNow.Add(trust.SnapshotLifetime + time.Minute).Unix())
+		v, err = a.Current(ctx, clock())
+		check(t, err)
+		if _, err := trust.VerifyProof(a.Anchor, v, grant.Proof, sign, clock()); err == nil {
+			t.Fatal("fixture did not expire original grant evidence")
+		}
+		nq, err := signed.ReauthorizationRequest()
+		check(t, err)
+		np, err := trust.SignPrincipalProof(a.Anchor, node.Chain, nk, v, nq, clock())
+		check(t, err)
+		gq, err := grant.ReauthorizationRequest()
+		check(t, err)
+		gp, err := trust.SignPrincipalProof(a.Anchor, cs.Chain, ck, v, gq, clock())
+		check(t, err)
+		envelope := workload.AuthorizedGrant{Version: workload.AuthorizedGrantVersion, Grant: grant, NodeAuthorization: workload.RequestAuthorization{Version: workload.RequestAuthorizationVersion, Proof: np}, ControllerAuthorization: gp}
+		issue = func(call context.Context) (workload.Result, error) {
+			return IssueRemoteAuthorizedWorkload(call, controller, endpoint, envelope, clock)
+		}
+		route = workloadIssueAuthorizedRoute
+	}
+	call := ctx
+	if callerBounded {
+		var stop context.CancelFunc
+		call, stop = context.WithTimeout(ctx, 3*time.Second)
+		defer stop()
+	}
+	started := time.Now()
+	first, err := issue(call)
+	if callerBounded {
+		if !errors.Is(err, context.DeadlineExceeded) || call.Err() != context.DeadlineExceeded || ctx.Err() != nil || len(first.Chain) != 0 {
+			t.Fatalf("issuance ignored caller deadline or published credentials: err=%v caller=%v parent=%v", err, call.Err(), ctx.Err())
+		}
+		select {
+		case <-slow.started:
+		default:
+			t.Fatal("caller deadline did not reach the issuance TLS connection")
+		}
+		if slow.accepted.Load() != 2 {
+			t.Fatalf("timed-out issuance retried: connections=%d", slow.accepted.Load())
+		}
+		return
+	}
 	check(t, err)
-	again, err := IssueRemoteWorkload(ctx, controller, endpoint, grant, clock)
+	if slow.accepted.Load() != 2 || time.Since(started) < delay {
+		t.Fatalf("issuance bypassed delay or retried internally: connections=%d elapsed=%v", slow.accepted.Load(), time.Since(started))
+	}
+	again, err := issue(ctx)
 	check(t, err)
 	if !bytes.Equal(first.Chain[0], again.Chain[0]) {
 		t.Fatal("TLS retry reissued certificate")
 	}
-	check(t, workload.ValidateResult(a.Anchor, grant, again, testNow))
-	check(t, credential.Install(ctx, grant, first, v, testNow))
-	check(t, credential.Install(ctx, grant, again, v, testNow))
-	chain, handle, err := credential.Identity(v, testNow)
+	check(t, workload.ValidateResult(a.Anchor, grant, again, clock()))
+	check(t, credential.Install(ctx, grant, first, v, clock()))
+	check(t, credential.Install(ctx, grant, again, v, clock()))
+	chain, handle, err := credential.Identity(v, clock())
 	check(t, err)
 	if !bytes.Equal(chain[0], first.Chain[0]) {
 		t.Fatal("installed certificate changed")
@@ -120,15 +213,15 @@ func TestWorkloadIssuanceOverManagedTLS(t *testing.T) {
 	// An anonymous snapshot client cannot use the workload route.
 	raw := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13, NextProtos: []string{"http/1.1"}, Time: clock}}
 	defer raw.CloseIdleConnections()
-	res, err := (&http.Client{Transport: raw, Timeout: time.Second}).Post(endpoint+workloadIssueRoute, "application/json", strings.NewReader("{}"))
+	res, err := (&http.Client{Transport: raw, Timeout: time.Second}).Post(endpoint+route, "application/json", strings.NewReader("{}"))
 	check(t, err)
 	_ = res.Body.Close()
 	if res.StatusCode != http.StatusUnauthorized {
 		t.Fatal("anonymous workload issuance", res.StatusCode)
 	}
-	_, err = a.Snapshots.Revoke(ctx, "principal", scope.Node, "prospective", "test", testNow)
+	_, err = a.Snapshots.Revoke(ctx, "principal", scope.Node, "prospective", "test", clock())
 	check(t, err)
-	if _, err := IssueRemoteWorkload(ctx, controller, endpoint, grant, clock); err == nil {
+	if _, err := issue(ctx); err == nil {
 		t.Fatal("revoked node received workload credential")
 	}
 	// Model a crash after terminal intent but before key deletion. An old

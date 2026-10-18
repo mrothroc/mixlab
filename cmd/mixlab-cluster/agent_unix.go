@@ -201,7 +201,7 @@ func serveInstalledAgent(ctx context.Context, path statehome.Path, listen, adver
 				event(err)
 			}
 		},
-		Execution: clusterapp.NodeExecutionPorts{Open: runtime.Open, OpenLearner: learnerRuntime.Open, Authorize: jobs.Authorize, Cleanup: jobs.Cleanup, Clock: time.Now, Event: event},
+		Execution: clusterapp.NodeExecutionPorts{Open: runtime.Open, OpenLearner: learnerRuntime.Open, Authorize: jobs.Authorize, Cleanup: jobs.Cleanup, StopPreparation: jobs.StopLearnerPreparation, Clock: time.Now, Event: event},
 	})
 	if err != nil {
 		return fail(err)

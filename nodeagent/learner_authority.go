@@ -146,59 +146,78 @@ func (s *Store) FinalizeLearner(ctx context.Context, actor trust.AuthenticatedPr
 	})
 }
 
+// LearnerCleanupTimeout bounds one cleanup attempt, including lifecycle locks.
+const LearnerCleanupTimeout = 50 * time.Second
+
 // CleanupLearner holds the accelerator until hosting and credential owners
-// confirm cleanup. Unstarted preparations need no process termination proof.
-func (s *Store) CleanupLearner(ctx context.Context, id string, cleanup func(context.Context, workload.Scope) error) error {
+// confirm cleanup. Async preparation owners must be canceled/joined BEFORE this
+// call, never in cleanup: the callback holds the job's credential lifecycle lock.
+// Unstarted preparations need no process termination proof.
+func (s *Store) CleanupLearner(ctx context.Context, id string, cleanup func(context.Context, CleanupRequest) error) error {
 	if cleanup == nil {
 		return fmt.Errorf("credential cleanup port required")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, LearnerCleanupTimeout)
 	defer cancel()
-	return s.path.WithProcessLock(ctx, nodeLock, func() error {
-		_, j, err := s.loadLearner(id)
-		if err != nil {
+	return s.withLearnerWorkloadLock(ctx, id, func() error {
+		var requests []CleanupRequest
+		var released bool
+		visit := func(finish bool) error {
+			return s.path.WithProcessLock(ctx, nodeLock, func() error {
+				_, j, err := s.loadLearner(id)
+				if err != nil {
+					return err
+				}
+				old, ls, err := s.load()
+				if err != nil {
+					return err
+				}
+				l := findLease(&ls, j.Signed.Manifest.Slot.Allocation.LeaseID)
+				if l == nil || l.Job != id {
+					return fmt.Errorf("learner allocation missing")
+				}
+				if l.State == Released {
+					released = true
+					return nil
+				}
+				if l.State != Releasing || j.Assignment != nil && !j.Stopped {
+					return fmt.Errorf("release intent and confirmed stopped child required")
+				}
+				var current []CleanupRequest
+				for _, retry := range []bool{false, true} {
+					if i := *learnerWorkloadIntent(&j, retry); i != nil {
+						scope, err := learnerScope(j, i.Principal, retry)
+						if err != nil {
+							return err
+						}
+						current = append(current, CleanupRequest{Job: id, Attempt: scope.Attempt, Workload: scope, WorkloadInitialized: i.Initialized})
+					}
+				}
+				if !finish {
+					requests = current
+					return nil
+				}
+				if digest(current) != digest(requests) {
+					return fmt.Errorf("learner cleanup scope changed")
+				}
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				l.State = Released
+				l.Version++
+				ls.Active = ""
+				ls.NodeVersion++
+				return s.save(old, ls)
+			})
+		}
+		if err := visit(false); err != nil || released {
 			return err
 		}
-		m := j.Signed.Manifest
-		old, ls, err := s.load()
-		if err != nil {
-			return err
-		}
-		l := findLease(&ls, m.Slot.Allocation.LeaseID)
-		if l == nil || l.Job != id {
-			return fmt.Errorf("learner allocation missing")
-		}
-		if l.State == Released {
-			return nil
-		}
-		if l.State != Releasing || j.Assignment != nil && !j.Stopped {
-			return fmt.Errorf("release intent and confirmed stopped child required")
-		}
-		if j.Workload != nil {
-			scope, err := learnerScope(j, j.Workload.Principal, false)
-			if err != nil {
-				return err
-			}
-			if err = cleanup(ctx, scope); err != nil {
+		for _, request := range requests {
+			if err := cleanup(ctx, request); err != nil {
 				return err
 			}
 		}
-		if j.RetryWorkload != nil {
-			scope, err := learnerScope(j, j.RetryWorkload.Principal, true)
-			if err != nil {
-				return err
-			}
-			if err = cleanup(ctx, scope); err != nil {
-				return err
-			}
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		l.State = Released
-		l.Version++
-		ls.Active = ""
-		ls.NodeVersion++
-		return s.save(old, ls)
+		return visit(true)
 	})
 }

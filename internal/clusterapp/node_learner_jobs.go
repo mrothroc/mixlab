@@ -9,22 +9,21 @@ import (
 	"github.com/mrothroc/mixlab/nodecredentials"
 	"github.com/mrothroc/mixlab/nodejob"
 	"github.com/mrothroc/mixlab/trust"
+	"github.com/mrothroc/mixlab/trust/workload"
 )
 
-func (a *NodeJobs) PrepareLearner(ctx context.Context, actor trust.AuthenticatedPrincipal, q NodeLearnerPrepareRequest) (out NodeLearnerPrepared, err error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+func (a *NodeJobs) prepareLearner(ctx context.Context, actor trust.AuthenticatedPrincipal, q NodeLearnerPrepareRequest) (out NodeLearnerPrepared, err error) {
 	if a.options.LearnerProbe == nil {
 		return out, fmt.Errorf("learner numerical probe unavailable")
 	}
 	m := q.Signed.Manifest
-	if err := a.preparationScope(ctx, actor, m.Slot.Allocation.LeaseID, m.Plan.Cohort.RunID, m.Slot.Allocation.JobID, "learner", q.ExpectedLeaseVersion); err != nil {
+	if err := a.learnerPreparationScope(ctx, actor, q); err != nil {
 		return out, err
 	}
 	var accepted nodejob.AcceptedLearner
 	_, err = a.currentForEvidence(ctx, q.Signed.Proof.Evidence.Snapshot, func(v trust.VerifiedSnapshot) error {
 		var err error
-		accepted, err = nodejob.AcceptLearner(a.options.Anchor, v, actor, a.options.Node, q.Signed, a.options.Clock())
+		accepted, err = a.options.Store.AcceptLearnerPreparation(ctx, a.options.Anchor, v, actor, q.Signed, a.options.Clock())
 		return err
 	})
 	if err != nil {
@@ -35,7 +34,7 @@ func (a *NodeJobs) PrepareLearner(ctx context.Context, actor trust.Authenticated
 		return out, err
 	}
 	m = j.Signed.Manifest
-	p, err := a.options.LearnerProbe(ctx, m.Config)
+	p, err := a.options.Store.PrepareLearnerNumerical(ctx, actor, accepted, a.options.LearnerProbe, a.options.Clock)
 	if err != nil {
 		return out, err
 	}
@@ -69,6 +68,23 @@ func (a *NodeJobs) PrepareLearner(ctx context.Context, actor trust.Authenticated
 		return out, err
 	}
 	out.Request, err = a.options.Store.PrepareLearnerWorkload(ctx, actor, m.Slot.Allocation.JobID, a.options.Workload)
+	if err != nil {
+		return out, err
+	}
+	return a.authorizeLearnerPreparation(ctx, actor, m.Slot.Allocation.JobID, out)
+}
+
+func (a *NodeJobs) authorizeLearnerPreparation(ctx context.Context, actor trust.AuthenticatedPrincipal, job string, out NodeLearnerPrepared) (NodeLearnerPrepared, error) {
+	var err error
+	out.Authorization, err = a.options.Store.AuthorizeLearnerWorkload(ctx, actor, job, out.Request, a.options.Workload)
+	if err != nil {
+		return out, err
+	}
+	view, err := a.current(ctx)
+	if err != nil {
+		return out, err
+	}
+	err = workload.VerifyRequestAuthorization(a.options.Anchor, view, out.Request, out.Authorization, a.options.Clock())
 	return out, err
 }
 

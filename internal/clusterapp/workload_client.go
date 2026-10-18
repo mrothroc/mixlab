@@ -13,6 +13,19 @@ import (
 )
 
 func IssueRemoteWorkload(ctx context.Context, p *principal.Store, endpoint string, grant workload.Grant, clock func() time.Time) (workload.Result, error) {
+	return issueRemoteWorkload(ctx, p, endpoint, grant, grant, workloadIssueRoute, clock)
+}
+
+// IssueRemoteAuthorizedWorkload preserves the immutable grant while supplying
+// fresh authorization. The admission owner, not this client, owns retry policy.
+func IssueRemoteAuthorizedWorkload(ctx context.Context, p *principal.Store, endpoint string, authorized workload.AuthorizedGrant, clock func() time.Time) (workload.Result, error) {
+	if err := authorized.Validate(); err != nil {
+		return workload.Result{}, err
+	}
+	return issueRemoteWorkload(ctx, p, endpoint, authorized.Grant, authorized, workloadIssueAuthorizedRoute, clock)
+}
+
+func issueRemoteWorkload(ctx context.Context, p *principal.Store, endpoint string, grant workload.Grant, body any, route string, clock func() time.Time) (workload.Result, error) {
 	if err := RefreshRemoteTrust(ctx, p, endpoint, clock); err != nil {
 		return workload.Result{}, err
 	}
@@ -27,7 +40,9 @@ func IssueRemoteWorkload(ctx context.Context, p *principal.Store, endpoint strin
 	if err != nil {
 		return workload.Result{}, err
 	}
-	c, err := policy.HTTPClient(15 * time.Second)
+	// Allow one load-tolerant issuance attempt. The persisted-grant saga owns
+	// mutation replay; this client must not introduce its own retry loop.
+	c, err := policy.HTTPClient(remoteTrustRefreshTimeout)
 	if err != nil {
 		return workload.Result{}, err
 	}
@@ -37,7 +52,7 @@ func IssueRemoteWorkload(ctx context.Context, p *principal.Store, endpoint strin
 		return workload.Result{}, err
 	}
 	var out workload.Result
-	if err := enrollmentJSON(ctx, c, http.MethodPost, base.ResolveReference(&url.URL{Path: workloadIssueRoute}).String(), grant, &out); err != nil {
+	if err := enrollmentJSON(ctx, c, http.MethodPost, base.ResolveReference(&url.URL{Path: route}).String(), body, &out); err != nil {
 		return workload.Result{}, err
 	}
 	a, err := trust.PinRoot(s.Root, s.Fingerprint, clock())

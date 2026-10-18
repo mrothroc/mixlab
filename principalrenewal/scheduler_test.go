@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/mrothroc/mixlab/statehome"
@@ -80,6 +81,60 @@ func TestScheduleRetryRestartAndRenew(t *testing.T) {
 	if _, e = s.Tick(ctx, i.Issued.Add(time.Minute)); e != nil || calls != 3 {
 		t.Fatal("renewal repeated", e, calls)
 	}
+}
+
+func TestScheduleLoadTolerantAttemptBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		i := identityAt(start.Add(-21 * 24 * time.Hour))
+		s, err := New(pathFor(t), Ports{
+			Identity: func(time.Time) (Identity, error) { return i, nil },
+			Renew: func(ctx context.Context, _ time.Time) error {
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) != 180*time.Second {
+					t.Fatalf("renewal budget=%v", time.Until(deadline))
+				}
+				time.Sleep(100 * time.Second) // snapshot catch-up plus slow renewal
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				i = Identity{i.Principal, strings.Repeat("c", 64), start, start.Add(30 * 24 * time.Hour)}
+				return nil
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err := s.Tick(context.Background(), start)
+		if err != nil || state.Outcome != "renewed" || time.Since(start) != 100*time.Second {
+			t.Fatalf("state=%+v err=%v elapsed=%v", state, err, time.Since(start))
+		}
+	})
+}
+
+func TestScheduleAttemptCannotOutliveIdentity(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		start := time.Now()
+		i := identityAt(start.Add(-30 * 24 * time.Hour).Add(10 * time.Second))
+		s, err := New(pathFor(t), Ports{
+			Identity: func(time.Time) (Identity, error) { return i, nil },
+			Renew: func(ctx context.Context, _ time.Time) error {
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) != 10*time.Second {
+					t.Fatalf("renewal extended identity lifetime: %v", deadline)
+				}
+				<-ctx.Done()
+				return nil // Even a late successful callback cannot beat expiry.
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		state, err := s.Tick(context.Background(), start)
+		if !errors.Is(err, context.DeadlineExceeded) || state.Outcome != "failed" || time.Since(start) != 10*time.Second {
+			t.Fatalf("state=%+v err=%v elapsed=%v", state, err, time.Since(start))
+		}
+	})
 }
 func TestScheduleExpiryCorruptionAndIndependentJitter(t *testing.T) {
 	start := time.Date(2026, 9, 26, 0, 0, 0, 0, time.UTC)

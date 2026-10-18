@@ -23,6 +23,10 @@ var ErrReenrollmentRequired = errors.New("principal expired; explicit approved r
 const filename = "renewal-schedule.json"
 const version = "mixlab_principal_renewal_schedule_v1"
 
+// AttemptTimeout includes public trust catch-up and one authenticated renewal.
+// The owning composition still supplies shorter per-request transport bounds.
+const AttemptTimeout = 180 * time.Second
+
 type Identity struct {
 	Principal, Certificate string
 	Issued, Expires        time.Time
@@ -156,9 +160,12 @@ func (s *Scheduler) Tick(ctx context.Context, now time.Time) (out State, result 
 		if err != nil {
 			return err
 		}
-		attempt, done := context.WithTimeout(ctx, 20*time.Second)
+		attempt, done := context.WithTimeout(ctx, min(AttemptTimeout, i.Expires.Sub(now)))
 		defer done()
 		renewErr := s.ports.Renew(attempt, now)
+		if renewErr == nil {
+			renewErr = attempt.Err()
+		}
 		if renewErr == nil {
 			next, err := s.ports.Identity(now)
 			switch {

@@ -7,21 +7,25 @@ import (
 	"slices"
 	"time"
 
+	"github.com/mrothroc/mixlab/principalrenewal"
 	"github.com/mrothroc/mixlab/transport/snapshottls"
 	"github.com/mrothroc/mixlab/trust"
 	"github.com/mrothroc/mixlab/trust/enrollment"
 	"github.com/mrothroc/mixlab/trust/principal"
 )
 
-const remoteTrustRefreshTimeout = 15 * time.Second
+const (
+	remoteTrustRefreshTimeout = 50 * time.Second
+	remoteTrustRefreshBudget  = principalrenewal.AttemptTimeout
+)
 
 // RefreshRemoteTrust authenticates the authority to the existing pin, verifies
 // the public snapshot signature, then installs it monotonically. It cannot
 // enroll, renew, revive an expired identity, or replace a root.
 func RefreshRemoteTrust(ctx context.Context, p *principal.Store, endpoint string, clock func() time.Time) error {
-	// Existing renewal, maintenance, and admission callers keep their original
-	// timeout. Controller startup opts into a longer read-only fetch separately.
-	return refreshRemoteTrustWithTimeout(ctx, p, endpoint, clock, remoteTrustRefreshTimeout)
+	return retryTrustRefresh(ctx, func(call context.Context, _ int) error {
+		return refreshRemoteTrustWithTimeout(call, p, endpoint, clock, remoteTrustRefreshTimeout)
+	})
 }
 
 func refreshRemoteTrustWithTimeout(ctx context.Context, p *principal.Store, endpoint string, clock func() time.Time, timeout time.Duration) error {
@@ -64,7 +68,14 @@ func refreshRemoteTrustWithTimeout(ctx context.Context, p *principal.Store, endp
 }
 
 func RenewRemotePrincipal(ctx context.Context, p *principal.Store, endpoint string, clock func() time.Time) error {
-	if err := RefreshRemoteTrust(ctx, p, endpoint, clock); err != nil {
+	ctx, cancel := context.WithTimeout(ctx, remoteTrustRefreshBudget)
+	defer cancel()
+	// Reserve one full attempt for the mutation; only the preceding snapshot
+	// GET is retried here. Durable renewal replay remains scheduler-owned.
+	refresh, stop := context.WithTimeout(ctx, remoteTrustRefreshBudget-remoteTrustRefreshTimeout)
+	err := RefreshRemoteTrust(refresh, p, endpoint, clock)
+	stop()
+	if err != nil {
 		return err
 	}
 	s, _, err := p.Active(clock())
@@ -83,7 +94,7 @@ func RenewRemotePrincipal(ctx context.Context, p *principal.Store, endpoint stri
 	if err != nil {
 		return err
 	}
-	c, err := policy.HTTPClient(15 * time.Second)
+	c, err := policy.HTTPClient(remoteTrustRefreshTimeout)
 	if err != nil {
 		return err
 	}

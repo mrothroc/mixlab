@@ -23,7 +23,10 @@ type WorkloadPorts struct {
 	Initialize func(context.Context, workload.Scope) error
 	// Request opens the published context; it must not initialize missing state.
 	Request func(context.Context, workload.Scope) (workload.SignedRequest, error)
-	Clock   func() time.Time
+	// AuthorizeRequest optionally attests to the exact existing initial learner
+	// request under current trust. It must not replace its key, CSR, or proof.
+	AuthorizeRequest func(context.Context, workload.Scope, workload.SignedRequest) (workload.RequestAuthorization, error)
+	Clock            func() time.Time
 }
 
 type PreparedWorkload struct {

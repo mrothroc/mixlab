@@ -77,6 +77,12 @@ func installRecoveryNodeTrust(t *testing.T, x *learnerHTTPFixture, n *recoveryNo
 		}
 		defer func() { _ = c.Close() }()
 		return c.PrepareRequest(ctx, sign, n.current(f), f.clock())
+	}, AuthorizeRequest: func(ctx context.Context, scope workload.Scope, original workload.SignedRequest) (workload.RequestAuthorization, error) {
+		p, err := credentialPath(scope)
+		if err != nil {
+			return workload.RequestAuthorization{}, err
+		}
+		return authorizeLearnerHTTPWorkload(ctx, p, f.a, n.current(f), sign, original, f.clock())
 	}}
 	plan := x.prepare.Signed.Manifest.Plan
 	c := plan.Contract

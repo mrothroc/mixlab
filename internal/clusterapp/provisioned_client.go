@@ -94,7 +94,9 @@ func enrollmentJSON(ctx context.Context, client *http.Client, method, target str
 	d := json.NewDecoder(bytes.NewReader(b))
 	d.DisallowUnknownFields()
 	if err := d.Decode(dst); err != nil {
-		return err
+		// A fully received malformed JSON body is not a transport EOF and
+		// must not trigger read-only trust refresh retries.
+		return fmt.Errorf("invalid enrollment response: %v", err)
 	}
 	var extra any
 	if err := d.Decode(&extra); err != io.EOF {

@@ -26,7 +26,7 @@ func TestNodeRetryRequestDeadlinePreservesRecoveryAndCatchesUp(t *testing.T) {
 	const (
 		nodeBudget    = 50 * time.Second
 		clientBudget  = nodeBudget + 5*time.Second
-		refreshBudget = 15 * time.Second
+		refreshBudget = 50 * time.Second
 	)
 	var f *recoveryFixture
 	var refreshes atomic.Int32
@@ -43,9 +43,9 @@ func TestNodeRetryRequestDeadlinePreservesRecoveryAndCatchesUp(t *testing.T) {
 				return errors.New("node refresh has no deadline")
 			}
 			remaining := time.Until(deadline)
-			// With the 50s route and 55s client budgets, the inner 15s trust
-			// refresh deadline expires first. Exercise that real deadline,
-			// not a shortened test timeout or synthetic refresh error.
+			// The 50s trust refresh is clipped by the enclosing 50s route,
+			// leaving the 55s client time to observe the transient response.
+			// Exercise the real deadline, not a synthetic refresh error.
 			<-ctx.Done()
 			expired <- refreshDeadline{remaining: remaining, err: ctx.Err()}
 			return ctx.Err()
@@ -89,7 +89,7 @@ func TestNodeRetryRequestDeadlinePreservesRecoveryAndCatchesUp(t *testing.T) {
 	select {
 	case result := <-expired:
 		if !errors.Is(result.err, context.DeadlineExceeded) || result.remaining < refreshBudget-time.Second || result.remaining > refreshBudget {
-			t.Fatalf("refresh did not exhaust actual 15s deadline within 50s node/55s client budgets: %+v", result)
+			t.Fatalf("refresh did not exhaust actual 50s deadline within 50s node/55s client budgets: %+v", result)
 		}
 	default:
 		t.Fatal("node returned before refresh exhausted its deadline")

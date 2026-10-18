@@ -104,6 +104,20 @@ type AcceptedLearner struct {
 }
 
 func AcceptLearner(a trust.Anchor, v trust.VerifiedSnapshot, actor trust.AuthenticatedPrincipal, node string, j SignedLearner, now time.Time) (AcceptedLearner, error) {
+	return acceptLearner(a, v, actor, node, j, nil, now)
+}
+
+// ContinueLearner verifies an already accepted admission using only the owning
+// store's durable journal. Callers must authenticate the current actor against
+// fresh trust; a peer-supplied acceptance receipt is never a commit journal.
+func ContinueLearner(a trust.Anchor, v trust.VerifiedSnapshot, actor trust.AuthenticatedPrincipal, node string, j SignedLearner, journal trust.CommitJournal, now time.Time) (AcceptedLearner, error) {
+	if journal == nil {
+		return AcceptedLearner{}, fmt.Errorf("learner continuation requires owner journal")
+	}
+	return acceptLearner(a, v, actor, node, j, journal, now)
+}
+
+func acceptLearner(a trust.Anchor, v trust.VerifiedSnapshot, actor trust.AuthenticatedPrincipal, node string, j SignedLearner, journal trust.CommitJournal, now time.Time) (AcceptedLearner, error) {
 	b, err := json.Marshal(j)
 	if err != nil || len(b) > MaxManifestBytes+trust.MaxTrustBytes {
 		return AcceptedLearner{}, fmt.Errorf("oversized learner job")
@@ -121,7 +135,24 @@ func AcceptLearner(a trust.Anchor, v trust.VerifiedSnapshot, actor trust.Authent
 	if actor.Role != trust.Controller || actor.Cluster != a.Cluster() || m.Plan.Coordinator.ClusterID != a.Cluster() || actor.Principal != m.Controller || j.Proof.Evidence.Principal != actor.Principal || m.Slot.Allocation.NodeID != node || now.Before(actor.NotBefore) || !now.Before(actor.ExpiresAt) || now.Unix() < m.Plan.CreatedAt || now.Unix() >= m.Plan.ExpiresAt {
 		return AcceptedLearner{}, fmt.Errorf("learner actor, node or admission deadline mismatch")
 	}
-	p, err := trust.VerifyProof(a, v, j.Proof, q, now)
+	var p trust.AcceptedProof
+	if journal == nil {
+		p, err = trust.VerifyProof(a, v, j.Proof, q, now)
+	} else {
+		err = trust.VerifyHistoricalProof(a, v, j.Proof, q, journal, now)
+		if err == nil {
+			b, marshalErr := json.Marshal(j.Proof)
+			if marshalErr != nil {
+				return AcceptedLearner{}, marshalErr
+			}
+			p.Digest = Hash(b)
+			var found bool
+			p.Generation, found, err = journal.AcceptedGeneration(p.Digest)
+			if err == nil && (!found || p.Generation == 0 || p.Generation > v.Generation()) {
+				err = fmt.Errorf("learner owner receipt changed")
+			}
+		}
+	}
 	if err != nil {
 		return AcceptedLearner{}, err
 	}

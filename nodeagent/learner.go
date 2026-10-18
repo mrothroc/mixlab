@@ -186,6 +186,17 @@ func (s *Store) PrepareLearner(ctx context.Context, actor trust.AuthenticatedPri
 		return out, fmt.Errorf("learner admission expired or wrong owner")
 	}
 	err = s.path.WithProcessLock(ctx, nodeLock, func() error {
+		out, err = s.prepareLearnerLocked(actor, signed, proof, expected, now)
+		return err
+	})
+	return out, err
+}
+
+// Caller holds nodeLock. Checked preparation supplies the current lease version
+// only after validating its durable intent and unchanged allocation/profile.
+func (s *Store) prepareLearnerLocked(actor trust.AuthenticatedPrincipal, signed nodejob.SignedLearner, proof trust.AcceptedProof, expected uint64, now time.Time) (out LearnerJob, err error) {
+	m := signed.Manifest
+	err = func() error {
 		old, leases, e := s.load()
 		if e != nil {
 			return e
@@ -236,7 +247,7 @@ func (s *Store) PrepareLearner(ctx context.Context, actor trust.AuthenticatedPri
 		}
 		out = j
 		return nil
-	})
+	}()
 	return out, err
 }
 func matchLearnerAssignment(m nodejob.LearnerManifest, a workerjob.LearnerAssignment) error {
@@ -347,101 +358,4 @@ func (s *Store) ConfirmLearnerStopped(ctx context.Context, b workercontrol.Bindi
 		j.Version++
 		return s.saveLearner(old, j)
 	})
-}
-
-func (s *Store) PrepareLearnerWorkload(ctx context.Context, actor trust.AuthenticatedPrincipal, id string, p WorkloadPorts) (out workload.SignedRequest, err error) {
-	return s.prepareLearnerWorkload(ctx, actor, id, p, false)
-}
-func (s *Store) PrepareLearnerRetryWorkload(ctx context.Context, actor trust.AuthenticatedPrincipal, id string, p WorkloadPorts) (workload.SignedRequest, error) {
-	return s.prepareLearnerWorkload(ctx, actor, id, p, true)
-}
-func (s *Store) prepareLearnerWorkload(ctx context.Context, actor trust.AuthenticatedPrincipal, id string, p WorkloadPorts, retry bool) (out workload.SignedRequest, err error) {
-	if p.Clock == nil || p.Initialize == nil || p.Request == nil {
-		return out, fmt.Errorf("workload ports required")
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	err = s.path.WithProcessLock(ctx, nodeLock, func() error {
-		old, j, e := s.loadLearner(id)
-		if e != nil {
-			return e
-		}
-		m := j.Signed.Manifest
-		intent := func() **workloadIntent {
-			if retry {
-				return &j.RetryWorkload
-			}
-			return &j.Workload
-		}
-		guard := func() error {
-			now := p.Clock()
-			if e := authorizeLeaseActor(actor, s.cluster, now); e != nil {
-				return e
-			}
-			_, ls, e := s.load()
-			if e != nil {
-				return e
-			}
-			l := findLease(&ls, m.Slot.Allocation.LeaseID)
-			if l == nil || l.Job != id || ls.Active != l.ID || now.Unix() >= l.Expires {
-				return fmt.Errorf("learner workload admission no longer live")
-			}
-			if retry {
-				if actor.Role != trust.Coordinator || !ownsLease(actor, *l) || l.State != Running || !j.Stopped || j.Recovery == nil || now.Unix() >= j.Recovery.Expires {
-					return fmt.Errorf("retry workload is not authorized")
-				}
-			} else if actor.Role != trust.Controller || m.Controller != actor.Principal || j.Stopped || j.Assignment != nil || l.State != Prepared || now.Unix() >= m.Plan.ExpiresAt {
-				return fmt.Errorf("initial learner workload is not authorized")
-			}
-			return ctx.Err()
-		}
-		if e = guard(); e != nil {
-			return e
-		}
-		if *intent() == nil {
-			principal, e := newID()
-			if e != nil {
-				return e
-			}
-			*intent() = &workloadIntent{Principal: principal, PreparedVersion: j.Version}
-			j.Version++
-			if e = s.saveLearner(old, j); e != nil {
-				return e
-			}
-			old, j, e = s.loadLearner(id)
-			if e != nil {
-				return e
-			}
-		}
-		scope, e := learnerScope(j, (*intent()).Principal, retry)
-		if e != nil {
-			return e
-		}
-		if !(*intent()).Initialized {
-			if e = p.Initialize(ctx, scope); e != nil {
-				return e
-			}
-			if e = guard(); e != nil {
-				return e
-			}
-			(*intent()).Initialized = true
-			j.Version++
-			if e = s.saveLearner(old, j); e != nil {
-				return e
-			}
-		}
-		out, e = p.Request(ctx, scope)
-		if e != nil {
-			return e
-		}
-		if e = guard(); e != nil {
-			return e
-		}
-		if out.Request.Scope != scope {
-			return fmt.Errorf("workload port changed learner scope")
-		}
-		_, e = out.GrantRequest()
-		return e
-	})
-	return out, err
 }

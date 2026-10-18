@@ -319,10 +319,11 @@ func nodeResponse(w http.ResponseWriter, value any, err error) {
 	if err != nil {
 		// Local paths and key-store details must not enter remote error bodies.
 		status := http.StatusConflict
-		if errors.Is(err, trust.ErrTrustBehind) {
+		if errors.Is(err, trust.ErrTrustBehind) || errors.Is(err, errLearnerPreparationPending) {
 			status = http.StatusServiceUnavailable
 		}
-		if request, ok := w.(*nodeResponseContext); ok && request.ctx.Err() != nil && errors.Is(err, request.ctx.Err()) {
+		// Require only context causes; expiry cannot hide a joined permanent failure.
+		if request, ok := w.(*nodeResponseContext); ok && request.ctx.Err() != nil && errors.Is(err, request.ctx.Err()) && contextOnlyFailure(err) {
 			status = http.StatusServiceUnavailable
 		}
 		http.Error(w, "node operation rejected; inspect local agent diagnostics", status)

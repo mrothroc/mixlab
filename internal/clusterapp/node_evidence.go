@@ -2,7 +2,6 @@ package clusterapp
 
 import (
 	"context"
-	"time"
 
 	"github.com/mrothroc/mixlab/trust"
 	"github.com/mrothroc/mixlab/trust/workload"
@@ -24,7 +23,7 @@ func (a *NodeJobs) currentForEvidence(ctx context.Context, snapshot trust.Signed
 	refresh := a.options.RefreshTrust
 	if refresh != nil {
 		refresh = func(ctx context.Context) error {
-			ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			ctx, cancel := context.WithTimeout(ctx, remoteTrustRefreshTimeout)
 			defer cancel()
 			return a.options.RefreshTrust(ctx)
 		}

@@ -63,51 +63,53 @@ func (s *Store) StartLearnerRetry(ctx context.Context, actor trust.Authenticated
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	err = s.path.WithProcessLock(ctx, nodeLock, func() error {
-		old, j, e := s.loadLearner(id)
-		if e != nil {
-			return e
-		}
-		m := j.Signed.Manifest
-		_, ls, e := s.load()
-		if e != nil {
-			return e
-		}
-		l := findLease(&ls, m.Slot.Allocation.LeaseID)
-		oldScope, replay, e := guardLearnerRetryStart(j, l, ls.Active, actor, id, ack, grant, credential, now)
-		if e != nil {
-			return e
-		}
-		if replay {
+	err = s.withLearnerWorkloadLock(ctx, id, func() error {
+		return s.path.WithProcessLock(ctx, nodeLock, func() error {
+			old, j, e := s.loadLearner(id)
+			if e != nil {
+				return e
+			}
+			m := j.Signed.Manifest
+			_, ls, e := s.load()
+			if e != nil {
+				return e
+			}
+			l := findLease(&ls, m.Slot.Allocation.LeaseID)
+			oldScope, replay, e := guardLearnerRetryStart(j, l, ls.Active, actor, id, ack, grant, credential, now)
+			if e != nil {
+				return e
+			}
+			if replay {
+				out = *j.Assignment
+				return nil
+			}
+			if e = cleanup(ctx, oldScope); e != nil {
+				return e
+			}
+			if e = ctx.Err(); e != nil {
+				return e
+			}
 			out = *j.Assignment
-			return nil
-		}
-		if e = cleanup(ctx, oldScope); e != nil {
-			return e
-		}
-		if e = ctx.Err(); e != nil {
-			return e
-		}
-		out = *j.Assignment
-		out.AttemptID = ack.Body.AttemptID
-		out.ExpectedPrivateHash = ack.Body.PrivateHash
-		if e = out.Validate(); e != nil {
-			return e
-		}
-		if e = s.retainLearnerOutcome(j.Outcome); e != nil {
-			return e
-		}
-		j.History = append(j.History, *j.Recovery)
-		j.RetryAcknowledgements = append(j.RetryAcknowledgements, accepted)
-		j.Recovery = nil
-		j.Assignment = &out
-		j.Stopped = false
-		j.Outcome = nil
-		j.Workload = j.RetryWorkload
-		j.RetryWorkload = nil
-		j.Credential = &credential
-		j.Version++
-		return s.saveLearner(old, j)
+			out.AttemptID = ack.Body.AttemptID
+			out.ExpectedPrivateHash = ack.Body.PrivateHash
+			if e = out.Validate(); e != nil {
+				return e
+			}
+			if e = s.retainLearnerOutcome(j.Outcome); e != nil {
+				return e
+			}
+			j.History = append(j.History, *j.Recovery)
+			j.RetryAcknowledgements = append(j.RetryAcknowledgements, accepted)
+			j.Recovery = nil
+			j.Assignment = &out
+			j.Stopped = false
+			j.Outcome = nil
+			j.Workload = j.RetryWorkload
+			j.RetryWorkload = nil
+			j.Credential = &credential
+			j.Version++
+			return s.saveLearner(old, j)
+		})
 	})
 	return out, err
 }

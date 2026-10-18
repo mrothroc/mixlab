@@ -61,6 +61,22 @@ func NodeWorkloadPorts(p *principal.Store, root statehome.Path, clock func() tim
 		}
 		return credential.Close()
 	}
+	signer := func(scope workload.Scope, now time.Time) (trust.VerifiedSnapshot, nodecredentials.NodeSigner, error) {
+		current, key, err := p.Active(now)
+		if err != nil {
+			return trust.VerifiedSnapshot{}, nil, err
+		}
+		if current.Principal != scope.Node || current.Cluster != scope.Cluster || current.Role != trust.Node {
+			return trust.VerifiedSnapshot{}, nil, fmt.Errorf("node credential context changed")
+		}
+		view, err := trust.VerifySnapshot(a, current.Snapshot, now)
+		if err != nil {
+			return trust.VerifiedSnapshot{}, nil, err
+		}
+		return view, func(_ context.Context, q trust.SignRequest) (trust.SignedProof, error) {
+			return trust.SignPrincipalProof(a, current.Chain, key, view, q, now)
+		}, nil
+	}
 	request := func(ctx context.Context, scope workload.Scope) (workload.SignedRequest, error) {
 		dir, err := path(scope)
 		if err != nil {
@@ -72,22 +88,37 @@ func NodeWorkloadPorts(p *principal.Store, root statehome.Path, clock func() tim
 		}
 		defer func() { _ = credential.Close() }()
 		now := clock()
-		current, key, err := p.Active(now)
+		view, sign, err := signer(scope, now)
 		if err != nil {
 			return workload.SignedRequest{}, err
 		}
-		if current.Principal != scope.Node || current.Cluster != scope.Cluster || current.Role != trust.Node {
-			return workload.SignedRequest{}, fmt.Errorf("node credential context changed")
-		}
-		view, err := trust.VerifySnapshot(a, current.Snapshot, now)
-		if err != nil {
-			return workload.SignedRequest{}, err
-		}
-		return credential.PrepareRequest(ctx, func(_ context.Context, q trust.SignRequest) (trust.SignedProof, error) {
-			return trust.SignPrincipalProof(a, current.Chain, key, view, q, now)
-		}, view, now)
+		return credential.PrepareRequest(ctx, sign, view, now)
 	}
-	return nodeagent.WorkloadPorts{Initialize: initialize, Request: request, Clock: clock}, nil
+	authorize := func(ctx context.Context, scope workload.Scope, original workload.SignedRequest) (workload.RequestAuthorization, error) {
+		dir, err := path(scope)
+		if err != nil {
+			return workload.RequestAuthorization{}, err
+		}
+		credential, err := nodecredentials.OpenTransport(dir, a, scope)
+		if err != nil {
+			return workload.RequestAuthorization{}, err
+		}
+		defer func() { _ = credential.Close() }()
+		now := clock()
+		view, sign, err := signer(scope, now)
+		if err != nil {
+			return workload.RequestAuthorization{}, err
+		}
+		auth, err := credential.AuthorizeRequest(ctx, view, sign, now)
+		if err != nil {
+			return workload.RequestAuthorization{}, err
+		}
+		if err := workload.VerifyRequestAuthorization(a, view, original, auth, clock()); err != nil {
+			return workload.RequestAuthorization{}, err
+		}
+		return auth, nil
+	}
+	return nodeagent.WorkloadPorts{Initialize: initialize, Request: request, AuthorizeRequest: authorize, Clock: clock}, nil
 }
 
 func workloadDirectory(root statehome.Path, scope workload.Scope) (statehome.Path, error) {

@@ -8,15 +8,48 @@ import (
 	"time"
 
 	"github.com/mrothroc/mixlab/nodeagent"
-	"github.com/mrothroc/mixlab/trust/workload"
 	"github.com/mrothroc/mixlab/workerhost"
 	"github.com/mrothroc/mixlab/workerhost/contract"
 )
 
-func (l *nodeExecutionLoop) cleanupLearner(ctx context.Context, x nodeagent.LocalExecution) error {
-	return l.store.CleanupLearner(ctx, x.Job.ID, func(ctx context.Context, scope workload.Scope) error {
-		return l.ports.Cleanup(ctx, nodeagent.CleanupRequest{Job: x.Job.ID, Attempt: scope.Attempt, Workload: scope, WorkloadInitialized: true})
-	})
+func (l *nodeExecutionLoop) cleanupLearner(ctx context.Context, x nodeagent.LocalExecution) (err error) {
+	owner := ctx
+	ctx, cancel := context.WithTimeout(ctx, nodeagent.LearnerCleanupTimeout)
+	defer cancel()
+	defer func() {
+		if owner.Err() == nil && contextOnlyFailure(err) {
+			// Releasing remains durable. A local timeout is not permission to
+			// free the allocation or terminate its only cleanup owner.
+			err = errors.Join(err, workerhost.ErrReconciliationRequired)
+		}
+	}()
+	if l.ports.StopPreparation != nil {
+		if err := l.ports.StopPreparation(ctx, x.Job.ID); err != nil {
+			return err
+		}
+	}
+	return l.store.CleanupLearner(ctx, x.Job.ID, l.ports.Cleanup)
+}
+
+func (l *nodeExecutionLoop) cleanupUnprepared(ctx context.Context, lease string) error {
+	owner := ctx
+	ctx, cancel := context.WithTimeout(ctx, nodeagent.LearnerCleanupTimeout)
+	defer cancel()
+	if l.ports.StopPreparation != nil {
+		if err := l.ports.StopPreparation(ctx, ""); err != nil {
+			if owner.Err() == nil && contextOnlyFailure(err) {
+				return errors.Join(err, workerhost.ErrReconciliationRequired)
+			}
+			return err
+		}
+	}
+	if err := l.store.ReleaseUnprepared(ctx, lease); err != nil {
+		if owner.Err() == nil && contextOnlyFailure(err) {
+			return errors.Join(err, workerhost.ErrReconciliationRequired)
+		}
+		return err
+	}
+	return nil
 }
 
 func (l *nodeExecutionLoop) pollLearner(ctx context.Context, x nodeagent.LocalExecution, stopping bool) error {

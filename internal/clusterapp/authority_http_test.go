@@ -72,8 +72,9 @@ func (c *delayedAuthorityConn) Close() error {
 }
 
 func TestAuthorityHTTPControllerStartupSlowTLS(t *testing.T) {
-	for _, cancelDuringTLS := range []bool{false, true} {
-		name := "signed_snapshot_after_twenty_seconds"
+	for _, mode := range []string{"startup", "service", "canceled"} {
+		cancelDuringTLS := mode == "canceled"
+		name := mode + "_signed_snapshot_after_twenty_seconds"
 		if cancelDuringTLS {
 			name = "cancellation_interrupts_tls"
 		}
@@ -109,7 +110,13 @@ func TestAuthorityHTTPControllerStartupSlowTLS(t *testing.T) {
 			defer func() { cancel(); check(t, <-served) }()
 			result := make(chan error, 1)
 			started := time.Now()
-			go func() { result <- RefreshControllerStartup(ctx, c, endpoint, clock, nil) }()
+			go func() {
+				if mode == "service" {
+					result <- refreshPrincipalTrust(ctx, c, clock)
+				} else {
+					result <- RefreshControllerStartup(ctx, c, endpoint, clock, nil)
+				}
+			}()
 			if cancelDuringTLS {
 				select {
 				case <-slow.started:

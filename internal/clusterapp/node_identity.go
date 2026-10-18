@@ -89,6 +89,8 @@ func maintainPrincipalTrust(ctx context.Context, path statehome.Path, p *princip
 		return fmt.Errorf("principal and clock required")
 	}
 	refresh := func(ctx context.Context, renew bool) error {
+		ctx, cancel := context.WithTimeout(ctx, remoteTrustRefreshBudget)
+		defer cancel()
 		s, err := p.View(clock())
 		if err != nil {
 			return err
@@ -96,16 +98,13 @@ func maintainPrincipalTrust(ctx context.Context, path statehome.Path, p *princip
 		if s.Role != role {
 			return fmt.Errorf("%s principal required", role)
 		}
+		if !renew {
+			return refreshPrincipalTrust(ctx, p, clock)
+		}
 		var last error
 		for _, endpoint := range s.Snapshot.Payload.Endpoints.Payload.URLs {
-			attempt, done := context.WithTimeout(ctx, 20*time.Second)
-			if renew {
-				last = RenewRemotePrincipal(attempt, p, endpoint, clock)
-			} else {
-				last = RefreshRemoteTrust(attempt, p, endpoint, clock)
-			}
-			done()
-			if last == nil || ctx.Err() != nil {
+			last = RenewRemotePrincipal(ctx, p, endpoint, clock)
+			if last == nil || ctx.Err() != nil || !transientControllerTrust(last) {
 				return last
 			}
 		}

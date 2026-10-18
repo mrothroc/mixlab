@@ -2,17 +2,21 @@ package clusterapp
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
+	"github.com/mrothroc/mixlab/transport/managedtls"
 	"github.com/mrothroc/mixlab/trust/principal"
 )
 
 const (
 	controllerStartupTrustBudget  = 2 * time.Minute
-	controllerStartupTrustAttempt = 50 * time.Second
+	controllerStartupTrustAttempt = remoteTrustRefreshTimeout
 )
 
 // RefreshControllerStartup retries only the pinned, read-only snapshot fetch.
@@ -25,8 +29,8 @@ func RefreshControllerStartup(ctx context.Context, p *principal.Store, endpoint 
 	return refreshControllerStartup(ctx, func(call context.Context) error {
 		// The shared refresh reloads the local view and checks the selected
 		// endpoint against that view on every attempt, including after waits.
-		// A consistently slow authority must be able to finish one fetch, not
-		// repeatedly hit the normal refresh caller's shorter HTTP timeout.
+		// Startup has its own bounded cache fallback, so use a single fetch
+		// here rather than nesting the service refresh retry budget.
 		return refreshRemoteTrustWithTimeout(call, p, endpoint, clock, controllerStartupTrustAttempt)
 	}, func() error {
 		_, _, err := p.Active(clock())
@@ -77,8 +81,35 @@ func refreshControllerStartup(parent context.Context, refresh func(context.Conte
 }
 
 func transientControllerTrust(err error) bool {
-	var status *enrollmentHTTPError
-	if errors.As(err, &status) {
+	var alert tls.AlertError
+	var verify *tls.CertificateVerificationError
+	var invalid x509.CertificateInvalidError
+	var unknown x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var op *net.OpError
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, managedtls.ErrPeerRejected) ||
+		errors.As(err, &alert) || errors.As(err, &verify) || errors.As(err, &invalid) ||
+		errors.As(err, &unknown) || errors.As(err, &hostname) || (errors.As(err, &op) && op.Op == "remote error") {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		causes := joined.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !transientControllerTrust(cause) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if cause := wrapped.Unwrap(); cause != nil {
+			return transientControllerTrust(cause)
+		}
+	}
+	if status, ok := err.(*enrollmentHTTPError); ok {
 		switch status.Status {
 		case http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusInternalServerError,
 			http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:

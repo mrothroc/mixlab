@@ -142,6 +142,9 @@ func newLearnerHTTPWithBuild(t *testing.T, configure func(*run.Plan), build stri
 	credentialPath := func(scope workload.Scope) (statehome.Path, error) {
 		return statehome.Resolve(statehome.Options{ExactDir: filepath.Join(root.Dir(), "job-"+scope.Job+"-"+scope.Attempt)}, statehome.Context{Kind: statehome.Agent})
 	}
+	nodeSign := func(_ context.Context, q trust.SignRequest) (trust.SignedProof, error) {
+		return trust.SignPrincipalProof(f.a, nodeIdentity.Chain, nodeIdentity.Key, f.view, q, f.now)
+	}
 	wp := nodeagent.WorkloadPorts{Clock: f.clock, Initialize: func(ctx context.Context, scope workload.Scope) error {
 		x.initializations.Add(1)
 		p, err := credentialPath(scope)
@@ -163,9 +166,13 @@ func newLearnerHTTPWithBuild(t *testing.T, configure func(*run.Plan), build stri
 			return workload.SignedRequest{}, err
 		}
 		defer func() { _ = c.Close() }()
-		return c.PrepareRequest(ctx, func(_ context.Context, q trust.SignRequest) (trust.SignedProof, error) {
-			return trust.SignPrincipalProof(f.a, nodeIdentity.Chain, nodeIdentity.Key, f.view, q, f.now)
-		}, f.view, f.now)
+		return c.PrepareRequest(ctx, nodeSign, f.view, f.now)
+	}, AuthorizeRequest: func(ctx context.Context, scope workload.Scope, original workload.SignedRequest) (workload.RequestAuthorization, error) {
+		p, err := credentialPath(scope)
+		if err != nil {
+			return workload.RequestAuthorization{}, err
+		}
+		return authorizeLearnerHTTPWorkload(ctx, p, f.a, f.view, nodeSign, original, f.now)
 	}}
 	c := plan.Contract
 	probe := workerprobe.Plan{Version: workerprobe.PlanVersion, BuildID: c.BuildHash, ConfigHash: c.ConfigHash, ProgramHash: c.ProgramHash, WeightLayoutHash: c.WeightLayoutHash, OptimizerHash: c.InnerOptimizerHash, DType: "fp32", Learner: &workerprobe.LearnerPlan{Outer: plan.Outer, BatchTokens: 16, SequenceLength: 4, Precision: &precision.Policy{ComputeDType: "float32", Backend: "metal"}}}
@@ -184,6 +191,22 @@ func newLearnerHTTPWithBuild(t *testing.T, configure func(*run.Plan), build stri
 	check(t, err)
 	x.url = serveCapabilities(t, policy, h).URL
 	return x
+}
+
+func authorizeLearnerHTTPWorkload(ctx context.Context, path statehome.Path, anchor trust.Anchor, view trust.VerifiedSnapshot, sign nodecredentials.NodeSigner, original workload.SignedRequest, now time.Time) (workload.RequestAuthorization, error) {
+	c, err := nodecredentials.OpenTransport(path, anchor, original.Request.Scope)
+	if err != nil {
+		return workload.RequestAuthorization{}, err
+	}
+	defer func() { _ = c.Close() }()
+	auth, err := c.AuthorizeRequest(ctx, view, sign, now)
+	if err != nil {
+		return workload.RequestAuthorization{}, err
+	}
+	if err := workload.VerifyRequestAuthorization(anchor, view, original, auth, now); err != nil {
+		return workload.RequestAuthorization{}, err
+	}
+	return auth, nil
 }
 
 func (x *learnerHTTPFixture) client(t *testing.T, identity managedtls.Identity) (*clusterapp.NodeClient, *http.Client) {

@@ -264,25 +264,7 @@ func refreshServicePrincipalStartup(ctx context.Context, p *principal.Store, rol
 	if s.Role != role {
 		return fmt.Errorf("%s principal required", role)
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var failures error
-	for _, endpoint := range s.Snapshot.Payload.Endpoints.Payload.URLs {
-		err = RefreshRemoteTrust(ctx, p, endpoint, clock)
-		if err == nil {
-			_, _, err = p.Active(clock())
-			return err
-		}
-		failures = errors.Join(failures, err)
-		if ctx.Err() != nil {
-			return errors.Join(failures, ctx.Err())
-		}
-	}
-	_, _, err = p.Active(clock())
-	if err == nil {
-		return nil
-	}
-	return errors.Join(err, failures)
+	return refreshStartupTrust(ctx, p, clock)
 }
 
 type unselectedAllocations struct{}

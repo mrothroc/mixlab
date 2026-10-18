@@ -156,7 +156,13 @@ func DiLoCoAdmissionPorts(o DiLoCoAdmissionOptions, q admission.Submission) (adm
 		if err != nil {
 			return zero, err
 		}
-		grant, err := o.Inbox.WorkloadGrant(ctx, q.Launch.Run, p.Slots[i].Allocation.JobID, prepared.Request, func() (workload.Grant, error) { return signer.grant(ctx, prepared.Request) })
+		grant, err := o.Inbox.WorkloadGrant(ctx, q.Launch.Run, p.Slots[i].Allocation.JobID, prepared.Request, func() (workload.Grant, error) {
+			return signer.grantWithAuthorization(ctx, prepared.Request, prepared.Authorization)
+		})
+		if err != nil {
+			return zero, err
+		}
+		authorized, err := signer.authorizeGrant(ctx, grant, prepared.Authorization)
 		if err != nil {
 			return zero, err
 		}
@@ -168,7 +174,7 @@ func DiLoCoAdmissionPorts(o DiLoCoAdmissionOptions, q admission.Submission) (adm
 		if len(endpoints) == 0 {
 			return zero, fmt.Errorf("signed authority endpoint missing")
 		}
-		credential, err := IssueRemoteWorkload(ctx, o.Controller, endpoints[0], grant, o.Clock)
+		credential, err := IssueRemoteAuthorizedWorkload(ctx, o.Controller, endpoints[0], authorized, o.Clock)
 		if err != nil {
 			return zero, err
 		}

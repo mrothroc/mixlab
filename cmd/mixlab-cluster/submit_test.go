@@ -97,8 +97,14 @@ func TestNodesTransientAuthorityLifecycle(t *testing.T) {
 	if code := run(args, &out, &diagnostic); code != 0 {
 		t.Fatal(code, diagnostic.String())
 	}
-	if !strings.Contains(out.String(), "connection_refused") {
-		t.Fatal(out.String())
+	var rows []recruitment.NodeStatus
+	if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+		t.Fatal(err)
+	}
+	// Inventory retries refusals within its bounded scan. The final attempt
+	// can meet that deadline instead of observing another immediate refusal.
+	if len(rows) != 1 || rows[0].Endpoint != "127.0.0.1:1" || rows[0].Capabilities != nil || rows[0].Hint == "" || (rows[0].Reason != "connection_refused" && rows[0].Reason != "timeout") {
+		t.Fatalf("unexpected unavailable endpoint result: %s", out.String())
 	}
 	l, err = net.Listen("tcp", address)
 	if err != nil {

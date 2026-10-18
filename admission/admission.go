@@ -92,6 +92,7 @@ type record struct {
 	Aborting      bool                   `json:"aborting"`
 	Fenced        bool                   `json:"fenced"`
 	Done          bool                   `json:"done"`
+	AbortNext     int                    `json:"abort_next,omitempty"`
 }
 type Saga struct{ path statehome.Path }
 
@@ -167,6 +168,9 @@ func (r record) validate() error {
 	}
 	if err := p.Selection.Requirements.Validate(); err != nil {
 		return err
+	}
+	if r.AbortNext < 0 || r.AbortNext >= len(r.Nodes) || r.AbortNext != 0 && (!r.Aborting || !r.Fenced || r.Committed) {
+		return fmt.Errorf("invalid compensation cursor")
 	}
 	if p.Selection.Requirements.Cluster != p.Cluster || p.Selection.Requirements.Count != len(r.Nodes) {
 		return fmt.Errorf("selection differs from admission")
@@ -425,8 +429,22 @@ func (s *Saga) compensate(ctx context.Context, p Ports, old []byte, r record) er
 		r.Fenced = true
 		return s.save(old, r)
 	}
-	for i, n := range r.Nodes {
+	for offset := range len(r.Nodes) {
+		i := (r.AbortNext + offset) % len(r.Nodes)
+		n := r.Nodes[i]
 		if n.Touched && !n.Released {
+			// Rotate before the effect: a timeout or process restart must not
+			// strand later reservations behind one unavailable node. This is
+			// scheduling progress only, never evidence that abort succeeded.
+			r.AbortNext = (i + 1) % len(r.Nodes)
+			if err := s.save(old, r); err != nil {
+				return err
+			}
+			var err error
+			old, r, err = s.load()
+			if err != nil {
+				return err
+			}
 			if err := p.AbortReservation(ctx, r.Request.Selection.Selected[i], n.Reserve); err != nil {
 				return err
 			}

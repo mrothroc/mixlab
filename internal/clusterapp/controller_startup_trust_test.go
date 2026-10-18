@@ -114,14 +114,13 @@ func TestControllerStartupTrustSlowFetch(t *testing.T) {
 }
 
 func TestControllerStartupTrustTimeoutPolicy(t *testing.T) {
-	// Ordinary RefreshRemoteTrust still selects 15 seconds. Startup alone
-	// selects 50, and the snapshot transport accepts and preserves both.
+	// Ordinary refresh and startup share the load-tolerant attempt budget.
 	for _, tc := range []struct {
 		name    string
 		timeout time.Duration
 		want    time.Duration
 	}{
-		{"ordinary", remoteTrustRefreshTimeout, 15 * time.Second},
+		{"ordinary", remoteTrustRefreshTimeout, 50 * time.Second},
 		{"startup", controllerStartupTrustAttempt, 50 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

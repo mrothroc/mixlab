@@ -14,20 +14,22 @@ import (
 type Purpose string
 
 const (
-	ProofVersion                      = "mixlab_principal_signature_v1"
-	EnrollmentApproval        Purpose = "enrollment_approval"
-	EnrollmentReceipt         Purpose = "enrollment_receipt"
-	NodeJob                   Purpose = "node_job"
-	SecureTransportPlan       Purpose = "secure_transport_plan"
-	RunPlan                   Purpose = "run_plan"
-	RunCommit                 Purpose = "run_commit"
-	RoundGrant                Purpose = "round_grant"
-	RecoveryGrant             Purpose = "recovery_grant"
-	ArtifactGrant             Purpose = "artifact_grant"
-	CredentialEnvelopePurpose Purpose = "credential_envelope"
-	WorkloadKeyRequest        Purpose = "workload_key_request"
-	WorkloadGrant             Purpose = "workload_grant"
-	LearnerRecovery           Purpose = "learner_recovery"
+	ProofVersion                         = "mixlab_principal_signature_v1"
+	EnrollmentApproval           Purpose = "enrollment_approval"
+	EnrollmentReceipt            Purpose = "enrollment_receipt"
+	NodeJob                      Purpose = "node_job"
+	SecureTransportPlan          Purpose = "secure_transport_plan"
+	RunPlan                      Purpose = "run_plan"
+	RunCommit                    Purpose = "run_commit"
+	RoundGrant                   Purpose = "round_grant"
+	RecoveryGrant                Purpose = "recovery_grant"
+	ArtifactGrant                Purpose = "artifact_grant"
+	CredentialEnvelopePurpose    Purpose = "credential_envelope"
+	WorkloadKeyRequest           Purpose = "workload_key_request"
+	WorkloadGrant                Purpose = "workload_grant"
+	WorkloadRequestAuthorization Purpose = "workload_request_authorization"
+	WorkloadGrantAuthorization   Purpose = "workload_grant_authorization"
+	LearnerRecovery              Purpose = "learner_recovery"
 )
 
 type SignRequest struct {
@@ -48,11 +50,11 @@ func (r SignRequest) validate(role Role) error {
 	case Authority:
 		allowed = r.Purpose == EnrollmentApproval || r.Purpose == EnrollmentReceipt
 	case Controller:
-		allowed = r.Purpose == NodeJob || r.Purpose == SecureTransportPlan || r.Purpose == CredentialEnvelopePurpose || r.Purpose == WorkloadGrant
+		allowed = r.Purpose == NodeJob || r.Purpose == SecureTransportPlan || r.Purpose == CredentialEnvelopePurpose || r.Purpose == WorkloadGrant || r.Purpose == WorkloadGrantAuthorization
 	case Node:
-		allowed = r.Purpose == WorkloadKeyRequest || r.Purpose == LearnerRecovery
+		allowed = r.Purpose == WorkloadKeyRequest || r.Purpose == LearnerRecovery || r.Purpose == WorkloadRequestAuthorization
 	case Coordinator:
-		allowed = r.Purpose == RunPlan || r.Purpose == RunCommit || r.Purpose == RoundGrant || r.Purpose == RecoveryGrant || r.Purpose == ArtifactGrant || r.Purpose == WorkloadGrant
+		allowed = r.Purpose == RunPlan || r.Purpose == RunCommit || r.Purpose == RoundGrant || r.Purpose == RecoveryGrant || r.Purpose == ArtifactGrant || r.Purpose == WorkloadGrant || r.Purpose == WorkloadGrantAuthorization
 	}
 	if !allowed {
 		return fmt.Errorf("role %q cannot sign purpose %q", role, r.Purpose)

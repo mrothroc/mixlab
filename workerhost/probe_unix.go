@@ -17,6 +17,17 @@ import (
 	"github.com/mrothroc/mixlab/workerprobe"
 )
 
+const readOnlyFallbackTimeout = 2 * time.Minute
+
+// Preparation owners supply their operation/admission deadline. Do not shorten
+// it for device initialization; standalone callers still need a finite bound.
+func readOnlyCommandContext(parent context.Context) (context.Context, context.CancelFunc) {
+	if _, bounded := parent.Deadline(); bounded {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, readOnlyFallbackTimeout)
+}
+
 // Probe invokes only the administrator-approved executable's fixed read-only
 // mode. It inherits no credentials/debugger/library variables and is bounded
 // even if device initialization hangs. The agent never links MLX itself.
@@ -79,8 +90,11 @@ func (s *Supervisor) readOnlyCommand(parent context.Context, directory statehome
 	if hash, err := workerjob.FileDigest(s.binary); err != nil || hash != s.build {
 		return nil, fmt.Errorf("approved probe binary changed")
 	}
-	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
+	ctx, cancel := readOnlyCommandContext(parent)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	cmd := exec.Command(s.binary, "-mode", mode)
 	cmd.Stdin = bytes.NewReader(input)
 	cmd.Dir = directory.Dir()
@@ -98,8 +112,9 @@ func (s *Supervisor) readOnlyCommand(parent context.Context, directory statehome
 	case err = <-process.wait:
 	case <-ctx.Done():
 		_ = process.signal(syscall.SIGKILL)
-		err = errors.Join(ctx.Err(), <-process.wait)
+		err = <-process.wait
 	}
+	err = errors.Join(err, ctx.Err())
 	if err != nil {
 		return nil, fmt.Errorf("approved worker %s: %w: %s", mode, err, diagnostic.buffer.String())
 	}

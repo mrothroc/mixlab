@@ -42,10 +42,12 @@ type NodeJobOptions struct {
 // NodeJobs owns in-process relay lifetime. The durable node store owns launch
 // permission; the credential context owns keys. Restart never resumes a relay.
 type NodeJobs struct {
-	options NodeJobOptions
-	life    context.Context
-	mu      sync.Mutex
-	relay   *nodeRelay
+	options   NodeJobOptions
+	life      context.Context
+	mu        sync.Mutex
+	relay     *nodeRelay
+	prepareMu sync.Mutex
+	preparing *learnerPreparation
 }
 
 func NewNodeJobs(life context.Context, o NodeJobOptions) (*NodeJobs, error) {
