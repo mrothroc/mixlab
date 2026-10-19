@@ -101,6 +101,11 @@ type fixture struct {
 
 func setup(t *testing.T) *fixture {
 	t.Helper()
+	return setupAt(t, t.TempDir())
+}
+
+func setupAt(t *testing.T, root string) *fixture {
+	t.Helper()
 	f := &fixture{p: &fakePeer{}}
 	b, err := os.ReadFile("../diloco/testdata/assignment.json")
 	if err != nil {
@@ -116,7 +121,7 @@ func setup(t *testing.T) *fixture {
 		t.Fatal(err)
 	}
 	f.a.BaseModel.Ref = ref(f.p.base)
-	root, err := filepath.EvalSymlinks(t.TempDir())
+	root, err = filepath.EvalSymlinks(root)
 	if err != nil {
 		t.Fatal(err)
 	}
