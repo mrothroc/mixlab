@@ -1,0 +1,19 @@
+{
+  "name": "p8_fineweb_seed29",
+  "model_dim": 256, "vocab_size": 8192, "seq_len": 128,
+  "blocks": [
+    {"type": "plain", "heads": 4}, {"type": "swiglu"},
+    {"type": "plain", "heads": 4}, {"type": "swiglu"}
+  ],
+  "training": {
+    "objective": "causal", "optimizer": "adamw", "steps": 400,
+    "lr": 0.001, "warmup_steps": 20, "weight_decay": 0.01,
+    "grad_clip": 1.0, "seed": 29, "batch_tokens": 2048,
+    "compute_dtype": "float32", "allow_tf32": false,
+    "distributed": {
+      "mode": "diloco", "inner_steps": 100,
+      "outer_optimizer": "nesterov", "outer_lr": 0.7,
+      "outer_momentum": 0.9, "aggregation": "uniform"
+    }
+  }
+}
