@@ -45,6 +45,13 @@ type ArtifactRequest struct {
 	Operation  string                    `json:"operation"`
 }
 
+// TerminalRead identifies operations that a completed run can answer without
+// granting work. Evaluate is only an exact durable-result retry at that point.
+// This classification does not replace request, trust, or attempt validation.
+func (q RelayRequest) TerminalRead() bool {
+	return q.Operation == "poll" || q.Operation == "receipt" || q.Operation == "evaluate"
+}
+
 func (q RelayRequest) Validate() error {
 	if q.Format != "mixlab_learner_relay_v1" || !wire.Text(q.WorkerID) {
 		return fmt.Errorf("invalid relay request")

@@ -355,6 +355,18 @@ An authenticated receipt lookup that has not yet been committed returns an
 explicit pending result, not an error-level relay log. Other conflicts and
 authorization failures remain errors.
 
+Successful completion and cancellation have different cleanup paths. After
+durable `COMPLETE`, the coordinator releases each exact current learner attempt
+with a bounded terminal drain (up to 90 seconds, never beyond its workload
+credential deadline). The node keeps the child alive to receive completion and
+exit normally; polling and exact receipt/evaluation-result retries remain
+authenticated. New work and artifact access are not allowed during the drain.
+Cancellation, failed runs, revoked authority, agent shutdown and an exhausted
+drain still stop the child. The accelerator is not advertised free until physical
+cleanup is confirmed. A failed exit is never relabeled successful because the
+coordinator completed. Upgrade coordinator and agents together for the optional
+`completed_attempt` lease-release field; older strict decoders reject it.
+
 To start a **new weights-only run**, optionally pass
 `-initial-model /absolute/path/model.safetensors` with the new-run flags. It must
 be a bounded float32 tensor artifact matching the config/layout. It does not

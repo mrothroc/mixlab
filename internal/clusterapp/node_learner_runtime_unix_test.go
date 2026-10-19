@@ -16,6 +16,7 @@ import (
 	"github.com/mrothroc/mixlab/diloco/run"
 	"github.com/mrothroc/mixlab/distributed"
 	"github.com/mrothroc/mixlab/nodeagent"
+	"github.com/mrothroc/mixlab/nodecredentials"
 	"github.com/mrothroc/mixlab/nodejob"
 	"github.com/mrothroc/mixlab/statehome"
 	"github.com/mrothroc/mixlab/trust"
@@ -52,6 +53,10 @@ func newLearnerRuntimeFixture(t *testing.T) learnerRuntimeFixture {
 }
 
 func newLearnerRuntimeFixtureMode(t *testing.T, start bool) learnerRuntimeFixture {
+	return newLearnerRuntimeFixtureEndpoint(t, start, "")
+}
+
+func newLearnerRuntimeFixtureEndpoint(t *testing.T, start bool, endpoint string) learnerRuntimeFixture {
 	t.Helper()
 	ctx := context.Background()
 	p := initialized(t)
@@ -125,6 +130,9 @@ func newLearnerRuntimeFixtureMode(t *testing.T, start bool) learnerRuntimeFixtur
 	plan.Slots = []run.Slot{{Member: member, CapabilityHash: capHash, Allocation: allocation}}
 	plan.Coordinator = run.Coordinator{ClusterID: a.Anchor.Cluster(), PrincipalID: coordinatorActor.Principal, Role: "coordinator", Audience: "learner-runtime"}
 	plan.CreatedAt, plan.ExpiresAt = testNow.Unix(), testNow.Add(time.Minute).Unix()
+	if endpoint != "" {
+		plan.Endpoint = endpoint
+	}
 	config := json.RawMessage(`{"model_dim":16}`)
 	plan.Contract.ConfigHash = nodejob.Hash(config)
 	plan.SHA256, err = plan.Digest()
@@ -156,11 +164,21 @@ func newLearnerRuntimeFixtureMode(t *testing.T, start bool) learnerRuntimeFixtur
 	credential, err := a.Workloads.Issue(ctx, identity.Chain, grant, v, testNow)
 	check(t, err)
 	check(t, s.ActivateLearnerCredential(ctx, actor, allocation.JobID, a.Anchor, grant, credential, testNow))
+	if endpoint != "" {
+		x, err := s.ActiveExecution(ctx)
+		check(t, err)
+		dir, err := workloadDirectory(root, x.Workload)
+		check(t, err)
+		transport, err := nodecredentials.OpenTransport(dir, a.Anchor, x.Workload)
+		check(t, err)
+		check(t, transport.Install(ctx, grant, credential, v, testNow))
+		check(t, transport.Close())
+	}
 	assignment, err := s.StartLearner(ctx, actor, allocation.JobID, id(), testNow)
 	check(t, err)
 	binding, err := assignment.Binding()
 	check(t, err)
-	return learnerRuntimeFixture{remote: &nodeLearnerRemote{runtime: NodeLearnerRuntime{Store: s, Principal: node, Anchor: a.Anchor, Clock: clock}, binding: binding}, authority: a, controller: controller, coordinator: coordinator, ports: ports}
+	return learnerRuntimeFixture{remote: &nodeLearnerRemote{runtime: NodeLearnerRuntime{Store: s, Principal: node, Anchor: a.Anchor, Clock: clock, Credentials: root}, binding: binding}, authority: a, controller: controller, coordinator: coordinator, ports: ports}
 }
 
 func TestNodeLearnerRuntimePrecommitPollReturnsPromptly(t *testing.T) {

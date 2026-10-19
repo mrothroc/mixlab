@@ -21,6 +21,7 @@ type fake struct {
 	now                  int64
 	renew, release, fail int
 	lost                 bool
+	commands             []nodeagent.LeaseCommand
 }
 
 func (f *fake) Unix() int64                                             { return f.now }
@@ -62,7 +63,38 @@ func (f *fake) Release(_ context.Context, a run.Allocation, q nodeagent.LeaseCom
 	l.Version++
 	f.leases[a.LeaseID] = l
 	f.release++
+	f.commands = append(f.commands, q)
 	return l, nil
+}
+
+func TestKeeperCompleteRequestsExactAttemptDrain(t *testing.T) {
+	for _, phase := range []coordinator.Phase{coordinator.Complete, coordinator.Failed} {
+		k, f := setup(t)
+		f.s.Phase, f.s.Round = phase, 1
+		f.s.Failure = "test"
+		for i := range f.s.PrivateHashes {
+			f.s.PrivateHashes[i] = f.s.Plan.BaseModel.Ref.SHA256
+		}
+		if released, err := k.Tick(context.Background()); err != nil || released {
+			t.Fatal(released, err)
+		}
+		if len(f.commands) != len(f.s.Plan.Slots) {
+			t.Fatal("missing release")
+		}
+		for _, q := range f.commands {
+			want := ""
+			if phase == coordinator.Complete {
+				for _, slot := range f.s.Plan.Slots {
+					if slot.Allocation.LeaseID == q.Lease {
+						want, _, _ = f.s.CurrentAttempt(slot.Member.WorkerID)
+					}
+				}
+			}
+			if q.CompletedAttempt != want {
+				t.Fatal("wrong completion scope", q, want)
+			}
+		}
+	}
 }
 func setup(t *testing.T) (Keeper, *fake) {
 	t.Helper()

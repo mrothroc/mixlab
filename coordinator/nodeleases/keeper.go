@@ -155,6 +155,13 @@ func (k Keeper) maintainSlot(ctx context.Context, s coordinator.State, slot run.
 		Version               uint64
 	}{s.Commit.Binding.CommitHash, l.ID, action, l.Version})
 	q := nodeagent.LeaseCommand{IdempotencyKey: h[:32], Lease: l.ID, ExpectedVersion: l.Version, TTLSeconds: ttl}
+	if s.Phase == coordinator.Complete {
+		attempt, _, e := s.CurrentAttempt(slot.Member.WorkerID)
+		if e != nil {
+			return leaseResult{err: e}
+		}
+		q.CompletedAttempt = attempt
+	}
 	if terminal {
 		_, err = k.Nodes.Release(ctx, slot.Allocation, q)
 	} else {

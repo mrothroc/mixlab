@@ -95,29 +95,41 @@ type nodeLearnerRemote struct {
 	binding wc.Binding
 }
 
-func (r *nodeLearnerRemote) client(ctx context.Context) (*LearnerClient, func(), error) {
+func (r *nodeLearnerRemote) execution(ctx context.Context, terminalRead bool) (*nodeagent.LocalExecution, error) {
 	o := r.runtime
 	anchor, view, err := NodeCurrentTrust(o.Principal)(ctx, o.Clock())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if anchor.Fingerprint() != o.Anchor.Fingerprint() {
-		return nil, nil, fmt.Errorf("node trust pin changed")
+		return nil, fmt.Errorf("node trust pin changed")
 	}
 	if err := o.Store.CheckExecutionTrust(ctx, anchor, view, o.Clock()); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	x, err := o.Store.ActiveExecution(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	if x == nil || x.Learner == nil || x.Learner.Assignment == nil || x.Learner.Stopped || x.Lease.State == nodeagent.Releasing {
-		return nil, nil, fmt.Errorf("learner attempt no longer live")
+	if x == nil || x.Learner == nil || x.Learner.Assignment == nil || x.Learner.Stopped {
+		return nil, fmt.Errorf("learner attempt no longer live")
+	}
+	if x.Lease.State == nodeagent.Releasing && (!terminalRead || !x.LearnerDraining(o.Clock())) {
+		return nil, fmt.Errorf("learner attempt no longer live")
 	}
 	b, err := x.Learner.Assignment.Binding()
 	if err != nil || b != r.binding {
-		return nil, nil, fmt.Errorf("learner IPC belongs to another attempt")
+		return nil, fmt.Errorf("learner IPC belongs to another attempt")
 	}
+	return x, nil
+}
+
+func (r *nodeLearnerRemote) client(ctx context.Context, terminalRead bool) (*LearnerClient, func(), error) {
+	x, err := r.execution(ctx, terminalRead)
+	if err != nil {
+		return nil, nil, err
+	}
+	o := r.runtime
 	if x.Learner.Commit == nil {
 		return nil, func() {}, nil
 	}
@@ -128,7 +140,7 @@ func (r *nodeLearnerRemote) client(ctx context.Context) (*LearnerClient, func(),
 	if err != nil {
 		return nil, nil, err
 	}
-	credential, err := nodecredentials.OpenTransport(dir, anchor, x.Workload)
+	credential, err := nodecredentials.OpenTransport(dir, o.Anchor, x.Workload)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -141,7 +153,7 @@ func (r *nodeLearnerRemote) client(ctx context.Context) (*LearnerClient, func(),
 	return client, close, nil
 }
 func (r *nodeLearnerRemote) Poll(ctx context.Context) (private.RelayResponse, error) {
-	c, close, err := r.client(ctx)
+	c, close, err := r.client(ctx, true)
 	if err != nil {
 		return private.RelayResponse{}, err
 	}
@@ -151,10 +163,23 @@ func (r *nodeLearnerRemote) Poll(ctx context.Context) (private.RelayResponse, er
 	if c == nil {
 		return private.RelayResponse{Format: "mixlab_learner_reply_v1"}, nil
 	}
-	return c.Poll(ctx)
+	out, err := c.Poll(ctx)
+	if err != nil {
+		return out, err
+	}
+	x, err := r.execution(ctx, true)
+	if err != nil {
+		return private.RelayResponse{}, err
+	}
+	if x.LearnerDraining(r.runtime.Clock()) && !out.Done {
+		// A release may win while the reply is in flight. Drain only a real
+		// terminal reply; never launch stale work or invent successful completion.
+		return private.RelayResponse{Format: "mixlab_learner_reply_v1"}, nil
+	}
+	return out, nil
 }
-func (r *nodeLearnerRemote) committed(ctx context.Context) (*LearnerClient, func(), error) {
-	c, close, err := r.client(ctx)
+func (r *nodeLearnerRemote) committed(ctx context.Context, terminalRead bool) (*LearnerClient, func(), error) {
+	c, close, err := r.client(ctx, terminalRead)
 	if err == nil && c == nil {
 		close()
 		return nil, nil, fmt.Errorf("learner is not committed")
@@ -162,7 +187,11 @@ func (r *nodeLearnerRemote) committed(ctx context.Context) (*LearnerClient, func
 	return c, close, err
 }
 func (r *nodeLearnerRemote) Call(ctx context.Context, q private.RelayRequest) (private.RelayResponse, error) {
-	c, close, err := r.committed(ctx)
+	// Poll must use Poll's final drain recheck, not the generic Call path.
+	if q.Operation == "poll" {
+		return private.RelayResponse{}, fmt.Errorf("poll requires the polling path")
+	}
+	c, close, err := r.committed(ctx, q.TerminalRead())
 	if err != nil {
 		return private.RelayResponse{}, err
 	}
@@ -170,7 +199,7 @@ func (r *nodeLearnerRemote) Call(ctx context.Context, q private.RelayRequest) (p
 	return c.Call(ctx, q)
 }
 func (r *nodeLearnerRemote) Read(ctx context.Context, a run.Assignment, b run.Blob, w io.Writer) error {
-	c, close, err := r.committed(ctx)
+	c, close, err := r.committed(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -178,7 +207,7 @@ func (r *nodeLearnerRemote) Read(ctx context.Context, a run.Assignment, b run.Bl
 	return c.Read(ctx, a, b, w)
 }
 func (r *nodeLearnerRemote) Write(ctx context.Context, a run.Assignment, b run.Blob, rd io.Reader) error {
-	c, close, err := r.committed(ctx)
+	c, close, err := r.committed(ctx, false)
 	if err != nil {
 		return err
 	}
@@ -186,7 +215,7 @@ func (r *nodeLearnerRemote) Write(ctx context.Context, a run.Assignment, b run.B
 	return c.Write(ctx, a, b, rd)
 }
 func (r *nodeLearnerRemote) ReadEvaluation(ctx context.Context, a run.EvaluationAssignment, w io.Writer) error {
-	c, close, err := r.committed(ctx)
+	c, close, err := r.committed(ctx, false)
 	if err != nil {
 		return err
 	}

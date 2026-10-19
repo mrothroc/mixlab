@@ -140,9 +140,10 @@ func (s *Store) InterruptActive(ctx context.Context, reason string) error {
 		if l == nil {
 			return fmt.Errorf("active lease missing")
 		}
-		if l.State == Releasing {
+		if l.State == Releasing && l.CompletedAttempt == "" {
 			return nil
 		}
+		l.CompletedAttempt, l.DrainUntil = "", 0
 		l.State, l.CleanupReason = Releasing, reason
 		l.Version++
 		r.NodeVersion++

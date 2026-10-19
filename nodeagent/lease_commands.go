@@ -71,6 +71,9 @@ func (s *Store) Reserve(ctx context.Context, actor trust.AuthenticatedPrincipal,
 }
 
 func (s *Store) RenewLease(ctx context.Context, actor trust.AuthenticatedPrincipal, q LeaseCommand, now time.Time) (Lease, error) {
+	if q.CompletedAttempt != "" {
+		return Lease{}, fmt.Errorf("renew cannot complete an attempt")
+	}
 	if err := ttl(q.TTLSeconds); err != nil {
 		return Lease{}, err
 	}
@@ -130,6 +133,18 @@ func (s *Store) leaseCommand(ctx context.Context, actor trust.AuthenticatedPrinc
 		if err := s.guardLearnerHandoff(*current, actor); err != nil {
 			return err
 		}
+		if q.CompletedAttempt != "" {
+			if action != "release" || !identifier(q.CompletedAttempt) || current.JobKind != "learner" || current.Coordinator != actor.Principal || actor.Role != trust.Coordinator {
+				return fmt.Errorf("completion requires the owning learner coordinator")
+			}
+			_, j, err := s.loadLearner(current.Job)
+			if err != nil {
+				return err
+			}
+			if j.Assignment == nil || j.Assignment.AttemptID != q.CompletedAttempt {
+				return fmt.Errorf("completion attempt differs from current learner")
+			}
+		}
 		prior, ok, err := replay(r, actor.Principal, q.IdempotencyKey, action, digest(q))
 		if err != nil {
 			return err
@@ -174,6 +189,10 @@ func (s *Store) leaseCommand(ctx context.Context, actor trust.AuthenticatedPrinc
 					return fmt.Errorf("lease already released; retry original command")
 				}
 				if l.State == Releasing {
+					if q.CompletedAttempt == "" && l.CompletedAttempt != "" {
+						l.CompletedAttempt, l.DrainUntil, l.CleanupReason = "", 0, "released"
+						l.Version++
+					}
 					record(&r, actor.Principal, q.IdempotencyKey, action, digest(q), *l)
 					if err := s.save(old, r); err != nil {
 						return err
@@ -183,6 +202,11 @@ func (s *Store) leaseCommand(ctx context.Context, actor trust.AuthenticatedPrinc
 				}
 				l.State = Releasing
 				l.CleanupReason = "released"
+				if q.CompletedAttempt != "" && now.Unix() < l.Expires && now.Unix() < l.WorkloadDeadline {
+					l.CleanupReason = "completed"
+					l.CompletedAttempt = q.CompletedAttempt
+					l.DrainUntil = min(now.Add(LearnerDrainTimeout).Unix(), l.WorkloadDeadline)
+				}
 			}
 			l.Version++
 			record(&r, actor.Principal, q.IdempotencyKey, action, digest(q), *l)

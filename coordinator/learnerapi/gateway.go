@@ -142,7 +142,12 @@ func (g Gateway) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		g.Model = model
 	}
-	guard := guardedRepository{Repository: g.Model.Repository, check: func(ctx context.Context, s coordinator.State) error { return g.authorize(ctx, r, q, s) }}
+	guard := guardedRepository{Repository: g.Model.Repository,
+		check: func(ctx context.Context, s coordinator.State) error { return g.authorize(ctx, r, q, s) },
+		read: func(ctx context.Context, id string) (coordinator.State, error) {
+			return g.authorizedState(ctx, r, q, id)
+		},
+	}
 	s, err := guard.Load(ctx, q.Call.Binding.RunID)
 	if ctx.Err() != nil || err != nil {
 		learnerError(w, ctx, "learner access rejected", http.StatusForbidden)
@@ -150,7 +155,10 @@ func (g Gateway) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	m := g.Model
 	m.Repository = guard
-	out, err := g.dispatch(ctx, m, s, q)
+	var out Response
+	if q.Call.Operation != "poll" {
+		out, err = g.dispatch(ctx, m, s, q)
+	}
 	pending := q.Call.Operation == "receipt" && errors.Is(err, private.ErrReceiptPending)
 	if errors.Is(err, coordinator.ErrConcurrent) || errors.Is(err, trust.ErrTrustBehind) {
 		learnerError(w, ctx, "learner service unavailable", http.StatusServiceUnavailable)
@@ -161,9 +169,19 @@ func (g Gateway) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Never release a result after trust or the attempt changed during the call.
-	if _, err = guard.Load(ctx, q.Call.Binding.RunID); ctx.Err() != nil || err != nil {
+	latest, err := guard.Load(ctx, q.Call.Binding.RunID)
+	if ctx.Err() != nil || err != nil {
 		learnerError(w, ctx, "learner access changed", http.StatusForbidden)
 		return
+	}
+	if q.Call.Operation == "poll" {
+		// COMPLETE can race the first read. Never return stale work after the
+		// final authorization has observed a terminal run.
+		out, err = g.dispatch(ctx, m, latest, q)
+		if err != nil {
+			learnerError(w, ctx, "learner operation rejected", http.StatusConflict)
+			return
+		}
 	}
 	status := http.StatusOK
 	if pending {
@@ -229,12 +247,10 @@ func (g Gateway) authorize(ctx context.Context, r *http.Request, q Request, s co
 			// receipt retries remain readable under current trust and attempt
 			// binding; they cannot authorize more work or artifact grants.
 			if s.Phase == coordinator.Complete || s.Phase == coordinator.Failed {
-				switch q.Call.Operation {
-				case "poll", "receipt", "evaluate":
+				if q.Call.TerminalRead() {
 					return nil
-				default:
-					return fmt.Errorf("terminal run permits only status and receipt reads")
 				}
+				return fmt.Errorf("terminal run permits only status and receipt reads")
 			}
 			return g.Model.Allocations.Ready(ctx, slot)
 		}
@@ -245,14 +261,11 @@ func (g Gateway) authorize(ctx context.Context, r *http.Request, q Request, s co
 type guardedRepository struct {
 	coordinator.Repository
 	check func(context.Context, coordinator.State) error
+	read  func(context.Context, string) (coordinator.State, error)
 }
 
 func (r guardedRepository) Load(ctx context.Context, id string) (coordinator.State, error) {
-	s, err := r.Repository.Load(ctx, id)
-	if err == nil {
-		err = r.check(ctx, s)
-	}
-	return s, err
+	return r.read(ctx, id)
 }
 func (r guardedRepository) Save(ctx context.Context, id string, revision uint64, c coordinator.Change) error {
 	if err := r.check(ctx, c.Next); err != nil {

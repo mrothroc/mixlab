@@ -5,6 +5,8 @@ package workerhost
 import (
 	"bufio"
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -38,42 +40,72 @@ func startSuspendTestProcess(t *testing.T, cmd *exec.Cmd) *ownedProcess {
 	return p
 }
 
+// A correctness observation can wait longer than the production monitor's
+// periodic sample: killing every slow ps would hide the actual process state.
+const groupStateSampleTimeout = 5 * resourceSampleTimeout
+
 func awaitGroupStopped(t *testing.T, pids []int, stopped bool) {
 	t.Helper()
 	ids := make([]string, len(pids))
 	for i, pid := range pids {
 		ids[i] = strconv.Itoa(pid)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*resourceSampleGrace)
 	defer cancel()
+	if err := waitGroupStopped(ctx, len(pids), stopped, func(probe context.Context) ([]byte, error) {
+		return exec.CommandContext(probe, "/bin/ps", "-p", strings.Join(ids, ","), "-o", "pid=,state=").Output()
+	}); err != nil {
+		t.Fatalf("processes %v: %v", pids, err)
+	}
+}
+
+// A failed/slow ps sample is not evidence that the signal operation failed.
+// Bound each sample independently, retry within the total observation budget,
+// and retain the last observation/error for a useful final timeout diagnostic.
+func waitGroupStopped(ctx context.Context, count int, stopped bool, sample func(context.Context) ([]byte, error)) error {
 	var last string
+	var lastErr error
 	for ctx.Err() == nil {
-		out, err := exec.CommandContext(ctx, "/bin/ps", "-p", strings.Join(ids, ","), "-o", "pid=,state=").Output()
-		if err != nil {
-			t.Fatalf("read group state: %v", err)
-		}
-		last = string(out)
-		lines := strings.Split(strings.TrimSpace(last), "\n")
-		match := len(lines) == len(pids)
-		for _, line := range lines {
-			fields := strings.Fields(line)
-			if len(fields) != 2 || strings.HasPrefix(fields[1], "T") != stopped {
-				match = false
+		probe, cancel := context.WithTimeout(ctx, groupStateSampleTimeout)
+		out, err := sample(probe)
+		cancel()
+		lastErr = err
+		if err == nil {
+			last = string(out)
+			lines := strings.Split(strings.TrimSpace(last), "\n")
+			match := len(lines) == count
+			for _, line := range lines {
+				fields := strings.Fields(line)
+				if len(fields) != 2 || strings.HasPrefix(fields[1], "T") != stopped {
+					match = false
+				}
+			}
+			if match && ctx.Err() == nil {
+				return nil
 			}
 		}
-		if match {
-			return
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("processes %v stopped=%v not observed: %s", pids, stopped, last)
+	return fmt.Errorf("stopped=%v not observed: %w; last sample error: %v; last state: %q", stopped, ctx.Err(), lastErr, last)
 }
 
 func TestOwnedProcessGroupSuspendResumeAndCleanup(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	foreign := startSuspendTestProcess(t, exec.Command("/bin/sleep", "60"))
-	cmd := exec.Command("/bin/sh", "-c", `sleep 60 & printf '%s\n' "$!"; wait`)
+	foreign := startSuspendTestProcess(t, exec.Command("/bin/sleep", "300"))
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The descendant, not the shell's $!, announces readiness. Suspending
+	// between fork and exec can strand process-table observations on Darwin.
+	cmd := exec.Command("/bin/sh", "-c", `"$1" -test.run='^TestSuspendGroupFixtureChild$' & wait`, "fixture", executable)
+	cmd.Env = append(os.Environ(), "MIXLAB_TEST_SUSPEND_CHILD=1")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -137,6 +169,15 @@ func TestOwnedProcessGroupSuspendResumeAndCleanup(t *testing.T) {
 	if err := p.resume(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestSuspendGroupFixtureChild(t *testing.T) {
+	if os.Getenv("MIXLAB_TEST_SUSPEND_CHILD") != "1" {
+		return
+	}
+	fmt.Println(os.Getpid())
+	time.Sleep(5 * time.Minute)
+	os.Exit(0)
 }
 
 func TestOwnedProcessEndingCannotResume(t *testing.T) {

@@ -41,6 +41,8 @@ type Lease struct {
 	Coordinator          string `json:"coordinator,omitempty"`
 	RunCommitHash        string `json:"run_commit_hash,omitempty"`
 	WorkloadDeadline     int64  `json:"workload_deadline,omitempty"`
+	CompletedAttempt     string `json:"completed_attempt,omitempty"`
+	DrainUntil           int64  `json:"drain_until,omitempty"`
 }
 type Reserve struct {
 	IdempotencyKey       string `json:"idempotency_key"`
@@ -50,10 +52,11 @@ type Reserve struct {
 	TTLSeconds           int    `json:"ttl_seconds"`
 }
 type LeaseCommand struct {
-	IdempotencyKey  string `json:"idempotency_key"`
-	Lease           string `json:"lease"`
-	ExpectedVersion uint64 `json:"expected_version"`
-	TTLSeconds      int    `json:"ttl_seconds"`
+	IdempotencyKey   string `json:"idempotency_key"`
+	Lease            string `json:"lease"`
+	ExpectedVersion  uint64 `json:"expected_version"`
+	TTLSeconds       int    `json:"ttl_seconds"`
+	CompletedAttempt string `json:"completed_attempt,omitempty"`
 }
 
 func identifier(s string) bool {
@@ -83,6 +86,11 @@ func ttl(seconds int) error {
 	return nil
 }
 func (l Lease) validate(node string) error {
+	if l.CleanupReason == "completed" || l.CompletedAttempt != "" || l.DrainUntil != 0 {
+		if !identifier(l.CompletedAttempt) || l.JobKind != "learner" || l.Coordinator == "" || l.CleanupReason != "completed" || (l.State != Releasing && l.State != Released) || l.DrainUntil <= l.Created || l.DrainUntil > l.WorkloadDeadline {
+			return fmt.Errorf("invalid completed learner drain")
+		}
+	}
 	if l.JobKind != "" && l.JobKind != "learner" {
 		return fmt.Errorf("invalid lease job kind")
 	}
@@ -112,7 +120,7 @@ func (l Lease) validate(node string) error {
 		return fmt.Errorf("invalid lease state")
 	}
 	switch l.CleanupReason {
-	case "", "released", "expired", "failed", "canceled", "exited", "agent_restart", "agent_shutdown", "authority_unavailable":
+	case "", "released", "completed", "expired", "failed", "canceled", "exited", "agent_restart", "agent_shutdown", "authority_unavailable":
 	default:
 		return fmt.Errorf("invalid cleanup reason")
 	}

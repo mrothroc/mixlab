@@ -111,7 +111,7 @@ func (l *nodeExecutionLoop) poll(ctx context.Context) error {
 	if err != nil || x == nil {
 		return err
 	}
-	if x.Lease.State != nodeagent.Releasing {
+	if x.Lease.State != nodeagent.Releasing || x.LearnerDraining(l.ports.Clock()) {
 		if err := l.ports.Authorize(ctx, *x); err != nil {
 			if l.ports.Event != nil {
 				l.ports.Event(fmt.Errorf("execution authority unavailable: %w", err))
@@ -130,7 +130,7 @@ func (l *nodeExecutionLoop) poll(ctx context.Context) error {
 		if x.Job == nil || l.running.job != x.Job.ID {
 			return fmt.Errorf("running job lost its exclusive lease")
 		}
-		if stopping {
+		if stopping && !x.LearnerDraining(l.ports.Clock()) {
 			l.running.cancel()
 		}
 		return nil
