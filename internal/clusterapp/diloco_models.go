@@ -128,7 +128,11 @@ func (s *DiLoCoModels) Tick(ctx context.Context, q admission.Submission, _ admis
 		if loadErr != nil || state.Phase == coordinator.Complete || state.Phase == coordinator.Failed {
 			return errors.Join(e, loadErr)
 		}
-		return errors.Join((DiLoCoRecovery{Model: v.model}).failureWithReason(ctx, q.Launch.Run, state.Recovery != nil, e, "allocation lease maintenance permanently rejected"), v.model.Tick(ctx, q.Launch.Run, int64(q.Launch.Selection.Requirements.Limits.RuntimeSeconds)))
+		reason := allocationFailureReason(q, s.Clock())
+		if !recoveryTransient(e) && !errors.Is(ctx.Err(), context.Canceled) {
+			e = fmt.Errorf("%s: %w", reason, e)
+		}
+		return errors.Join((DiLoCoRecovery{Model: v.model}).failureWithReason(ctx, q.Launch.Run, state.Recovery != nil, e, reason), v.model.Tick(ctx, q.Launch.Run, int64(q.Launch.Selection.Requirements.Limits.RuntimeSeconds)))
 	}
 	if released {
 		s.released.Store(q.Launch.Run, struct{}{})

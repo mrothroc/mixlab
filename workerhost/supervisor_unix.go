@@ -138,9 +138,15 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 		return result, err
 	}
 	defer func() { _ = server.Close() }()
-	ctx, cancel := context.WithTimeout(parent, time.Duration(runtimeSeconds)*time.Second)
+	ctx, cancel := attemptRuntimeContext(parent, time.Duration(runtimeSeconds)*time.Second)
 	defer cancel()
 	logs := &boundedLog{file: log, remaining: p.Limits.LogBytes, cancel: cancel}
+	defer func() {
+		err = withRuntimeDiagnostic(ctx, err)
+		if cause := runtimeDiagnostic(ctx); err != nil && cause != nil {
+			_, _ = fmt.Fprintln(logs, "workerhost:", cause)
+		}
+	}()
 	cmd := exec.Command(s.binary, "-mode", "managed-worker", "-worker-control-socket", server.Path(), "-worker-session-fd", "3")
 	cmd.Dir = p.Directory.Dir()
 	cmd.ExtraFiles = []*os.File{credential}
@@ -170,6 +176,8 @@ func (s *Supervisor) Run(parent context.Context, p LaunchPlan) (result Result, e
 	defer func() {
 		// Physical termination must precede the sampler join. In particular a
 		// stalled filesystem read must not prevent signaling the owned group.
+		// Freeze expiry before cancellation or cleanup can change its evidence.
+		err = withRuntimeDiagnostic(ctx, err)
 		cancel()
 		_ = server.Close()
 		if !reaped {

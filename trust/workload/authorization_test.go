@@ -40,6 +40,39 @@ func cloneAuthorized(t *testing.T, g AuthorizedGrant) AuthorizedGrant {
 	return out
 }
 
+func TestVerifyRequestAuthorizationAdmissionExpiry(t *testing.T) {
+	f := newFixture(t)
+	scope := f.grant.Request.Request.Scope
+	scope.AdmitUntil = f.now.Add(time.Minute).Unix()
+	grant := f.sign(t, scope, newKey(t))
+	auth := f.authorize(t, grant).NodeAuthorization
+	want, err := grant.Request.ReauthorizationRequest()
+	check(t, err)
+	for _, tc := range []struct {
+		name   string
+		offset time.Duration
+		valid  bool
+	}{
+		{name: "before_deadline", offset: -time.Second, valid: true},
+		{name: "at_deadline"},
+		{name: "after_deadline", offset: time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Unix(scope.AdmitUntil, 0).Add(tc.offset)
+			// Keep the signature, certificate and both snapshots valid so only
+			// the request's admission deadline can reject this authorization.
+			_, err := trust.VerifyProof(f.a.Anchor, f.view, auth.Proof, want, now)
+			check(t, err)
+			err = VerifyRequestAuthorization(f.a.Anchor, f.view, grant.Request, auth, now)
+			if tc.valid {
+				check(t, err)
+			} else if err == nil {
+				t.Fatal("fresh proof bypassed the request's admission deadline")
+			}
+		})
+	}
+}
+
 func TestAuthorizedWorkloadExpiredOriginalAndHistoricalReplay(t *testing.T) {
 	f := newFixture(t)
 	original := digest(f.grant)

@@ -138,6 +138,18 @@ early stopping, whereas explicit zero is a real target.
 Resource ceilings are `-max-runtime-seconds` (3600), `-max-cpu-seconds` (7200 per
 learner), `-max-memory-bytes` (4294967296), `-max-disk-bytes` (4294967296 private
 disk) and `-max-log-bytes` (16777216). Node policy can reject these requests.
+Choose an explicit runtime ceiling large enough for the expected loaded run;
+resource suspension and slow rounds do not pause wall-clock limits. Each recovered
+attempt has a new local hosting timer, but recovery never extends the original
+allocation/workload deadline (admission expiry plus requested runtime and the
+bounded cleanup allowance). Either bound can stop work. Failure diagnostics
+report the original deadline and whether it has been reached; an earlier lease
+renewal rejection is not itself proof of expiry. The worker-host diagnostic log
+identifies local attempt-runtime expiry separately from unrelated EOF failures.
+Expiry is captured against the absolute attempt deadline before cleanup; error
+and log diagnostics share that observation even when context timer delivery is
+delayed. Cleanup or exit-state persistence cannot retroactively relabel an
+earlier observed failure as runtime expiry.
 `-authority-endpoint` optionally selects a root-signed authority URL;
 `-state-home` is available to the submitting client, not coordinator configuration.
 
@@ -304,9 +316,16 @@ context and the coordinator's durable outage policy still bound this wait. Local
 learner IPC and guardian channels use supervised runtime bounds so scheduler
 stalls or resource suspension do not independently destroy framed connections.
 This does not extend signed authority or guarantee progress under indefinite host
-starvation. Raw artifact reads/writes are not
-automatically replayed: their caller-owned streams have no implicit rewind or
-destination reset, so an interruption can still fail the learner attempt.
+starvation. Artifact `read_begin` (including evaluation downloads) and
+`write_begin` retry an explicit IPC `unavailable` response within that same
+owning context. No bytes have reached the learner's destination or been consumed
+from its upload reader at this boundary, and the agent discards failed download
+staging before replying. Raw artifact reads/writes, chunk/end operations and
+ambiguous IPC failures are not automatically replayed: caller-owned streams have
+no implicit rewind or destination reset, so an interruption can still fail the
+learner attempt. `read_chunk`/`read_end` operate on the local staged file; they do
+not call the coordinator. `write_end` can consume or commit an upload, so its
+failure remains terminal for that stream.
 That failure uses the same bounded, private-state-preserving recovery path;
 it is not a claim that every interrupted transfer preserves the original PID.
 The local IPC boundary distinguishes exhausted transient unavailability from

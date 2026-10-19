@@ -66,6 +66,9 @@ func (r *LocalRunner) Run(ctx context.Context, a contract.Approved, started func
 			return errors.Join(ErrReconciliationRequired, err)
 		}
 		result, runErr := r.supervisor.Run(ctx, LaunchPlan{Assignment: a.Assignment, Learner: a.Learner, Relay: r.LearnerRelay, LearnerPrivateDirectory: r.LearnerPrivateDirectory, Directory: r.directory, StartupTimeout: r.startup, ShutdownGrace: r.grace, Limits: a.Limits, Started: started})
+		// Preflight can return before the supervisor installs its own observer.
+		// Freeze the outer runtime before exit persistence can cross its deadline.
+		runErr = withRuntimeDiagnostic(ctx, runErr)
 		if errors.Is(runErr, ErrReconciliationRequired) {
 			return runErr
 		}

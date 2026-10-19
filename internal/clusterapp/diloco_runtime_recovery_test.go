@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -210,10 +211,15 @@ func TestDiLoCoModelsReportsPermanentLeaseFailure(t *testing.T) {
 				return false, nil
 			}}
 			models.cache.Store(f.q.Launch.Run, composedRun{model, keeper})
-			if err := models.Tick(context.Background(), f.q, admission.Snapshot{}); err == nil {
+			err := models.Tick(context.Background(), f.q, admission.Snapshot{})
+			if err == nil {
 				t.Fatal("lease rejection not reported")
 			}
-			if repo.state.Phase != coordinator.Failed || repo.state.Failure != "allocation lease maintenance permanently rejected" {
+			var peer *NodeHTTPError
+			if !errors.As(err, &peer) || peer.Status != http.StatusForbidden || !strings.Contains(err.Error(), allocationFailureReason(f.q, clock.now())) {
+				t.Fatalf("local diagnostic lost peer rejection or immutable deadline: %v", err)
+			}
+			if repo.state.Phase != coordinator.Failed || repo.state.Failure != allocationFailureReason(f.q, clock.now()) {
 				t.Fatalf("lease failure misattributed: phase=%s reason=%q", repo.state.Phase, repo.state.Failure)
 			}
 		})

@@ -69,7 +69,9 @@ func (c *Client) call(ctx context.Context, q request) (private.RelayResponse, er
 
 // Network-attempt exhaustion is not process loss. Retain the same semantic
 // payload and private state until the owning assignment/job is canceled.
-// Never use this loop for partially consumed artifact byte streams.
+// Artifact begin is also safe: an explicit unavailable response closes the
+// server's failed spool before any bytes reach the caller. Never use this loop
+// for chunk/end requests or ambiguous local IPC transport failures.
 func waitSemantic(ctx context.Context, call func() (response, error)) (response, error) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -124,7 +126,9 @@ func (c *Client) read(ctx context.Context, q *private.ArtifactRequest, w io.Writ
 	defer c.mu.Unlock()
 	ctx, cancel := localTransferContext(ctx)
 	defer cancel()
-	r, err := c.request(ctx, request{Operation: "read_begin", Artifact: q})
+	r, err := waitSemantic(ctx, func() (response, error) {
+		return c.request(ctx, request{Operation: "read_begin", Artifact: q})
+	})
 	if err != nil {
 		return err
 	}
@@ -171,7 +175,8 @@ func (c *Client) Write(ctx context.Context, a run.Assignment, b run.Blob, reader
 	defer c.mu.Unlock()
 	ctx, cancel := localTransferContext(ctx)
 	defer cancel()
-	r, err := c.request(ctx, request{Operation: "write_begin", Artifact: artifactRequest(a, b, "create")})
+	q := request{Operation: "write_begin", Artifact: artifactRequest(a, b, "create")}
+	r, err := waitSemantic(ctx, func() (response, error) { return c.request(ctx, q) })
 	if err != nil {
 		return err
 	}

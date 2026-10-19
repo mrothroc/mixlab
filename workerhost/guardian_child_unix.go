@@ -56,7 +56,7 @@ func ServeGuardian(file *os.File) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(q.Approval.RuntimeSeconds())*time.Second)
+	ctx, cancel := attemptRuntimeContext(context.Background(), time.Duration(q.Approval.RuntimeSeconds())*time.Second)
 	defer cancel()
 	if q.Approval.Learner != nil {
 		private, err := guardianPrivateDirectory(q)
@@ -117,6 +117,7 @@ func ServeGuardian(file *os.File) error {
 			return fmt.Errorf("guardian start acknowledgment expired")
 		}
 	})
+	runErr = withRuntimeDiagnostic(ctx, runErr)
 	if !errors.Is(runErr, ErrReconciliationRequired) {
 		cleanupCtx, done := context.WithTimeout(context.Background(), 5*time.Second)
 		// Do not infer cleanup solely from Run's error class: an early lock

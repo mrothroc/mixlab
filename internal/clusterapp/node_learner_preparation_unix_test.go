@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -379,9 +380,16 @@ func TestLearnerPreparationCleanupJoinsCredentialWriter(t *testing.T) {
 			f := newLearnerRuntimeFixtureMode(t, false)
 			app := preparationApp(t, f, context.Background(), func(context.Context, []byte) (workerprobe.Plan, error) { return preparationNumerical(f), nil })
 			entered := make(chan struct{})
+			cancelled := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			releaseWriter := func() { releaseOnce.Do(func() { close(release) }) }
+			defer releaseWriter()
 			block := func(ctx context.Context) error {
 				close(entered)
 				<-ctx.Done()
+				close(cancelled)
+				<-release
 				return ctx.Err()
 			}
 			if stage == "sign_request" {
@@ -414,10 +422,45 @@ func TestLearnerPreparationCleanupJoinsCredentialWriter(t *testing.T) {
 			check(t, err)
 			x, err := app.options.Store.ActiveExecution(ctx)
 			check(t, err)
-			loop := nodeExecutionLoop{store: app.options.Store, ports: NodeExecutionPorts{StopPreparation: app.StopLearnerPreparation, Cleanup: app.Cleanup}}
-			check(t, loop.cleanupLearner(ctx, *x))
-			if err := <-done; err == nil {
-				t.Fatal("aborted credential preparation succeeded")
+			stopped := make(chan struct{})
+			loop := nodeExecutionLoop{store: app.options.Store, ports: NodeExecutionPorts{
+				StopPreparation: func(ctx context.Context, job string) error {
+					err := app.StopLearnerPreparation(ctx, job)
+					close(stopped)
+					return err
+				},
+				Cleanup: app.Cleanup,
+			}}
+			cleaned := make(chan error, 1)
+			go func() { cleaned <- loop.cleanupLearner(ctx, *x) }()
+			select {
+			case <-cancelled:
+			case <-ctx.Done():
+				t.Fatal("cleanup did not cancel the credential writer", ctx.Err())
+			}
+			// Observe the stop boundary too: the credential lock must not hide a
+			// missing join by independently blocking the subsequent cleanup.
+			select {
+			case <-stopped:
+				t.Fatal("preparation stop returned while the cancelled writer was still running")
+			case err := <-cleaned:
+				t.Fatalf("cleanup returned before the credential writer finished: %v", err)
+			case <-time.After(100 * time.Millisecond):
+			}
+			releaseWriter()
+			select {
+			case err := <-cleaned:
+				check(t, err)
+			case <-ctx.Done():
+				t.Fatal("cleanup did not finish after releasing the writer", ctx.Err())
+			}
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("aborted credential preparation succeeded")
+				}
+			case <-ctx.Done():
+				t.Fatal("credential preparation did not finish", ctx.Err())
 			}
 			x, err = app.options.Store.ActiveExecution(ctx)
 			check(t, err)
