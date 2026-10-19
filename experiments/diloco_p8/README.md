@@ -94,3 +94,41 @@ Coordinator `COMPLETE` proves numerical run completion, not a clean process
 shutdown. Preserve node attempt outcomes and service/worker logs separately;
 post-completion poll rejection or cancellation must remain visible in the
 review report even when all global models and evaluations committed.
+
+## Independent Outer Replay
+
+`replay.py` is read-only and requires NumPy. It verifies the committed chain,
+artifact sizes/SHA-256, accepted receipt identities, base/momentum lineage and
+the two registered workers' partition assignments. It independently computes
+uniform-mean Nesterov with the registered LR 0.7 and momentum 0.9:
+
+```text
+g = float32(mean(delta_i))
+m_next = float32(0.9 * m + g)
+w_next = float32(w - 0.7 * (g + 0.9 * m_next))
+```
+
+Intermediate arithmetic is float64; the indicated boundaries round to float32.
+Each tensor element must satisfy `abs(error) <= 1e-7 + 1e-6 * abs(reference)`.
+Each round reports maximum absolute and relative error for weights and momentum.
+Relative error uses float32's smallest positive normal value as its denominator
+floor. Nonfinite values or mismatches fail with nonzero exit status.
+
+```sh
+.venv/bin/python experiments/diloco_p8/replay.py \
+  --state /path/to/coordinator/state --artifacts /path/to/coordinator/artifacts \
+  --run RUN_ID --run ANOTHER_RUN_ID
+```
+
+The partition audit checks committed cohort order against registrations and
+round assignments. `train.PrepareLocalLearner` derives the index from that order;
+`data.NewLearnerLoader` uses a common config seed and disjoint pre-permutation
+ordinals `count*k+index`. A common epoch permutation preserves disjointness.
+This verifies assigned partitions, not a historical trace of tokens actually
+consumed. It does not imply disjoint corpora across epochs. The tool deliberately
+targets the fixed two-worker, no-recovery P8 experiment, not arbitrary training.
+
+Tests include hand-calculated rounds, stale delta bytes under current metadata,
+zeroed momentum, broken lineage, partition mismatch and artifact corruption.
+Keep reports in the private evidence directory, not in this repository. A replay
+failure is a new finding to investigate, not permission to rewrite old artifacts.
