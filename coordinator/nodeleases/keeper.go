@@ -20,6 +20,11 @@ type Nodes interface {
 	Renew(context.Context, run.Allocation, nodeagent.LeaseCommand) (nodeagent.Lease, error)
 	Release(context.Context, run.Allocation, nodeagent.LeaseCommand) (nodeagent.Lease, error)
 }
+
+// ErrReleaseConflict permits a fresh status read, not an assumption of cleanup.
+// Transport adapters must not classify authentication or availability errors here.
+var ErrReleaseConflict = errors.New("allocation release conflict")
+
 type Keeper struct {
 	Repository coordinator.Repository
 	Nodes      Nodes
@@ -164,8 +169,30 @@ func (k Keeper) maintainSlot(ctx context.Context, s coordinator.State, slot run.
 	}
 	if terminal {
 		_, err = k.Nodes.Release(ctx, slot.Allocation, q)
+		if errors.Is(err, ErrReleaseConflict) {
+			return k.reconcileRelease(ctx, s, slot, q, err)
+		}
 	} else {
 		_, err = k.Nodes.Renew(ctx, slot.Allocation, q)
 	}
 	return leaseResult{err: err}
+}
+
+func (k Keeper) reconcileRelease(ctx context.Context, s coordinator.State, slot run.Slot, q nodeagent.LeaseCommand, conflict error) leaseResult {
+	// Cleanup can finish between Status and Release. Only a new authenticated
+	// observation of that exact allocation proves the conflicting release is moot.
+	l, err := k.Nodes.Status(ctx, slot.Allocation)
+	if err == nil {
+		err = match(s, slot, l)
+	}
+	if err != nil {
+		return leaseResult{err: errors.Join(conflict, err)}
+	}
+	if l.State != nodeagent.Released || l.Version <= q.ExpectedVersion {
+		return leaseResult{err: conflict}
+	}
+	if q.CompletedAttempt != "" && (l.CompletedAttempt != q.CompletedAttempt || l.CleanupReason != "completed") {
+		return leaseResult{err: conflict}
+	}
+	return leaseResult{released: true}
 }

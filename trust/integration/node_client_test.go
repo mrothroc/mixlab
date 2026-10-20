@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -46,6 +47,18 @@ func TestNodeClientLeaseRoundTripAndReconciledRelease(t *testing.T) {
 	check(t, err)
 	if got.State != nodeagent.Released {
 		t.Fatal("terminal cleanup missing", got)
+	}
+	// A controller that read the prior version can race with physical cleanup.
+	// The command stays a conflict; a fresh authenticated status proves release.
+	_, err = c.Release(ctx, nodeagent.LeaseCommand{IdempotencyKey: id(t), Lease: l.ID, ExpectedVersion: l.Version})
+	var conflict *clusterapp.NodeHTTPError
+	if !errors.As(err, &conflict) || conflict.Status != http.StatusConflict {
+		t.Fatalf("stale release should conflict: %v", err)
+	}
+	after, err := c.LeaseStatus(ctx, l.ID)
+	check(t, err)
+	if after != got {
+		t.Fatal("conflicting release changed terminal lease", after, got)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -58,7 +59,16 @@ func (n serviceNodes) Release(ctx context.Context, a run.Allocation, q nodeagent
 	if e != nil {
 		return nodeagent.Lease{}, e
 	}
-	return c.Release(ctx, q)
+	l, err := c.Release(ctx, q)
+	return l, classifyLeaseReleaseError(err)
+}
+
+func classifyLeaseReleaseError(err error) error {
+	var remote *NodeHTTPError
+	if errors.As(err, &remote) && remote.Status == http.StatusConflict {
+		return errors.Join(nodeleases.ErrReleaseConflict, err)
+	}
+	return err
 }
 
 // DiLoCoModels caches immutable composition and confirmed terminal cleanup.
