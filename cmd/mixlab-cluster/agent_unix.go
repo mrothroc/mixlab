@@ -60,7 +60,12 @@ func runAgentSupervised(ctx context.Context, args []string, stdout, stderr io.Wr
 		return 2
 	}
 	fail := func(err error) int { _, _ = fmt.Fprintln(stderr, "agent:", err); return 1 }
-	if f.NArg() != 0 || (*advertise != "off" && *advertise != "mdns") {
+	if f.NArg() != 0 {
+		_, _ = fmt.Fprintf(stderr, "agent: unexpected argument %q; the node agent's foreground command is 'mixlab-cluster agent [flags]' (no serve subcommand)\n", f.Arg(0))
+		return 2
+	}
+	if *advertise != "off" && *advertise != "mdns" {
+		_, _ = fmt.Fprintf(stderr, "agent: -agent-advertise %q: advertisement must be mdns or off\n", *advertise)
 		return 2
 	}
 	if _, err := bootstrapEndpoint(*listen); err != nil {

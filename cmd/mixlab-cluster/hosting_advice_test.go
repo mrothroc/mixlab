@@ -153,7 +153,11 @@ func TestHeadlessDocumentedStartCommands(t *testing.T) {
 		fields := strings.Fields(line)
 		role := fields[2]
 		command := []string{role}
-		if role != "agent" {
+		if role == "agent" {
+			if !strings.HasPrefix(fields[3], "-") {
+				t.Fatalf("invalid agent foreground command (expected a flag after agent): %s", line)
+			}
+		} else {
 			if fields[3] != "serve" {
 				t.Fatalf("invalid foreground command: %s", line)
 			}
