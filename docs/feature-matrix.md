@@ -27,6 +27,21 @@ the [HF support matrix](hf-export-support-matrix.md).
 | Energy/PLL scoring | Yes | `mixlab -mode score-ebm` | Supports native energy, differing-span PLL, dependent-window PLL, and full-sequence PLL. |
 | Hugging Face export | Gated by model surface | `export-hf`, then `parity` | Unsupported features fail explicitly; see the HF support matrix. |
 
+## Managed Cluster Hosting
+
+| macOS path | Startup | Evidence and limits |
+|---|---|---|
+| GUI approval / per-user LaunchAgent | Signed `mixlab-cluster ROLE install`; Local Network approval with a logged-in GUI session | Physical managed-training evidence. Stops at logout; returns after GUI login, not before login. |
+| Administrator allowlist / manual headless SSH | Administrator destination CIDRs and one restart; existing foreground commands with `nohup`, explicit file-backed provisioning | Qualified macOS 27.0.1 VM evidence, **not verified on a physical Mac**. Physical reboot gate waived, not passed. No restart survival, boot-time daemons, pre-login behavior, sleep/wake recovery or FileVault unlock promise. |
+
+See [hosting choices](cluster-services.md#macos-hosting-choices),
+[headless setup](cluster-headless.md) and [spike D/E evidence](cluster-network-evidence.md).
+The exemption is system-wide for every program, not a Mixlab-only grant; it
+does not replace inbound firewall rules or mTLS. Detached roles remain ordinary
+user processes. Reviewer acceptance on already-approved physical hosts validates
+the agent-driven commands/training, not the unapproved-host allowlist claim.
+Root brokers, SSH tunnels and new manual lifecycle APIs are not included.
+
 ## Objectives And Heads
 
 | Feature | Training | Native eval/scoring | Native generation | HF export | Starting point |

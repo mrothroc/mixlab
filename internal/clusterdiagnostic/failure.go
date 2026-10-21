@@ -33,7 +33,7 @@ func Classify(err error) Failure {
 	case errors.Is(err, context.Canceled):
 		return Failure{"canceled", "The request was canceled."}
 	case errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH):
-		return Failure{"route_or_permission_denied", "Check routing and host policy. On macOS, repeated failures to an on-link peer can indicate Local Network denial; allow the signed service at the console. This error alone does not prove permission denial."}
+		return Failure{"route_or_permission_denied", "Check routing and host policy. On macOS, repeated failures to an on-link peer can indicate Local Network denial; approve the signed LaunchAgent at the console or ask an administrator about the Local Network allowlist for manual headless operation (docs/cluster-headless.md). This error alone does not prove permission denial."}
 	case errors.Is(err, syscall.ECONNREFUSED):
 		return Failure{"connection_refused", "Check the listener address and service status on the target host."}
 	case errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):

@@ -131,6 +131,12 @@ func TestPublishedDocumentationIndexesHaveValidLocalLinks(t *testing.T) {
 		"llms.txt",
 		"docs/README.md",
 		"docs/feature-matrix.md",
+		"docs/cluster-quickstart.md",
+		"docs/cluster-agent.md",
+		"docs/cluster-services.md",
+		"docs/cluster-diloco.md",
+		"docs/cluster-headless.md",
+		"docs/cluster-network-evidence.md",
 		"examples/README.md",
 	} {
 		path := filepath.Join(root, relative)

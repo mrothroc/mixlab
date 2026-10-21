@@ -72,7 +72,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		add("services", "unknown", "Local user service manager unavailable; no service readiness established.")
 	}
 	if runtime.GOOS == "darwin" {
-		add("local_network_permission", "unknown", "No supported BSD-socket permission query. Allow the signed LaunchAgent once at the console; a logged-in GUI session is required. EHOSTUNREACH can also mean a routing problem.")
+		add("local_network_permission", "unknown", macOSLocalNetworkAdvice)
 		c, stop := context.WithTimeout(ctx, 3*time.Second)
 		b, err := exec.CommandContext(c, "/usr/libexec/ApplicationFirewall/socketfilterfw", "--getglobalstate").Output()
 		stop()

@@ -5,8 +5,8 @@
 > [When distributed training helps](distributed-when.md) before you start.
 
 > **Experimental.** `mixlab-cluster` trains one model across several Macs on a
-> trusted LAN. Use the signed package for macOS background services and complete
-> the initial Local Network approval at each Mac's desktop.
+> trusted LAN. Use the signed package and choose GUI-approved LaunchAgents or
+> [administrator-allowlisted headless operation](cluster-headless.md).
 > Read [Current limitations](#current-limitations) before you start. For training
 > on one machine, keep using `mixlab` as before; nothing here changes it.
 
@@ -36,12 +36,15 @@ runs `mixlab` directly on each machine with `mlx.launch` and needs no enrollment
 
 ## Current limitations
 
-- **Logged-in macOS session required.** Signed per-user LaunchAgents run without
+- **Choose the macOS hosting path.** Signed per-user LaunchAgents run without
   an open terminal, but stop at logout and return after GUI login. They do not
-  run before login. Do not substitute `nohup` or `screen` for service installation.
-- **Run commands from Terminal.app or SSH.** macOS grants Local Network access per
-  app. Terminal.app and SSH sessions have it; some third-party terminals do not,
-  even with the setting enabled. See [Troubleshooting](#troubleshooting).
+  run before login. Detached `nohup` operation is documented only with the
+  administrator allowlist configured; see the table below. `screen` alone does
+  not grant network permission.
+- **Use a verified Terminal.app or SSH context.** Some third-party terminal
+  contexts can be denied Local Network access even with the setting enabled.
+  Success in a terminal or SSH session does not establish a detached process's
+  permission. See [Troubleshooting](#troubleshooting).
 - **Upgrades need explicit reapproval.** Each node pins the exact `mixlab` and
   `mixlab-cluster` builds it runs. After an upgrade the agent refuses to start
   until you reapprove the new binaries; see [Upgrading](#upgrading).
@@ -52,6 +55,15 @@ runs `mixlab` directly on each machine with `mlx.launch` and needs no enrollment
 - **Apple Silicon Macs on macOS 26.** The signed package, which background
   services require, is built for macOS 26. On macOS 15, use the Homebrew formula
   and run the authority and agents in the foreground.
+
+| Path | Setup and lifetime | Evidence |
+|---|---|---|
+| GUI approval | Signed per-user LaunchAgent; approve Local Network once per Mac/user and keep the GUI session logged in. Stable signing is intended to retain approval across upgrades. | Physical managed-training acceptance; the numbered walkthrough below uses this path. |
+| Administrator allowlist | Administrator sets destination CIDRs and restarts once; ordinary-user roles then start over SSH with `nohup` and provisioned file keys. No logged-in GUI session is required for the documented manual workflow. | Qualified macOS 27 VM evidence only, not physical-Mac verification; no pre-login or restart-survival promise. |
+
+For the second path, follow the [headless walkthrough](cluster-headless.md)
+instead of the `install` steps below. Read the [spike limitations](cluster-network-evidence.md)
+and [support matrix](feature-matrix.md#managed-cluster-hosting) before choosing it.
 
 ## Before you start
 
@@ -256,7 +268,7 @@ See [upgrade and key-storage details](cluster-services.md#upgrade-without-reenro
 | Symptom | Cause and fix |
 |---------|---------------|
 | `nodes` reports TLS rejection or an unknown failure although TCP connects | Run `doctor` on both hosts; inspect the agent's service log for stale trust or refresh failure. Keep the authority service running. TCP reachability alone does not establish identity. |
-| `connect: no route to host` to another Mac, although `ping` works | Check routing and Local Network privacy. Allow the signed LaunchAgent at the desktop. This socket error alone is not proof of permission denial. |
+| `connect: no route to host` to another Mac, although `ping` works | Check routing and Local Network privacy. Approve the signed LaunchAgent at the desktop, or have an administrator configure the [headless allowlist](cluster-headless.md). This socket error alone is not proof of permission denial. |
 | `key-store backend unavailable; explicit backend selection required` | The Keychain is not usable in this session, typically over SSH. Use `-key-backend file`. |
 | `approved executable changed; explicit local reapproval required` | `mixlab` or `mixlab-cluster` was upgraded. Follow [Upgrading](#upgrading). |
 | `unsafe state path: not a real directory` | A state directory path passes through a symbolic link, such as `/tmp` or `/var` on macOS. Use a real path under your home directory. |

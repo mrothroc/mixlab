@@ -83,7 +83,7 @@ func runCoordinatorContext(ctx context.Context, action string, args []string, st
 		if err := clusterapp.InitializeDiLoCoCoordinator(o); err != nil {
 			return fail(err)
 		}
-		_, _ = fmt.Fprintln(stdout, "coordinator contexts initialized; install the service with these same paths and listener")
+		_, _ = fmt.Fprintln(stdout, "coordinator contexts initialized; use install or serve with these same paths and listener")
 		return 0
 	}
 	if action == "install" {
@@ -103,7 +103,7 @@ func runCoordinatorContext(ctx context.Context, action string, args []string, st
 		if err := m.Install(ctx, clusterservice.Spec{Role: "coordinator", Binary: self, Arguments: argv}); err != nil {
 			return fail(err)
 		}
-		_, _ = fmt.Fprintln(stdout, "coordinator service installed; use coordinator status and doctor. macOS requires a logged-in GUI session and Local Network permission.")
+		reportServiceInstalled(stdout, "coordinator", runtime.GOOS)
 		return 0
 	}
 	l, err := net.Listen("tcp", *listen)

@@ -126,12 +126,7 @@ func runService(role, action string, args []string, stdout, stderr io.Writer) in
 	if err := m.Install(ctx, clusterservice.Spec{Role: role, Binary: self, Arguments: argv}); err != nil {
 		return fail(err)
 	}
-	_, _ = fmt.Fprintf(stdout, "%s service installed. Use '%s status' and 'doctor' to check readiness.\n", role, role)
-	if runtime.GOOS == "darwin" {
-		_, _ = fmt.Fprintln(stdout, "Requires a logged-in GUI session. Click Allow for Local Network access on this Mac. Logs: ~/.mixlab/services/"+role+"/service.log")
-	} else {
-		_, _ = fmt.Fprintln(stdout, "Logged-out operation requires administrator-enabled systemd lingering; installation does not change it.")
-	}
+	reportServiceInstalled(stdout, role, runtime.GOOS)
 	return 0
 }
 

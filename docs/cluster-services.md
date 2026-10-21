@@ -12,6 +12,21 @@ The experimental DiLoCo coordinator reuses this lifecycle; see
 independent context paths, submission and recovery limits. Its service label is
 `com.mixlab.cluster-coordinator` and its logs use the `coordinator` role directory.
 
+## macOS Hosting Choices
+
+| Path | Operation | Requirements and limits |
+|---|---|---|
+| GUI approval | `authority/agent/coordinator install` and per-user LaunchAgents | Signed package, Local Network approval and logged-in GUI session. Stops at logout, returns after GUI login. |
+| Administrator allowlist | Existing foreground commands started over SSH with `nohup` | Administrator sets system-wide destination CIDRs and restarts once; explicitly provision file keys. No service install, root daemon or new lifecycle commands. Qualified VM-only evidence, not physical-Mac verification. |
+
+The [manual headless guide](cluster-headless.md) gives the exact administrator
+commands, scope/reversal guidance and detached start/check/stop walkthrough.
+It promises neither restart survival nor behavior before first login,
+sleep/wake recovery or FileVault unlock. [Spike D/E evidence](cluster-network-evidence.md)
+distinguishes the failed ordinary-user daemon-only approach from the selective
+VM exemption result. See the [support matrix](feature-matrix.md#managed-cluster-hosting).
+An exemption changes network policy; it does not make a LaunchAgent run at logout.
+
 ## macOS
 
 Use the Developer ID-signed, notarized package (macOS 26), not the source-built
@@ -169,11 +184,20 @@ failure; run doctor on that peer and inspect its service log.
 On macOS, repeated `EHOSTUNREACH` to a reachable on-link machine **may** indicate
 Local Network denial. It can also be a real routing failure. BSD sockets do not
 provide a definitive permission query. Check Privacy & Security > Local Network
-and allow the signed service at the console. Gatekeeper, Local Network privacy,
+and allow the signed service at the console, or use the administrator-managed
+[allowlist path](cluster-headless.md) for manual headless operation. Gatekeeper, Local Network privacy,
 Application Firewall and third-party filters are separate controls. Do not
 disable them or remove quarantine to make a test pass.
 
 ## Release Acceptance
+
+The manual SSH workflow has a separate reviewer gate: on already-approved
+physical hosts, use only non-interactive SSH to start/detach/reconnect, submit
+a bounded multi-round Metal run at realistic load, inspect status/logs, then
+stop/restart and clean up. No Terminal.app or `osascript` launch supplies the
+execution context. This tests manual commands, not physical allowlist behavior;
+the latter rests on the explicitly qualified VM evidence, with the physical
+reboot gate waived for this release. No acceptance is implied by docs/tests alone.
 
 Before releasing a change to service behavior, verify the published quickstart on two fresh user
 installations, both services running without SSH sessions, signed rebuild/upgrade

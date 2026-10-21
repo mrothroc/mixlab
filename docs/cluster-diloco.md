@@ -70,14 +70,22 @@ Setup is explicit: no default startup installs, stops or replaces an existing
 service. Inspect existing registrations before choosing `install` or a control
 action; a conflicting registration is rejected, not silently overwritten.
 
-For foreground diagnosis, stop the service first and run
+For foreground diagnosis or the [administrator-allowlisted headless path](cluster-headless.md), stop the service first and run
 `mixlab-cluster coordinator serve "${coordinator_args[@]}"`. Foreground serving
-ends with its process/terminal. Never run foreground and installed copies over
+normally ends with its process/terminal; the headless guide explicitly redirects
+all streams and uses `nohup`. Never run foreground and installed copies over
 the same state. `coordinator start|stop|status|uninstall` take no configuration
 flags. Changing service settings requires uninstalling the registration first;
 that does not migrate or erase its operational state.
 
 ## Login And Terminal Contract
+
+Choose [GUI-approved services or administrator-allowlisted manual SSH](cluster-services.md#macos-hosting-choices).
+The latter uses file keys selected during `init`/`enroll`, not a `serve` flag,
+and has qualified VM-only Local Network evidence. It has not been verified on a
+physical Mac and promises no pre-login behavior or restart survival. The
+[headless guide](cluster-headless.md) covers commands, logs and explicit stop/restart.
+The following installed-service contract is unchanged.
 
 The coordinator reuses the [existing user-service lifecycle](cluster-services.md).
 macOS uses `com.mixlab.cluster-coordinator` in the logged-in GUI session, not a
@@ -93,7 +101,9 @@ signed service's Local Network prompt there. A submission terminal must itself
 be able to reach and authenticate the coordinator and selected nodes,
 and access its enrolled controller backend. A terminal-hosted app or SSH context
 that fails these checks is not made usable merely by approving a LaunchAgent.
-Use a verified desktop terminal for setup/submission when another context fails.
+Use a verified SSH context (including `ssh localhost` for the agent's own host)
+or desktop terminal when another context fails; manual detached operation requires
+the administrator policy above, not simply a successful terminal probe.
 No command unlocks a Keychain, changes firewall/privacy policy, or falls back
 from Keychain storage to file keys automatically.
 The client attempts an authority trust refresh; during an authority outage it

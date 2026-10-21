@@ -13,9 +13,20 @@ does not make a LAN acceleration claim. Do not expose an agent to untrusted host
 Start with [managed clusters: getting started](cluster-quickstart.md) for a
 service-first walkthrough. [Background services](cluster-services.md) covers
 installation, logs, diagnosis and explicit post-upgrade reapproval. The direct
-foreground commands below remain available for development. Do not use a detached
-SSH process as a substitute for the signed LaunchAgent: it can lose Local Network
-access, fail trust refresh and eventually reject controllers.
+foreground commands below also support [manual headless operation](cluster-headless.md)
+with an administrator-configured Local Network allowlist and explicitly
+provisioned file keys. Without that policy, do not substitute a detached SSH
+process for the signed LaunchAgent: it can lose Local Network access, fail trust
+refresh and eventually reject controllers.
+
+| macOS path | Requirement | Boundary |
+|---|---|---|
+| GUI approval / LaunchAgent | Signed package, Local Network approval, logged-in user session | Existing physical managed-training evidence; stops at logout. |
+| Administrator allowlist / manual SSH | System-wide peer CIDRs, one administrator restart, file keys, redirected `nohup` process | Qualified VM-only network evidence; not verified on a physical Mac, no pre-login or reboot recovery promise. |
+
+See the [support matrix](feature-matrix.md#managed-cluster-hosting) and
+[sanitized spike results](cluster-network-evidence.md). The allowlist covers
+outgoing destinations, not inbound firewall permission or mTLS identity.
 
 ## Local Setup
 
