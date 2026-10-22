@@ -60,13 +60,16 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		add(name, "failed", doctorFailure(err))
 	}
 	if m, err := serviceManager(); err == nil {
-		for _, role := range []string{"authority", "agent", "coordinator"} {
-			_, err := m.Control(ctx, role, "status")
-			if err != nil {
-				add(role+"_service", "unknown", "Not installed/running or service manager unavailable; use '"+role+" status' for details.")
-			} else {
-				add(role+"_service", "ok", "Service manager reports the job. Check trust and peer reachability for readiness.")
+		inspected := *agent
+		if inspected != "" {
+			if opts, err := stateOptions(*home, inspected); err == nil {
+				if p, err := statehome.Resolve(opts, statehome.Context{Kind: statehome.Agent}); err == nil {
+					inspected = p.Dir()
+				}
 			}
+		}
+		for _, role := range []string{"authority", "agent", "coordinator"} {
+			checks = append(checks, doctorService(ctx, m, role, inspected))
 		}
 	} else {
 		add("services", "unknown", "Local user service manager unavailable; no service readiness established.")

@@ -32,6 +32,7 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 	recover := flags.Bool("recover", false, "recover the persisted initialization; requires -cluster-state-dir and no new options")
 	flags.Usage = func() {
 		_, _ = fmt.Fprintln(stderr, "Usage: mixlab-cluster init [options]\n"+developmentNotice)
+		_, _ = fmt.Fprintln(stderr, "-cluster-state-dir does not relocate principals or staging/enrollment. Set -state-home to contain all default paths, or use the three -ROLE-principal-state-dir flags. The JSON report lists authority_dir and principals[].directory; retain it for teardown. See docs/cluster-headless.md for interrupted-init staging cleanup.")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {

@@ -83,3 +83,34 @@ func TestInitCLIValidationAndHelp(t *testing.T) {
 		t.Fatal(endpoint, err)
 	}
 }
+
+func TestInitExactAuthorityDoesNotRelocatePrincipals(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	home, authority := filepath.Join(dir, "home"), filepath.Join(dir, "authority")
+	var out, stderr bytes.Buffer
+	if code := runInit([]string{"-state-home", home, "-cluster-state-dir", authority, "-key-backend", "file"}, &out, &stderr); code != 0 {
+		t.Fatalf("%d %s", code, &stderr)
+	}
+	var report bootstrap.Report
+	if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.AuthorityDir != authority || len(report.Principals) != 3 {
+		t.Fatal(report)
+	}
+	for _, principal := range report.Principals {
+		want := filepath.Join(home, "principals", report.Cluster, string(principal.Role), principal.Principal)
+		if principal.Directory != want {
+			t.Fatalf("principal path %s != %s", principal.Directory, want)
+		}
+		if _, err := os.Stat(want); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(filepath.Join(home, "staging", "enrollment", principal.Principal)); !os.IsNotExist(err) {
+			t.Fatal("successful init retained staging", err)
+		}
+	}
+}

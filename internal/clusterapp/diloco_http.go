@@ -13,6 +13,7 @@ import (
 
 	"github.com/mrothroc/mixlab/admission"
 	"github.com/mrothroc/mixlab/coordinator"
+	"github.com/mrothroc/mixlab/internal/clusterdiagnostic"
 	"github.com/mrothroc/mixlab/transport/managedtls"
 	"github.com/mrothroc/mixlab/trust"
 )
@@ -29,16 +30,20 @@ type DiLoCoInfo struct {
 }
 
 type DiLoCoSubmissionStatus struct {
-	RunID                   string            `json:"run_id"`
-	Admission               string            `json:"admission"`
-	RunPhase                coordinator.Phase `json:"run_phase,omitempty"`
-	Round                   uint64            `json:"round"`
-	Failure                 string            `json:"failure,omitempty"`
-	ServiceError            bool              `json:"service_error"`
-	ObservedAt              int64             `json:"observed_at,omitempty"`
-	RecoveryWorker          string            `json:"recovery_worker,omitempty"`
-	RecoveryStartedAt       int64             `json:"recovery_started_at,omitempty"`
-	LearnerUnavailableSince int64             `json:"learner_unavailable_since,omitempty"`
+	RunID                   string                     `json:"run_id"`
+	Admission               string                     `json:"admission"`
+	RunPhase                coordinator.Phase          `json:"run_phase,omitempty"`
+	Round                   uint64                     `json:"round"`
+	Failure                 string                     `json:"failure,omitempty"`
+	ServiceError            bool                       `json:"service_error"`
+	ObservedAt              int64                      `json:"observed_at,omitempty"`
+	RecoveryWorker          string                     `json:"recovery_worker,omitempty"`
+	RecoveryStartedAt       int64                      `json:"recovery_started_at,omitempty"`
+	LearnerUnavailableSince int64                      `json:"learner_unavailable_since,omitempty"`
+	ServiceNode             string                     `json:"service_node,omitempty"`
+	ServiceFailure          *clusterdiagnostic.Failure `json:"service_failure,omitempty"`
+	AwaitingNode            bool                       `json:"awaiting_node,omitempty"`
+	NextRetryAt             int64                      `json:"next_retry_at,omitempty"`
 }
 
 // DiLoCoSubmissionAPI owns transport authentication only. Admission persists
@@ -197,12 +202,31 @@ func (a DiLoCoSubmissionAPI) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "service observation unavailable", http.StatusServiceUnavailable)
 		return
 	}
-	out.ServiceError, out.ObservedAt = o.Error != "", o.At
+	out.setObservation(o)
 	if !current() {
 		http.Error(w, "current trust required", http.StatusForbidden)
 		return
 	}
 	writeJSON(w, out)
+}
+
+func (out *DiLoCoSubmissionStatus) setObservation(o admission.Observation) {
+	out.ServiceError, out.ObservedAt = o.Error != "", o.At
+	out.ServiceFailure, out.ServiceNode, out.AwaitingNode, out.NextRetryAt = nil, "", false, 0
+	if !out.ServiceError {
+		return
+	}
+	failure := clusterdiagnostic.FromReason(o.FailureClass)
+	out.ServiceFailure = &failure
+	if nodeRouteID(o.FailureNode) {
+		out.ServiceNode = o.FailureNode
+	}
+	out.NextRetryAt = o.RetryAt
+	// No timeout alone authorizes a successful abort. Operators can distinguish
+	// retained compensation from a silently stalled run, without raw TLS errors.
+	terminal := out.RunPhase == coordinator.Complete || out.RunPhase == coordinator.Failed
+	out.AwaitingNode = out.Admission == "ABORTING" ||
+		(out.Admission == "COMMITTED" && terminal && o.RetryAt > 0 && out.ServiceNode != "")
 }
 
 func (out *DiLoCoSubmissionStatus) setRunState(s coordinator.State) {

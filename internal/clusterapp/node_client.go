@@ -59,7 +59,12 @@ func NewNodeClientWithPolicy(endpoint, node string, policy func() (*managedtls.P
 	return &NodeClient{endpoint, node, policy}, nil
 }
 
-func (c *NodeClient) request(ctx context.Context, method, path string, body, out any) error {
+func (c *NodeClient) request(ctx context.Context, method, path string, body, out any) (failure error) {
+	defer func() {
+		if failure != nil {
+			failure = &nodeFailure{node: c.node, err: failure}
+		}
+	}()
 	p, err := c.policy()
 	if err != nil {
 		return err

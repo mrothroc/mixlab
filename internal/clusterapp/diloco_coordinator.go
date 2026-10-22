@@ -161,7 +161,7 @@ func ServeInstalledDiLoCo(ctx context.Context, l net.Listener, o DiLoCoCoordinat
 		}
 		return recovery.Tick(ctx, q.Launch.Run)
 	}
-	service := DiLoCoService{Inbox: inbox, Clock: o.Clock, Interval: time.Second}
+	service := DiLoCoService{Inbox: inbox, Clock: o.Clock, Interval: time.Second, RunTerminal: models.Terminal}
 	leases := DiLoCoAdmissionLeases{Repository: repository, Clock: o.Clock, Client: func(role trust.Role, candidate recruitment.Candidate) (AdmissionLeaseClient, error) {
 		identity := a
 		if role == trust.Coordinator {

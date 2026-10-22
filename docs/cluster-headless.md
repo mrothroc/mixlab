@@ -85,7 +85,9 @@ submitting-controller and node identities. For example, for a new cluster:
 
 ```bash
 mixlab-cluster init -key-backend file \
+  -state-home "$HOME/.mixlab" \
   -cluster-state-dir "$HOME/.mixlab/authority" \
+  -authority-principal-state-dir "$HOME/.mixlab/authority-principal" \
   -controller-principal-state-dir "$HOME/.mixlab/controller" \
   -coordinator-principal-state-dir "$HOME/.mixlab/coordinator-principal" \
   -trust-listen 192.168.1.10:7443
@@ -97,6 +99,18 @@ invitation secrets or keys in chat/logs. State must be owner-only, on real paths
 without symlink components. File keys are not a silent fallback from Keychain:
 existing Keychain identities need an explicit migration/reenrollment decision,
 not an edit to backend metadata or a new runtime flag.
+
+Authority state and TLS principals intentionally have independent lifecycles.
+`-cluster-state-dir` relocates **only authority state**, not the principals.
+Without exact principal flags, all three initial roles (authority, controller,
+coordinator) are written under `<state-home>/principals/<cluster>/<role>/<id>`.
+The state root is `-state-home`, then `MIXLAB_STATE_HOME`, then `~/.mixlab`.
+Temporary initialization staging uses `<state-home>/staging/enrollment/<id>` even when
+exact principal directories are supplied. For a disposable deployment choose a
+dedicated `-state-home` and keep all exact paths inside it; do not accidentally
+leave authority credentials in the default home. Successful initialization
+removes its staging directories; interrupted initialization must be recovered
+with `init -recover -cluster-state-dir ...` before considering cleanup.
 
 **Serving commands do not accept `-key-backend`.** They reopen the backend
 recorded at provisioning. The node foreground command is `agent`, not
@@ -195,7 +209,10 @@ ssh -o BatchMode=yes controller 'tail -n 80 "$HOME/.mixlab/manual/authority.log"
 
 Replace `COORDINATOR_ID` with the enrolled coordinator ID. Require authenticated
 node availability and `coordinator_tls_trust: ok`, not only TCP success. Doctor
-is read-only; its service-manager checks may remain unknown for manual roles,
+is read-only; its `*_service` rows describe installed OS registrations and their
+state paths, never manual processes. An agent registration for a different
+`-agent-state-dir` is marked `mismatch`; registrations for other roles may belong
+to another cluster and are not evidence about this deployment. Checks may remain unknown for manual roles,
 and `local_network_permission` remains unknown rather than pretending to inspect
 the effective OS grant. A terminal probe does not prove the background process's
 outbound permission. Check startup/refresh logs and continued authenticated
@@ -239,3 +256,15 @@ writing to the old file). Preserve run evidence and required checkpoints;
 remove only this deployment's PID notes, logs and disposable state after cleanup.
 Do not delete live leases or unrelated service installations. Roll back the
 administrator exemption separately if the deployment no longer needs it.
+
+For permanent teardown of a **disposable** deployment, inventory the retained
+init report's `authority_dir` and every `principals[].directory` (authority,
+controller and coordinator), plus any node/enrolled-principal and coordinator
+context paths subsequently created. Include the chosen state root's `staging/enrollment`
+staging area if initialization was interrupted; never delete it to work around
+a recovery error. Also account for manual PID/log files and any OS service
+registrations installed separately. Removing only `-cluster-state-dir` does not
+remove principals. Delete only verified deployment-owned paths after all roles
+and workers stop; do not recursively delete a shared `~/.mixlab` or shared
+enrollment root. File-backed keys live with their owning state; Keychain-backed
+identities require their existing key-lifecycle procedure, not just file deletion.

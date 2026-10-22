@@ -23,6 +23,7 @@ import (
 	runcontract "github.com/mrothroc/mixlab/diloco/run"
 	"github.com/mrothroc/mixlab/discovery"
 	"github.com/mrothroc/mixlab/internal/clusterapp"
+	"github.com/mrothroc/mixlab/internal/clusterdiagnostic"
 	"github.com/mrothroc/mixlab/nodeagent"
 	"github.com/mrothroc/mixlab/nodejob"
 	"github.com/mrothroc/mixlab/recruitment"
@@ -108,13 +109,7 @@ func runSubmitDiLoCoContext(ctx context.Context, args []string, stdout, stderr i
 			if err != nil {
 				return err
 			}
-			if err := json.NewEncoder(stdout).Encode(v); err != nil {
-				return err
-			}
-			if v.RunPhase == coordinator.Failed || v.Admission == "ABORTED" {
-				return fmt.Errorf("run ended unsuccessfully; see durable status")
-			}
-			return nil
+			return reportDiLoCoStatus(stdout, stderr, v)
 		}
 		info, err := client.Info(ctx)
 		if err != nil {
@@ -187,6 +182,23 @@ func runSubmitDiLoCoContext(ctx context.Context, args []string, stdout, stderr i
 		return 1
 	}
 	return 0
+}
+
+func reportDiLoCoStatus(stdout, stderr io.Writer, v clusterapp.DiLoCoSubmissionStatus) error {
+	if err := json.NewEncoder(stdout).Encode(v); err != nil {
+		return err
+	}
+	if v.ServiceFailure != nil {
+		// Reconstruct static guidance rather than printing a server-provided hint.
+		f := clusterdiagnostic.FromReason(v.ServiceFailure.Reason)
+		if _, err := fmt.Fprintf(stderr, "coordinator service: %s: %s\n", f.Reason, f.Hint); err != nil {
+			return err
+		}
+	}
+	if v.RunPhase == coordinator.Failed || v.Admission == "ABORTED" {
+		return fmt.Errorf("run ended unsuccessfully; see durable status")
+	}
+	return nil
 }
 
 func uploadDiLoCoInitialModel(ctx context.Context, client *clusterapp.DiLoCoClient, file, binary string, config []byte) (runcontract.Blob, error) {

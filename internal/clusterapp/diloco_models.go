@@ -112,6 +112,17 @@ func (s *DiLoCoModels) Model(ctx context.Context, id string) (coordinator.Model,
 	v, e := s.get(ctx, id)
 	return v.model, e
 }
+
+// Terminal reloads the authoritative run state, never admission observations
+// or the process-local cleanup cache. This keeps restart retry scope accurate.
+func (s *DiLoCoModels) Terminal(ctx context.Context, id string) (bool, error) {
+	state, err := s.Repository.Load(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return state.Phase == coordinator.Complete || state.Phase == coordinator.Failed, nil
+}
+
 func (s *DiLoCoModels) Tick(ctx context.Context, q admission.Submission, _ admission.Snapshot) (err error) {
 	stage := "compose"
 	defer func() { err = diLoCoStageError(stage, err) }()

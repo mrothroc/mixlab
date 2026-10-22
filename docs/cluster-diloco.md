@@ -210,6 +210,33 @@ The request and individual effects are bounded, not the total time to finish
 compensation during an outage. A cancel can also race commit; inspect the durable
 status rather than assuming that an acknowledged cancel prevented commitment.
 
+Failed admission, abort compensation and terminal allocation-release effects
+retry with exponential backoff starting at two seconds,
+with per-run jitter and a maximum delay of 60 seconds. Retry timing survives
+coordinator restart; completed admission effects, explicit cancellation and
+admission deadline transitions are not held behind an obsolete retry delay.
+Service failure events are rate-limited to one per run per minute, including
+changing error text. This bounds repetitive error logging, not all operational
+logs. Live committed runs keep their normal service tick cadence, including
+lease maintenance, learner recovery, round advancement and evaluation deadline
+checks, even when errors persist. Backoff for committed runs requires durable
+`COMPLETE` or `FAILED` coordinator state; live errors never delay the next tick.
+Existing lease and workload deadlines are unchanged.
+
+On failure, status additionally reports `service_node` when the affected node is
+known, a sanitized `service_failure` (`reason` and `hint`), and `next_retry_at`
+(Unix seconds). The CLI prints the same diagnostic guidance to stderr. Raw
+remote error text and TLS material are not returned. For an unreachable node
+during compensation, `admission` stays `ABORTING` and `awaiting_node` is true.
+Terminal committed runs also report `awaiting_node` when retrying failed cleanup
+at a known node, while preserving their `COMPLETE` or `FAILED` run phase.
+Retries continue at the capped cadence until cleanup is acknowledged; there is
+no timeout that silently converts this to `ABORTED`. Lease expiry alone cannot
+prove that an ambiguously successful reservation or its cleanup was observed.
+Restore node reachability and inspect authenticated status rather than deleting
+admission state. Local Network/routing guidance does not prove which policy
+caused a failed connection.
+
 ## State Retention And Recovery
 
 Keep coordinator/admission journals, checkpoint references and their artifact

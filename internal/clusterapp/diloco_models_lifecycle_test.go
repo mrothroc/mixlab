@@ -55,7 +55,7 @@ func (n *terminalLeaseNodes) Release(_ context.Context, a run.Allocation, q node
 	return l, n.releaseErr
 }
 
-func lifecycleModels(f *admissionLeaseFixture, repo *recoveryTestRepository, nodes *terminalLeaseNodes) *DiLoCoModels {
+func lifecycleModels(f *admissionLeaseFixture, repo *recoveryTestRepository, nodes nodeleases.Nodes) *DiLoCoModels {
 	artifacts := coordinatorlocal.Artifacts{}
 	clock := serviceClock{func() time.Time { return time.Unix(f.now.Load(), 0) }}
 	model := coordinator.Model{Repository: repo, Artifacts: artifacts, Clock: clock, Evaluator: remoteEvaluation{}}

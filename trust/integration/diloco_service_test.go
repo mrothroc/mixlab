@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -17,6 +20,7 @@ import (
 	coordinatorlocal "github.com/mrothroc/mixlab/coordinator/local"
 	"github.com/mrothroc/mixlab/diloco/run"
 	"github.com/mrothroc/mixlab/internal/clusterapp"
+	"github.com/mrothroc/mixlab/nodeagent"
 	"github.com/mrothroc/mixlab/nodejob"
 	"github.com/mrothroc/mixlab/recruitment"
 	"github.com/mrothroc/mixlab/transport/managedtls"
@@ -109,6 +113,53 @@ func TestDiLoCoSubmissionDurableHTTPAndOwnership(t *testing.T) {
 	if status.Admission != "ADMITTING" {
 		t.Fatal(status)
 	}
+	// Drive an actual service effect through the node-client error boundary,
+	// persist it, and read the public status over authenticated HTTP.
+	nodeID := q.Launch.Selection.Selected[0].Capabilities.Node
+	refusing, err := clusterapp.NewNodeClientWithPolicy("127.0.0.1:7445", nodeID, func() (*managedtls.Policy, error) {
+		return nil, fmt.Errorf("PRIVATE-TLS-DETAIL: %w", &net.OpError{Op: "dial", Net: "tcp", Err: syscall.EHOSTUNREACH})
+	})
+	check(t, err)
+	life, stop := context.WithCancel(context.Background())
+	service := clusterapp.DiLoCoService{Inbox: inbox, Clock: f.clock, Interval: 10 * time.Millisecond,
+		Maintain: func(ctx context.Context, _ admission.Submission, _ admission.Snapshot) error {
+			_, e := refusing.Reserve(ctx, nodeagent.Reserve{})
+			return e
+		},
+		Admission: func(context.Context, admission.Submission) (admission.Ports, error) {
+			return admission.Ports{}, errors.New("unexpected forward effect")
+		},
+		Run: func(context.Context, admission.Submission, admission.Snapshot) error {
+			return errors.New("unexpected run")
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- service.Serve(life, nil) }()
+	func() {
+		defer func() {
+			stop()
+			if e := <-done; !errors.Is(e, context.Canceled) {
+				t.Errorf("service shutdown: %v", e)
+			}
+		}()
+		until := time.Now().Add(5 * time.Second)
+		for time.Now().Before(until) {
+			status, err = c.Status(context.Background(), q.Launch.Run, false)
+			check(t, err)
+			if status.ServiceError {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		if status.ServiceNode != nodeID || status.ServiceFailure == nil || status.ServiceFailure.Reason != "route_or_permission_denied" || status.NextRetryAt <= status.ObservedAt {
+			t.Fatalf("missing node failure over HTTP: %+v", status)
+		}
+		payload, e := json.Marshal(status)
+		check(t, e)
+		if strings.Contains(string(payload), "PRIVATE-TLS-DETAIL") || !strings.Contains(string(payload), "allowlist") {
+			t.Fatalf("unsafe/unhelpful status: %s", payload)
+		}
+	}()
 	// Retry an exact lost acknowledgement after admission expires. It must
 	// not re-run preflight or change the accepted request.
 	f.mu.Lock()
@@ -143,6 +194,9 @@ func TestDiLoCoSubmissionDurableHTTPAndOwnership(t *testing.T) {
 	check(t, err)
 	if status.Admission != "ABORTING" {
 		t.Fatal(status)
+	}
+	if !status.AwaitingNode {
+		t.Fatal("pending compensation not reported")
 	}
 }
 

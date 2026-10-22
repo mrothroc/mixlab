@@ -21,9 +21,12 @@ type DiLoCoService struct {
 	Admission func(context.Context, admission.Submission) (admission.Ports, error)
 	Maintain  func(context.Context, admission.Submission, admission.Snapshot) error
 	Run       func(context.Context, admission.Submission, admission.Snapshot) error
-	Clock     func() time.Time
-	Interval  time.Duration
-	Event     func(string, error)
+	// RunTerminal reads durable coordinator state. Without it, committed work
+	// always keeps normal cadence; an error alone cannot authorize backoff.
+	RunTerminal func(context.Context, string) (bool, error)
+	Clock       func() time.Time
+	Interval    time.Duration
+	Event       func(string, error)
 }
 
 func (s DiLoCoService) validate() error {
@@ -54,9 +57,29 @@ func (s DiLoCoService) step(ctx context.Context, id string) error {
 	if v.Done && !v.Committed {
 		return nil
 	}
+	previous, err := s.Inbox.Observation(ctx, id)
+	if err != nil {
+		return err
+	}
+	work, cancel := context.WithTimeout(ctx, diLoCoServiceBudget)
+	defer cancel()
+	retryAllowed := !v.Committed
+	var terminalErr error
+	if v.Committed && v.Done && s.RunTerminal != nil {
+		retryAllowed, terminalErr = s.RunTerminal(work, id)
+		if terminalErr != nil {
+			retryAllowed = false
+		}
+	}
+	now := s.Clock().Unix()
+	// An explicit cancellation or expired admission bypasses forward retry wait.
+	deadlineCrossed := !v.Aborting && !v.Committed && previous.At < v.Deadline && now >= v.Deadline
+	if retryAllowed && previous.At <= now && previous.RetryAt > now && previous.RetryPhase == admissionRetryPhase(v) && !deadlineCrossed {
+		return nil
+	}
+	before := v
 	// Admission maintenance needs the same liveness envelope as committed work.
 	// Its shorter budget leaves room for compensation or handoff in this turn.
-	work, cancel := context.WithTimeout(ctx, diLoCoServiceBudget)
 	var effect error
 	if !v.Done {
 		var maintenance error
@@ -85,19 +108,25 @@ func (s DiLoCoService) step(ctx context.Context, id string) error {
 	} else {
 		effect = s.Run(work, q, v)
 	}
+	effect = errors.Join(diLoCoStageError("read run retry scope", terminalErr), effect)
 	cancel()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	} // Shutdown never requests compensation.
-	if effect != nil && len(effect.Error()) > 4096 {
-		effect = fmt.Errorf("service effect failed; diagnostic exceeded limit")
+	after, err := saga.Snapshot(ctx)
+	if err != nil {
+		return err
 	}
+	observation, emit := serviceObservation(id, s.Clock().Unix(), previous, before, after, retryAllowed, effect)
 	// Observation is replaceable operational evidence, not the local event log.
 	// A failed observation write must not hide the original effect diagnostic.
-	if effect != nil && s.Event != nil {
+	if emit && s.Event != nil {
+		if len(effect.Error()) > 4096 {
+			effect = fmt.Errorf("service effect failed; diagnostic exceeded limit")
+		}
 		s.Event(id, effect)
 	}
-	return s.Inbox.Observe(ctx, id, s.Clock().Unix(), effect)
+	return s.Inbox.ObserveState(ctx, id, observation)
 }
 
 func (s DiLoCoService) Serve(ctx context.Context, ready func()) error {

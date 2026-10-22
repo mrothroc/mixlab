@@ -13,6 +13,25 @@ import (
 type Observation struct {
 	At    int64  `json:"at"`
 	Error string `json:"error,omitempty"`
+	// Retry timing is scheduling evidence only, never proof of compensation.
+	RetryAt       int64  `json:"retry_at,omitempty"`
+	RetryFailures uint32 `json:"retry_failures,omitempty"`
+	RetryPhase    string `json:"retry_phase,omitempty"`
+	EventAt       int64  `json:"event_at,omitempty"`
+	FailureNode   string `json:"failure_node,omitempty"`
+	FailureClass  string `json:"failure_class,omitempty"`
+}
+
+func (v Observation) valid() bool {
+	if v.At <= 0 || len(v.Error) > 4096 || v.RetryAt < 0 || v.RetryFailures > 16 ||
+		v.EventAt < 0 || len(v.FailureNode) > 64 || len(v.FailureClass) > 64 {
+		return false
+	}
+	if v.RetryAt == 0 {
+		return v.RetryFailures == 0 && v.RetryPhase == ""
+	}
+	return v.Error != "" && v.RetryFailures > 0 && v.RetryAt > v.At && v.RetryAt-v.At <= 60 &&
+		(v.RetryPhase == "admitting" || v.RetryPhase == "aborting" || v.RetryPhase == "committed")
 }
 
 func (i *Inbox) OwnService(ctx context.Context, serve func(context.Context) error) error {
@@ -23,14 +42,20 @@ func (i *Inbox) OwnService(ctx context.Context, serve func(context.Context) erro
 }
 
 func (i *Inbox) Observe(ctx context.Context, id string, at int64, failure error) error {
-	if _, err := i.Read(ctx, id); err != nil {
-		return err
-	}
 	v := Observation{At: at}
 	if failure != nil {
 		v.Error = failure.Error()
 	}
-	if at <= 0 || len(v.Error) > 4096 {
+	return i.ObserveState(ctx, id, v)
+}
+
+// ObserveState persists bounded scheduling and diagnostic data independently
+// of the admission journal. A missing old record remains backward compatible.
+func (i *Inbox) ObserveState(ctx context.Context, id string, v Observation) error {
+	if _, err := i.Read(ctx, id); err != nil {
+		return err
+	}
+	if !v.valid() {
 		return fmt.Errorf("invalid service observation")
 	}
 	b, err := json.Marshal(v)
@@ -47,11 +72,13 @@ func (i *Inbox) Observe(ctx context.Context, id string, at int64, failure error)
 			if err := json.Unmarshal(old, &previous); err != nil {
 				return err
 			}
-			if previous.At <= 0 || len(previous.Error) > 4096 {
+			if !previous.valid() {
 				return fmt.Errorf("invalid persisted service observation")
 			}
 			// Keep live diagnostics at minute cadence unless the error changes.
-			if previous.Error == v.Error && at >= previous.At && at-previous.At < 60 {
+			at := previous.At
+			previous.At = v.At
+			if previous == v && v.At >= at && v.At-at < 60 {
 				return nil
 			}
 		}
@@ -74,7 +101,7 @@ func (i *Inbox) Observation(ctx context.Context, id string) (Observation, error)
 	if err := json.Unmarshal(b, &v); err != nil {
 		return v, err
 	}
-	if v.At <= 0 || len(v.Error) > 4096 {
+	if !v.valid() {
 		return v, fmt.Errorf("invalid persisted service observation")
 	}
 	return v, nil

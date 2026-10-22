@@ -191,13 +191,15 @@ disable them or remove quarantine to make a test pass.
 
 ## Release Acceptance
 
-The manual SSH workflow has a separate reviewer gate: on already-approved
-physical hosts, use only non-interactive SSH to start/detach/reconnect, submit
-a bounded multi-round Metal run at realistic load, inspect status/logs, then
-stop/restart and clean up. No Terminal.app or `osascript` launch supplies the
-execution context. This tests manual commands, not physical allowlist behavior;
-the latter rests on the explicitly qualified VM evidence, with the physical
-reboot gate waived for this release. No acceptance is implied by docs/tests alone.
+The physical reviewer gate passed using GUI-approved LaunchAgents managed over
+non-interactive SSH: start/disconnect/reconnect, a bounded multi-round Metal run
+at realistic load, status/logs, service stop/restart and cleanup. No Terminal.app
+or `osascript` launch supplied the execution context. See the exact candidate
+and qualifications in [network evidence](cluster-network-evidence.md).
+This is path-1 acceptance, not proof of manual detached operation without an
+allowlist. The administrator-allowlist path rests on qualified VM evidence,
+with physical reboot verification waived. Docs/tests alone do not imply a
+physical acceptance pass for later changes.
 
 Before releasing a change to service behavior, verify the published quickstart on two fresh user
 installations, both services running without SSH sessions, signed rebuild/upgrade

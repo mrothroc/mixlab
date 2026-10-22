@@ -57,10 +57,13 @@ Mac**; that reboot gate was waived because physical restarts were unavailable.
 This is not an assertion that authenticated multi-host training, trust renewal,
 or detached lifecycle acceptance passed through the exemption.
 
-GUI-approved LaunchAgents have the earlier physical two-Mac managed-training
-evidence. The release's separate reviewer gate exercises documented detached
-commands over non-interactive SSH on already-approved physical hosts, including
-a bounded multi-round Metal run, logs/status, stop/restart and cleanup. It cannot
-establish the headless exemption's behavior on an unapproved physical host.
+GUI-approved LaunchAgents passed the separate physical reviewer gate on candidate
+`29cb1d2`: non-interactive SSH service management, an eight-round two-Mac Metal
+run under ambient host load, trust refresh beyond 15 minutes, status/logs,
+service stop/restart and cleanup. The M1 required a fresh console approval;
+an identical signing requirement did not eliminate that prompt in this run.
+This is path-1 acceptance, not a detached-process or physical allowlist pass.
+It cannot establish the headless exemption's behavior on an unapproved host,
+and it is not hardware verification of subsequent code changes.
 No automatic reboot recovery, sleep/wake handling or FileVault unlock is promised.
 See the [support matrix](feature-matrix.md#managed-cluster-hosting).
