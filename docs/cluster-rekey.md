@@ -1,5 +1,8 @@
 # Cluster Rekey And Reenrollment
 
+> **Experimental.** Part of the experimental managed-cluster feature; see
+> [Managed clusters: getting started](cluster-quickstart.md).
+
 Rekeying replaces a trust domain; it is not certificate renewal. Use this
 procedure after loss or compromise of root, certificate-issuer or snapshot-signer
 keys. Ordinary rotation cannot replace those keys. No command silently changes

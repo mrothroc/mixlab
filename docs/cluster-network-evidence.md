@@ -60,8 +60,9 @@ or detached lifecycle acceptance passed through the exemption.
 GUI-approved LaunchAgents passed the separate physical reviewer gate on candidate
 `29cb1d2`: non-interactive SSH service management, an eight-round two-Mac Metal
 run under ambient host load, trust refresh beyond 15 minutes, status/logs,
-service stop/restart and cleanup. The M1 required a fresh console approval;
-an identical signing requirement did not eliminate that prompt in this run.
+service stop/restart and cleanup. One macOS 27 host required a fresh console
+approval for the new build; an identical signing requirement did not eliminate
+that prompt in this run.
 This is path-1 acceptance, not a detached-process or physical allowlist pass.
 It cannot establish the headless exemption's behavior on an unapproved host,
 and it is not hardware verification of subsequent code changes.

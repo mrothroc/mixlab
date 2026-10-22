@@ -21,8 +21,8 @@ refresh and eventually reject controllers.
 
 | macOS path | Requirement | Boundary |
 |---|---|---|
-| GUI approval / LaunchAgent | Signed package, Local Network approval, logged-in user session | Existing physical managed-training evidence; stops at logout. |
-| Administrator allowlist / manual SSH | System-wide peer CIDRs, one administrator restart, file keys, redirected `nohup` process | Qualified VM-only network evidence; not verified on a physical Mac, no pre-login or reboot recovery promise. |
+| **GUI approval / LaunchAgent (recommended)** | Signed package, Local Network approval, logged-in user session | Physical two-Mac managed-training acceptance; stops at logout. A new build may need approval again. |
+| Administrator allowlist / manual SSH (alternative) | System-wide peer CIDRs, one administrator restart, file keys, redirected `nohup` process | Qualified VM-only network evidence; not verified on a physical Mac, no pre-login or reboot recovery promise. |
 
 See the [support matrix](feature-matrix.md#managed-cluster-hosting) and
 [sanitized spike results](cluster-network-evidence.md). The allowlist covers

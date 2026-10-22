@@ -16,8 +16,11 @@ independent context paths, submission and recovery limits. Its service label is
 
 | Path | Operation | Requirements and limits |
 |---|---|---|
-| GUI approval | `authority/agent/coordinator install` and per-user LaunchAgents | Signed package, Local Network approval and logged-in GUI session. Stops at logout, returns after GUI login. |
-| Administrator allowlist | Existing foreground commands started over SSH with `nohup` | Administrator sets system-wide destination CIDRs and restarts once; explicitly provision file keys. No service install, root daemon or new lifecycle commands. Qualified VM-only evidence, not physical-Mac verification. |
+| **GUI approval (recommended)** | `authority/agent/coordinator install` and per-user LaunchAgents | Signed package, Local Network approval and logged-in GUI session. Stops at logout, returns after GUI login. Physical two-Mac acceptance. |
+| Administrator allowlist (alternative) | Existing foreground commands started over SSH with `nohup` | Administrator sets system-wide destination CIDRs and restarts once; explicitly provision file keys. No service install, root daemon or new lifecycle commands. Qualified VM-only evidence, not physical-Mac verification. |
+
+Use GUI approval unless a host cannot keep a GUI session logged in. The
+allowlist changes Local Network policy for every program on the host.
 
 The [manual headless guide](cluster-headless.md) gives the exact administrator
 commands, scope/reversal guidance and detached start/check/stop walkthrough.
@@ -68,7 +71,9 @@ machine, but Mixlab never configures it. Locking the screen is not logging out;
 sleep can still make the node unreachable.
 
 Stable Developer ID signing is intended to preserve both Local Network identity
-and Keychain access across upgrades. The initial Keychain must be unlocked in the
+and Keychain access across upgrades. On macOS 27, however, a new build has needed
+a fresh Local Network approval despite an unchanged signing identity, so expect
+the alert again after upgrading (see below). The initial Keychain must be unlocked in the
 user session. Existing keys made by an ad-hoc binary may require migration or
 interactive approval; switching to the signed package does not silently change
 their ACL or storage backend. Select `-key-backend file` explicitly at enrollment
@@ -128,7 +133,8 @@ checkpoints or logs. Stop services before removing their binaries. Do not use
 
 1. Finish or abort active jobs and wait for cleanup. Check `nodes` and local
    `doctor` output before upgrading every member of the cohort.
-2. Stop agents and then the authority using the commands above.
+2. Stop the coordinator (if used), then the agents, then the authority, using
+   the commands above.
 3. Upgrade both executables together, preserving the stable installation path.
 4. On each node, run:
 
@@ -137,7 +143,11 @@ checkpoints or logs. Stop services before removing their binaries. Do not use
      -worker-binary "$(command -v mixlab)"
    ```
 
-5. Start the authority, then the agents. Check authenticated `nodes` results.
+5. Start the authority, then the agents (and the coordinator, if used). Check
+   authenticated `nodes` results.
+6. Check each role's `service.log` for `connect: no route to host`. If it appears,
+   click **Allow** on that Mac's Local Network alert at the desktop or through
+   Screen Sharing. The service retries automatically; no restart is needed.
 
 `agent reapprove` pins the new worker and the currently running cluster binary,
 probes the worker, and advances its capability generation. It preserves the
@@ -181,11 +191,21 @@ observation. It does not echo remote error bodies or credential paths. Remote TL
 rejection alone cannot distinguish stale peer trust from another authentication
 failure; run doctor on that peer and inspect its service log.
 
-On macOS, repeated `EHOSTUNREACH` to a reachable on-link machine **may** indicate
-Local Network denial. It can also be a real routing failure. BSD sockets do not
-provide a definitive permission query. Check Privacy & Security > Local Network
-and allow the signed service at the console, or use the administrator-managed
-[allowlist path](cluster-headless.md) for manual headless operation. Gatekeeper, Local Network privacy,
+On macOS, repeated `connect: no route to host` (`EHOSTUNREACH`) in a service log,
+while `ping` to the same machine works, usually means Local Network privacy is
+blocking that service. To fix it:
+
+1. On the Mac whose log shows the error, look for the Local Network alert for
+   `mixlab-cluster` at the desktop (or through Screen Sharing) and click **Allow**.
+2. Check that System Settings → Privacy & Security → Local Network shows
+   `mixlab-cluster` enabled.
+3. Watch the log: the service retries automatically, and the errors stop once
+   access is granted.
+
+For manual roles detached with `nohup`, this error is likely unless an
+administrator has configured the [allowlist path](cluster-headless.md). If
+neither applies, check routing: BSD sockets cannot report which policy blocked a
+connection, so the error alone is not proof of a permission denial. Gatekeeper, Local Network privacy,
 Application Firewall and third-party filters are separate controls. Do not
 disable them or remove quarantine to make a test pass.
 

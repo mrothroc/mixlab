@@ -1,7 +1,8 @@
 # Manual Headless Clusters Over SSH (Experimental)
 
-This is the administrator-allowlist alternative to [GUI-approved LaunchAgents](cluster-services.md#macos-hosting-choices).
-It uses existing foreground commands, explicit file-backed identities and
+This is the administrator-allowlist alternative to [GUI-approved LaunchAgents](cluster-services.md#macos-hosting-choices),
+which remain the recommended path. Use this guide only when a host cannot keep a
+GUI session logged in. It uses existing foreground commands, explicit file-backed identities and
 `nohup`; it adds no daemon, process manager, tunnel or root training process.
 Use it only on trusted, administrator-controlled hosts.
 

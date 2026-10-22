@@ -57,8 +57,10 @@ surfaces to Hugging Face.
 - Export and parity: `docs/hf-export.md`, `docs/cli-export.md`
 - Performance and profiling: `docs/performance.md`
 - Managed clusters: `docs/cluster-quickstart.md`, `docs/cluster-diloco.md`
-- Cluster hosting: `docs/cluster-services.md` (GUI-approved LaunchAgents) or
-  `docs/cluster-headless.md` (administrator allowlist, manual SSH, file keys).
+- Cluster hosting: `docs/cluster-services.md` (GUI-approved LaunchAgents, the
+  recommended path; each Mac clicks Allow for Local Network, possibly again after
+  an upgrade) or `docs/cluster-headless.md` (alternative: administrator
+  allowlist, manual SSH, file keys).
   Read `docs/cluster-network-evidence.md` for VM-only limits; do not invent
   `agent serve` or runtime `-key-backend` flags.
 

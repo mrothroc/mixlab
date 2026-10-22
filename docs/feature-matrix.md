@@ -31,15 +31,16 @@ the [HF support matrix](hf-export-support-matrix.md).
 
 | macOS path | Startup | Evidence and limits |
 |---|---|---|
-| GUI approval / per-user LaunchAgent | Signed `mixlab-cluster ROLE install`; Local Network approval with a logged-in GUI session | Physical managed-training evidence. Stops at logout; returns after GUI login, not before login. |
-| Administrator allowlist / manual headless SSH | Administrator destination CIDRs and one restart; existing foreground commands with `nohup`, explicit file-backed provisioning | Qualified macOS 27.0.1 VM evidence, **not verified on a physical Mac**. Physical reboot gate waived, not passed. No restart survival, boot-time daemons, pre-login behavior, sleep/wake recovery or FileVault unlock promise. |
+| **GUI approval / per-user LaunchAgent (recommended)** | Signed `mixlab-cluster ROLE install`; Local Network approval with a logged-in GUI session | Physical two-Mac managed-training acceptance. Stops at logout; returns after GUI login, not before login. A new build may need approval again. |
+| Administrator allowlist / manual headless SSH (alternative) | Administrator destination CIDRs and one restart; existing foreground commands with `nohup`, explicit file-backed provisioning | Qualified macOS 27.0.1 VM evidence, **not verified on a physical Mac**. Physical reboot gate waived, not passed. No restart survival, boot-time daemons, pre-login behavior, sleep/wake recovery or FileVault unlock promise. |
 
 See [hosting choices](cluster-services.md#macos-hosting-choices),
 [headless setup](cluster-headless.md) and [spike D/E evidence](cluster-network-evidence.md).
 The exemption is system-wide for every program, not a Mixlab-only grant; it
 does not replace inbound firewall rules or mTLS. Detached roles remain ordinary
-user processes. Reviewer acceptance on already-approved physical hosts validates
-the agent-driven commands/training, not the unapproved-host allowlist claim.
+user processes. The physical reviewer acceptance ran GUI-approved LaunchAgents
+managed over SSH. It did not exercise detached manual roles or the allowlist,
+which rest on the VM evidence alone.
 Root brokers, SSH tunnels and new manual lifecycle APIs are not included.
 
 ## Objectives And Heads

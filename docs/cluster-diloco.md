@@ -80,8 +80,10 @@ that does not migrate or erase its operational state.
 
 ## Login And Terminal Contract
 
-Choose [GUI-approved services or administrator-allowlisted manual SSH](cluster-services.md#macos-hosting-choices).
-The latter uses file keys selected during `init`/`enroll`, not a `serve` flag,
+Use [GUI-approved services](cluster-services.md#macos-hosting-choices), the
+recommended path, unless a host cannot keep a GUI session logged in; the
+alternative is administrator-allowlisted manual SSH.
+The alternative uses file keys selected during `init`/`enroll`, not a `serve` flag,
 and has qualified VM-only Local Network evidence. It has not been verified on a
 physical Mac and promises no pre-login behavior or restart survival. The
 [headless guide](cluster-headless.md) covers commands, logs and explicit stop/restart.

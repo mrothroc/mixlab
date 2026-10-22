@@ -5,8 +5,10 @@
 > [When distributed training helps](distributed-when.md) before you start.
 
 > **Experimental.** `mixlab-cluster` trains one model across several Macs on a
-> trusted LAN. Use the signed package and choose GUI-approved LaunchAgents or
-> [administrator-allowlisted headless operation](cluster-headless.md).
+> trusted LAN. Use the signed package with GUI-approved LaunchAgents, the
+> recommended path that this guide walks through. An
+> [administrator-allowlisted headless alternative](cluster-headless.md) exists
+> for hosts that cannot keep a GUI session logged in.
 > Read [Current limitations](#current-limitations) before you start. For training
 > on one machine, keep using `mixlab` as before; nothing here changes it.
 
@@ -36,15 +38,21 @@ runs `mixlab` directly on each machine with `mlx.launch` and needs no enrollment
 
 ## Current limitations
 
-- **Choose the macOS hosting path.** Signed per-user LaunchAgents run without
-  an open terminal, but stop at logout and return after GUI login. They do not
-  run before login. Detached `nohup` operation is documented only with the
-  administrator allowlist configured; see the table below. `screen` alone does
-  not grant network permission.
-- **Use a verified Terminal.app or SSH context.** Some third-party terminal
-  contexts can be denied Local Network access even with the setting enabled.
-  Success in a terminal or SSH session does not establish a detached process's
-  permission. See [Troubleshooting](#troubleshooting).
+- **Each Mac must allow Local Network access.** macOS blocks connections to
+  other machines on the LAN until you click **Allow** on the Local Network alert
+  for `mixlab-cluster`, at that Mac's desktop or through Screen Sharing. Every role
+  runs the same signed `mixlab-cluster`, so one approval normally covers them all. Until then, connections fail with
+  `connect: no route to host`.
+- **Services need a logged-in GUI session.** Signed per-user LaunchAgents run
+  without an open terminal, but stop at logout and return after GUI login. They
+  do not run before login. Processes detached with `nohup` or `screen` can lose
+  network access (seen on macOS 27) unless an administrator has configured the
+  [allowlist alternative](cluster-headless.md); see the table below.
+- **Run commands from Terminal.app or SSH.** Commands you type, such as `nodes`
+  and `submit`, connect from your terminal. Some third-party terminals are denied
+  Local Network access even when enabled in System Settings (iTerm2 on macOS 27,
+  for example). A command that works in a terminal does not prove that a detached
+  process or service can connect. See [Troubleshooting](#troubleshooting).
 - **Upgrades need explicit reapproval.** Each node pins the exact `mixlab` and
   `mixlab-cluster` builds it runs. After an upgrade the agent refuses to start
   until you reapprove the new binaries; see [Upgrading](#upgrading).
@@ -58,12 +66,14 @@ runs `mixlab` directly on each machine with `mlx.launch` and needs no enrollment
 
 | Path | Setup and lifetime | Evidence |
 |---|---|---|
-| GUI approval | Signed per-user LaunchAgent; approve Local Network once per Mac/user and keep the GUI session logged in. Stable signing is intended to retain approval across upgrades. | Physical managed-training acceptance; the numbered walkthrough below uses this path. |
-| Administrator allowlist | Administrator sets destination CIDRs and restarts once; ordinary-user roles then start over SSH with `nohup` and provisioned file keys. No logged-in GUI session is required for the documented manual workflow. | Qualified macOS 27 VM evidence only, not physical-Mac verification; no pre-login or restart-survival promise. |
+| **GUI approval (recommended)** | Signed per-user LaunchAgent; click Allow for Local Network on each Mac and keep the GUI session logged in. A new build may show the alert again after an upgrade (see [Upgrading](#upgrading)). | Physical two-Mac managed-training acceptance; the numbered walkthrough below uses this path. |
+| Administrator allowlist (alternative) | Administrator sets destination CIDRs and restarts once; ordinary-user roles then start over SSH with `nohup` and provisioned file keys. No logged-in GUI session is required for the documented manual workflow. | Qualified macOS 27 VM evidence only, not physical-Mac verification; no pre-login or restart-survival promise. |
 
-For the second path, follow the [headless walkthrough](cluster-headless.md)
-instead of the `install` steps below. Read the [spike limitations](cluster-network-evidence.md)
-and [support matrix](feature-matrix.md#managed-cluster-hosting) before choosing it.
+Use the allowlist only when a host cannot keep a GUI session logged in. It changes
+network policy for every program on the host, not just Mixlab. For that path,
+follow the [headless walkthrough](cluster-headless.md) instead of the `install`
+steps below, and read the [spike limitations](cluster-network-evidence.md) and
+[support matrix](feature-matrix.md#managed-cluster-hosting) first.
 
 ## Before you start
 
@@ -259,6 +269,10 @@ each node:
 3. Run `mixlab-cluster agent reapprove -agent-state-dir ~/.mixlab/node-agent
    -worker-binary "$(command -v mixlab)"` on each node.
 4. Run `authority start`, then `agent start` on every node and check `nodes`.
+5. Check each service log for `connect: no route to host`. macOS may ask for
+   Local Network approval again for a new build, even with an unchanged signing
+   identity; this happened on macOS 27. If so, click **Allow** at that Mac's desktop. The service
+   retries automatically, so no restart is needed.
 
 Do not create a new agent directory: reapproval preserves identity and history.
 See [upgrade and key-storage details](cluster-services.md#upgrade-without-reenrollment).
@@ -268,7 +282,7 @@ See [upgrade and key-storage details](cluster-services.md#upgrade-without-reenro
 | Symptom | Cause and fix |
 |---------|---------------|
 | `nodes` reports TLS rejection or an unknown failure although TCP connects | Run `doctor` on both hosts; inspect the agent's service log for stale trust or refresh failure. Keep the authority service running. TCP reachability alone does not establish identity. |
-| `connect: no route to host` to another Mac, although `ping` works | Check routing and Local Network privacy. Approve the signed LaunchAgent at the desktop, or have an administrator configure the [headless allowlist](cluster-headless.md). This socket error alone is not proof of permission denial. |
+| `connect: no route to host` to another Mac, although `ping` works | Usually macOS Local Network privacy. **From a service:** look for the Local Network alert on the desktop of the Mac whose log shows the error, click **Allow**, and check System Settings → Privacy & Security → Local Network shows `mixlab-cluster` enabled; the service retries on its own. **From a command you typed:** run it from Terminal.app or an SSH session instead of a third-party terminal. **From a detached `nohup` process:** likely, unless an administrator configured the [headless allowlist](cluster-headless.md). If none of these applies, check routing; the error alone cannot prove which policy blocked the connection. |
 | `key-store backend unavailable; explicit backend selection required` | The Keychain is not usable in this session, typically over SSH. Use `-key-backend file`. |
 | `approved executable changed; explicit local reapproval required` | `mixlab` or `mixlab-cluster` was upgraded. Follow [Upgrading](#upgrading). |
 | `unsafe state path: not a real directory` | A state directory path passes through a symbolic link, such as `/tmp` or `/var` on macOS. Use a real path under your home directory. |
