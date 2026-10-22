@@ -29,8 +29,8 @@ RUN wget -q https://github.com/Kitware/CMake/releases/download/v3.29.3/cmake-3.2
 
 # Go. GO_VERSION must equal the toolchain line in go.mod (TestGoToolchainHasOneSource
 # enforces it); GO_SHA256 is the archive checksum published at go.dev/dl.
-ARG GO_VERSION=1.27.2
-ARG GO_SHA256=ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5
+ARG GO_VERSION=1.27.3
+ARG GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
 RUN wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" -O /tmp/go.tar.gz \
     && echo "${GO_SHA256}  /tmp/go.tar.gz" | sha256sum -c - \
     && tar -C /usr/local -xzf /tmp/go.tar.gz \
