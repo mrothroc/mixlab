@@ -161,7 +161,7 @@ func ServeInstalledDiLoCo(ctx context.Context, l net.Listener, o DiLoCoCoordinat
 		}
 		return recovery.Tick(ctx, q.Launch.Run)
 	}
-	service := DiLoCoService{Inbox: inbox, Clock: o.Clock, Interval: time.Second, RunTerminal: models.Terminal}
+	service := installedDiLoCoService(models)
 	leases := DiLoCoAdmissionLeases{Repository: repository, Clock: o.Clock, Client: func(role trust.Role, candidate recruitment.Candidate) (AdmissionLeaseClient, error) {
 		identity := a
 		if role == trust.Coordinator {
@@ -245,6 +245,10 @@ func ServeInstalledDiLoCo(ctx context.Context, l net.Listener, o DiLoCoCoordinat
 		return errors.Join(<-done, <-done)
 	}
 	return ServeDiLoCo(ctx, l, DiLoCoServerOptions{Service: service, Policy: policy, Handler: handler, Maintenance: maintenance, Ready: o.Ready})
+}
+
+func installedDiLoCoService(models *DiLoCoModels) DiLoCoService {
+	return DiLoCoService{Inbox: models.Inbox, Clock: models.Clock, Interval: time.Second, RunTerminal: models.Terminal}
 }
 
 func (o DiLoCoCoordinatorOptions) runEvent(id string, err error) {

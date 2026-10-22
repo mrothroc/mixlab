@@ -169,10 +169,41 @@ func TestDiLoCoTerminalReleaseRetryAndRecovery(t *testing.T) {
 			}
 			s.Event = func(string, error) { events++ }
 			start := f.now.Load()
-			for second := int64(0); second < 3600; second++ {
-				f.now.Store(start + second)
+			end := start + 3600
+			for due := start; due < end; {
+				f.now.Store(due)
+				before := calls
 				restarted := s
 				check(t, restarted.step(ctx, f.q.Launch.Run))
+				if calls != before+1 {
+					t.Fatal("due terminal retry was skipped")
+				}
+				o, err := s.Inbox.Observation(ctx, f.q.Launch.Run)
+				check(t, err)
+				base := min(int64(2)<<min(calls-1, 5), 48)
+				if delay := o.RetryAt - due; delay < base || delay > base+base/4 {
+					t.Fatalf("terminal delay did not grow/cap: attempt=%d delay=%d", calls, delay)
+				}
+				// Exercise the gate just after failure and just before the next
+				// retry, then jump the fake clock. Polling every skipped second
+				// only repeats durable-file reads, especially costly under race.
+				lastProbe := due
+				for _, probe := range []int64{due + 1, min(o.RetryAt-1, end-1)} {
+					if probe <= lastProbe || probe >= end {
+						continue
+					}
+					f.now.Store(probe)
+					beforeEvents := events
+					restarted = s
+					check(t, restarted.step(ctx, f.q.Launch.Run))
+					got, err := s.Inbox.Observation(ctx, f.q.Launch.Run)
+					check(t, err)
+					if calls != before+1 || events != beforeEvents || got != o {
+						t.Fatal("early probe bypassed persisted backoff")
+					}
+					lastProbe = probe
+				}
+				due = o.RetryAt
 			}
 			if calls < 10 || calls > 100 || events > 61 {
 				t.Fatalf("terminal retry calls=%d events=%d", calls, events)
@@ -196,10 +227,8 @@ func TestDiLoCoTerminalReleaseRetryAndRecovery(t *testing.T) {
 				lease.State = nodeagent.Released
 				nodes.leases[id] = lease
 			}
-			for second := int64(3600); second < 3661; second++ {
-				f.now.Store(start + second)
-				check(t, s.step(ctx, f.q.Launch.Run))
-			}
+			f.now.Store(max(end, o.RetryAt))
+			check(t, s.step(ctx, f.q.Launch.Run))
 			if _, ok := models.released.Load(f.q.Launch.Run); !ok {
 				t.Fatal("returning nodes did not confirm cleanup")
 			}
