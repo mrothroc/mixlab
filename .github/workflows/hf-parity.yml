@@ -31,9 +31,21 @@ jobs:
         with:
           persist-credentials: false
 
+      # Install MLX before Go so its version can key the build cache. The cache
+      # holds cgo objects compiled against MLX's headers, and runners do not all
+      # get the same Homebrew MLX; reusing objects across versions fails to link
+      # (MLX 0.32.4 changed array::set_data).
+      - name: Install MLX runtime
+        run: |
+          brew install mlx
+          brew list --versions mlx | tee .mlx-version
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            .mlx-version
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -43,9 +55,6 @@ jobs:
         run: |
           python -m pip install -r requirements-hf.txt
           python -c "import torch, transformers; print('torch', torch.__version__, 'transformers', transformers.__version__)"
-
-      - name: Install MLX runtime
-        run: brew install mlx
 
       # Pure-Go oracle tests build with the non-MLX stubs, matching main CI.
       # CGO_ENABLED=1 without -tags mlx is unsupported (the gpu package then
