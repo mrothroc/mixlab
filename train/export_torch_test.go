@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -87,8 +88,12 @@ func TestExportTorchStatePackage(t *testing.T) {
 		t.Fatal(err)
 	}
 	opts := ExportTorchStateOptions{ConfigPath: cfgPath, SafetensorsLoad: checkpoint, MapPath: mapPath, OutputDir: filepath.Join(dir, "export")}
-	if err = RunExportTorchState(opts); err != nil {
+	log := captureStdout(t, func() { err = RunExportTorchState(opts) })
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(log, "data-only export; no GPU compute executed") {
+		t.Fatalf("missing precision/export semantics: %s", log)
 	}
 	for _, file := range []string{"model.safetensors", "export.json", "infer.py", "config.json", "export-map.json"} {
 		if _, err = os.Stat(filepath.Join(opts.OutputDir, file)); err != nil {

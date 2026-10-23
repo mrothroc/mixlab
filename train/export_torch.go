@@ -81,7 +81,19 @@ func RunExportTorchState(opts ExportTorchStateOptions) error {
 	if err = os.WriteFile(filepath.Join(tmp, "infer.py"), torchStateInference, 0644); err != nil {
 		return err
 	}
-	return publishGridDirectory(tmp, opts.OutputDir)
+	if err = publishGridDirectory(tmp, opts.OutputDir); err != nil {
+		return err
+	}
+	fmt.Println(torchStatePrecisionNotice(cfg))
+	return nil
+}
+
+func torchStatePrecisionNotice(cfg *ArchConfig) string {
+	requested := "unset (runtime default/environment)"
+	if cfg.Training.AllowTF32 != nil {
+		requested = fmt.Sprintf("%t", *cfg.Training.AllowTF32)
+	}
+	return fmt.Sprintf("  [%s] export-torch-state storage=float32 configured_allow_tf32=%s (data-only export; no GPU compute executed)", cfg.Name, requested)
 }
 
 func torchStateFileHash(path string) (string, error) {

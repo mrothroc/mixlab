@@ -42,11 +42,17 @@ func TestGridPredictionLogicalCheckpointIdentity(t *testing.T) {
 	}
 	predict := func(path string) ([]float32, error) {
 		var result []float32
-		err := visitGridPredictions(cfg, path, ds, func(b data.GridBatch, values []float32) error {
-			n := b.Count * b.Geometry.Height * b.Geometry.Width * cfg.DenseRegression.TargetChannels
-			result = append(result, values[:n]...)
-			return nil
+		var err error
+		log := captureStdout(t, func() {
+			err = visitGridPredictions(cfg, path, ds, func(b data.GridBatch, values []float32) error {
+				n := b.Count * b.Geometry.Height * b.Geometry.Width * cfg.DenseRegression.TargetChannels
+				result = append(result, values[:n]...)
+				return nil
+			})
 		})
+		if !strings.Contains(log, "predict-grid compute=float32") {
+			t.Fatalf("missing inference precision notice: %s", log)
+		}
 		return result, err
 	}
 	t.Run("reordered", func(t *testing.T) {

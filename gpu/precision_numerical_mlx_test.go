@@ -38,6 +38,7 @@ func TestGPUPrecisionSubprocess(t *testing.T) {
 				t.Run(fmt.Sprintf("conv=%v/depth=%d", conv, depth), func(t *testing.T) { precisionNumericalProbe(t, conv, depth, allow) })
 			}
 		}
+		precisionSpatialProbes(t, allow)
 		other := !allow
 		if _, err := ConfigurePrecision("float32", &other); err == nil {
 			t.Fatal("changed initialized TF32 policy")

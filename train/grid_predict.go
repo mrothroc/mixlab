@@ -31,9 +31,11 @@ func visitGridPredictions(cfg *ArchConfig, checkpoint string, ds *data.GridDatas
 	if err := checkGridGeometry(cfg, ds.Geometry, false); err != nil {
 		return err
 	}
-	if _, err := trainingPrecision(cfg); err != nil {
+	policy, err := trainingPrecision(cfg)
+	if err != nil {
 		return err
 	}
+	fmt.Printf("  [%s] predict-grid %s\n", cfg.Name, policy)
 	if _, err := configureMLXMemoryLimits(cfg.Name); err != nil {
 		return err
 	}

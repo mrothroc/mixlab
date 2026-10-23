@@ -194,11 +194,17 @@ on CUDA, explicit true conflicts with `NVIDIA_TF32_OVERRIDE=0`.
 ignores it. Environment values must be `0` or `1`. Without a GPU backend, explicit
 values fail at execution, not config parsing.
 
-The banner reports dtype, backend, and the permission. This is permission for
+Training and `predict-grid` banners report dtype, backend, and the permission. This is permission for
 eligible kernels, not a claim that every operation uses reduced precision. The
 switch is locked for the process lifetime, including native eval/prediction.
 Use a fresh process for each precision variant. This policy does not configure
 an independently exported Hugging Face/PyTorch runtime.
+
+`export-torch-state` reports `storage=float32` and the config's requested
+`allow_tf32` value (or `unset`). Export only converts data, so this notice is not
+an effective GPU policy and does not initialize a GPU. The exported inference
+script currently runs PyTorch on CPU; other consumers must configure their own
+compute precision.
 
 Runs with a final safetensors path write `<path>.run.json`; otherwise runs with
 a checkpoint directory write `<checkpoint-dir>/run.json`. Runs without an
@@ -231,6 +237,19 @@ python3 scripts/validate_tf32_probe.py /tmp/tf32-probes
 MIXLAB_TEST_GRID_TF32=1 go test -tags mlx ./train -run '^TestGridTF32Throughput$' -count=1 -v
 MIXLAB_TEST_GRID_TF32=0 go test -tags mlx ./train -run '^TestGridTF32Throughput$' -count=1 -v
 ```
+
+For a standalone CUDA-library check without Go or model data, run
+`bash docker/test_mlx_conv_precision.sh` on a CUDA development image with MLX.
+It tests ordinary and transposed convolutions, cached-plan reuse, batch sizes
+1 and 16, and large encoder/decoder shapes against scalar float64 contractions. Large tensors use
+deterministic spatial samples, not an exhaustive model-level comparison. Neither
+this check nor the small IR probes replace a trained-model fidelity check.
+
+Strict FP32 does not promise identical results across CUDA, Metal, or PyTorch:
+convolution algorithms and reduction order can differ. For accuracy reports,
+compare each runtime directly with the same float64 reference, and record the
+effective policy, batch size, GPU driver, cuDNN version, and MLX revision. A
+cross-runtime difference alone does not identify which runtime is inaccurate.
 
 ## Piecewise-Constant Learning Rates
 
