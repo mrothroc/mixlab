@@ -44,11 +44,10 @@ else
     fi
 fi
 
-# Tests
-if ! go test ./... -count=1 -timeout 600s 2>&1; then
-    echo "FAIL: go test"
-    exit 1
-fi
+# The full test suite is not run here: CI's Test job runs it on every push, and
+# locally it took ten minutes or more on a loaded machine while repeating that
+# job. Run the tests your change affects before committing (`make test` for
+# everything), and check the pushed commit's CI.
 
 # File size lint (no Go file over 1000 lines)
 OVERSIZED=$(find . -name "*.go" -not -path "./vendor/*" -exec wc -l {} + | sort -rn | awk '$1 > 1000 && $2 != "total" {print $2 " (" $1 " lines)"}')
