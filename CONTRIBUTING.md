@@ -17,6 +17,13 @@ Open a GitHub issue with:
 5. Run `make test` and `make lint`
 6. Submit a PR
 
+Every change to `main`, including the maintainer's, arrives through a pull
+request that must pass CI and the image check before it merges. The image check
+builds the CLI and RunPod container images from `docker/cloudbuild-pr.yaml`
+without publishing them. For pull requests from outside the repository it starts
+after a maintainer comments `/gcbrun`, because it runs on the project's build
+infrastructure.
+
 ## Code style
 
 - `gofmt` for formatting
