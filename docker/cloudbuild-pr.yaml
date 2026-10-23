@@ -1,0 +1,56 @@
+# Pull-request image check: build the CLI and RunPod images exactly as the main
+# build does, then discard them. Nothing is pushed and no secret is read, because
+# a pull request runs code nobody has merged yet.
+#
+# The build steps and options must match docker/cloudbuild-ci.yaml;
+# TestPullRequestImageBuildMatchesMainBuild (cmd/mixlab) fails if they drift.
+#
+# Required substitutions (set in the Cloud Build trigger):
+#   _REGISTRY_PREFIX  — e.g. us-central1-docker.pkg.dev/my-project/my-repo
+#   _MLX_BASE_IMAGE   — e.g. us-central1-docker.pkg.dev/my-project/my-repo/mlx-cuda:latest
+#
+# The trigger's service account needs only read access to the base image and
+# permission to write build logs.
+
+substitutions:
+  _REGISTRY_PREFIX: ''
+  _MLX_BASE_IMAGE: ''
+  _IMAGE_TAG: 'pr-check'
+  _RUNPOD_TAG: 'pr-check-runpod'
+  _RELEASE_VERSION: 'dev'
+  _SOURCE_REVISION: '${COMMIT_SHA:-unknown}'
+
+steps:
+  # Build CLI image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'docker/app.Dockerfile'
+      - '--build-arg'
+      - 'BASE_IMAGE=${_MLX_BASE_IMAGE}'
+      - '--build-arg'
+      - 'MIXLAB_VERSION=${_RELEASE_VERSION}'
+      - '--build-arg'
+      - 'VCS_REF=${_SOURCE_REVISION}'
+      - '-t'
+      - '${_REGISTRY_PREFIX}/mixlab:${_IMAGE_TAG}'
+      - '.'
+
+  # Build RunPod image on top of CLI
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-f'
+      - 'docker/runpod.Dockerfile'
+      - '--build-arg'
+      - 'APP_IMAGE=${_REGISTRY_PREFIX}/mixlab:${_IMAGE_TAG}'
+      - '-t'
+      - '${_REGISTRY_PREFIX}/mixlab:${_RUNPOD_TAG}'
+      - '.'
+
+options:
+  dynamicSubstitutions: true
+  machineType: 'E2_HIGHCPU_8'
+  logging: CLOUD_LOGGING_ONLY
+timeout: '1200s'
