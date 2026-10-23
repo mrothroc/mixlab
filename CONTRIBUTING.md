@@ -75,6 +75,12 @@ Build *and* load the same version: the dylib's install name resolves through
 `opt/mlx`, so `-rpath` alone does not redirect it, and a mixed build yields
 `Symbol not found` rather than a clean result.
 
+Go's build cache does not track MLX headers, so after an upgrade it can reuse
+objects compiled against the old ones. When MLX changes an inline header
+function (0.32.4 changed `array::set_data`), linking fails with
+`Undefined symbols` in code you did not touch. Rebuild once with `go build -a`
+(or `go clean -cache`).
+
 **Go and golangci-lint.** golangci-lint typechecks against the standard library of
 whichever Go it runs under, and a newer Go can emit export data it cannot decode —
 producing phantom `typecheck` errors on every import that drown out real findings.
