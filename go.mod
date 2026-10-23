@@ -7,7 +7,7 @@ toolchain go1.27.3
 require (
 	github.com/cloudflare/circl v1.6.5
 	github.com/hashicorp/mdns v1.0.7
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 )
 
 require (
