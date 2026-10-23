@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
       {false,64,120,50,5,1,2}, {true,64,100,40,6,2,2},
       {true,128,80,20,6,2,2}, {false,256,28,20,5,1,2},
       {false,256,22,1,5,1,2}}) {
-    std::vector<float> x(c.h*c.h*c.ci), w(c.co*c.k*c.k*c.ci);
+    std::vector<float> x(size_t(c.h)*c.h*c.ci), w(size_t(c.co)*c.k*c.k*c.ci);
     // Integer PRNG makes the fixture identical across standard libraries.
     uint32_t state=83;
     auto next = [&] {
@@ -45,7 +45,7 @@ int main(int argc, char** argv) {
     for (auto& v:x) v=next();
     for (auto& v:w) v=next()/std::sqrt(float(c.k*c.k*c.ci));
     int oh=c.transpose ? (c.h-1)*c.stride-2*c.pad+c.k : (c.h+2*c.pad-c.k)/c.stride+1;
-    std::vector<double> reference(oh*oh*c.co,0);
+    std::vector<double> reference(size_t(oh)*oh*c.co,0);
     // Large production shapes use evenly distributed spatial samples; GPU
     // computation still evaluates the full tensor and selects its real plan.
     std::vector<int> pixels;
@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
       auto values=output.data<float>();
       double error=0,scale=0;
       for(int row : std::vector<int>{0,batch-1}) for(auto pixel:pixels) for(int co=0;co<c.co;co++) {
-        size_t i=pixel*c.co+co;
+        size_t i=size_t(pixel)*c.co+co;
         size_t offset=size_t(row)*oh*oh*c.co+i;
         if(!std::isfinite(values[offset])) { passed=false; error=INFINITY; }
         error=std::max(error,std::abs(values[offset]-reference[i]));
