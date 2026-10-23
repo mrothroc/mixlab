@@ -1,6 +1,10 @@
 package train
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/mrothroc/mixlab/internal/checkedint"
+)
 
 // clsBatchPositions maps [CLS, content...] to insertion order. Readout positions
 // index the flattened backbone, not the raw content-token tensor.
@@ -10,7 +14,15 @@ func clsBatchPositions(cfg *ArchConfig, mask []float32, seqLen int) ([]int32, []
 		return nil, nil, nil
 	}
 	rows := len(mask) / seqLen
-	indices := make([]int32, rows*(seqLen+1))
+	width, err := checkedint.Sum(seqLen, 1)
+	var count int
+	if err == nil {
+		count, err = checkedint.Product(rows, width)
+	}
+	if err != nil {
+		return nil, nil, fmt.Errorf("cls_position=%s batch: %w", mode, err)
+	}
+	indices := make([]int32, count)
 	positions := make([]int32, rows)
 	for row := 0; row < rows; row++ {
 		length := 0

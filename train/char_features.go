@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/mrothroc/mixlab/internal/checkedint"
 )
 
 // File format for char_features.bin:
@@ -117,13 +119,22 @@ func loadCharFeatures(path string, vocabSize, charVocabSize, charMaxPerToken int
 	if charMaxPerToken <= 0 {
 		return nil, fmt.Errorf("invalid char_max_per_token=%d", charMaxPerToken)
 	}
+	headerBytes := charFeatureHeaderInts * 4
+	count, err := checkedint.Product(vocabSize, charMaxPerToken)
+	var wantBytes int
+	if err == nil {
+		wantBytes, err = checkedint.Product(count, 2)
+	}
+	if err == nil {
+		wantBytes, err = checkedint.Sum(headerBytes, wantBytes)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("char features vocab_size=%d char_max_per_token=%d: %w", vocabSize, charMaxPerToken, err)
+	}
 	blob, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read char features %q: %w", path, err)
 	}
-	headerBytes := charFeatureHeaderInts * 4
-	payloadBytes := vocabSize * charMaxPerToken * 2
-	wantBytes := headerBytes + payloadBytes
 	if len(blob) != wantBytes {
 		return nil, fmt.Errorf("char features %q size=%d, want %d for vocab_size=%d char_max_per_token=%d", path, len(blob), wantBytes, vocabSize, charMaxPerToken)
 	}
@@ -146,7 +157,7 @@ func loadCharFeatures(path string, vocabSize, charVocabSize, charMaxPerToken int
 		return nil, fmt.Errorf("char features %q char_max_per_token=%d, want %d", path, got, charMaxPerToken)
 	}
 	payload := blob[headerBytes:]
-	out := make([]int32, vocabSize*charMaxPerToken)
+	out := make([]int32, count)
 	for i := range out {
 		id := int(binary.LittleEndian.Uint16(payload[i*2 : i*2+2]))
 		if id >= charVocabSize {

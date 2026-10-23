@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/mrothroc/mixlab/internal/checkedint"
 )
 
 const (
@@ -346,7 +348,11 @@ func (l *Loader) nextCodebookBatch(batchTokens, seqLen int) (Batch, error) {
 	}
 	batchSize := batchTokens / seqLen
 	Q := l.codebooks.numCodebooks
-	tokens := make([]int32, batchTokens*Q)
+	tokenCount, err := checkedint.Product(batchTokens, Q)
+	if err != nil {
+		return Batch{}, fmt.Errorf("codebook batch: %w", err)
+	}
+	tokens := make([]int32, tokenCount)
 	labels := make([]int32, batchSize)
 	validMask := make([]float32, batchTokens)
 	for row := 0; row < batchSize; row++ {
@@ -369,7 +375,11 @@ func (l *Loader) nextContinuousBatch(batchTokens, seqLen int) (Batch, error) {
 	}
 	batchSize := batchTokens / seqLen
 	featureDim := l.continuous.featureDim
-	frames := make([]float32, batchTokens*featureDim)
+	frameCount, err := checkedint.Product(batchTokens, featureDim)
+	if err != nil {
+		return Batch{}, fmt.Errorf("continuous batch: %w", err)
+	}
+	frames := make([]float32, frameCount)
 	labels := make([]int32, batchSize)
 	validMask := make([]float32, batchTokens)
 	for row := 0; row < batchSize; row++ {

@@ -152,6 +152,8 @@ func attachRCEquivariantInputs(cfg *ArchConfig, batch trainBatch, prepared *obje
 	for i := range alignment {
 		alignment[i] = int32(i)
 	}
+	// One reusable buffer: a segment never spans rows, so seqLen bounds it.
+	positions := make([]int, 0, seqLen)
 	for rowStart := 0; rowStart < need; rowStart += seqLen {
 		rowEnd := rowStart + seqLen
 		for segmentStart := rowStart; segmentStart < rowEnd; {
@@ -163,7 +165,7 @@ func attachRCEquivariantInputs(cfg *ArchConfig, batch trainBatch, prepared *obje
 					segmentEnd++
 				}
 			}
-			positions := make([]int, 0, segmentEnd-segmentStart)
+			positions = positions[:0]
 			for pos := segmentStart; pos < segmentEnd; pos++ {
 				if batch.maskEligible[pos] != 0 {
 					positions = append(positions, pos)

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/mrothroc/mixlab/arch"
+	"github.com/mrothroc/mixlab/internal/checkedint"
 )
 
 func prepareMultiheadBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen int) (objectiveBatch, error) {
@@ -21,11 +22,17 @@ func prepareMultiheadBatch(cfg *ArchConfig, batch trainBatch, step, need, seqLen
 	if headCount == 0 {
 		return objectiveBatch{}, fmt.Errorf("multihead objective has no heads")
 	}
-	totalRows := rawBatchSize * headCount
-	if minimalPairUsesMLMSpanPLL(cfg) {
-		totalRows += rawBatchSize
+	totalRows, err := checkedint.Product(rawBatchSize, headCount)
+	if err == nil && minimalPairUsesMLMSpanPLL(cfg) {
+		totalRows, err = checkedint.Sum(totalRows, rawBatchSize)
 	}
-	totalNeed := totalRows * seqLen
+	var totalNeed int
+	if err == nil {
+		totalNeed, err = checkedint.Product(totalRows, seqLen)
+	}
+	if err != nil {
+		return objectiveBatch{}, fmt.Errorf("multihead batch: %w", err)
+	}
 	out := objectiveBatch{
 		x:                   make([]int, totalNeed),
 		y:                   make([]int, totalNeed),
