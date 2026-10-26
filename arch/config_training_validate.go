@@ -8,6 +8,9 @@ import (
 
 // validateCommonTrainingSettings is shared by sequence and spatial task builders.
 func validateCommonTrainingSettings(cfg *ArchConfig, source string) error {
+	if len(cfg.Training.MuonExclude) > 0 && (!cfg.GridEnabled() || !cfg.Training.UsesMuon()) {
+		return fmt.Errorf("training.muon_exclude requires a grid model with a Muon-family optimizer")
+	}
 	if cfg.Training.WeightDecay < 0 {
 		return fmt.Errorf("config %q has invalid training.weight_decay=%g (must be >= 0)", source, cfg.Training.WeightDecay)
 	}

@@ -5,6 +5,7 @@ import (
 	"log"
 	"math"
 
+	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/gpu"
 )
 
@@ -82,11 +83,29 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 	}
 	for i, s := range shapes {
 		group := ""
+		view := gpu.MuonMatrixIdentity
 		if cfg.GridEnabled() && len(s.Shape) == 4 {
-			group = "grid_kernel"
-			settings := groupSettings(cfg.Training.MatrixLR)
-			settings.WeightDecay = cfg.Training.MatrixWeightDecay
-			extraGroups[group] = settings
+			if cfg.Training.UsesMuon() && !s.MuonExcluded {
+				switch s.KernelLayout {
+				case arch.KernelLayoutOHWI:
+					view = gpu.MuonMatrixOHWI
+				case arch.KernelLayoutIHWO:
+					view = gpu.MuonMatrixIHWO
+				default:
+					if !s.Frozen {
+						return gpu.TrainerOptimizerSpec{}, fmt.Errorf("grid weight %q lacks a convolution layout for Muon", s.Name)
+					}
+				}
+			} else {
+				group = "grid_kernel"
+				settings := groupSettings(cfg.Training.MatrixLR)
+				if cfg.Training.UsesMuon() {
+					group = "grid_muon_excluded"
+					settings.LR = cfg.Training.ScalarLR
+				}
+				settings.WeightDecay = cfg.Training.MatrixWeightDecay
+				extraGroups[group] = settings
+			}
 		}
 		switch s.OptimizerRole {
 		case "s4d_main":
@@ -114,6 +133,7 @@ func buildTrainerOptimizerSpec(cfg *ArchConfig, shapes []WeightShape) (gpu.Train
 			Group:        group,
 			ForceNoDecay: s.ForceNoDecay,
 			ForceDecay:   s.ForceDecay,
+			MuonView:     view,
 		}
 	}
 	return gpu.BuildTrainerOptimizerSpec(gpu.TrainerOptimizerConfig{

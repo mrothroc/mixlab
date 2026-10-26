@@ -10,6 +10,8 @@ dense-regression example. It uses record batches and grid manifests, not token
 shards. See [the prepare/train/eval/predict workflow](../docs/dense-grid.md).
 [`grid_group_norm_tiny.json`](grid_group_norm_tiny.json) adds explicit affine
 GroupNorm between convolutions and trains with batch size one.
+[`grid_muon_tiny.json`](grid_muon_tiny.json) trains convolution and transposed
+convolution kernels with Muon while keeping named input/output kernels on AdamW.
 [`grid_aspp_tiny.json`](grid_aspp_tiny.json) uses four parallel dilated
 convolutions (1/6/12/18), concatenation and a 1x1 projection on a 32x32 grid.
 [`grid_two_stage_1.json`](grid_two_stage_1.json) and

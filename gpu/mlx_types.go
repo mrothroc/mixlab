@@ -268,6 +268,7 @@ type WeightOptimizer struct {
 	GroupIndex int
 	Decay      bool
 	Frozen     bool
+	MuonView   MuonMatrixView `json:",omitempty"`
 }
 
 type TrainerOptimizerSpec struct {

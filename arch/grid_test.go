@@ -101,7 +101,7 @@ func TestGridValidation(t *testing.T) {
 		{`"batch_size": 2`, `"batch_size": 0`, "batch_size"},
 		{`"batch_size": 2`, `"batch_size": 2, "batch_tokens": 128`, "batch_tokens"},
 		{`"target_channels": 1`, `"target_channels": 1, "metric_scale": 0`, "metric_scale"},
-		{`"optimizer": "adamw"`, `"optimizer": "muon"`, "optimizer"},
+		{`"optimizer": "adamw"`, `"optimizer": "sgd"`, "optimizer"},
 		{`"optimizer": "adamw"`, `"optimizer": "adamw", "seq_len_schedule": [[0,8]]`, "SeqLenSchedule"},
 		{`"name": "grid_regression_tiny"`, `"name": "grid_regression_tiny", "model_dim": 8`, "ModelDim"},
 		{`"name": "grid_regression_tiny"`, `"name": "grid_regression_tiny", "data": {"no_shard_shuffle":true}`, "Data"},

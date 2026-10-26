@@ -39,6 +39,8 @@ type WeightShape struct {
 	OptimizerWeightDecay float32
 	ForceNoDecay         bool
 	ForceDecay           bool
+	KernelLayout         string
+	MuonExcluded         bool
 }
 
 func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
@@ -78,6 +80,8 @@ func computeWeightShapes(cfg *ArchConfig) ([]WeightShape, error) {
 			OptimizerWeightDecay: m.OptimizerWeightDecay,
 			ForceNoDecay:         m.ForceNoDecay,
 			ForceDecay:           m.ForceDecay,
+			KernelLayout:         m.KernelLayout,
+			MuonExcluded:         m.MuonExcluded,
 		}
 		switch m.Name {
 		case "position_embeddings":

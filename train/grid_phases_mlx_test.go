@@ -15,10 +15,13 @@ func TestGridPhasesExactResumeAcrossLRDrop(t *testing.T) {
 		t.Skip("MLX required")
 	}
 	manifest := prepareTinyGrid(t)
-	for _, optimizer := range []string{"adamw", "lamb"} {
+	for _, optimizer := range []string{"adamw", "lamb", "muon", "muon_eq_r", "normuon"} {
 		t.Run(optimizer, func(t *testing.T) {
 			cfg := gridPhaseConfig(t)
 			cfg.Training.Optimizer = optimizer
+			if cfg.Training.UsesMuon() {
+				cfg.Training.MuonMomentum, cfg.Training.MuonBackendSteps = .9, 5
+			}
 			fullDir := filepath.Join(t.TempDir(), "full")
 			var full TrainResult
 			log := captureStdout(t, func() {
@@ -30,7 +33,7 @@ func TestGridPhasesExactResumeAcrossLRDrop(t *testing.T) {
 			})
 			if strings.Count(log, "effective optimizer rates") != 2 ||
 				!strings.Contains(log, "update=1 ") || !strings.Contains(log, "update=7 ") ||
-				!strings.Contains(log, "extra:grid_kernel=") {
+				(!strings.Contains(log, "extra:grid_kernel=") && !strings.Contains(log, "matrix=")) {
 				t.Fatalf("missing effective phase rates: %s", log)
 			}
 			for step := 1; step <= 10; step++ {

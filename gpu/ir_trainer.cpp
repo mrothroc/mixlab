@@ -3,6 +3,7 @@
 #include "backward_trace.h"
 #include "optimizer_step_guard.h"
 #include "mamba3_debug_policy.h"
+#include "muon_matrix_view.h"
 
 #include <mlx/compile.h>
 #include <mlx/transforms.h>
@@ -2076,14 +2077,12 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
       if (has_muon_state[i] == 0) {
         throw std::runtime_error("Muon state missing for weight");
       }
-      if (w.ndim() != 2) {
-        throw std::runtime_error("Muon only supports rank-2 weights");
-      }
       muon_momentum[i] = group.beta1 * muon_momentum[i] + grad;
       mx::array update = group.nesterov ? (grad + group.beta1 * muon_momentum[i]) : muon_momentum[i];
+      update = muon_matrix_view(update, spec.muon_view);
+      const auto rows = static_cast<float>(update.shape(0));
+      const auto cols = static_cast<float>(update.shape(1));
       update = zeropower_via_newtonschulz5(update, group.backend_steps, group.newton_schulz_variant);
-      const auto rows = static_cast<float>(w.shape(0));
-      const auto cols = static_cast<float>(w.shape(1));
       const float aspect = std::sqrt(std::max(1.0f, rows / cols));
       update = update * mx::array(aspect, mx::float32);
       switch (group.muon_normalization) {
@@ -2099,6 +2098,7 @@ void IRTrainer::apply_weight_optimizer_update(size_t i, const mx::array& g) {
           update = normuon_normalize(update, muon_second_moment[i], group.beta2);
           break;
       }
+      update = muon_storage_view(update, w.shape(), spec.muon_view);
       w = apply_weight_decay(w, grad, group, spec.decay, optimizer_step, effective_lr);
       w = w - effective_lr * update;
       break;
@@ -3985,6 +3985,9 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
       continue;
     }
     const auto& group = groups[spec.group_index];
+    if (spec.muon_view != 0 && group.kind != OptimizerKind::Muon) {
+      throw std::runtime_error("Muon matrix view requires Muon optimizer");
+    }
     switch (group.kind) {
       case OptimizerKind::AdamW:
       case OptimizerKind::Lamb:
@@ -3999,16 +4002,14 @@ std::unique_ptr<IRTrainer> create_ir_trainer(
         trainer->has_sgd_state.push_back(0);
         break;
       case OptimizerKind::Muon:
-        if (initial_weights[i].ndim() != 2) {
-          throw std::runtime_error("Muon only supports rank-2 weights");
-        }
+        (void)muon_matrix_view(initial_weights[i], spec.muon_view);
         trainer->adam_m.push_back(mx::array(0.0f, mx::float32));
         trainer->adam_v.push_back(mx::array(0.0f, mx::float32));
         trainer->has_adam_state.push_back(0);
         trainer->muon_momentum.push_back(mx::zeros_like(initial_weights[i]));
         trainer->has_muon_state.push_back(1);
         if (group.muon_normalization == MuonNormalization::NorMuon) {
-          trainer->muon_second_moment.push_back(init_normuon_second_moment(initial_weights[i]));
+          trainer->muon_second_moment.push_back(init_normuon_second_moment(muon_matrix_view(initial_weights[i], spec.muon_view)));
           trainer->has_muon_second_moment_state.push_back(1);
         } else {
           trainer->muon_second_moment.push_back(mx::array(0.0f, mx::float32));

@@ -36,6 +36,7 @@ std::vector<mlx_ir::WeightOptimizerSpec> read_weight_specs(
         static_cast<uint32_t>(weight_optimizers[i].group_index),
         weight_optimizers[i].decay != 0,
         weight_optimizers[i].frozen != 0,
+        weight_optimizers[i].muon_view,
     });
   }
   return specs;

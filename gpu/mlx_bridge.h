@@ -131,6 +131,7 @@ typedef struct {
     int group_index;
     int decay;
     int frozen;
+    int muon_view; // 0=rank2, 1=OHWI, 2=IHWO
 } mlx_ir_weight_optimizer;
 
 int mlx_ir_eval_program_output_size(

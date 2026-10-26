@@ -43,6 +43,8 @@ type optimizerReportTensor struct {
 	DecayEligible         bool     `json:"decay_eligible"`
 	Frozen                bool     `json:"frozen"`
 	Buffer                bool     `json:"buffer"`
+	MuonMatrixShape       []int    `json:"muon_matrix_shape,omitempty"`
+	KernelLayout          string   `json:"kernel_layout,omitempty"`
 }
 
 // RunOptimizerReport resolves config policy only: no data, checkpoint, or GPU is loaded.
@@ -130,6 +132,14 @@ func resolvedOptimizerReport(spec gpu.TrainerOptimizerSpec, shapes []WeightShape
 			g.Parameters += n
 			t.GroupIndex, t.Group, t.Optimizer = g.Index, g.Name, g.Optimizer
 			t.ConfiguredLR, t.ConfiguredWeightDecay = g.ConfiguredLR, g.ConfiguredWeightDecay
+			if spec.Groups[w.GroupIndex].Kind == gpu.OptimizerMuon {
+				var err error
+				t.MuonMatrixShape, err = w.MuonView.Shape(s.Shape)
+				if err != nil {
+					return r, err
+				}
+			}
+			t.KernelLayout = s.KernelLayout
 			t.DecayEligible = w.Decay
 			if w.Decay {
 				g.DecayEligibleTensors++

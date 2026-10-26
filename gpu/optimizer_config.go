@@ -15,6 +15,7 @@ type OptimizerWeightMetadata struct {
 	Group        string
 	ForceNoDecay bool
 	ForceDecay   bool
+	MuonView     MuonMatrixView
 }
 
 type OptimizerSettings struct {
@@ -101,9 +102,17 @@ func BuildTrainerOptimizerSpec(cfg TrainerOptimizerConfig) (TrainerOptimizerSpec
 		if err != nil {
 			return TrainerOptimizerSpec{}, err
 		}
+		if groups[groupIdx].Kind == OptimizerMuon {
+			if _, err := weight.MuonView.Shape(weight.Shape); err != nil {
+				return TrainerOptimizerSpec{}, fmt.Errorf("weight %q: %w", weight.Name, err)
+			}
+		} else if weight.MuonView != MuonMatrixIdentity {
+			return TrainerOptimizerSpec{}, fmt.Errorf("weight %q has a Muon view with a non-Muon optimizer", weight.Name)
+		}
 		weights = append(weights, WeightOptimizer{
 			GroupIndex: groupIdx,
 			Decay:      shouldDecayOptimizerWeightWithPolicy(weight, class, cfg.DecayAll),
+			MuonView:   weight.MuonView,
 		})
 	}
 

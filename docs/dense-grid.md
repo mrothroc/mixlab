@@ -19,6 +19,40 @@ The selected `dense_regression.output` must have shape
 `[B,IH,IW,target_channels]`. There is no implicit embedding, normalization,
 residual, final activation or output head.
 
+### Muon for convolution kernels
+
+Dense regression accepts `adamw`, `lamb`, `muon`, `muon_eq_r`, and `normuon`.
+AdamW/LAMB routing is unchanged. Muon-family optimizers use `matrix_lr` and
+`matrix_weight_decay` for convolution kernels, orthogonalizing an optimizer-only
+`[out_channels, kernel_height * kernel_width * in_channels]` view. Ordinary
+`[O,H,W,I]` kernels flatten directly; transposed `[I,H,W,O]` kernels first permute
+to `[O,H,W,I]`. Model storage, prediction, export, and checkpoint tensor names do
+not change. The same view controls shape scaling and variant normalization.
+
+`training.muon_exclude: ["stem", "output"]` matches exact convolution **node
+output names**, not weight names or wildcard patterns. Those kernels use AdamW
+in `extra:grid_muon_excluded` with `scalar_lr` and `matrix_weight_decay`, still
+respecting decay eligibility. Biases and GroupNorm affine parameters keep their
+scalar AdamW policy. There are no automatic first/last-layer exclusions.
+Unknown or duplicate names, non-convolution nodes, and conflicting exclusions or
+layouts for a shared kernel are errors. All consumers of a shared kernel must
+agree. Muon kernels must be direct declared weights, not computed activations.
+
+Inspect routing before training:
+
+```bash
+mixlab -mode optimizer-report -config examples/grid_muon_tiny.json
+```
+
+Each active Muon tensor reports `muon_matrix_shape`; grid kernels also report
+`kernel_layout` (`ohwi` or `ihwo`). Frozen weights have no optimizer assignment or
+state. `muon_momentum`, `muon_backend_steps`, `muon_nesterov`, and
+`newton_schulz_variant` retain their existing semantics. Resume restores momentum
+and variant state and rejects an incompatible optimizer view/configuration.
+[`grid_muon_tiny.json`](../examples/grid_muon_tiny.json) demonstrates a small
+encoder/decoder with excluded input/output kernels. These are experimental
+optimizer choices, not an accuracy or speed guarantee.
+
 Spatial custom operations:
 
 | Op | Inputs | Parameters and semantics |
