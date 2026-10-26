@@ -94,14 +94,21 @@ func validateGridConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	// The common defaults include sequence-only knobs; validate explicit policy
 	// before applying them, then leave those defaults inert in the grid runner.
 	allowed := map[string]bool{"GridLoader": true, "GridAugmentation": true, "InitFrom": true, "InitAllowMissing": true, "Freeze": true, "Phases": true}
+	if cfg.Training.UsesMuon() {
+		for _, name := range []string{"MuonExclude", "MuonMomentum", "MuonBackendSteps", "MuonNesterov", "NewtonSchulzVariant"} {
+			allowed[name] = true
+		}
+	} else if len(cfg.Training.MuonExclude) > 0 {
+		return nil, fmt.Errorf("training.muon_exclude requires a grid model with a Muon-family optimizer")
+	}
 	for _, name := range []string{"Objective", "BatchSize", "Steps", "Seed", "LR", "Optimizer", "WeightDecay", "WeightDecayPolicy", "EmbedLR", "MatrixLR", "ScalarLR", "HeadLR", "EmbedWeightDecay", "MatrixWeightDecay", "ScalarWeightDecay", "HeadWeightDecay", "Beta1", "Beta2", "Epsilon", "LAMBBeta1", "LAMBBeta2", "LAMBEps", "LAMBTrustRatioCap", "GradClip", "WarmupSteps", "WarmupRatio", "HoldSteps", "WarmdownSteps", "MinLRFraction", "LRScheduleSteps", "WeightInit", "WeightInitStd", "ComputeDType", "AllowTF32", "ValEverySteps", "ValExamples", "EarlyStop", "TargetValLoss"} {
 		allowed[name] = true
 	}
 	if err := rejectGridExtras(cfg.Training, allowed, "training"); err != nil {
 		return nil, err
 	}
-	if cfg.Training.Optimizer != "adamw" && cfg.Training.Optimizer != "lamb" {
-		return nil, fmt.Errorf("dense_regression requires optimizer adamw or lamb")
+	if cfg.Training.Optimizer != "adamw" && cfg.Training.Optimizer != "lamb" && !cfg.Training.UsesMuon() {
+		return nil, fmt.Errorf("dense_regression requires optimizer adamw, lamb, muon, muon_eq_r, or normuon")
 	}
 	if cfg.Training.Steps < 0 || cfg.Training.ValEverySteps < 0 || cfg.Training.ValExamples != 0 {
 		return nil, fmt.Errorf("dense_regression requires nonnegative steps/val_every_steps and full-split validation (val_examples=0)")

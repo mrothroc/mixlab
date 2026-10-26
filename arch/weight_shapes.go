@@ -41,6 +41,8 @@ type WeightMeta struct {
 	OptimizerWeightDecay float32
 	ForceNoDecay         bool
 	ForceDecay           bool
+	KernelLayout         string // graph-derived convolution storage layout
+	MuonExcluded         bool
 }
 
 func linearWeightMeta(name string, fanIn, fanOut int) WeightMeta {

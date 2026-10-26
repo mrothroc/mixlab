@@ -434,6 +434,7 @@ type TrainingSpec struct {
 	// (You Jiacheng, arXiv:2505.16932).
 	NewtonSchulzVariant      string   `json:"newton_schulz_variant,omitempty"`
 	MuonNesterov             *bool    `json:"muon_nesterov,omitempty"`
+	MuonExclude              []string `json:"muon_exclude,omitempty"`
 	Optimizer                string   `json:"optimizer,omitempty"` // "muon" (default), "muon_eq_r", "normuon", "adamw", or "lamb"
 	ComputeDType             string   `json:"compute_dtype,omitempty"`
 	AllowTF32                *bool    `json:"allow_tf32,omitempty"`

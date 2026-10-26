@@ -325,6 +325,7 @@ func mlxCreateTrainer(programHandle int64, weightHandles []int64, spec TrainerOp
 		}
 		cWeightSpecs[i] = C.mlx_ir_weight_optimizer{
 			group_index: C.int(weightSpec.GroupIndex),
+			muon_view:   C.int(weightSpec.MuonView),
 			decay:       0,
 			frozen:      0,
 		}

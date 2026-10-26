@@ -1338,6 +1338,7 @@ The `training` object controls optimization, batching, and stochastic settings.
 | `muon_backend_steps` | integer | No | `5` | Muon backend iteration count. Must be `> 0` after defaults. |
 | `newton_schulz_variant` | string | No | `"fixed"` | Muon Newton-Schulz coefficient schedule. `"fixed"` uses the canonical fixed coefficients; `"polar_express"` uses the supported per-iteration Polar Express coefficients. Ignored by AdamW and LAMB. |
 | `muon_nesterov` | boolean | No | `true` | Enables Muon Nesterov mode when set or omitted. |
+| `muon_exclude` | string array | No | `[]` | Grid Muon-family models only: exact convolution graph output names excluded from Muon. Kernels use AdamW with `scalar_lr` and `matrix_weight_decay`. Unknown/duplicate names and conflicting shared-kernel policies reject. See [grid Muon](dense-grid.md#muon-for-convolution-kernels). |
 | `embed_weight_decay` | number | No | `weight_decay` | Per-group weight decay for embeddings. Explicit `0` disables this group's decay. |
 | `matrix_weight_decay` | number | No | `weight_decay` | Per-group weight decay for matrices. Explicit `0` disables this group's decay. |
 | `scalar_weight_decay` | number | No | `weight_decay` | Per-group weight decay for scalars and vectors. Explicit `0` disables this group's decay. |
@@ -1718,6 +1719,8 @@ The embedding class recognizes `embed`, `rtd_generator_embed`, `char_table`,
 `bigram_table`, and `trigram_table`; the head class recognizes `head` and
 `head_*`. Norms, designated dynamics/scale tensors, and remaining rank-1
 tensors use the scalar class. Other rank-2 tensors use the matrix class.
+Grid Muon kernels additionally use an explicit output-channel matrix view;
+excluded kernels stay on AdamW. See [grid Muon routing](dense-grid.md#muon-for-convolution-kernels).
 In particular, **`position_embeddings`, `cls_token` (stored as `[1,D]`), and
 `input_adapter_proj` currently use the matrix class**, including Muon when
 selected. A continuous-input classifier can therefore have an empty embedding

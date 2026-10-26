@@ -67,6 +67,7 @@ struct WeightOptimizerSpec {
   uint32_t group_index = 0;
   bool decay = false;
   bool frozen = false;
+  int muon_view = 0;
 };
 
 struct ModelBufferUpdate {

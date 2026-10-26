@@ -19,7 +19,7 @@ func TestGridTwoStageFreezeAndResume(t *testing.T) {
 		t.Skip("MLX required")
 	}
 	manifest := prepareTinyGrid(t)
-	for _, optimizer := range []string{"adamw", "lamb"} {
+	for _, optimizer := range []string{"adamw", "lamb", "muon", "muon_eq_r", "normuon"} {
 		t.Run(optimizer, func(t *testing.T) {
 			cfg, err := LoadArchConfig("../examples/grid_two_stage_1.json")
 			if err != nil {
@@ -27,6 +27,9 @@ func TestGridTwoStageFreezeAndResume(t *testing.T) {
 			}
 			cfg.Training.Steps = 4
 			cfg.Training.Optimizer = optimizer
+			if cfg.Training.UsesMuon() {
+				cfg.Training.MuonMomentum, cfg.Training.MuonBackendSteps = .9, 5
+			}
 			cfg.Training.LR = .001
 			cfg.Training.EarlyStop = &EarlyStopSpec{Patience: 100}
 			dir := t.TempDir()

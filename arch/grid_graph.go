@@ -130,6 +130,9 @@ func buildGridGraph(cfg *ArchConfig, supervised bool) (*Program, []WeightMeta, e
 		}
 		shapes[op.Output] = s
 	}
+	if err := resolveGridKernelMetadata(cfg, metas); err != nil {
+		return nil, nil, err
+	}
 	for n, w := range spec.Weights {
 		if w.Init != nil && w.Init.Kind == "pytorch_conv_uniform" && w.Init.Weight != "" {
 			paired := false
