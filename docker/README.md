@@ -5,6 +5,25 @@ The current CUDA image is built from MLX v0.32.0 and requires NCCL support.
 
 ### Float32 And TF32
 
+The base image carries `MIXLAB_MLX_CUDA_CONV_PLAN_FIX=1`, a build marker (not a
+runtime opt-in). Strict-FP32 cuDNN plan rejection falls back to MLX's existing
+FP32 GEMM convolution; execution and other CUDA errors still propagate. Both
+the architecture tiers and application image reject a base missing this fix.
+Rebuild the base and tiers before publishing an application image with it.
+
+`python3 docker/test_mlx_conv_fallback.py --source <mlx>/mlx/backend/cuda/conv.cpp`
+tests plan-result policy without a GPU. On CUDA, run
+`bash docker/test_mlx_dilated_conv.sh` for forward/input/weight-gradient checks
+against independent FP64 scalar references, followed by:
+
+```bash
+MIXLAB_TEST_WIDE_DILATION=1 MLX_ENABLE_TF32=0 go test -tags mlx ./train \
+  -run '^TestGridStrictDilatedTrainingPrediction$' -count=1 -v
+```
+
+The wide test uses synthetic batch-2 192-channel grids at 32/64 pixels and
+dilation 2/4, including training preflight and checkpoint-backed prediction.
+
 `compute_dtype: "float32"` controls tensor dtype, not strict multiplication
 precision: CUDA allows TF32 for eligible float32 matmuls/convolutions by default.
 Set `training.allow_tf32: false` or, when the config omits that field,

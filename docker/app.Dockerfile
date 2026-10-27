@@ -20,6 +20,8 @@ RUN test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1" \
     || { echo "Rebuild the MLX CUDA base and architecture tiers with the convolution gradient fix" >&2; exit 1; }
 RUN test "${MIXLAB_MLX_CUDA_ALLOCATOR_FIX}" = "2" \
     || { echo "Rebuild the MLX CUDA base and architecture tiers with the allocator reclaim fix" >&2; exit 1; }
+RUN test "${MIXLAB_MLX_CUDA_CONV_PLAN_FIX}" = "1" \
+    || { echo "Rebuild the MLX CUDA base and architecture tiers with the strict convolution plan fix" >&2; exit 1; }
 
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \

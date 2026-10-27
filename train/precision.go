@@ -38,6 +38,7 @@ func startTrainingPrecision(cfg *ArchConfig, opts TrainOptions) error {
 		}
 	}
 	fmt.Printf("  [%s] %s\n", cfg.Name, p)
+	writeGridConvolutionContext(os.Stderr, cfg, p)
 	// No new output flag: attach provenance to the existing artifact location.
 	path := ""
 	if opts.SafetensorsPath != "" {

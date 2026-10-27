@@ -228,6 +228,24 @@ on CUDA, explicit true conflicts with `NVIDIA_TF32_OVERRIDE=0`.
 ignores it. Environment values must be `0` or `1`. Without a GPU backend, explicit
 values fail at execution, not config parsing.
 
+On CUDA, a strict-FP32 convolution whose cuDNN execution plans are unavailable
+uses MLX's GEMM convolution fallback, including input and weight gradients. It
+does **not** enable TF32. A `[mlx conv] fallback=gemm` stderr message reports
+the backend operation, input/weight/output shapes, stride, padding, kernel/input
+dilation and reason once per signature (up to 256 distinct signatures). This
+path can be slower and needs an unfolded-input workspace. Successful cuDNN
+plans and Metal execution are unchanged.
+Strict CUDA setup also prints a `[grid convolution context]` source-name map
+once per run/prediction setup so backend shape signatures can be attributed to
+named graph operations.
+
+CUDA grid training's existing preflight executes and restores probe steps before
+normal training. Failures include precision and named convolution candidates;
+these names let you correlate lazy backend shape diagnostics with the source
+graph, rather than guessing which operation failed. Keep the preflight enabled
+for acceptance runs. The fix is in the pinned MLX CUDA library: rebuild the base
+and architecture-tier images, not just the Mixlab binary. No opt-in flag is needed.
+
 Training and `predict-grid` banners report dtype, backend, and the permission. This is permission for
 eligible kernels, not a claim that every operation uses reduced precision. The
 switch is locked for the process lifetime, including native eval/prediction.
