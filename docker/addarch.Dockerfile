@@ -26,6 +26,7 @@ RUN test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}" \
     && test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1" \
     && test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1" \
     && test "${MIXLAB_MLX_CUDA_ALLOCATOR_FIX}" = "2" \
+    && test "${MIXLAB_MLX_CUDA_CONV_PLAN_FIX}" = "1" \
     && test "${MIXLAB_MLX_BUILD_COMMIT}" = "${MLX_COMMIT}" \
     && test "$(git -C /opt/mlx rev-parse HEAD)" = "${MLX_COMMIT}" \
     && cd /opt/mlx/build \

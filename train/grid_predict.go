@@ -36,6 +36,7 @@ func visitGridPredictions(cfg *ArchConfig, checkpoint string, ds *data.GridDatas
 		return err
 	}
 	fmt.Printf("  [%s] predict-grid %s\n", cfg.Name, policy)
+	writeGridConvolutionContext(os.Stderr, cfg, policy)
 	if _, err := configureMLXMemoryLimits(cfg.Name); err != nil {
 		return err
 	}

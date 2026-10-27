@@ -93,6 +93,18 @@ jobs:
           python3 docker/test_mlx_allocator.py --source "$SOURCE"
           python3 docker/test_mlx_allocator_retry.py --source "$SOURCE"
 
+      - name: Test MLX strict convolution fallback patch
+        run: |
+          ROOT="$RUNNER_TEMP/mlx-conv"
+          SOURCE="$ROOT/mlx/backend/cuda/conv.cpp"
+          mkdir -p "$(dirname "$SOURCE")"
+          curl --fail --location --max-time 30 \
+            "https://raw.githubusercontent.com/ml-explore/mlx/7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247/mlx/backend/cuda/conv.cpp" -o "$SOURCE"
+          python3 docker/test_mlx_conv_fallback.py --source "$SOURCE" --expect-broken
+          git -C "$ROOT" apply --check "$GITHUB_WORKSPACE/docker/patches/mlx-cuda-conv-plan-fallback.patch"
+          git -C "$ROOT" apply "$GITHUB_WORKSPACE/docker/patches/mlx-cuda-conv-plan-fallback.patch"
+          python3 docker/test_mlx_conv_fallback.py --source "$SOURCE"
+
   image-python:
     name: Image Python dependencies
     runs-on: ubuntu-latest

@@ -64,6 +64,15 @@ RUN git -C /opt/mlx apply --check /tmp/mlx-conv-transpose-weight-grad.patch \
     && git -C /opt/mlx apply /tmp/mlx-conv-transpose-weight-grad.patch
 ENV MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1
 
+# Missing strict cuDNN plans must reach MLX's existing FP32 GEMM fallback.
+COPY docker/patches/mlx-cuda-conv-plan-fallback.patch /tmp/mlx-cuda-conv-plan-fallback.patch
+COPY docker/test_mlx_conv_fallback.py /tmp/test_mlx_conv_fallback.py
+RUN python3 /tmp/test_mlx_conv_fallback.py --source /opt/mlx/mlx/backend/cuda/conv.cpp --expect-broken \
+    && git -C /opt/mlx apply --check /tmp/mlx-cuda-conv-plan-fallback.patch \
+    && git -C /opt/mlx apply /tmp/mlx-cuda-conv-plan-fallback.patch \
+    && python3 /tmp/test_mlx_conv_fallback.py --source /opt/mlx/mlx/backend/cuda/conv.cpp
+ENV MIXLAB_MLX_CUDA_CONV_PLAN_FIX=1
+
 # Bound the logical cache and reclaim completed pool frees before retrying OOM.
 # Exercise the pinned methods without CUDA before/after applying the patch.
 COPY docker/patches/mlx-cuda-allocator-reclaim.patch /tmp/mlx-cuda-allocator-reclaim.patch

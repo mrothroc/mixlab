@@ -217,7 +217,7 @@ func runGridTrainWithStep(cfg *ArchConfig, manifest string, opts TrainOptions, s
 		}
 		fmt.Printf("  [%s] %s\n", cfg.Name, gridMemoryDiagnostic("preflight-start", memoryPlan))
 		if e = preflightGridTraining(trainer, shapes, b, setup.StartStep, sched.At(setup.StartStep)); e != nil {
-			return result, annotateGridMemoryError(e, "preflight before full validation", cfg, memoryPlan)
+			return result, annotateGridPreflightError(e, cfg, memoryPlan)
 		}
 		fmt.Printf("  [%s] %s (model and optimizer restored)\n", cfg.Name, gridMemoryDiagnostic("preflight-complete", memoryPlan))
 	}

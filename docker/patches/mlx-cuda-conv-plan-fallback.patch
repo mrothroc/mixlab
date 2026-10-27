@@ -1,0 +1,86 @@
+--- a/mlx/backend/cuda/conv.cpp
++++ b/mlx/backend/cuda/conv.cpp
+@@ -10,6 +10,10 @@
+ #include <nvtx3/nvtx3.hpp>
+ 
+ #include <cassert>
++#include <iostream>
++#include <mutex>
++#include <sstream>
++#include <unordered_set>
+ 
+ namespace mlx::core {
+ 
+@@ -139,10 +143,48 @@
+   if (dtype == float32 && !env::enable_tf32()) {
+     graph.deselect_numeric_notes({fe::NumericalNote_t::TENSOR_CORE});
+   }
+-  CHECK_CUDNN_ERROR(graph.build());
++  auto status = graph.build();
++  // Plan rejection is a capability result, not an execution failure. Let the
++  // caller select its existing strict cuBLAS path.
++  if (dtype == float32 && !env::enable_tf32() &&
++      (status.get_code() == fe::error_code_t::GRAPH_NOT_SUPPORTED ||
++       status.get_code() == fe::error_code_t::GRAPH_EXECUTION_PLAN_CREATION_FAILED)) {
++    return std::nullopt;
++  }
++  CHECK_CUDNN_ERROR(status);
+   return graph;
+ }
+ 
++void log_strict_conv_fallback(
++    const array& in, const array& wt, const array& out,
++    const std::vector<int>& strides, const std::vector<int>& padding,
++    const std::vector<int>& dilation, const std::vector<int>& input_dilation,
++    bool flip) {
++  if (out.dtype() != float32 || env::enable_tf32()) return;
++  std::ostringstream line;
++  line << "[mlx conv] fallback=gemm operation=Convolution precision=strict-fp32"
++       << " reason=no-supported-cudnn-plan";
++  auto field = [&](const char* name, const auto& values) {
++    line << " " << name << "=[";
++    const char* separator = "";
++    for (auto value : values) { line << separator << value; separator = ","; }
++    line << "]";
++  };
++  field("input", in.shape()); field("weight", wt.shape()); field("output", out.shape());
++  field("stride", strides); field("padding", padding); field("dilation", dilation);
++  field("input_dilation", input_dilation);
++  line << " flip=" << flip;
++  // Bound diagnostic state independently of the execution-plan cache. Avoid
++  // repeated messages when pointer alignment or cache eviction changes keys.
++  static std::mutex mutex;
++  static std::unordered_set<std::string> seen;
++  std::lock_guard<std::mutex> lock(mutex);
++  if (seen.size() < 256 && seen.insert(line.str()).second) {
++    std::cerr << line.str() << std::endl;
++    if (seen.size() == 256) std::cerr << "[mlx conv] further fallback signatures suppressed" << std::endl;
++  }
++}
++
+ // Transpose from (C_out, H, W, C_in / groups) to (C_in, H, W, C_out / groups).
+ array group_transpose(
+     const array& x,
+@@ -369,6 +411,13 @@
+       in = std::move(x);
+       wt = std::move(w);
+       out = std::move(y);
++      break;
++    }
++    // Under strict FP32, do not reinterpret a rejected convolution as a
++    // different cuDNN operation: some wide dilated shapes admit an alternate
++    // plan with incorrect results. The generic GEMM path preserves the
++    // original convolution parameters for forward and both adjoints.
++    if (dtype == float32 && !env::enable_tf32()) {
+       break;
+     }
+   }
+@@ -388,6 +437,8 @@
+   }
+ 
+   // Use fallback kernel for settings not supported by cuDNN.
++  log_strict_conv_fallback(in, wt, out, kernel_strides_, padding_lo_,
++                           kernel_dilation_, input_dilation_, flip_);
+   gemm_conv(
+       encoder,
+       in,
