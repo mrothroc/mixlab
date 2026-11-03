@@ -29,6 +29,15 @@ func runGridTrain(cfg *ArchConfig, manifest string, opts TrainOptions) (TrainRes
 // The step boundary is injectable for failure/replay tests without adding a
 // production fault flag or mutating global trainer state.
 func runGridTrainWithStep(cfg *ArchConfig, manifest string, opts TrainOptions, stepFn func(GPUTrainer, objectiveBatch, int, float32) (float32, error)) (result TrainResult, runErr error) {
+	return runGridTrainWithHooks(cfg, manifest, opts, gridTrainHooks{step: stepFn})
+}
+
+type gridTrainHooks struct {
+	step     func(GPUTrainer, objectiveBatch, int, float32) (float32, error)
+	evaluate func(*ArchConfig, GPUTrainer, *data.GridDataset) (gridMetrics, error)
+}
+
+func runGridTrainWithHooks(cfg *ArchConfig, manifest string, opts TrainOptions, hooks gridTrainHooks) (result TrainResult, runErr error) {
 	result = TrainResult{Name: cfg.Name, LastUnmaskedLoss: math.NaN()}
 	recovery := newGridRecovery(opts.CheckpointDir)
 	if err := validateRunTrainOptions(opts); err != nil {
@@ -84,6 +93,7 @@ func runGridTrainWithStep(cfg *ArchConfig, manifest string, opts TrainOptions, s
 	if err != nil {
 		return result, err
 	}
+	stepFn := hooks.step
 	if stepFn == nil {
 		stepFn = func(tr GPUTrainer, b objectiveBatch, batchSize int, lr float32) (float32, error) {
 			if e := submitPreparedStepGPU(tr, b, batchSize, 0, lr); e != nil {
@@ -92,6 +102,10 @@ func runGridTrainWithStep(cfg *ArchConfig, manifest string, opts TrainOptions, s
 			loss, e := tr.CollectLossGPU()
 			return loss, annotateGridMemoryError(e, "training collect", cfg, memoryPlan)
 		}
+	}
+	evaluate := hooks.evaluate
+	if evaluate == nil {
+		evaluate = evaluateGridDataset
 	}
 	preflight, err := gridMemoryPreflightEnabled(memoryPlan.DedicatedDevice)
 	if err != nil {
@@ -188,6 +202,13 @@ func runGridTrainWithStep(cfg *ArchConfig, manifest string, opts TrainOptions, s
 		_, path, e := writeResumableCheckpoint(cfg, trainer, shapes, dir, step, ctx)
 		return path, e
 	}
+	checkpointOnCadence := func(step int) error {
+		if opts.CheckpointDir != "" && opts.CheckpointEvery > 0 && step%opts.CheckpointEvery == 0 {
+			_, e := checkpoint(step, opts.CheckpointDir)
+			return e
+		}
+		return nil
+	}
 	if err = recovery.publish(setup.StartStep, func(dir string) (string, error) { return checkpoint(setup.StartStep, dir) }); err != nil {
 		return result, err
 	}
@@ -236,7 +257,7 @@ func runGridTrainWithStep(cfg *ArchConfig, manifest string, opts TrainOptions, s
 			return false, nil
 		}
 		start := time.Now()
-		metrics, e := evaluateGridDataset(cfg, trainer, val)
+		metrics, e := evaluate(cfg, trainer, val)
 		if e != nil {
 			return false, annotateGridMemoryError(e, "validation", cfg, memoryPlan)
 		}
@@ -258,6 +279,7 @@ func runGridTrainWithStep(cfg *ArchConfig, manifest string, opts TrainOptions, s
 		}
 		return stop || (cfg.Training.TargetValLoss > 0 && metrics.MaskedRMSE() <= cfg.Training.TargetValLoss), nil
 	}
+	finalValidationOnly := setup.Loaded != nil && setup.StartStep == steps
 	// Validate the whole split before any committed update or best selection.
 	if validationPending {
 		stopped, err = validate(setup.StartStep)
@@ -265,6 +287,11 @@ func runGridTrainWithStep(cfg *ArchConfig, manifest string, opts TrainOptions, s
 			return result, err
 		}
 		validationPending = false
+		if finalValidationOnly {
+			if err = checkpointOnCadence(setup.StartStep); err != nil {
+				return result, err
+			}
+		}
 	}
 	start := time.Now()
 	var timing gridThroughput
@@ -272,11 +299,14 @@ func runGridTrainWithStep(cfg *ArchConfig, manifest string, opts TrainOptions, s
 	if stopped {
 		loaderSteps = setup.StartStep
 	}
-	loader, err := newTrainingGridPrefetch(cfg, ds, sampler, setup.StartStep, loaderSteps)
-	if err != nil {
-		return result, err
+	var loader *data.GridPrefetch
+	if setup.StartStep < loaderSteps {
+		loader, err = newTrainingGridPrefetch(cfg, ds, sampler, setup.StartStep, loaderSteps)
+		if err != nil {
+			return result, err
+		}
+		defer func() { _ = loader.Close() }()
 	}
-	defer func() { _ = loader.Close() }()
 	fmt.Printf("  [%s] dense regression: records=%d batch_size=%d grid=%dx%dx%d epochs are complete shuffled passes\n", cfg.Name, ds.Len(), batchSize, ds.Geometry.Channels, ds.Geometry.Height, ds.Geometry.Width)
 	var frozen []string
 	for _, shape := range shapes {
@@ -358,19 +388,22 @@ func runGridTrainWithStep(cfg *ArchConfig, manifest string, opts TrainOptions, s
 			}
 			validationPending = false
 		}
-		if opts.CheckpointDir != "" && opts.CheckpointEvery > 0 && (step+1)%opts.CheckpointEvery == 0 {
-			if _, e = checkpoint(step+1, opts.CheckpointDir); e != nil {
-				return result, e
-			}
+		if e = checkpointOnCadence(step + 1); e != nil {
+			return result, e
 		}
 	}
-	if err = loader.Close(); err != nil {
-		return result, err
+	if loader != nil {
+		if err = loader.Close(); err != nil {
+			return result, err
+		}
 	}
 	if opts.SafetensorsPath != "" {
 		if err = save(opts.SafetensorsPath); err != nil {
 			return result, err
 		}
+	}
+	if finalValidationOnly {
+		fmt.Printf("  [%s] finished from final-step bundle at step %d with pending validation; no training updates performed\n", cfg.Name, setup.StartStep)
 	}
 	result.Delta = result.FirstLoss - result.LastLoss
 	result.Elapsed = time.Since(start)
