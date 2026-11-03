@@ -412,6 +412,17 @@ potentially partial weights/moments are never saved. Resuming replays work after
 the last known-good bundle, including pending validation. Recovery checkpoint
 writes add CPU readback and disk IO at the configured cadence.
 
+If final validation fails after all training updates have completed, resume the
+final-step recovery manifest with the same `training.steps`. A grid bundle at
+exactly that step with `validation_pending: true` finishes validation, best-model
+selection, the periodic checkpoint (only when its cadence divides the final
+step), and the requested `-safetensors` export without another training update.
+The completion log explicitly identifies this recovery. Reuse the original
+checkpoint directory to preserve any earlier best-model weights. A completed
+final bundle without pending validation, or a bundle beyond the configured
+training end, is still rejected. Rolling recovery bundles remain pre-validation
+snapshots, not completion markers.
+
 Without `-checkpoint-dir` no recovery bundle is created. Local ephemeral disk
 does not survive pod deletion; use persistent storage or externally upload the
 whole bundle. Recovery is not a guarantee against process kill or machine loss.

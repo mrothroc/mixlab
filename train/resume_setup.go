@@ -51,8 +51,8 @@ func prepareResumeRun(cfg *ArchConfig, trainPattern, resumePath string, earlySto
 	if err != nil {
 		return resumeRunSetup{}, err
 	}
-	if manifest.GlobalStep >= steps {
-		return resumeRunSetup{}, fmt.Errorf("checkpoint is at step %d, at or after configured training steps %d; raise training.steps to extend", manifest.GlobalStep, steps)
+	if err := validateResumeStep(cfg, manifest, steps); err != nil {
+		return resumeRunSetup{}, err
 	}
 	loaded, err := loadResumeState(manifest)
 	if err != nil {
@@ -69,6 +69,18 @@ func prepareResumeRun(cfg *ArchConfig, trainPattern, resumePath string, earlySto
 	setup.StartStep = manifest.GlobalStep
 	setup.Loaded = &loaded
 	return setup, nil
+}
+
+func validateResumeStep(cfg *ArchConfig, manifest resumeManifest, steps int) error {
+	if manifest.GlobalStep < steps {
+		return nil
+	}
+	// A completed update is not a completed run when final grid validation is owed.
+	if manifest.GlobalStep == steps && cfg.GridEnabled() && manifest.Grid != nil &&
+		manifest.Grid.Version == 1 && manifest.Grid.ValidationPending {
+		return nil
+	}
+	return fmt.Errorf("checkpoint is at step %d, at or after configured training steps %d; raise training.steps to extend", manifest.GlobalStep, steps)
 }
 
 func replayTrainingLoader(loader *data.Loader, steps, batchTokens, seqLen int) error {
