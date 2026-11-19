@@ -26,6 +26,9 @@ func attachGridContract(p *Program, cfg *ArchConfig, metas []WeightMeta, shapes 
 			r.Meaning = "supervised_target"
 		case "grid":
 			r.Meaning = "input_grid_nhwc"
+		case "grid_vectors":
+			r.Meaning = "per_record_vector_unnormalized_unaugmented"
+			r.Tensor = contractTensor(r.Tensor.DType, r.Tensor.Shape, "batch", "feature")
 		case "predictions":
 			r.Meaning = "selected_output_grid_nhwc"
 		}
@@ -33,6 +36,9 @@ func attachGridContract(p *Program, cfg *ArchConfig, metas []WeightMeta, shapes 
 	// Preserve axis provenance through explicit transposes, including detached
 	// activations; element-count equality cannot establish layout compatibility.
 	axes := map[string][]string{"x": {"batch", "height", "width", "channel"}}
+	if cfg.InputAdapter.VectorDim > 0 {
+		axes["v"] = []string{"batch", "feature"}
+	}
 	for _, op := range cfg.Blocks[0].Ops {
 		names := append([]string(nil), axes[op.Inputs[0]]...)
 		if len(names) == 0 {
@@ -50,6 +56,12 @@ func attachGridContract(p *Program, cfg *ArchConfig, metas []WeightMeta, shapes 
 		if op.Op == "conv2d" || op.Op == "conv_transpose2d" || op.Op == "max_pool2d" {
 			names = []string{"batch", "height", "width", "channel"}
 		}
+		if op.Op == "reshape" {
+			names = []string{"batch"}
+			for j := 1; j < len(shapes[op.Output]); j++ {
+				names = append(names, fmt.Sprintf("axis_%d", j))
+			}
+		}
 		axes[op.Output] = names
 		out := prefix + op.Output
 		if !needed[out] {
@@ -60,6 +72,8 @@ func attachGridContract(p *Program, cfg *ArchConfig, metas []WeightMeta, shapes 
 			in := prefix + op.Inputs[0]
 			if op.Inputs[0] == "x" {
 				in = "grid"
+			} else if op.Inputs[0] == "v" && cfg.InputAdapter.VectorDim > 0 {
+				in = "grid_vectors"
 			}
 			pc.DetachedEdges = append(pc.DetachedEdges, ContractEdge{in, out})
 		}

@@ -71,6 +71,11 @@ func RunExportTorchState(opts ExportTorchStateOptions) error {
 		"target_channels": cfg.DenseRegression.TargetChannels, "units": "model", "source_sha256": hashes,
 		"mappings": mapping.Mappings, "excluded": mapping.Excluded, "provenance": mapping.Provenance,
 	}
+	if cfg.InputAdapter.VectorDim > 0 {
+		manifest["vector_dim"] = cfg.InputAdapter.VectorDim
+		manifest["vector_dtype"] = "float32"
+		manifest["vector_layout"] = "NS"
+	}
 	// One-time warm-start paths are not part of an inference package.
 	cfg.Training.InitFrom, cfg.Training.InitAllowMissing = "", nil
 	for name, value := range map[string]any{"export.json": manifest, "config.json": cfg, "export-map.json": mapping} {

@@ -151,6 +151,18 @@ func emitCustomBlockIR(
 	stream string,
 	wi, D, T, B, V, idx int,
 ) (int, error) {
+	return emitCustomBlockIRWithBindings(prog, spec, stream, wi, D, T, B, V, idx, nil)
+}
+
+// Additional bindings are supplied by the task's graph builder; sequence custom
+// blocks retain their historical x/weight/local-activation name resolution.
+func emitCustomBlockIRWithBindings(
+	prog *Program,
+	spec BlockSpec,
+	stream string,
+	wi, D, T, B, V, idx int,
+	bindings map[string]string,
+) (int, error) {
 	opName := strings.ToLower(strings.TrimSpace(spec.Name))
 	if opName == "" {
 		opName = "custom"
@@ -176,6 +188,9 @@ func emitCustomBlockIR(
 
 	// resolveName maps a user-facing name to an IR variable name.
 	resolveName := func(name string) string {
+		if input, ok := bindings[name]; ok {
+			return input
+		}
 		if name == "x" {
 			return stream
 		}

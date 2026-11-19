@@ -14,7 +14,7 @@ import (
 
 func checkGridGeometry(cfg *ArchConfig, g data.GridGeometry, targets bool) error {
 	i := cfg.InputAdapter
-	if g.Channels != i.Channels || g.Height != i.Height || g.Width != i.Width || (targets && g.TargetChannels != cfg.DenseRegression.TargetChannels) {
+	if g.Channels != i.Channels || g.Height != i.Height || g.Width != i.Width || g.VectorDim != i.VectorDim || (targets && g.TargetChannels != cfg.DenseRegression.TargetChannels) {
 		return fmt.Errorf("grid dataset geometry %+v does not match model", g)
 	}
 	return nil

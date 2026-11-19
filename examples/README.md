@@ -5,6 +5,10 @@ support JSONC comments (`//`) for inline documentation.
 
 ## Dense Grids
 
+[`grid_vectors_tiny.json`](grid_vectors_tiny.json) combines a one-pixel map with
+a per-record scalar (`input_adapter.vector_dim: 1`). Prepare aligned float32
+`vectors` arrays for every split; see [per-record vectors](../docs/dense-grid.md#per-record-vectors).
+
 [`grid_regression_tiny.json`](grid_regression_tiny.json) is a native convolutional
 dense-regression example. It uses record batches and grid manifests, not token
 shards. See [the prepare/train/eval/predict workflow](../docs/dense-grid.md).

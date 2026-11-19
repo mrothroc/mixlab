@@ -142,7 +142,7 @@ func (p *GridPrefetch) Close() error {
 // Index/ID metadata and OS page cache are not part of the payload bound.
 func GridLoaderMemoryBounds(g GridGeometry, dtype string, opts GridPrefetchOptions) (decoded, scratch int64) {
 	pixels := int64(g.Height) * int64(g.Width)
-	decoded = int64(opts.Depth+1) * int64(opts.BatchSize) * pixels * int64(g.Channels+2*g.TargetChannels) * 4
+	decoded = int64(opts.Depth+1) * int64(opts.BatchSize) * (pixels*int64(g.Channels+2*g.TargetChannels) + int64(g.VectorDim)) * 4
 	width := int64(4)
 	if dtype == "float16" {
 		width = 2
@@ -151,6 +151,7 @@ func GridLoaderMemoryBounds(g GridGeometry, dtype string, opts GridPrefetchOptio
 	if g.TargetChannels > 0 {
 		encoded += (pixels + 7) / 8
 	}
+	encoded += int64(g.VectorDim) * 4
 	scratch = int64(opts.Workers) * encoded
 	if opts.Dihedral {
 		scratch += pixels * int64(max(g.Channels, g.TargetChannels)) * 4

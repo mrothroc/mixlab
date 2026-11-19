@@ -62,10 +62,18 @@ func validateGridConfig(cfg *ArchConfig, source string) (*ArchConfig, error) {
 	if err := rejectGridExtras(*cfg, map[string]bool{"Name": true, "InputAdapter": true, "DenseRegression": true, "Blocks": true, "Training": true}, "config"); err != nil {
 		return nil, err
 	}
-	if err := rejectGridExtras(*cfg.InputAdapter, map[string]bool{"Kind": true, "Channels": true, "Height": true, "Width": true}, "input_adapter"); err != nil {
+	if err := rejectGridExtras(*cfg.InputAdapter, map[string]bool{"Kind": true, "Channels": true, "Height": true, "Width": true, "VectorDim": true}, "input_adapter"); err != nil {
 		return nil, err
 	}
 	i := cfg.InputAdapter
+	if i.VectorDim < 0 {
+		return nil, fmt.Errorf("input_adapter.vector_dim must be nonnegative")
+	}
+	if i.VectorDim > 0 {
+		if _, err := gridSize([]int{cfg.Training.BatchSize, i.VectorDim}); err != nil {
+			return nil, fmt.Errorf("input_adapter.vector_dim: %w", err)
+		}
+	}
 	if err := cfg.Training.GridLoader.validate(); err != nil {
 		return nil, err
 	}

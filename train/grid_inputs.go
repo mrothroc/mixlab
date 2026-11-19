@@ -12,7 +12,7 @@ func makeGridInputs(decls []arch.TensorDecl, b *data.GridBatch) ([]gpu.TensorInp
 	if b == nil {
 		return nil, fmt.Errorf("grid program requires a grid batch")
 	}
-	values := map[string][]float32{"grid": b.Inputs, "grid_targets": b.Targets, "grid_loss_mask": b.LossMask}
+	values := map[string][]float32{"grid": b.Inputs, "grid_targets": b.Targets, "grid_loss_mask": b.LossMask, "grid_vectors": b.Vectors}
 	inputs := make([]gpu.TensorInput, 0, len(decls))
 	for _, d := range decls {
 		v, ok := values[d.Name]

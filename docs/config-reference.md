@@ -8,7 +8,8 @@ are available alongside the tiny examples. Export uses the CLI-only
 
 Optional top-level `dense_regression` selects a native spatial task with
 `output`, `target_channels`, and optional `metric_scale`. Use
-`input_adapter.kind: "grid"` with `channels`, `height`, `width`, and
+`input_adapter.kind: "grid"` with `channels`, `height`, `width`, optional
+`vector_dim` (default 0; positive S adds per-record float32 `[B,S]` input `v`), and
 `training.objective: "dense_regression"` with record-count `batch_size`.
 No token dimensions are required. Custom weights accept optional typed `init`
 policies. See [Dense Grid Regression](dense-grid.md) for the complete field,

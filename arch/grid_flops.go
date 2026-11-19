@@ -17,6 +17,9 @@ func estimateGridFLOPs(cfg *ArchConfig) FLOPsEstimate {
 	}
 	est.ExpandedParamCount = est.ParamCount
 	shapes := map[string][]int{"x": {cfg.Training.BatchSize, cfg.InputAdapter.Height, cfg.InputAdapter.Width, cfg.InputAdapter.Channels}}
+	if cfg.InputAdapter.VectorDim > 0 {
+		shapes["v"] = []int{cfg.Training.BatchSize, cfg.InputAdapter.VectorDim}
+	}
 	for _, w := range cfg.Blocks[0].Weights {
 		s, e := gridWeightShape(w.Shape, cfg)
 		if e != nil {

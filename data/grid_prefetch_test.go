@@ -36,6 +36,10 @@ func gridReaderFixtureGeometry(t testing.TB, dtype int, g GridGeometry, perShard
 		for i, v := range []int{GridShardMagic, 1, dtype, g.Channels, g.Height, g.Width, g.TargetChannels, perShard, len(rawIDs)} {
 			binary.LittleEndian.PutUint32(raw[4*i:], uint32(v))
 		}
+		if g.VectorDim > 0 {
+			binary.LittleEndian.PutUint32(raw[4:], 2)
+			binary.LittleEndian.PutUint32(raw[36:], uint32(g.VectorDim))
+		}
 		raw = append(raw, rawIDs...)
 		for i, id := range ids {
 			for j := 0; j < g.Height*g.Width*(g.Channels+g.TargetChannels); j++ {
@@ -49,6 +53,9 @@ func gridReaderFixtureGeometry(t testing.TB, dtype int, g GridGeometry, perShard
 				for p := 0; p < g.Height*g.Width; p += 8 {
 					raw = append(raw, byte(1+i%15)&byte((1<<min(8, g.Height*g.Width-p))-1))
 				}
+			}
+			for j := 0; j < g.VectorDim; j++ {
+				raw = binary.LittleEndian.AppendUint32(raw, math.Float32bits(float32(100*shard+12*i+j)+.123456))
 			}
 			d.records = append(d.records, gridRecordRef{shard, i, id})
 		}
@@ -67,6 +74,7 @@ func cloneGridBatch(b GridBatch) GridBatch {
 	b.Targets = slices.Clone(b.Targets)
 	b.LossMask = slices.Clone(b.LossMask)
 	b.IDs = slices.Clone(b.IDs)
+	b.Vectors = slices.Clone(b.Vectors)
 	return b
 }
 

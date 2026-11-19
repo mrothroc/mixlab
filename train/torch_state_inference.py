@@ -48,6 +48,17 @@ def run(args):
     expected = (manifest["input_channels"], manifest["height"], manifest["width"])
     if x.ndim != 4 or tuple(x.shape[1:]) != expected or len(x) == 0 or x.dtype.kind != "f":
         raise ValueError("input must be nonempty floating NCHW matching export.json")
+    vectors = None
+    vector_dim = manifest.get("vector_dim", 0)
+    vector_path = getattr(args, "vectors", None)
+    if vector_dim:
+        if not vector_path:
+            raise ValueError("--vectors is required by this package")
+        vectors = np.load(vector_path, mmap_mode="r", allow_pickle=False)
+        if vectors.shape != (len(x), vector_dim) or vectors.dtype != np.float32:
+            raise ValueError("vectors must be float32 [N,S] matching export.json and input")
+    elif vector_path:
+        raise ValueError("--vectors requires a package with vector_dim")
     dest = Path(args.output)
     if dest.exists():
         raise ValueError("output must not already exist")
@@ -63,7 +74,13 @@ def run(args):
                 batch = np.array(x[start:start+args.batch_size], dtype=np.float32, copy=True)
                 if not np.isfinite(batch).all():
                     raise ValueError("non-finite input")
-                y = model(torch.from_numpy(batch))
+                if vectors is None:
+                    y = model(torch.from_numpy(batch))
+                else:
+                    v = np.array(vectors[start:start+len(batch)], copy=True)
+                    if not np.isfinite(v).all():
+                        raise ValueError(f"non-finite vectors in rows {start}:{start+len(batch)}")
+                    y = model(torch.from_numpy(batch), torch.from_numpy(v))
                 if isinstance(y, (tuple, list)):
                     if args.output_index is None or not 0 <= args.output_index < len(y):
                         raise ValueError("tuple output requires explicit in-range --output-index")
@@ -98,6 +115,7 @@ def main():
     p.add_argument("--native-output", required=True)
     p.add_argument("--output-index", type=int)
     p.add_argument("--input", required=True)
+    p.add_argument("--vectors", help="float32 [N,S] .npy; required for packages with vector_dim")
     p.add_argument("--output", required=True)
     p.add_argument("--batch-size", type=int, default=1)
     p.add_argument("--target-offset", type=float, nargs="+", default=[0.0])
