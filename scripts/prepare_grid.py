@@ -1,5 +1,6 @@
 """Streaming fixed-shape grid records. Layout is documented in docs/dense-grid.md."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -14,12 +15,13 @@ def _strict_keys(value, allowed, scope):
         raise ValueError(f"{scope}: invalid/unknown fields")
 
 
-def _validate_record_size(c, h, w, ct, dtype):
+def _validate_record_size(c, h, w, ct, dtype, vector_dim=0):
     elements = h * w * (c + ct)
     size = elements * (4 if dtype == "float32" else 2)
     if ct > 0:
         size += (h * w + 7) // 8
-    if elements > 2**31 - 1 or size > 512 << 20:
+    size += vector_dim * 4
+    if elements > 2**31 - 1 or not 0 <= vector_dim <= 2**31 - 1 or size > 512 << 20:
         raise ValueError("grid dimensions overflow")
 
 
@@ -50,13 +52,25 @@ def prepare_grid(source, output):
         for split, ent in splits.items():
             if not re.fullmatch(r"[a-z][a-z0-9_]*", split):
                 raise ValueError("invalid grid split name")
-            _strict_keys(ent, ("inputs", "targets", "masks", "ids", "groups"), f"split {split}")
+            _strict_keys(ent, ("inputs", "targets", "masks", "ids", "groups", "vectors"), f"split {split}")
             def load(key):
                 return np.load(source.parent / ent[key], mmap_mode="r", allow_pickle=False)
             x = load("inputs")
             if x.ndim != 4 or min(x.shape) <= 0 or x.dtype not in (np.float32, np.float16):
                 raise ValueError("grid inputs require finite floating [N,C,H,W]")
             n, c, h, w = x.shape
+            vectors = load("vectors") if "vectors" in ent else None
+            vector_dim = 0
+            if vectors is not None:
+                if vectors.ndim != 2 or vectors.shape[0] != n or vectors.shape[1] < 1 or vectors.dtype != np.float32:
+                    raise ValueError(f"split {split}: vectors require float32 [N,S] with S >= 1 matching inputs")
+                vector_dim = vectors.shape[1]
+                with open(source.parent / ent["vectors"], "rb") as f:
+                    digest = hashlib.sha256()
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        digest.update(chunk)
+                provenance.setdefault("vectors", {})[split] = dict(
+                    name=Path(ent["vectors"]).name, sha256=digest.hexdigest(), width=vector_dim)
             y = load("targets") if "targets" in ent else None
             mask = load("masks") if "masks" in ent else None
             if (y is None) != (mask is None):
@@ -66,10 +80,12 @@ def prepare_grid(source, output):
                                   or y.dtype not in (np.float32, np.float16)):
                 raise ValueError("grid targets/masks shape or dtype mismatch")
             current = dict(channels=c, height=h, width=w, target_channels=ct)
+            if vector_dim:
+                current["vector_dim"] = vector_dim
             if geometry is not None and current != geometry:
                 raise ValueError("grid split geometry mismatch")
             geometry = current
-            _validate_record_size(c, h, w, ct, dtype)
+            _validate_record_size(c, h, w, ct, dtype, vector_dim)
             if "normalization" in spec:
                 norm = spec["normalization"]
                 _strict_keys(norm, ("fit_split", "input_offset", "input_scale", "target_offset", "target_scale"), "normalization")
@@ -96,7 +112,7 @@ def prepare_grid(source, output):
                 meta = json.dumps(ids[start:end], ensure_ascii=True).encode()
                 if len(meta) > 16 << 20:
                     raise ValueError("grid ID metadata exceeds limit")
-                header = [20260930, 1, 1 if dtype == "float32" else 2, c, h, w, ct, end-start, len(meta)] + [0]*247
+                header = [20260930, 2 if vector_dim else 1, 1 if dtype == "float32" else 2, c, h, w, ct, end-start, len(meta), vector_dim] + [0]*246
                 path = output / f"{split}_{files:0{shard_digits}d}.grid"
                 fd, temporary = tempfile.mkstemp(dir=output, prefix=".grid-")
                 try:
@@ -117,6 +133,10 @@ def prepare_grid(source, output):
                                 if not ((m == 0) | (m == 1)).all():
                                     raise ValueError("grid masks must contain only 0 and 1")
                                 f.write(np.packbits(m.astype(np.uint8), bitorder="little").tobytes())
+                            if vectors is not None:
+                                if not np.isfinite(vectors[j]).all():
+                                    raise ValueError(f"nonfinite grid vector at record {ids[j]!r} ({split}[{j}])")
+                                f.write(vectors[j].astype("<f4").tobytes(order="C"))
                     os.replace(temporary, path)
                     created.append(path)
                 finally:
@@ -126,7 +146,9 @@ def prepare_grid(source, output):
             pattern = f"{split}_" + "[0-9]" * shard_digits + ".grid"
             manifest["splits"][split] = {"pattern": pattern, "shards": files, "sequences": n, "tokens": 0}
         manifest["grid"] = geometry
-        if provenance["groups"] or "normalization" in provenance:
+        if geometry.get("vector_dim", 0):
+            manifest["shard_format"] = "mixlab_grid_shard_v2"
+        if provenance["groups"] or "normalization" in provenance or "vectors" in provenance:
             manifest["grid_provenance"] = provenance
         path = output / "mixlab.dataset.json"
         fd, temporary = tempfile.mkstemp(dir=output, prefix=".manifest-")

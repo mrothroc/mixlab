@@ -23,6 +23,7 @@ type GridDataset struct {
 }
 
 type GridBatch struct {
+	Vectors                   []float32
 	Inputs, Targets, LossMask []float32
 	IDs                       []string
 	Count, BatchSize          int
@@ -89,14 +90,14 @@ func (d *GridDataset) Close() error {
 }
 
 // ReadBatch reuses batch storage; callers must finish consuming it before the
-// next call. Short batches are padded with zeros and have zero loss masks.
+// next call. Short batches have zero maps/loss masks and duplicate a real vector.
 func (d *GridDataset) ReadBatch(indices []int, batchSize int) (GridBatch, error) {
 	if batchSize <= 0 || len(indices) > batchSize || len(indices) == 0 {
 		return GridBatch{}, fmt.Errorf("invalid grid batch size")
 	}
 	g := d.Geometry
 	p := g.Height * g.Width
-	recordElements := int64(p) * int64(g.Channels+2*g.TargetChannels)
+	recordElements := int64(p)*int64(g.Channels+2*g.TargetChannels) + int64(g.VectorDim)
 	if recordElements <= 0 || int64(batchSize) > mathMaxGridBatchElements/recordElements {
 		return GridBatch{}, fmt.Errorf("grid batch exceeds element limit")
 	}
@@ -112,6 +113,7 @@ func (d *GridDataset) ReadBatch(indices []int, batchSize int) (GridBatch, error)
 	clear(b.Targets)
 	clear(b.LossMask)
 	clear(b.IDs)
+	clear(b.Vectors)
 	b.Count = len(indices)
 	for row, index := range indices {
 		if index < 0 || index >= len(d.records) {
@@ -130,11 +132,15 @@ func (d *GridDataset) ReadBatch(indices []int, batchSize int) (GridBatch, error)
 			d.currentIndex = r.shard
 		}
 		xN, yN := p*g.Channels, p*g.TargetChannels
-		if err := d.current.ReadNHWC(r.index, b.Inputs[row*xN:(row+1)*xN], b.Targets[row*yN:(row+1)*yN], b.LossMask[row*yN:(row+1)*yN]); err != nil {
+		if d.current.Geometry != g || d.current.DType != d.DType {
+			return GridBatch{}, fmt.Errorf("grid shard/manifest geometry or dtype mismatch")
+		}
+		if err := d.current.ReadNHWCWithVectors(r.index, b.Inputs[row*xN:(row+1)*xN], b.Targets[row*yN:(row+1)*yN], b.LossMask[row*yN:(row+1)*yN], b.Vectors[row*g.VectorDim:(row+1)*g.VectorDim]); err != nil {
 			return GridBatch{}, fmt.Errorf("grid record %q: %w", r.id, err)
 		}
 		b.IDs[row] = r.id
 	}
+	padGridVectors(b)
 	return *b, nil
 }
 

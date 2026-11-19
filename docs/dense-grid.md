@@ -19,6 +19,22 @@ The selected `dense_regression.output` must have shape
 `[B,IH,IW,target_channels]`. There is no implicit embedding, normalization,
 residual, final activation or output head.
 
+### Per-record vectors
+
+Set `input_adapter.vector_dim: S` to add a float32 vector per record. Omitted or
+`0` keeps the existing map-only contract; positive widths are grid-only. The
+custom graph alias `v` has shape `[B,S]` and binds to runtime input
+`grid_vectors`. An unused `v` is pruned from the executable graph, but the
+configured width must still match the dataset. Counting and weight export need
+no dataset. No weights are added just by declaring a vector input.
+
+Vectors are caller-defined features, not tokens or image channels. Mixlab does
+not normalize or augment them. Generic non-geometric vectors may accompany D4
+map augmentation, but do not enable map augmentation when vectors encode spatial
+coordinates unless the graph explicitly supports the corresponding transform.
+[`grid_vectors_tiny.json`](../examples/grid_vectors_tiny.json) demonstrates a
+one-pixel map plus a per-record scalar, using reshape, addition and convolution.
+
 ### Muon for convolution kernels
 
 Dense regression accepts `adamw`, `lamb`, `muon`, `muon_eq_r`, and `normuon`.
@@ -65,6 +81,7 @@ Spatial custom operations:
 | `relu`, `stop_gradient` | one input | No parameters. |
 | `add`, `sub`, `mul` | two inputs | Equal shapes, no parameters. |
 | `transpose` | one input | Complete `axes` permutation. |
+| `reshape` | one input | `shape` array of positive integer strings, rank 2..4; leading `"B"` is allowed. Preserves leading batch size and total element count; no inferred `-1` dimension. |
 | `slice` | one input | Explicit `start`, `end`, positive `step`, and `axis`; nonempty in-bounds range. |
 
 Convolutions use native MLX operations. Square kernels, stride, padding and
@@ -157,6 +174,21 @@ exactly 0 or 1. Optional `ids` names a JSON string array with one unique,
 nonempty ID per record. Without it, IDs are `<split>_<index>`. Input-only
 prediction splits omit both targets and masks; use a separate input-only
 manifest because all splits in one dataset share geometry.
+
+For vector-enabled models, add `"vectors":"train_v.npy"` (and corresponding
+files for every other split). Each vector array must be finite float32 `[N,S]`,
+with the same N/order as that split's maps and the same positive S across all
+splits. Float16 vector arrays are rejected even with `"dtype":"float16"` map
+storage. Prepare records `grid.vector_dim` and, per split,
+`grid_provenance.vectors` entries containing the source basename, SHA-256 file
+hash and width. Input-only prediction datasets also require their vector file.
+
+Vectors travel with record IDs through shuffle, prefetch, validation and resume.
+Partial batches duplicate the first real vector into unused slots while keeping
+their loss masks zero; padded records are never included in output or metrics.
+This avoids inventing zero-valued coordinates for later coordinate consumers.
+Resume identity covers both the manifest and all train/validation shard bytes,
+so changing only vectors invalidates replay just as changing maps does.
 
 ```bash
 mixlab -mode prepare -input-format grid -input source.json \
@@ -495,8 +527,16 @@ CHW target floats, and `ceil(H*W/8)` mask bytes, low bit first; unused high
 bits must be zero. Ct=0 omits targets/mask. Exact file length, finite payloads,
 dimensions, IDs and manifest geometry are validated. ID metadata is capped at
 16 MiB, a shard at one million records, and one record at 512 MiB. Combined
-CPU input/target/mask batch buffers are capped at 1 GiB. The usual MLX memory
+CPU input/target/mask/vector batch buffers are capped at 1 GiB. The usual MLX memory
 and cache limits also apply to training and prediction.
+
+Vector-enabled datasets use `mixlab_grid_shard_v2`. The header version is `2`,
+word 9 (zero-based) holds positive S, and words 10..255 remain zero. Each record
+appends S little-endian float32 values after its map/target/mask payload. Vectors
+remain float32 even when the header map dtype is float16. Target-free records
+append vectors directly after input floats. Exact length, finite vectors and
+manifest/header width agreement are checked. Map-only prepare still writes v1;
+both formats remain readable.
 
 ## PyTorch State Export
 
@@ -551,6 +591,13 @@ python exported-grid/infer.py --model-file trusted_model.py --factory build_mode
   --kwargs-json '{"channels":2}' --native-output network.prediction \
   --input normalized_inputs.npy --output predictions.npy --batch-size 2
 ```
+
+For a vector-enabled package, also pass `--vectors record_vectors.npy`. The
+package declares `vector_dim`, `vector_dtype:"float32"`, and `vector_layout:"NS"`.
+The helper validates finite float32 `[N,S]` vectors aligned with the input maps,
+then calls `model(x, v)` in each batch, including the final partial batch. It
+does not normalize vectors. Map-only packages still call `model(x)` and reject
+an unexpected `--vectors` argument.
 
 Use the exact `selected_output` from `export.json` for `--native-output`. For a
 tuple/list model result, also supply the corresponding `--output-index` (0-based).
@@ -646,7 +693,8 @@ batch. The pool contains at most `prefetch_batches + 1` decoded batches,
 including the consumer and any batch under construction. Each read worker
 holds at most one open shard and one encoded-record scratch buffer. The banner
 reports the decoded pool and scratch bounds separately. Decoded bytes are
-`(depth+1) * batch_size * H * W * (C+2*Ct) * 4`; targets and broadcast masks count
+`(depth+1) * batch_size * (H * W * (C+2*Ct) + S) * 4`, where S is vector width
+(0 when disabled); targets, broadcast masks and float32 vectors count
 even when shards are float16. Metadata, OS page cache, GPU input copies, and the
 separate validation batch are not included. This is not a whole-dataset cache.
 Early stop/error cleanup joins workers; an in-progress filesystem read must

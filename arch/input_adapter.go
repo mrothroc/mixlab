@@ -24,6 +24,7 @@ const (
 // InputAdapterSpec selects how model inputs become [B,T,model_dim] hidden
 // states. Omission preserves the historical token embedding path.
 type InputAdapterSpec struct {
+	VectorDim         int               `json:"vector_dim,omitempty"`
 	Channels          int               `json:"channels,omitempty"`
 	Height            int               `json:"height,omitempty"`
 	Width             int               `json:"width,omitempty"`
@@ -225,6 +226,9 @@ func validateInputAdapter(cfg *ArchConfig, source string) error {
 		return fmt.Errorf("config %q is nil", source)
 	}
 	kind := cfg.EffectiveInputAdapterKind()
+	if cfg.InputAdapter != nil && cfg.InputAdapter.VectorDim != 0 && kind != InputAdapterGrid {
+		return fmt.Errorf("input_adapter.vector_dim requires kind=grid")
+	}
 	if err := validatePatchAdapter(cfg, source); err != nil {
 		return err
 	}

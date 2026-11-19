@@ -98,6 +98,14 @@ func buildGridGraph(cfg *ArchConfig, supervised bool) (*Program, []WeightMeta, e
 		return nil, nil, err
 	}
 	shapes := map[string][]int{"x": inputShape}
+	bindings := map[string]string{}
+	if i.VectorDim > 0 {
+		if _, err := gridSize([]int{cfg.Training.BatchSize, i.VectorDim}); err != nil {
+			return nil, nil, err
+		}
+		shapes["v"] = []int{cfg.Training.BatchSize, i.VectorDim}
+		bindings["v"] = "grid_vectors"
+	}
 	metas := make([]WeightMeta, len(spec.Weights))
 	resolved := spec
 	resolved.Weights = append([]WeightSpec(nil), spec.Weights...)
@@ -160,7 +168,10 @@ func buildGridGraph(cfg *ArchConfig, supervised bool) (*Program, []WeightMeta, e
 	}
 	p := NewProgram(len(metas))
 	p.DeclareInput("grid", TensorFloat32, inputShape)
-	if _, err := emitCustomBlockIR(p, resolved, "grid", 0, 1, 1, cfg.Training.BatchSize, 1, 0); err != nil {
+	if i.VectorDim > 0 {
+		p.DeclareInput("grid_vectors", TensorFloat32, shapes["v"])
+	}
+	if _, err := emitCustomBlockIRWithBindings(p, resolved, "grid", 0, 1, 1, cfg.Training.BatchSize, 1, 0, bindings); err != nil {
 		return nil, nil, err
 	}
 	prefix := tmpName("grid_custom_"+strings.ToLower(strings.TrimSpace(spec.Name)), 0) + "_"
@@ -192,6 +203,14 @@ func buildGridGraph(cfg *ArchConfig, supervised bool) (*Program, []WeightMeta, e
 		}
 	}
 	p.Ops = ops
+	if !needed["grid_vectors"] {
+		for n, input := range p.Inputs {
+			if input.Name == "grid_vectors" {
+				p.Inputs = append(p.Inputs[:n], p.Inputs[n+1:]...)
+				break
+			}
+		}
+	}
 	for n := range metas {
 		metas[n].Frozen = !needed[weightName(n)]
 	}
@@ -266,6 +285,8 @@ func gridOpShape(op OpSpec, shapes map[string][]int, fanIn map[string]int) ([]in
 	}
 	s := append([]int(nil), inputs[0]...)
 	switch op.Op {
+	case "reshape":
+		return gridReshape(op, inputs, shapes["x"][0])
 	case "group_norm":
 		return groupNormShape(op, inputs)
 	case "conv2d", "conv_transpose2d":

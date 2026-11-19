@@ -12,11 +12,12 @@ func NewGridBatch(g GridGeometry, batchSize int) (GridBatch, error) {
 		return GridBatch{}, err
 	}
 	p := int64(g.Height) * int64(g.Width)
-	n := p * int64(g.Channels+2*g.TargetChannels)
+	n := p*int64(g.Channels+2*g.TargetChannels) + int64(g.VectorDim)
 	if batchSize <= 0 || n <= 0 || int64(batchSize) > mathMaxGridBatchElements/n {
 		return GridBatch{}, fmt.Errorf("grid batch exceeds element limit or invalid batch size")
 	}
 	return GridBatch{BatchSize: batchSize, Geometry: g,
+		Vectors:  make([]float32, batchSize*g.VectorDim),
 		Inputs:   make([]float32, batchSize*int(p)*g.Channels),
 		Targets:  make([]float32, batchSize*int(p)*g.TargetChannels),
 		LossMask: make([]float32, batchSize*int(p)*g.TargetChannels),
@@ -64,7 +65,7 @@ func (r *GridBatchReader) ReadInto(indices []int, b *GridBatch) error {
 	}
 	g := d.Geometry
 	xN, yN := g.Height*g.Width*g.Channels, g.Height*g.Width*g.TargetChannels
-	if len(b.Inputs) != b.BatchSize*xN || len(b.Targets) != b.BatchSize*yN || len(b.LossMask) != b.BatchSize*yN || len(b.IDs) != b.BatchSize {
+	if len(b.Inputs) != b.BatchSize*xN || len(b.Targets) != b.BatchSize*yN || len(b.LossMask) != b.BatchSize*yN || len(b.IDs) != b.BatchSize || len(b.Vectors) != b.BatchSize*g.VectorDim {
 		return fmt.Errorf("invalid grid batch buffers")
 	}
 	rows := make([]int, len(indices))
@@ -80,6 +81,7 @@ func (r *GridBatchReader) ReadInto(indices []int, b *GridBatch) error {
 	clear(b.Targets)
 	clear(b.LossMask)
 	clear(b.IDs)
+	clear(b.Vectors)
 	b.Count = len(indices)
 	errs := make([]error, len(indices))
 	n := min(len(r.workers), len(indices))
@@ -101,7 +103,7 @@ func (r *GridBatchReader) ReadInto(indices []int, b *GridBatch) error {
 				errs[row] = fmt.Errorf("grid shard/manifest geometry or dtype mismatch")
 			}
 			if errs[row] == nil {
-				errs[row] = w.shard.ReadNHWC(ref.index, b.Inputs[row*xN:(row+1)*xN], b.Targets[row*yN:(row+1)*yN], b.LossMask[row*yN:(row+1)*yN])
+				errs[row] = w.shard.ReadNHWCWithVectors(ref.index, b.Inputs[row*xN:(row+1)*xN], b.Targets[row*yN:(row+1)*yN], b.LossMask[row*yN:(row+1)*yN], b.Vectors[row*g.VectorDim:(row+1)*g.VectorDim])
 			}
 			if errs[row] != nil {
 				errs[row] = fmt.Errorf("grid record %q: %w", ref.id, errs[row])
@@ -125,5 +127,6 @@ func (r *GridBatchReader) ReadInto(indices []int, b *GridBatch) error {
 			return err
 		}
 	}
+	padGridVectors(b)
 	return nil
 }

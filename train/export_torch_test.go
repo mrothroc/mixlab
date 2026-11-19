@@ -153,3 +153,46 @@ func TestExportTorchStatePackage(t *testing.T) {
 		}
 	}
 }
+
+func TestExportTorchStateGridVectorsContract(t *testing.T) {
+	config := "../examples/grid_vectors_tiny.json"
+	cfg, err := LoadArchConfig(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shapes, err := computeWeightShapes(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	checkpoint, mapping := filepath.Join(dir, "weights.st"), filepath.Join(dir, "map.json")
+	if err = exportSafetensors(checkpoint, cfg, shapes, initWeightData(shapes, 42, "", 0)); err != nil {
+		t.Fatal(err)
+	}
+	m := torchStateMap{Format: "mixlab.torch_state_map.v1"}
+	for _, shape := range shapes {
+		m.Mappings = append(m.Mappings, torchStateMapping{Source: shape.Name, Target: shape.Name, Transform: "identity", Shape: shape.Shape})
+	}
+	if err = atomicWriteJSON(mapping, m); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "export")
+	if err = RunExportTorchState(ExportTorchStateOptions{ConfigPath: config, SafetensorsLoad: checkpoint, MapPath: mapping, OutputDir: out}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(out, "export.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err = json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest["vector_dim"] != float64(1) || manifest["vector_dtype"] != "float32" || manifest["vector_layout"] != "NS" {
+		t.Fatal(manifest)
+	}
+	packaged, err := LoadArchConfig(filepath.Join(out, "config.json"))
+	if err != nil || packaged.InputAdapter.VectorDim != 1 {
+		t.Fatal(err)
+	}
+}

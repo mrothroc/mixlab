@@ -13,12 +13,20 @@ import (
 
 const GridShardMagic = 20260930
 const GridShardFormat = "mixlab_grid_shard_v1"
+const GridShardVectorFormat = "mixlab_grid_shard_v2"
 
 // GridProvenance preserves preparation metadata without fitting or applying
 // normalization in the runtime. Group lists align with split record order.
 type GridProvenance struct {
-	Normalization *GridNormalization  `json:"normalization,omitempty"`
-	Groups        map[string][]string `json:"groups,omitempty"`
+	Vectors       map[string]GridVectorSource `json:"vectors,omitempty"`
+	Normalization *GridNormalization          `json:"normalization,omitempty"`
+	Groups        map[string][]string         `json:"groups,omitempty"`
+}
+
+type GridVectorSource struct {
+	Name   string `json:"name"`
+	SHA256 string `json:"sha256"`
+	Width  int    `json:"width"`
 }
 type GridNormalization struct {
 	FitSplit     string    `json:"fit_split"`
@@ -30,6 +38,7 @@ type GridNormalization struct {
 
 // GridGeometry describes external CHW records. GPU batches are NHWC.
 type GridGeometry struct {
+	VectorDim      int `json:"vector_dim,omitempty"`
 	Channels       int `json:"channels"`
 	Height         int `json:"height"`
 	Width          int `json:"width"`
@@ -37,6 +46,9 @@ type GridGeometry struct {
 }
 
 func (g GridGeometry) Validate() error {
+	if g.VectorDim < 0 || g.VectorDim > math.MaxInt32 {
+		return fmt.Errorf("invalid grid vector_dim %d", g.VectorDim)
+	}
 	if g.Channels <= 0 || g.Channels > math.MaxInt32 || g.TargetChannels < 0 || g.TargetChannels > math.MaxInt32 || g.Height <= 0 || g.Width <= 0 {
 		return fmt.Errorf("invalid grid geometry %+v", g)
 	}
@@ -57,8 +69,12 @@ func (m *DatasetManifest) validateGrid() error {
 	if err := m.Grid.Validate(); err != nil {
 		return err
 	}
-	if m.ShardFormat != GridShardFormat || m.Task == nil || m.Task.Type != "dense_regression" || m.Task.NumLabels != 0 {
-		return fmt.Errorf("grid requires dense_regression task and %s", GridShardFormat)
+	format := GridShardFormat
+	if m.Grid.VectorDim > 0 {
+		format = GridShardVectorFormat
+	}
+	if m.ShardFormat != format || m.Task == nil || m.Task.Type != "dense_regression" || m.Task.NumLabels != 0 {
+		return fmt.Errorf("grid requires dense_regression task and %s", format)
 	}
 	if m.FeatureDType != "float32" && m.FeatureDType != "float16" {
 		return fmt.Errorf("grid feature_dtype must be float32 or float16")
@@ -111,11 +127,12 @@ func (m *DatasetManifest) validateGrid() error {
 			}
 		}
 	}
-	return nil
+	return validateGridVectorProvenance(m)
 }
 
 // GridShard holds only record metadata. Payloads are read one record at a time.
 type GridShard struct {
+	Version       int
 	Geometry      GridGeometry
 	IDs           []string
 	DType         string
@@ -140,13 +157,22 @@ func OpenGridShard(path string) (s *GridShard, err error) {
 		return nil, err
 	}
 	word := func(n int) int { return int(binary.LittleEndian.Uint32(header[n*4:])) }
-	if word(0) != GridShardMagic || word(1) != 1 {
+	if word(0) != GridShardMagic || (word(1) != 1 && word(1) != 2) {
 		return nil, fmt.Errorf("unsupported grid shard magic/version")
 	}
 	if word(2) != 1 && word(2) != 2 {
 		return nil, fmt.Errorf("invalid grid dtype")
 	}
 	s = &GridShard{file: f, Geometry: GridGeometry{Channels: word(3), Height: word(4), Width: word(5), TargetChannels: word(6)}, bytesPerFloat: 4, DType: "float32"}
+	s.Version = word(1)
+	reservedStart := 9
+	if s.Version == 2 {
+		s.Geometry.VectorDim = word(9)
+		if s.Geometry.VectorDim <= 0 {
+			return nil, fmt.Errorf("grid v2 requires positive vector_dim")
+		}
+		reservedStart = 10
+	}
 	if word(2) == 2 {
 		s.bytesPerFloat = 2
 		s.DType = "float16"
@@ -158,7 +184,7 @@ func OpenGridShard(path string) (s *GridShard, err error) {
 	if count <= 0 || count > 1_000_000 || metaLen <= 0 || metaLen > 16<<20 {
 		return nil, fmt.Errorf("invalid grid count/metadata length")
 	}
-	for n := 9; n < 256; n++ {
+	for n := reservedStart; n < 256; n++ {
 		if word(n) != 0 {
 			return nil, fmt.Errorf("nonzero reserved grid header word %d", n)
 		}
@@ -186,6 +212,7 @@ func OpenGridShard(path string) (s *GridShard, err error) {
 	if g.TargetChannels > 0 {
 		s.stride += (pixels + 7) / 8
 	}
+	s.stride += int64(g.VectorDim) * 4
 	s.start = 1024 + int64(metaLen)
 	stat, err := f.Stat()
 	if err != nil {
@@ -206,9 +233,15 @@ func (s *GridShard) Close() error { return s.file.Close() }
 
 // ReadNHWC decodes into caller-owned batch slices. Mask is broadcast to channels.
 func (s *GridShard) ReadNHWC(index int, x, y, mask []float32) error {
+	return s.ReadNHWCWithVectors(index, x, y, mask, nil)
+}
+
+// ReadNHWCWithVectors reads the map and its aligned, untransformed vector into
+// caller-owned buffers. A v1 shard requires an empty vector buffer.
+func (s *GridShard) ReadNHWCWithVectors(index int, x, y, mask, vectors []float32) error {
 	g := s.Geometry
 	p := g.Height * g.Width
-	if index < 0 || index >= len(s.IDs) || len(x) != p*g.Channels || len(y) != p*g.TargetChannels || len(mask) != len(y) {
+	if index < 0 || index >= len(s.IDs) || len(x) != p*g.Channels || len(y) != p*g.TargetChannels || len(mask) != len(y) || len(vectors) != g.VectorDim {
 		return fmt.Errorf("grid record/index buffer mismatch")
 	}
 	if _, err := s.file.ReadAt(s.scratch, s.start+int64(index)*s.stride); err != nil {
@@ -239,7 +272,8 @@ func (s *GridShard) ReadNHWC(index int, x, y, mask []float32) error {
 		}
 	}
 	if g.TargetChannels > 0 {
-		bits := s.scratch[p*(g.Channels+g.TargetChannels)*s.bytesPerFloat:]
+		offset := p * (g.Channels + g.TargetChannels) * s.bytesPerFloat
+		bits := s.scratch[offset : offset+(p+7)/8]
 		if p%8 != 0 && bits[len(bits)-1]>>uint(p%8) != 0 {
 			return fmt.Errorf("grid mask has nonzero padding bits")
 		}
@@ -249,6 +283,14 @@ func (s *GridShard) ReadNHWC(index int, x, y, mask []float32) error {
 				mask[j*g.TargetChannels+c] = v
 			}
 		}
+	}
+	start := len(s.scratch) - 4*g.VectorDim
+	for n := range vectors {
+		v := math.Float32frombits(binary.LittleEndian.Uint32(s.scratch[start+4*n:]))
+		if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+			return fmt.Errorf("grid record %q vector contains nonfinite value", s.IDs[index])
+		}
+		vectors[n] = v
 	}
 	return nil
 }
