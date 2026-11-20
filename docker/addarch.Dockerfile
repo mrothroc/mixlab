@@ -23,7 +23,8 @@ ARG MLX_VERSION=v0.32.4
 ARG MLX_COMMIT=36969c094354086e15d2a327a9c50feb20b9cf11
 
 COPY docker/test_mlx_jit_cccl_probe.cpp /tmp/test_mlx_jit_cccl_probe.cpp
-RUN test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}" \
+RUN set -x \
+    && test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}" \
     && test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1" \
     && test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1" \
     && test "${MIXLAB_MLX_CUDA_ALLOCATOR_FIX}" = "2" \
