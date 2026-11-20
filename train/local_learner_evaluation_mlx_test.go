@@ -12,15 +12,12 @@ import (
 	"testing"
 
 	"github.com/mrothroc/mixlab/data"
-	"github.com/mrothroc/mixlab/gpu"
 	"github.com/mrothroc/mixlab/precision"
 	"github.com/mrothroc/mixlab/workerjob"
 )
 
 func TestLocalLearnerEvaluationMLXPreservesContinuation(t *testing.T) {
-	if !gpu.Available() {
-		t.Skip("MLX unavailable")
-	}
+	requireMetalLocalLearner(t)
 	cfg, path, id, _ := learnerFixture(t, 2)
 	cfg.Dropout = .4
 	cfg.Blocks = append(cfg.Blocks, cfg.Blocks[0])
