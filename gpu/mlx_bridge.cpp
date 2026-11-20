@@ -48,39 +48,9 @@ using CompiledArrayFunction =
 std::unordered_map<std::string, CompiledArrayFunction> g_compiled_ir_grad_pool;
 std::unordered_map<std::string, CompiledArrayFunction> g_compiled_ir_eval_pool;
 
-namespace {
-
-std::string env_value_or_unset(const char* name) {
-  const char* value = std::getenv(name);
-  if (!value || value[0] == '\0') {
-    return "unset";
-  }
-  return value;
-}
-
-bool is_cuda_cache_thrash_message(const std::string& message) {
-  return message.find("Cache thrashing is happening") != std::string::npos ||
-      message.find("MLX_CUDA_GRAPH_CACHE_SIZE") != std::string::npos;
-}
-
-std::string bridge_exception_message(const std::exception& e) {
-  std::string message = e.what();
-  if (!is_cuda_cache_thrash_message(message)) {
-    return message;
-  }
-  return "Cache thrashing is happening. The MLX CUDA buffer-batching limits are too small "
-      "for this workload. Increase MLX_MAX_OPS_PER_BUFFER (current " +
-      env_value_or_unset("MLX_MAX_OPS_PER_BUFFER") + ") and/or MLX_MAX_MB_PER_BUFFER (current " +
-      env_value_or_unset("MLX_MAX_MB_PER_BUFFER") +
-      "), and set MLX_CUDA_GRAPH_CACHE_SIZE above the upstream default (current " +
-      env_value_or_unset("MLX_CUDA_GRAPH_CACHE_SIZE") + "). For canonical Mamba3, mixlab "
-      "auto-tunes these before MLX initializes unless the environment already overrides them.";
-}
-
-}  // namespace
-
+// Keep MLX's text verbatim; Go adds workload hints when it reads the error.
 void log_bridge_exception(const char* fn, const std::exception& e) {
-  const auto message = bridge_exception_message(e);
+  const std::string message = e.what();
   set_bridge_error_message(message);
   std::cout << "[mlx_bridge] " << fn << " exception: " << message << std::endl;
 }
