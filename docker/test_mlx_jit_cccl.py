@@ -17,8 +17,22 @@ import tempfile
 START = "# The binary of C++ tests will not be installed"
 END = "# Use fixed version of NVTX."
 
+# dirs.cpp includes MLX's common utils header for current_binary_dir(), which
+# pulls in the array headers. Declare just that function so the real dirs.cpp
+# builds without the rest of MLX.
+UTILS_STUB = """#pragma once
+#include <filesystem>
+namespace mlx::core {
+std::filesystem::path current_binary_dir();
+}
+"""
+
 MAIN = r"""
 #include <cstdio>
+#include <filesystem>
+namespace mlx::core {
+std::filesystem::path current_binary_dir() { return "/nonexistent"; }
+}
 namespace mlx::core::cu {
 const char* cccl_dir();
 }
@@ -43,6 +57,9 @@ def cccl_dir(source, block, build_tests, work):
     project = work / ("tests-on" if build_tests else "tests-off")
     project.mkdir()
     (project / "main.cpp").write_text(MAIN)
+    stub = project / "stub/mlx/backend/common"
+    stub.mkdir(parents=True)
+    (stub / "utils.h").write_text(UTILS_STUB)
     (project / "CMakeLists.txt").write_text(f"""
 cmake_minimum_required(VERSION 3.20)
 project(mlx_jit_cccl_probe CXX)
@@ -50,6 +67,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(MLX_BUILD_TESTS {"ON" if build_tests else "OFF"})
 set(cccl_SOURCE_DIR "/mlx-build/_deps/cccl-src")
 add_library(mlx_dirs OBJECT "{source / 'mlx/backend/cuda/dirs.cpp'}")
+target_include_directories(mlx_dirs PRIVATE "{project / 'stub'}")
 {block}
 add_executable(probe main.cpp $<TARGET_OBJECTS:mlx_dirs>)
 """)

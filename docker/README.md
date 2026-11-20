@@ -1,7 +1,7 @@
 # Docker builds for mixlab (CUDA)
 
 mixlab runs natively on Apple Silicon (Metal/MLX). For NVIDIA GPUs, use Docker.
-The current CUDA image is built from MLX v0.32.0 and requires NCCL support.
+The current CUDA image is built from MLX v0.32.4 and requires NCCL support.
 
 ### Float32 And TF32
 
@@ -277,7 +277,7 @@ installed archive with NVRTC (no GPU needed), including a toolkit-only control.
 Compiles MLX from source with CUDA backend for sm_80 (A100).
 
 ```bash
-docker build -f docker/base.Dockerfile -t mixlab-cuda-base:mlx-0.32.0 .
+docker build -f docker/base.Dockerfile -t mixlab-cuda-base:mlx-0.32.4 .
 ```
 
 ### Layer 2: Add GPU architectures
@@ -288,15 +288,15 @@ Add support for more GPU types. Each step only compiles the new kernels
 ```bash
 # Add sm_86 (RTX 3090, A40)
 docker build -f docker/addarch.Dockerfile \
-    --build-arg BASE_IMAGE=mixlab-cuda-base:mlx-0.32.0 \
+    --build-arg BASE_IMAGE=mixlab-cuda-base:mlx-0.32.4 \
     --build-arg ARCHS="80;86" \
-    -t mixlab-cuda:mlx-0.32.0 .
+    -t mixlab-cuda:mlx-0.32.4 .
 
 # Add sm_89 and sm_90 (RTX 4090/L40 and H100)
 docker build -f docker/addarch.Dockerfile \
-    --build-arg BASE_IMAGE=mixlab-cuda:mlx-0.32.0 \
+    --build-arg BASE_IMAGE=mixlab-cuda:mlx-0.32.4 \
     --build-arg ARCHS="80;86;89;90" \
-    -t mixlab-cuda:mlx-0.32.0 .
+    -t mixlab-cuda:mlx-0.32.4 .
 ```
 
 ### Layer 3: App image
@@ -305,8 +305,8 @@ Builds the mixlab Go binary and its preparation runtime.
 
 ```bash
 docker build -f docker/app.Dockerfile \
-    --build-arg BASE_IMAGE=mixlab-cuda:mlx-0.32.0 \
-    -t mixlab:mlx-0.32.0 .
+    --build-arg BASE_IMAGE=mixlab-cuda:mlx-0.32.4 \
+    -t mixlab:mlx-0.32.4 .
 ```
 
 ### RunPod image (optional)

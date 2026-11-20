@@ -11,8 +11,17 @@
 #include <nvrtc.h>
 
 #include <cstdio>
+#include <filesystem>
 #include <string>
 #include <vector>
+
+// dirs.cpp.o resolves relative library dirs through this libmlx function; the
+// probe only calls cccl_dir(), so a stand-in satisfies the link.
+namespace mlx::core {
+std::filesystem::path current_binary_dir() {
+  return "/nonexistent";
+}
+}
 
 namespace mlx::core::cu {
 const char* cccl_dir();

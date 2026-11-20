@@ -14,6 +14,11 @@ ARG MIXLAB_VERSION=dev
 ARG VCS_REF=unknown
 
 # Refuse an old cached MLX base: rebuilding only the app cannot fix libmlx.
+# v0.32.4 brings CUDA graph encoder recovery and the consecutive-miss cache
+# thrash check, which have no local patch marker.
+ARG MLX_VERSION=v0.32.4
+RUN test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}" \
+    || { echo "Rebuild the MLX CUDA base and architecture tiers from MLX ${MLX_VERSION}" >&2; exit 1; }
 RUN test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1" \
     || { echo "Rebuild the MLX CUDA base and architecture tiers with the worker fix" >&2; exit 1; }
 RUN test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1" \

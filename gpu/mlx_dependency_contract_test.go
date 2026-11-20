@@ -6,12 +6,12 @@ import (
 	"testing"
 )
 
-const pinnedMLXCommit = "7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247"
+const pinnedMLXCommit = "36969c094354086e15d2a327a9c50feb20b9cf11"
 
 func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 	base := readRepositoryFile(t, "../docker/base.Dockerfile")
 	for _, required := range []string{
-		"ARG MLX_VERSION=v0.32.0",
+		"ARG MLX_VERSION=v0.32.4",
 		"ARG MLX_COMMIT=" + pinnedMLXCommit,
 		"test -f /usr/include/nccl.h",
 		"libnccl\\.so",
@@ -32,18 +32,23 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		"python3 /tmp/test_mlx_allocator.py --source /opt/mlx/mlx/backend/cuda/allocator.cpp --expect-broken",
 		"git -C /opt/mlx apply --check /tmp/mlx-conv-transpose-weight-grad.patch",
 		"git -C /opt/mlx apply /tmp/mlx-conv-transpose-weight-grad.patch",
-		"--expect-spin",
-		"git -C /opt/mlx apply --check /tmp/mlx-cuda-worker-wait.patch",
 		"python3 /tmp/test_mlx_worker.py --source /opt/mlx/mlx/backend/cuda/worker.cpp",
 	} {
 		if !strings.Contains(base, required) {
 			t.Errorf("docker/base.Dockerfile is missing %q", required)
 		}
 	}
+	// v0.32.4 fixed the idle worker spin upstream; the local patch must stay gone.
+	if strings.Contains(base, "mlx-cuda-worker-wait.patch") || strings.Contains(base, "--expect-spin") {
+		t.Error("docker/base.Dockerfile still applies the worker patch that MLX v0.32.4 made redundant")
+	}
+	if _, err := os.Stat("../docker/patches/mlx-cuda-worker-wait.patch"); err == nil {
+		t.Error("docker/patches/mlx-cuda-worker-wait.patch is redundant on MLX v0.32.4")
+	}
 
 	addarch := readRepositoryFile(t, "../docker/addarch.Dockerfile")
 	for _, required := range []string{
-		"ARG MLX_VERSION=v0.32.0",
+		"ARG MLX_VERSION=v0.32.4",
 		"ARG MLX_COMMIT=" + pinnedMLXCommit,
 		"MIXLAB_MLX_BUILD_VERSION",
 		"MIXLAB_MLX_CUDA_WORKER_FIX",
@@ -61,9 +66,9 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 
 	baseBuild := readRepositoryFile(t, "../docker/cloudbuild-mlx-cuda-base.yaml")
 	for _, required := range []string{
-		`_MLX_VERSION: "v0.32.0"`,
+		`_MLX_VERSION: "v0.32.4"`,
 		`_MLX_COMMIT: "` + pinnedMLXCommit + `"`,
-		"golf-mlx-cuda-base:mlx-0.32.0",
+		"golf-mlx-cuda-base:mlx-0.32.4",
 	} {
 		if !strings.Contains(baseBuild, required) {
 			t.Errorf("docker/cloudbuild-mlx-cuda-base.yaml is missing %q", required)
@@ -73,7 +78,7 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 	archBuild := readRepositoryFile(t, "../docker/cloudbuild-golf-mlx-cuda.yaml")
 	for _, required := range []string{
 		// The tag also carries the Go version; cmd/mixlab's toolchain test owns that part.
-		`_IMAGE_TAG: "mlx-0.32.0-go`,
+		`_IMAGE_TAG: "mlx-0.32.4-go`,
 		"${_REGISTRY_PREFIX}/golf-mlx-cuda:${_IMAGE_TAG}",
 	} {
 		if !strings.Contains(archBuild, required) {
@@ -93,6 +98,16 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		}
 	}
 	app := readRepositoryFile(t, "../docker/app.Dockerfile")
+	// The encoder-recovery and consecutive-miss thrash fixes come from the MLX
+	// release itself, not a marker-carrying patch, so the app checks the version.
+	for _, required := range []string{
+		"ARG MLX_VERSION=v0.32.4",
+		`test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}"`,
+	} {
+		if !strings.Contains(app, required) {
+			t.Errorf("docker/app.Dockerfile is missing %q", required)
+		}
+	}
 	if !strings.Contains(app, `test "${MIXLAB_MLX_CUDA_JIT_CCCL_FIX}" = "1"`) {
 		t.Fatal("app image must reject an MLX base whose JIT can fall back to the toolkit's CCCL")
 	}

@@ -19,8 +19,8 @@ ARG BASE_IMAGE=mixlab-cuda-base
 FROM ${BASE_IMAGE}
 
 ARG ARCHS="80;86"
-ARG MLX_VERSION=v0.32.0
-ARG MLX_COMMIT=7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247
+ARG MLX_VERSION=v0.32.4
+ARG MLX_COMMIT=36969c094354086e15d2a327a9c50feb20b9cf11
 
 COPY docker/test_mlx_jit_cccl_probe.cpp /tmp/test_mlx_jit_cccl_probe.cpp
 RUN test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}" \

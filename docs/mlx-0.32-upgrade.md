@@ -9,8 +9,8 @@ were wrapped in `stop_gradient`). Run the `-tags mlx` suite before widening the 
 release:
 
 ```text
-tag:    v0.32.0
-commit: 7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247
+tag:    v0.32.4
+commit: 36969c094354086e15d2a327a9c50feb20b9cf11
 ```
 
 This upgrade is the R0 prerequisite for distributed training. It does not add
@@ -43,14 +43,14 @@ the `/opt/mlx` source and object tree from its base image.
 Build locally:
 
 ```bash
-docker build -f docker/base.Dockerfile -t mixlab-cuda-base:mlx-0.32.0 .
+docker build -f docker/base.Dockerfile -t mixlab-cuda-base:mlx-0.32.4 .
 docker build -f docker/addarch.Dockerfile \
-  --build-arg BASE_IMAGE=mixlab-cuda-base:mlx-0.32.0 \
+  --build-arg BASE_IMAGE=mixlab-cuda-base:mlx-0.32.4 \
   --build-arg 'ARCHS=80;86;89;90' \
-  -t mixlab-cuda:mlx-0.32.0 .
+  -t mixlab-cuda:mlx-0.32.4 .
 docker build -f docker/app.Dockerfile \
-  --build-arg BASE_IMAGE=mixlab-cuda:mlx-0.32.0 \
-  -t mixlab:mlx-0.32.0 .
+  --build-arg BASE_IMAGE=mixlab-cuda:mlx-0.32.4 \
+  -t mixlab:mlx-0.32.4 .
 ```
 
 Cloud Build must run the base build before the architecture build. Neither config
@@ -64,7 +64,7 @@ gcloud builds submit \
   --timeout=14400s .
 gcloud builds submit \
   --config=docker/cloudbuild-golf-mlx-cuda.yaml \
-  --substitutions=_REGISTRY_PREFIX=$REG,_BASE_IMAGE=$REG/golf-mlx-cuda-base:mlx-0.32.0-go1.27.1 \
+  --substitutions=_REGISTRY_PREFIX=$REG,_BASE_IMAGE=$REG/golf-mlx-cuda-base:mlx-0.32.4-go1.27.1 \
   --timeout=14400s .
 ```
 
@@ -73,12 +73,12 @@ For pre-promotion validation, build the application with versioned tags:
 ```bash
 gcloud builds submit \
   --config=docker/cloudbuild-ci.yaml \
-  --substitutions="_REGISTRY_PREFIX=$REG,_MLX_BASE_IMAGE=$REG/golf-mlx-cuda:mlx-0.32.0-go1.27.1,_IMAGE_TAG=mlx-0.32.0-r0,_RUNPOD_TAG=mlx-0.32.0-r0-runpod" \
+  --substitutions="_REGISTRY_PREFIX=$REG,_MLX_BASE_IMAGE=$REG/golf-mlx-cuda:mlx-0.32.4-go1.27.1,_IMAGE_TAG=mlx-0.32.4-r0,_RUNPOD_TAG=mlx-0.32.4-r0-runpod" \
   .
 ```
 
 The normal application trigger can promote the dependency by pointing
-`_MLX_BASE_IMAGE` at the versioned `golf-mlx-cuda:mlx-0.32.0-go1.27.1` image. Base-image
+`_MLX_BASE_IMAGE` at the versioned `golf-mlx-cuda:mlx-0.32.4-go1.27.1` image. Base-image
 tags carry the Go version from `go.mod`'s `toolchain` line, so a toolchain upgrade builds
 new tags rather than replacing the ones the trigger uses. Its
 default `latest` and `runpod` output tags are unchanged.
