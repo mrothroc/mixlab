@@ -18,6 +18,7 @@ import "C"
 import (
 	"fmt"
 	"math"
+	"os"
 	"runtime"
 	"unsafe"
 )
@@ -484,7 +485,7 @@ func mlxLastErrorMessage() string {
 	if written <= 1 {
 		return ""
 	}
-	return C.GoString((*C.char)(unsafe.Pointer(&buf[0])))
+	return explainBridgeError(C.GoString((*C.char)(unsafe.Pointer(&buf[0]))), os.LookupEnv)
 }
 
 func mlxTrainerCollectLoss(t TrainerHandle) (float32, error) {
