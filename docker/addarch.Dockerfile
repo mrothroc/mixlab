@@ -22,11 +22,13 @@ ARG ARCHS="80;86"
 ARG MLX_VERSION=v0.32.0
 ARG MLX_COMMIT=7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247
 
+COPY docker/test_mlx_jit_cccl_probe.cpp /tmp/test_mlx_jit_cccl_probe.cpp
 RUN test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}" \
     && test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1" \
     && test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1" \
     && test "${MIXLAB_MLX_CUDA_ALLOCATOR_FIX}" = "2" \
     && test "${MIXLAB_MLX_CUDA_CONV_PLAN_FIX}" = "1" \
+    && test "${MIXLAB_MLX_CUDA_JIT_CCCL_FIX}" = "1" \
     && test "${MIXLAB_MLX_BUILD_COMMIT}" = "${MLX_COMMIT}" \
     && test "$(git -C /opt/mlx rev-parse HEAD)" = "${MLX_COMMIT}" \
     && cd /opt/mlx/build \
@@ -34,6 +36,11 @@ RUN test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}" \
        -DMLX_CUDA_ARCHITECTURES="${ARCHS}" -DCMAKE_BUILD_TYPE=Release -G Ninja \
     && grep -Eq '^NCCL_LIBRARIES:FILEPATH=.*/libnccl' CMakeCache.txt \
     && ninja -j4 \
-    && ninja install
+    && ninja install \
+    && mkdir -p /tmp/mlx-jit-cccl && cd /tmp/mlx-jit-cccl \
+    && ar x /usr/local/lib/libmlx.a dirs.cpp.o \
+    && g++ -std=c++17 /tmp/test_mlx_jit_cccl_probe.cpp dirs.cpp.o -I/usr/local/cuda/include \
+       -L/usr/local/cuda/lib64 -Wl,-rpath,/usr/local/cuda/lib64 -lnvrtc -o probe \
+    && ./probe /usr/local/include/cccl /usr/local/cuda/include
 
 WORKDIR /app

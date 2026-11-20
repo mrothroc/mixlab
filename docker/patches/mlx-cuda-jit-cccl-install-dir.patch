@@ -1,0 +1,19 @@
+diff --git a/mlx/backend/cuda/CMakeLists.txt b/mlx/backend/cuda/CMakeLists.txt
+index 065220e..5d3f2e5 100644
+--- a/mlx/backend/cuda/CMakeLists.txt
++++ b/mlx/backend/cuda/CMakeLists.txt
+@@ -241,6 +241,14 @@ install(DIRECTORY ${cccl_SOURCE_DIR}/include/nv
+ if(MLX_BUILD_TESTS)
+   target_compile_definitions(mlx_dirs
+                              PRIVATE MLX_CCCL_DIR="${cccl_SOURCE_DIR}/include")
++else()
++  # A static libmlx locates headers relative to the executable, so a binary
++  # outside the install prefix (such as a go test binary) would otherwise
++  # compile JIT kernels against the CUDA toolkit's older CCCL. Name the
++  # installed copy written by the install rules above.
++  include(GNUInstallDirs)
++  target_compile_definitions(
++    mlx_dirs PRIVATE MLX_CCCL_DIR="${CMAKE_INSTALL_FULL_INCLUDEDIR}/cccl")
+ endif()
+ 
+ # Use fixed version of NVTX.

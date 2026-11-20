@@ -105,6 +105,20 @@ jobs:
           git -C "$ROOT" apply "$GITHUB_WORKSPACE/docker/patches/mlx-cuda-conv-plan-fallback.patch"
           python3 docker/test_mlx_conv_fallback.py --source "$SOURCE"
 
+      - name: Test MLX JIT CCCL install-dir patch
+        run: |
+          ROOT="$RUNNER_TEMP/mlx-jit-cccl"
+          mkdir -p "$ROOT/mlx/backend/cuda"
+          for FILE in CMakeLists.txt dirs.cpp; do
+            curl --fail --location --max-time 30 \
+              "https://raw.githubusercontent.com/ml-explore/mlx/7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247/mlx/backend/cuda/$FILE" \
+              -o "$ROOT/mlx/backend/cuda/$FILE"
+          done
+          python3 docker/test_mlx_jit_cccl.py --source "$ROOT" --expect-broken
+          git -C "$ROOT" apply --check "$GITHUB_WORKSPACE/docker/patches/mlx-cuda-jit-cccl-install-dir.patch"
+          git -C "$ROOT" apply "$GITHUB_WORKSPACE/docker/patches/mlx-cuda-jit-cccl-install-dir.patch"
+          python3 docker/test_mlx_jit_cccl.py --source "$ROOT"
+
   image-python:
     name: Image Python dependencies
     runs-on: ubuntu-latest
