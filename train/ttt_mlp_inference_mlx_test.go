@@ -17,7 +17,12 @@ import (
 	"github.com/mrothroc/mixlab/gpu"
 )
 
+// Split prefill and full replay take different matmul shapes, so under
+// CUDA's default TF32 their logits differ by ~7e-4; compare strict FP32.
 func TestTTTMLPInferenceSessionReplayContinuationResetAndIsolation(t *testing.T) {
+	if !runInStrictFP32Process(t) {
+		return
+	}
 	if !mlxAvailable() {
 		t.Skip("MLX backend not available")
 	}
