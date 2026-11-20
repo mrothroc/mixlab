@@ -16,9 +16,7 @@ import (
 )
 
 func TestLocalLearnerMLXReplayInstallAndEvaluation(t *testing.T) {
-	if !gpu.Available() {
-		t.Skip("MLX unavailable")
-	}
+	requireMetalLocalLearner(t)
 	cfg, path, id, w := learnerFixture(t, 2)
 	s, e := NewLocalLearnerSession(cfg, path, id, w)
 	if e != nil {
@@ -268,9 +266,7 @@ func testLocalAccumulationOracle(t *testing.T, masked bool) {
 }
 
 func TestLocalLearnerMLXRecordReplay(t *testing.T) {
-	if !gpu.Available() {
-		t.Skip("MLX unavailable")
-	}
+	requireMetalLocalLearner(t)
 	cfg, _, id, w := learnerFixture(t, 2)
 	cfg.SeqLen = 6
 	cfg.Training.BatchTokens = 12
@@ -323,4 +319,16 @@ func TestLocalLearnerMLXRecordReplay(t *testing.T) {
 		t.Fatal(e)
 	}
 	assertLocalSnapshotNear(t, want, got)
+}
+
+// R2 local learners run on Metal only; NewLocalLearnerSession rejects other
+// backends by design.
+func requireMetalLocalLearner(t *testing.T) {
+	t.Helper()
+	if !gpu.Available() {
+		t.Skip("MLX unavailable")
+	}
+	if gpu.PrecisionBackend() != "metal" {
+		t.Skip("R2 local learner requires Metal")
+	}
 }
