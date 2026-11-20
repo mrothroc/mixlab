@@ -11,7 +11,7 @@ if [[ "$(uname)" == Darwin ]]; then
 else
   cuda="${CUDA_HOME:-/usr/local/cuda}"
   flags+=(-L"$cuda/lib64" -L"$cuda/lib64/stubs" -Wl,-rpath,"$cuda/lib64"
-    -lcudart -lcublas -lcublasLt -lcudnn -lcufft -lcuda -lnvrtc -lnccl
+    -lcudart -lcublas -lcublasLt -lcudnn -lcufft -lcusolver -lcuda -lnvrtc -lnccl
     -lopenblas -llapack -lpthread -ldl)
 fi
 "${CXX:-c++}" -O2 -std=c++20 -I"$mlx/include" "$root/test_mlx_dilated_conv.cpp" "${flags[@]}" -o "$tmp/probe"
