@@ -127,7 +127,10 @@ def run_probe(source):
         subprocess.run([compiler, "-std=c++20", "-O2", "-pthread", "-I", tmp,
                         str(source), str(root / "main.cpp"), "-o", str(binary)],
                        check=True, timeout=60)
-        return subprocess.run([str(binary)], check=True, timeout=5, text=True, capture_output=True).stdout
+        result = subprocess.run([str(binary)], timeout=5, text=True, capture_output=True)
+        if result.returncode != 0:
+            raise SystemExit(f"worker probe failed (exit {result.returncode}):\n{result.stdout}{result.stderr}")
+        return result.stdout
 
 
 if __name__ == "__main__":
