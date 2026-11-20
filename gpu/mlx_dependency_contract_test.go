@@ -20,6 +20,11 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		"MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1",
 		"MIXLAB_MLX_CUDA_ALLOCATOR_FIX=2",
 		"MIXLAB_MLX_CUDA_CONV_PLAN_FIX=1",
+		"MIXLAB_MLX_CUDA_JIT_CCCL_FIX=1",
+		"python3 /tmp/test_mlx_jit_cccl.py --source /opt/mlx --expect-broken",
+		"git -C /opt/mlx apply --check /tmp/mlx-cuda-jit-cccl-install-dir.patch",
+		"git -C /opt/mlx apply /tmp/mlx-cuda-jit-cccl-install-dir.patch",
+		"/tmp/test_mlx_jit_cccl_probe.cpp",
 		"git -C /opt/mlx apply --check /tmp/mlx-cuda-conv-plan-fallback.patch",
 		"python3 /tmp/test_mlx_conv_fallback.py --source /opt/mlx/mlx/backend/cuda/conv.cpp --expect-broken",
 		"python3 /tmp/test_mlx_allocator_retry.py --source /opt/mlx/mlx/backend/cuda/allocator.cpp",
@@ -45,6 +50,8 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		"MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX",
 		"MIXLAB_MLX_CUDA_ALLOCATOR_FIX",
 		"MIXLAB_MLX_CUDA_CONV_PLAN_FIX",
+		`test "${MIXLAB_MLX_CUDA_JIT_CCCL_FIX}" = "1"`,
+		"/tmp/test_mlx_jit_cccl_probe.cpp",
 		"NCCL_LIBRARIES:FILEPATH",
 	} {
 		if !strings.Contains(addarch, required) {
@@ -86,6 +93,9 @@ func TestCUDAImagePinsDistributedCapableMLX(t *testing.T) {
 		}
 	}
 	app := readRepositoryFile(t, "../docker/app.Dockerfile")
+	if !strings.Contains(app, `test "${MIXLAB_MLX_CUDA_JIT_CCCL_FIX}" = "1"`) {
+		t.Fatal("app image must reject an MLX base whose JIT can fall back to the toolkit's CCCL")
+	}
 	if !strings.Contains(app, `test "${MIXLAB_MLX_CUDA_CONV_PLAN_FIX}" = "1"`) {
 		t.Fatal("app image must reject an MLX base without strict convolution fallback")
 	}
@@ -112,6 +122,15 @@ func TestCUDAAllocatorPatchIsCoveredInCI(t *testing.T) {
 func TestCUDAConvolutionFallbackPatchIsCoveredInCI(t *testing.T) {
 	ci := readRepositoryFile(t, "../.github/workflows/ci.yml")
 	for _, required := range []string{"mlx-cuda-conv-plan-fallback.patch", "test_mlx_conv_fallback.py", pinnedMLXCommit + "/mlx/backend/cuda/conv.cpp"} {
+		if !strings.Contains(ci, required) {
+			t.Errorf("CI missing %s", required)
+		}
+	}
+}
+
+func TestCUDAJITCCCLPatchIsCoveredInCI(t *testing.T) {
+	ci := readRepositoryFile(t, "../.github/workflows/ci.yml")
+	for _, required := range []string{"mlx-cuda-jit-cccl-install-dir.patch", "test_mlx_jit_cccl.py", "--expect-broken", pinnedMLXCommit + "/mlx/backend/cuda/$FILE", "CMakeLists.txt dirs.cpp"} {
 		if !strings.Contains(ci, required) {
 			t.Errorf("CI missing %s", required)
 		}

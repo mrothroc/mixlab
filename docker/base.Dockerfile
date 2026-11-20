@@ -85,6 +85,17 @@ RUN python3 /tmp/test_mlx_allocator.py --source /opt/mlx/mlx/backend/cuda/alloca
     && python3 /tmp/test_mlx_allocator_retry.py --source /opt/mlx/mlx/backend/cuda/allocator.cpp
 ENV MIXLAB_MLX_CUDA_ALLOCATOR_FIX=2
 
+# A static libmlx finds its CCCL headers relative to the executable, so JIT
+# kernels in binaries outside /usr/local (go test binaries) used the toolkit's
+# CCCL 2.7, which lacks cuda::std::rint. Compile in the installed CCCL path.
+COPY docker/patches/mlx-cuda-jit-cccl-install-dir.patch /tmp/mlx-cuda-jit-cccl-install-dir.patch
+COPY docker/test_mlx_jit_cccl.py /tmp/test_mlx_jit_cccl.py
+COPY docker/test_mlx_jit_cccl_probe.cpp /tmp/test_mlx_jit_cccl_probe.cpp
+RUN python3 /tmp/test_mlx_jit_cccl.py --source /opt/mlx --expect-broken \
+    && git -C /opt/mlx apply --check /tmp/mlx-cuda-jit-cccl-install-dir.patch \
+    && git -C /opt/mlx apply /tmp/mlx-cuda-jit-cccl-install-dir.patch \
+    && python3 /tmp/test_mlx_jit_cccl.py --source /opt/mlx
+
 # Build MLX with sm_80 ONLY — minimal first tier.
 # KEEP the build directory for incremental arch additions.
 RUN cd /opt/mlx \
@@ -93,6 +104,12 @@ RUN cd /opt/mlx \
        -DMLX_CUDA_ARCHITECTURES="80" -DCMAKE_BUILD_TYPE=Release -G Ninja \
     && grep -Eq '^NCCL_LIBRARIES:FILEPATH=.*/libnccl' CMakeCache.txt \
     && ninja -j4 \
-    && ninja install
+    && ninja install \
+    && mkdir -p /tmp/mlx-jit-cccl && cd /tmp/mlx-jit-cccl \
+    && ar x /usr/local/lib/libmlx.a dirs.cpp.o \
+    && g++ -std=c++17 /tmp/test_mlx_jit_cccl_probe.cpp dirs.cpp.o -I/usr/local/cuda/include \
+       -L/usr/local/cuda/lib64 -Wl,-rpath,/usr/local/cuda/lib64 -lnvrtc -o probe \
+    && ./probe /usr/local/include/cccl /usr/local/cuda/include
+ENV MIXLAB_MLX_CUDA_JIT_CCCL_FIX=1
 
 WORKDIR /app

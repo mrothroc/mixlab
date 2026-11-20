@@ -260,6 +260,18 @@ methods before and after patching. On an otherwise idle CUDA host, run
 See [dense grid memory checks](../docs/performance.md#dense-grid-memory-checks)
 for the GPU acceptance command and memory attribution.
 
+`MIXLAB_MLX_CUDA_JIT_CCCL_FIX=1` marks a base whose MLX runtime-compiled
+kernels always find MLX's own CCCL headers. `libmlx` is a static archive, so
+MLX looks for them relative to the executable; a binary outside `/usr/local`
+(any `go test` binary, or `mixlab` built elsewhere) used the CUDA toolkit's
+older CCCL instead, which lacks `cuda::std::rint` and broke QAT and other fused
+kernels on first compile. The patch compiles in the installed
+`/usr/local/include/cccl` as the fallback; the executable-relative lookup still
+comes first. `python3 docker/test_mlx_jit_cccl.py --source <mlx>` checks the
+pinned CMake and `dirs.cpp` before and after patching, and the base and
+architecture builds run `docker/test_mlx_jit_cccl_probe.cpp` against the
+installed archive with NVRTC (no GPU needed), including a toolkit-only control.
+
 ### Layer 1: Base image (CUDA + Go + MLX)
 
 Compiles MLX from source with CUDA backend for sm_80 (A100).
