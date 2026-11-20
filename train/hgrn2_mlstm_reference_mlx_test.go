@@ -38,7 +38,11 @@ type fixtureWeight struct {
 	Values []float32 `json:"values"`
 }
 
+// The fixtures are strict FP32; CUDA's default TF32 misses them by ~3e-4.
 func TestHGRN2MLSTMFullBlocksMatchReferenceFixtures(t *testing.T) {
+	if !runInStrictFP32Process(t) {
+		return
+	}
 	if !mlxAvailable() {
 		t.Skip("MLX backend not available")
 	}
