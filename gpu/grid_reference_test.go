@@ -25,7 +25,12 @@ type gridReferenceCase struct {
 	Output, Cotangent       gridReferenceTensor
 }
 
+// The PyTorch fixtures are strict FP32. Under CUDA's default TF32, dilated
+// convolutions miss them by ~1e-2 relative, which is TF32 rounding, not a bug.
 func TestGridSpatialPyTorchForwardBackward(t *testing.T) {
+	if !runInStrictFP32Process(t) {
+		return
+	}
 	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX unavailable")
