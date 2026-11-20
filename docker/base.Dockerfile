@@ -39,22 +39,19 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Pin MLX to an immutable release commit. The tag check catches accidental
 # disagreement between the human-readable release and the commit used by CI.
-ARG MLX_VERSION=v0.32.0
-ARG MLX_COMMIT=7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247
+ARG MLX_VERSION=v0.32.4
+ARG MLX_COMMIT=36969c094354086e15d2a327a9c50feb20b9cf11
 RUN git clone --branch ${MLX_VERSION} --depth 1 https://github.com/ml-explore/mlx.git /opt/mlx \
     && test "$(git -C /opt/mlx rev-parse HEAD)" = "${MLX_COMMIT}"
 
 ENV MIXLAB_MLX_BUILD_VERSION=${MLX_VERSION}
 ENV MIXLAB_MLX_BUILD_COMMIT=${MLX_COMMIT}
 
-# Local dependency fix, not a version upgrade. Test the pinned worker body with
-# stubbed CUDA event delivery before/after patching, without requiring a GPU.
-COPY docker/patches/mlx-cuda-worker-wait.patch /tmp/mlx-cuda-worker-wait.patch
+# MLX v0.32.4 fixed the completion worker's idle spin upstream (#4452), which
+# mixlab used to patch locally. Keep testing the pinned worker body with stubbed
+# CUDA event delivery, without a GPU, so a future pin cannot reintroduce it.
 COPY docker/test_mlx_worker.py /tmp/test_mlx_worker.py
-RUN python3 /tmp/test_mlx_worker.py --source /opt/mlx/mlx/backend/cuda/worker.cpp --expect-spin \
-    && git -C /opt/mlx apply --check /tmp/mlx-cuda-worker-wait.patch \
-    && git -C /opt/mlx apply /tmp/mlx-cuda-worker-wait.patch \
-    && python3 /tmp/test_mlx_worker.py --source /opt/mlx/mlx/backend/cuda/worker.cpp
+RUN python3 /tmp/test_mlx_worker.py --source /opt/mlx/mlx/backend/cuda/worker.cpp
 ENV MIXLAB_MLX_CUDA_WORKER_FIX=1
 
 # Exact transposed-convolution weight VJP via ordinary-convolution patches.

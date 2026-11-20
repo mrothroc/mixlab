@@ -79,7 +79,7 @@ class Worker : public std::enable_shared_from_this<Worker> {
 MAIN = r"""
 #include "mlx/backend/cuda/worker.h"
 using namespace mlx::core::cu;
-int main(int argc, char**) {
+int main() {
   Device device;
   auto worker = std::make_shared<Worker>(device);
   // Join explicitly so shutdown is also tested, unlike production's detach.
@@ -107,13 +107,12 @@ int main(int argc, char**) {
   thread.join();
   std::cout << "callbacks_delivered=" << delivered
             << " idle_loop_visits=" << idle_visits << std::endl;
-  bool spin = idle_visits > 100;
-  return delivered && (argc > 1 ? spin : !spin) ? 0 : 1;
+  return delivered && idle_visits <= 100 ? 0 : 1;
 }
 """
 
 
-def run_probe(source, expect_spin=False):
+def run_probe(source):
     compiler = shutil.which(os.environ.get("CXX", "c++"))
     if not compiler:
         raise RuntimeError("a C++ compiler is required for the MLX worker probe")
@@ -128,13 +127,11 @@ def run_probe(source, expect_spin=False):
         subprocess.run([compiler, "-std=c++20", "-O2", "-pthread", "-I", tmp,
                         str(source), str(root / "main.cpp"), "-o", str(binary)],
                        check=True, timeout=60)
-        return subprocess.run([str(binary)] + (["expect-spin"] if expect_spin else []),
-                              check=True, timeout=5, text=True, capture_output=True).stdout
+        return subprocess.run([str(binary)], check=True, timeout=5, text=True, capture_output=True).stdout
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
-    parser.add_argument("--expect-spin", action="store_true")
     args = parser.parse_args()
-    print(run_probe(args.source, args.expect_spin), end="")
+    print(run_probe(args.source), end="")

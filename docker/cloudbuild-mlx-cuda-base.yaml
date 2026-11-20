@@ -13,8 +13,8 @@
 
 substitutions:
   _REGISTRY_PREFIX: ""
-  _MLX_VERSION: "v0.32.0"
-  _MLX_COMMIT: "7a1d4f5c12ac82f4b4d0a6e71538d89ca0605247"
+  _MLX_VERSION: "v0.32.4"
+  _MLX_COMMIT: "36969c094354086e15d2a327a9c50feb20b9cf11"
 
 steps:
   # The registry has no default: this repository is public, so the project
@@ -37,11 +37,11 @@ steps:
       - '--build-arg'
       - 'MLX_COMMIT=${_MLX_COMMIT}'
       - '-t'
-      - '${_REGISTRY_PREFIX}/golf-mlx-cuda-base:mlx-0.32.0-go1.27.4'
+      - '${_REGISTRY_PREFIX}/golf-mlx-cuda-base:mlx-0.32.4-go1.27.4'
       - '.'
 
 images:
-  - '${_REGISTRY_PREFIX}/golf-mlx-cuda-base:mlx-0.32.0-go1.27.4'
+  - '${_REGISTRY_PREFIX}/golf-mlx-cuda-base:mlx-0.32.4-go1.27.4'
 
 options:
   machineType: 'E2_HIGHCPU_32'

@@ -745,17 +745,16 @@ GPU utilization, and host/container memory readings from the same interval.
 
 ### CUDA long-run isolation
 
-The CUDA build carries a narrowly scoped patch to pinned MLX v0.32.0's completion
-worker: retain the last processed batch across waits, and read the stop flag under
-its mutex. Without the patch, an idle worker spins after its first completion.
-`docker/test_mlx_worker.py` compiles the actual upstream worker body with stubbed
-CUDA event delivery. CI and the base-image build check both the original spin and
-patched sleep/wakeup behavior. This proves the idle-spin defect, **not** that it
-causes or fixes the reported long-run Mamba3 stall.
+MLX v0.32.0's completion worker spun after its first completion; mixlab patched it
+locally until MLX v0.32.4 fixed it upstream. `docker/test_mlx_worker.py` compiles
+the pinned upstream worker body with stubbed CUDA event delivery, and CI and the
+base-image build require the sleep/wakeup behavior, so a future pin cannot bring the
+spin back. This proves the idle-spin defect is absent, **not** that it caused the
+reported long-run Mamba3 stall.
 
 Rebuild the MLX base, architecture tier, CLI, and RunPod images in that order.
-`MIXLAB_MLX_CUDA_WORKER_FIX=1` identifies the patched dependency build; downstream
-Dockerfiles reject an older base. Rebuilding only the Go binary/handler cannot
+`MIXLAB_MLX_CUDA_WORKER_FIX=1` identifies a base whose worker passed that check;
+downstream Dockerfiles reject an older base. Rebuilding only the Go binary/handler cannot
 patch an already installed `libmlx.so`. Use staging image tags until a real CUDA
 run passes. Build definitions are in [docker/](../docker/README.md).
 
