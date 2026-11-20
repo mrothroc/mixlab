@@ -14,6 +14,12 @@ func TestSWAWindow128Smoke(t *testing.T) {
 	if !mlxAvailable() {
 		t.Skip("MLX backend not available")
 	}
+	trainPattern := filepath.Join("..", "data", "example", "train_*.bin")
+	if files, err := filepath.Glob(trainPattern); err != nil {
+		t.Fatalf("Glob train shards: %v", err)
+	} else if len(files) == 0 {
+		t.Skip("no example train shards found (data/example is gitignored; skipping in environments without local data)")
+	}
 
 	cfg, err := LoadArchConfig(filepath.Join("experiments", "swa_test", "window128_smoke.json"))
 	if err != nil {
@@ -29,7 +35,6 @@ func TestSWAWindow128Smoke(t *testing.T) {
 	}
 	defer trainer.CloseTrainer()
 
-	trainPattern := filepath.Join("..", "data", "example", "train_*.bin")
 	loader, err := data.NewLoaderWithOptions(trainPattern, cfg.Training.Seed, effectiveLoaderOptions(cfg))
 	if err != nil {
 		t.Fatalf("data.NewLoader: %v", err)
