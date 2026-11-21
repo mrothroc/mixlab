@@ -104,6 +104,7 @@ const (
 	OpConvTranspose2D      = 110
 	OpMaxPool2D            = 111
 	OpGroupNorm            = 112
+	OpSpatialPad           = 113
 )
 
 // HandleInput binds an existing GPU array handle to a declared IR input.

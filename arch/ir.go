@@ -118,6 +118,7 @@ const OpConv2D = 109          // OP_CONV2D
 const OpConvTranspose2D = 110 // OP_CONV_TRANSPOSE2D
 const OpMaxPool2D = 111       // OP_MAX_POOL2D
 const OpGroupNorm = 112       // OP_GROUP_NORM
+const OpSpatialPad = 113      // OP_SPATIAL_PAD
 
 const (
 	SegmentMaskModeNone            = 0

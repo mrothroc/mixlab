@@ -18,6 +18,8 @@ GroupNorm between convolutions and trains with batch size one.
 convolution kernels with Muon while keeping named input/output kernels on AdamW.
 [`grid_aspp_tiny.json`](grid_aspp_tiny.json) uses four parallel dilated
 convolutions (1/6/12/18), concatenation and a 1x1 projection on a 32x32 grid.
+[`grid_rectangular_tiny.json`](grid_rectangular_tiny.json) uses 1x9 and 9x1
+convolutions with explicit circular/edge padding on a two-channel 8x8 grid.
 [`grid_two_stage_1.json`](grid_two_stage_1.json) and
 [`grid_two_stage_2.json`](grid_two_stage_2.json) demonstrate joint augmentation,
 stable stage inventories, frozen-backbone warm starts, and resumable training.

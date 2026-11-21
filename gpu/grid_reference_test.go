@@ -21,6 +21,7 @@ type gridReferenceCase struct {
 	Dilation                int
 	Groups                  int
 	Eps                     float32
+	Params                  []int
 	Weights, Grads          []gridReferenceTensor
 	Output, Cotangent       gridReferenceTensor
 }
@@ -73,7 +74,9 @@ func runGridReferenceCases(t *testing.T, cases []gridReferenceCase) {
 					code = ir.OpConvTranspose2D
 				}
 			}
-			if f.Op == "group_norm" {
+			if f.Op == "pad" {
+				p.AddOp(ir.OpSpatialPad, names, []string{"output"}, nil, f.Params)
+			} else if f.Op == "group_norm" {
 				p.AddOp(ir.OpGroupNorm, names, []string{"output"}, []float32{f.Eps}, []int{f.Groups})
 			} else if f.Op == "layout" {
 				p.ReLU("w0", "positive")
@@ -85,6 +88,9 @@ func runGridReferenceCases(t *testing.T, cases []gridReferenceCase) {
 				params := []int{f.Kernel, f.Stride, f.Padding}
 				if f.Dilation > 1 {
 					params = append(params, f.Dilation)
+				}
+				if len(f.Params) > 0 {
+					params = f.Params
 				}
 				p.AddOp(code, names, []string{"output"}, nil, params)
 			}

@@ -1,4 +1,5 @@
 #include "ir.h"
+#include "grid_spatial.h"
 #include "backward_trace.h"
 #include "gated_delta_chunk_metal_primitive.h"
 #include "gated_delta_cuda_primitive.h"
@@ -4162,31 +4163,13 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
       }
       case OP_CONV2D:
       case OP_CONV_TRANSPOSE2D: {
-        if ((op.n_int_params != 3 && !(op.type == OP_CONV2D && op.n_int_params == 4)) ||
-            (op.n_inputs != 2 && op.n_inputs != 3)) {
-          throw std::runtime_error("spatial convolution requires kernel,stride,padding[,dilation for conv2d] and input,weight[,bias]");
-        }
-        int kernel = op.int_params[0], stride = op.int_params[1], padding = op.int_params[2];
-        int dilation = op.n_int_params == 4 ? op.int_params[3] : 1;
-        auto x = get(op, 0);
-        auto w = get(op, 1);
-        if (kernel <= 0 || stride <= 0 || padding < 0 || dilation <= 0 || x.ndim() != 4 || w.ndim() != 4 ||
-            w.shape(1) != kernel || w.shape(2) != kernel) {
-          throw std::runtime_error("invalid spatial convolution shape or parameters");
-        }
-        if (op.type == OP_CONV2D &&
-            (int64_t(dilation) * (kernel - 1) + 1 > INT32_MAX ||
-             int64_t(x.shape(1)) + 2 * int64_t(padding) > INT32_MAX ||
-             int64_t(x.shape(2)) + 2 * int64_t(padding) > INT32_MAX)) {
-          throw std::runtime_error("convolution effective kernel or padded input exceeds int32 dimensions");
-        }
-        // Canonical transposed weights are I,H,W,O; MLX expects O,H,W,I.
-        if (op.type == OP_CONV_TRANSPOSE2D) w = mx::transpose(w, {3, 1, 2, 0});
-        auto y = op.type == OP_CONV2D
-          ? mx::conv2d(x, w, {stride,stride}, {padding,padding}, {dilation,dilation})
-          : mx::conv_transpose2d(x, w, {stride,stride}, {padding,padding});
-        if (op.n_inputs == 3) y = y + get(op, 2);
-        set_out(op, 0, y);
+        std::vector<mx::array> inputs;
+        for (int i = 0; i < op.n_inputs; ++i) inputs.push_back(get(op, i));
+        set_out(op, 0, spatial_convolution(op, inputs));
+        break;
+      }
+      case OP_SPATIAL_PAD: {
+        set_out(op, 0, spatial_pad(op, get(op, 0)));
         break;
       }
       case OP_GROUP_NORM: {

@@ -1,0 +1,26 @@
+{
+  "name": "grid_rectangular_tiny",
+  "input_adapter": {"kind": "grid", "channels": 2, "height": 8, "width": 8},
+  "dense_regression": {"output": "network.prediction", "target_channels": 1},
+  "blocks": [{
+    "type": "custom", "name": "network",
+    "weights": [
+      {"name": "row.weight", "shape": ["2", "1", "9", "2"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "row.bias", "shape": ["2"], "init": {"kind": "pytorch_conv_uniform", "weight": "row.weight"}},
+      {"name": "col.weight", "shape": ["1", "9", "1", "2"], "init": {"kind": "pytorch_conv_uniform"}},
+      {"name": "col.bias", "shape": ["1"], "init": {"kind": "pytorch_conv_uniform", "weight": "col.weight"}}
+    ],
+    "ops": [
+      {"op": "pad", "inputs": ["x"], "output": "wrapped", "params": {"axis1": [0, 0], "axis2": [4, 4], "mode": "circular"}},
+      {"op": "conv2d", "inputs": ["wrapped", "row.weight", "row.bias"], "output": "rows", "params": {"kernel": [1, 9]}},
+      {"op": "relu", "inputs": ["rows"], "output": "hidden"},
+      {"op": "pad", "inputs": ["hidden"], "output": "edged", "params": {"axis1": [4, 4], "axis2": [0, 0], "mode": "edge"}},
+      {"op": "conv2d", "inputs": ["edged", "col.weight", "col.bias"], "output": "prediction", "params": {"kernel": [9, 1]}}
+    ]
+  }],
+  "training": {
+    "objective": "dense_regression", "batch_size": 2, "steps": 30,
+    "optimizer": "adamw", "lr": 0.01, "beta1": 0.9, "beta2": 0.999,
+    "epsilon": 1e-8, "weight_decay": 0.0, "allow_tf32": false, "seed": 42
+  }
+}
