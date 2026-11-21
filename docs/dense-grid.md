@@ -73,9 +73,10 @@ Spatial custom operations:
 
 | Op | Inputs | Parameters and semantics |
 |---|---|---|
-| `conv2d` | input, kernel, optional bias | Kernel `[Cout,K,K,Cin]`; integer `kernel`, `stride` (default 1), `padding` (default 0), `dilation` (default 1, positive). |
-| `conv_transpose2d` | input, kernel, optional bias | Kernel `[Cin,K,K,Cout]`; same parameters; `output_padding` must be 0. |
+| `conv2d` | input, kernel, optional bias | Kernel `[Cout,Kh,Kw,Cin]`; `kernel`, `stride` (default 1), `padding` (default 0), `dilation` (default 1) each accept an integer or `[H,W]`. Kernel/stride/dilation must be positive, padding nonnegative. |
+| `conv_transpose2d` | input, kernel, optional bias | Square kernel `[Cin,K,K,Cout]`; integer `kernel`, `stride`, `padding`; `output_padding` must be 0. No dilation or pairs. |
 | `max_pool2d` | input | `kernel=stride`, padding 0; floor output sizes; first maximum receives gradient on ties. |
+| `pad` | one rank-4 NHWC input | Required `axis1:[before,after]`, `axis2:[before,after]` and `mode:"zero"`, `"edge"` or `"circular"`; no batch/channel padding. |
 | `group_norm` | input, scale, bias | NHWC activation, affine vectors `[C]`; required positive integer `groups` dividing C, optional finite positive `eps` (default `1e-5`). |
 | `concat` | two inputs | `axis:3`; matching batch/height/width. |
 | `relu`, `stop_gradient` | one input | No parameters. |
@@ -84,14 +85,30 @@ Spatial custom operations:
 | `reshape` | one input | `shape` array of positive integer strings, rank 2..4; leading `"B"` is allowed. Preserves leading batch size and total element count; no inferred `-1` dimension. |
 | `slice` | one input | Explicit `start`, `end`, positive `step`, and `axis`; nonempty in-bounds range. |
 
-Convolutions use native MLX operations. Square kernels, stride, padding and
-dilation apply equally to both spatial axes; groups remain 1. `conv2d` output size is
+Convolutions use native MLX operations; groups remain 1. An integer applies equally
+to both spatial axes. A pair is ordered height, width; legacy scalar configs and
+weight layouts are unchanged. `conv2d` output size on each axis is
 `floor((input+2*padding-dilation*(kernel-1)-1)/stride)+1`; transposed output size is
 `(input-1)*stride-2*padding+kernel`.
 `dilation` is not accepted on `conv_transpose2d` or `max_pool2d`.
 Increasing dilation does not change weights, initialization fan-in or MACs per
 output pixel; it changes the sampled locations and potentially output size.
 For a stride-1 odd kernel, `padding=dilation*(kernel-1)/2` preserves spatial size.
+For example, `kernel:[1,3], dilation:[1,8], padding:[0,8]` preserves both axes.
+Initialization fan-in is `Cin*Kh*Kw`, and Muon views the OHWI kernel as
+`[Cout,Kh*Kw*Cin]`, including rectangular kernels.
+
+`pad` amounts must be nonnegative integers; both pairs and the mode are required.
+`zero` fills with zeros, `edge` repeats the border, and `circular` wraps the axis.
+Each circular amount must be no larger than that original input axis. Zero amounts
+are valid in every mode. Gradients from repeated edge/wrap indices accumulate
+into the original input; padding introduces no weights. Use explicit `pad` before
+`conv2d` for asymmetric before/after padding; convolution's `padding:[H,W]` remains
+symmetric on each axis.
+
+[`grid_rectangular_tiny.json`](../examples/grid_rectangular_tiny.json) uses a
+1x9 convolution with circular width padding followed by a 9x1 convolution with
+edge height padding, on two-channel 8x8 inputs.
 
 [`grid_aspp_tiny.json`](../examples/grid_aspp_tiny.json) combines four parallel
 3x3 branches at dilation 1/6/12/18 on a 32x32 grid, channel concatenation and a
@@ -542,8 +559,10 @@ both formats remain readable.
 
 `export-torch-state` is a CPU-only, grid-only weight/layout exporter. It does not
 export Python model code or require MLX. Existing grid HF rejection is unchanged.
-For dilated convolutions the weight mapping is unchanged; the consumer's
-`torch.nn.Conv2d` must use the same `dilation`, stride and padding. These settings
+For rectangular/dilated convolutions the OHWI-to-OIHW weight mapping is unchanged;
+the consumer's `torch.nn.Conv2d` must use the same per-axis kernel, dilation, stride
+and padding. Map spatial `pad` to `torch.nn.functional.pad` using `(left,right,top,bottom)`
+and modes `constant` (value 0), `replicate`, or `circular`, respectively. These settings
 are retained in the exported `config.json`, not encoded in the weight tensor.
 
 ```bash

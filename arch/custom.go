@@ -10,6 +10,7 @@ import (
 // opNameToCode maps JSON op names to IR op codes for custom blocks.
 var opNameToCode = map[string]int{
 	"group_norm":       OpGroupNorm,
+	"pad":              OpSpatialPad,
 	"conv2d":           OpConv2D,
 	"conv_transpose2d": OpConvTranspose2D,
 	"max_pool2d":       OpMaxPool2D,
@@ -409,7 +410,20 @@ func emitCustomBlockIRWithBindings(
 				return wi, fmt.Errorf("custom block %q op[%d] slice params: %w", spec.Name, i, err)
 			}
 		}
-		if code == OpConv2D || code == OpConvTranspose2D || code == OpMaxPool2D {
+		if code == OpSpatialPad {
+			intParams, err = spatialPadParams(op.Params)
+			if err != nil {
+				return wi, fmt.Errorf("custom block %q op[%d]: %w", spec.Name, i, err)
+			}
+		}
+		if code == OpConv2D {
+			params, err := convolutionParameters(op)
+			if err != nil {
+				return wi, fmt.Errorf("custom block %q op[%d]: %w", spec.Name, i, err)
+			}
+			intParams = params.intParams()
+		}
+		if code == OpConvTranspose2D || code == OpMaxPool2D {
 			k, stride, padding, dilation, err := spatialOpParams(op)
 			if err != nil {
 				return wi, fmt.Errorf("custom block %q op[%d]: %w", spec.Name, i, err)

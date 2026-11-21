@@ -117,6 +117,7 @@ enum OpType {
   OP_CONV_TRANSPOSE2D = 110,
   OP_MAX_POOL2D = 111,
   OP_GROUP_NORM = 112,
+  OP_SPATIAL_PAD = 113,
 };
 
 struct IRop {

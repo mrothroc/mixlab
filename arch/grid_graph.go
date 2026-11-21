@@ -285,6 +285,8 @@ func gridOpShape(op OpSpec, shapes map[string][]int, fanIn map[string]int) ([]in
 	}
 	s := append([]int(nil), inputs[0]...)
 	switch op.Op {
+	case "pad":
+		return spatialPadShape(op, inputs)
 	case "reshape":
 		return gridReshape(op, inputs, shapes["x"][0])
 	case "group_norm":
@@ -293,7 +295,7 @@ func gridOpShape(op OpSpec, shapes map[string][]int, fanIn map[string]int) ([]in
 		if len(inputs) < 2 || len(inputs) > 3 || len(s) != 4 || len(inputs[1]) != 4 {
 			return nil, fmt.Errorf("convolution requires NHWC input, rank-4 weight, optional bias")
 		}
-		k, st, p, dilation, err := spatialOpParams(op)
+		params, err := convolutionParameters(op)
 		if err != nil {
 			return nil, err
 		}
@@ -302,15 +304,15 @@ func gridOpShape(op OpSpec, shapes map[string][]int, fanIn map[string]int) ([]in
 		if op.Op == "conv_transpose2d" {
 			cin, cout = w[0], w[3]
 		}
-		if s[3] != cin || w[1] != k || w[2] != k {
+		if s[3] != cin || w[1] != params.Kernel[0] || w[2] != params.Kernel[1] {
 			return nil, fmt.Errorf("convolution input/kernel channel mismatch")
 		}
 		if len(inputs) == 3 && !reflect.DeepEqual(inputs[2], []int{cout}) {
 			return nil, fmt.Errorf("bias must have shape [%d]", cout)
 		}
-		fan := cin * k * k
+		fan := cin * params.Kernel[0] * params.Kernel[1]
 		if op.Op == "conv_transpose2d" {
-			fan = cout * k * k
+			fan = cout * params.Kernel[0] * params.Kernel[1]
 		}
 		if old := fanIn[op.Inputs[1]]; old != 0 && old != fan {
 			return nil, fmt.Errorf("conflicting convolution fan-in")
@@ -318,12 +320,12 @@ func gridOpShape(op OpSpec, shapes map[string][]int, fanIn map[string]int) ([]in
 		fanIn[op.Inputs[1]] = fan
 		for d := 1; d <= 2; d++ {
 			if op.Op == "conv2d" {
-				s[d], err = gridConvOutputSize(s[d], k, st, p, dilation)
+				s[d], err = gridConvOutputSize(s[d], params.Kernel[d-1], params.Stride[d-1], params.Padding[d-1], params.Dilation[d-1])
 				if err != nil {
 					return nil, err
 				}
 			} else {
-				s[d] = (s[d]-1)*st - 2*p + k
+				s[d] = (s[d]-1)*params.Stride[d-1] - 2*params.Padding[d-1] + params.Kernel[d-1]
 			}
 		}
 		s[3] = cout

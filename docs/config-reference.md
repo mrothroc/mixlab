@@ -1182,9 +1182,10 @@ These symbols are accepted in custom weight shapes and in `params.shape`:
 | `layernorm` / `layer_norm` | 1 or 3 | 1 | `eps` | Non-affine LayerNorm with one input, or affine LayerNorm with `[x, scale, bias]`. |
 | `rope` | 2 | 2 | `T`, `head_dim`, `base` | Rotary embedding helper. Outputs are rotated Q and K. |
 | `stop_gradient` | 1 | 1 | None | Identity forward, zero backward. |
-| `conv2d` | 2 or 3 | 1 | `kernel`, `stride`, `padding`, `dilation` | NHWC spatial convolution, optional bias. Positive square dilation defaults to 1. See [grid contracts](dense-grid.md). |
+| `conv2d` | 2 or 3 | 1 | `kernel`, `stride`, `padding`, `dilation` | NHWC spatial convolution, optional bias. Each parameter accepts an integer or `[H,W]`; dilation defaults to 1. See [grid contracts](dense-grid.md). |
 | `conv_transpose2d` | 2 or 3 | 1 | `kernel`, `stride`, `padding`, `output_padding:0` | NHWC spatial transposed convolution, optional bias. |
 | `max_pool2d` | 1 | 1 | `kernel`, `stride`, `padding:0` | NHWC pooling; kernel=stride; first-max tie gradient. |
+| `pad` | 1 | 1 | `axis1`, `axis2`, `mode` (all required) | Rank-4 NHWC spatial padding. Nonnegative `[before,after]` per axis; mode `zero`, `edge` or `circular`. Each circular amount is bounded by the original axis length. |
 | `group_norm` | 3 | 1 | required `groups`, optional `eps` (default `1e-5`) | NHWC input, scale `[C]`, bias `[C]`. Positive groups must divide C; positive finite epsilon. Normalizes H/W and channels within each group per sample, with biased variance. Declare scale/bias weights with `one`/`zero` initialization. See [grid contracts](dense-grid.md). |
 
 Grid custom graphs support the narrower, shape-checked operation subset listed
@@ -1209,7 +1210,10 @@ The custom-op decoder recognizes these `params` keys:
 | `rate` | number | `dropout` |
 | `exponent` | number | one-input `pow` |
 | `min` / `max` | number | `clamp` |
-| `kernel`, `stride`, `padding`, `output_padding` | integer | Spatial convolution/pooling; constraints above |
+| `kernel`, `stride`, `padding`, `dilation` | integer; `[H,W]` allowed for `conv2d` only | Spatial convolution/pooling; constraints above |
+| `output_padding` | integer | Transposed convolution; must be 0 |
+| `axis1`, `axis2` | two nonnegative integers `[before,after]` | Spatial `pad` |
+| `mode` | string: `zero`, `edge`, `circular` | Spatial `pad` |
 
 ### Custom block example with reshape
 

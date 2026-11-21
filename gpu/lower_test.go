@@ -110,6 +110,7 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"ConvTranspose2D", ir.OpConvTranspose2D, OpConvTranspose2D},
 		{"MaxPool2D", ir.OpMaxPool2D, OpMaxPool2D},
 		{"GroupNorm", ir.OpGroupNorm, OpGroupNorm},
+		{"SpatialPad", ir.OpSpatialPad, OpSpatialPad},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -11,6 +11,9 @@ func GridConvolutionDiagnostics(cfg *ArchConfig) ([]string, error) {
 	}
 	i := cfg.InputAdapter
 	shapes := map[string][]int{"x": {cfg.Training.BatchSize, i.Height, i.Width, i.Channels}}
+	if i.VectorDim > 0 {
+		shapes["v"] = []int{cfg.Training.BatchSize, i.VectorDim}
+	}
 	for _, w := range cfg.Blocks[0].Weights {
 		s, err := gridWeightShape(w.Shape, cfg)
 		if err != nil {
@@ -26,12 +29,12 @@ func GridConvolutionDiagnostics(cfg *ArchConfig) ([]string, error) {
 		}
 		shapes[op.Output] = s
 		if op.Op == "conv2d" || op.Op == "conv_transpose2d" {
-			_, stride, padding, dilation, err := spatialOpParams(op)
+			params, err := convolutionParameters(op)
 			if err != nil {
 				return nil, err
 			}
-			result = append(result, fmt.Sprintf("%s.%s op=%s input=%v weight=%v output=%v stride=%d padding=%d dilation=%d",
-				cfg.Blocks[0].Name, op.Output, op.Op, shapes[op.Inputs[0]], shapes[op.Inputs[1]], s, stride, padding, dilation))
+			result = append(result, fmt.Sprintf("%s.%s op=%s input=%v weight=%v output=%v stride=%s padding=%s dilation=%s",
+				cfg.Blocks[0].Name, op.Output, op.Op, shapes[op.Inputs[0]], shapes[op.Inputs[1]], s, params.Stride, params.Padding, params.Dilation))
 		}
 	}
 	return result, nil
