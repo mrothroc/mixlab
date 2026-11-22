@@ -40,7 +40,7 @@ std::vector<double> sample(const std::vector<float>& input,const OraclePlan& p,i
   return y;
 }
 std::vector<double> adjoint(const std::vector<float>& cot,const OraclePlan& p,int batch,int source_size,bool rounded) {
-  std::vector<double> g(batch*source_size,0);
+  std::vector<double> g(size_t(batch)*source_size,0);
   int per=cot.size()/batch;
   for(size_t i=0;i<cot.size();++i) for(int n=0;n<4;++n)
     g[(i/per)*source_size+p.index[n][i]]+=cot[i]*(rounded?double(p.rounded[n][i]):p.weight[n][i]);
