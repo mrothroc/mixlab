@@ -1,5 +1,6 @@
 #include "ir.h"
 #include "grid_spatial.h"
+#include "grid_polar.h"
 #include "backward_trace.h"
 #include "gated_delta_chunk_metal_primitive.h"
 #include "gated_delta_cuda_primitive.h"
@@ -3748,7 +3749,8 @@ std::vector<uint8_t> required_ops_for_outputs(
 
 namespace mlx_ir {
 
-ArrayMap tensor_map_to_arrays(const TensorMap& inputs) {
+ArrayMap tensor_map_to_arrays(const TensorMap& inputs, const IRProgram* program) {
+  if (program) validate_polar_inputs(*program, inputs);
   ArrayMap out;
   out.reserve(inputs.size());
   for (const auto& kv : inputs) {
@@ -3815,7 +3817,7 @@ mx::array ir_interpret(
     const TensorMap& inputs,
     const std::string& output_name,
     bool training) {
-  return ir_interpret(program, weights, tensor_map_to_arrays(inputs), output_name, training);
+  return ir_interpret(program, weights, tensor_map_to_arrays(inputs, &program), output_name, training);
 }
 
 mx::array ir_interpret(
@@ -3874,7 +3876,7 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
     const TensorMap& inputs,
     const std::vector<std::string>& output_names,
     bool training) {
-  return ir_interpret_outputs(program, weights, tensor_map_to_arrays(inputs), output_names, training);
+  return ir_interpret_outputs(program, weights, tensor_map_to_arrays(inputs, &program), output_names, training);
 }
 
 std::unordered_map<std::string, mx::array> ir_interpret_outputs(
@@ -4170,6 +4172,11 @@ std::unordered_map<std::string, mx::array> ir_interpret_outputs(
       }
       case OP_SPATIAL_PAD: {
         set_out(op, 0, spatial_pad(op, get(op, 0)));
+        break;
+      }
+      case OP_CARTESIAN_TO_POLAR:
+      case OP_POLAR_TO_CARTESIAN: {
+        set_out(op, 0, polar_resample(op, get(op, 0), get(op, 1)));
         break;
       }
       case OP_GROUP_NORM: {

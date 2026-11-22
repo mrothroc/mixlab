@@ -76,6 +76,9 @@ var opNameToCode = map[string]int{
 	"layernorm":        OpLayerNorm,
 	"layer_norm":       OpLayerNorm,
 	"rope":             OpRoPE,
+
+	"cartesian_to_polar": OpCartesianToPolar,
+	"polar_to_cartesian": OpPolarToCartesian,
 }
 
 // resolveShapeSymbol resolves a slice of symbolic shape dimensions to concrete
@@ -152,7 +155,7 @@ func emitCustomBlockIR(
 	stream string,
 	wi, D, T, B, V, idx int,
 ) (int, error) {
-	return emitCustomBlockIRWithBindings(prog, spec, stream, wi, D, T, B, V, idx, nil)
+	return emitCustomBlockIRWithBindings(prog, spec, stream, wi, D, T, B, V, idx, nil, nil)
 }
 
 // Additional bindings are supplied by the task's graph builder; sequence custom
@@ -163,6 +166,7 @@ func emitCustomBlockIRWithBindings(
 	stream string,
 	wi, D, T, B, V, idx int,
 	bindings map[string]string,
+	shapes map[string][]int,
 ) (int, error) {
 	opName := strings.ToLower(strings.TrimSpace(spec.Name))
 	if opName == "" {
@@ -415,6 +419,17 @@ func emitCustomBlockIRWithBindings(
 			if err != nil {
 				return wi, fmt.Errorf("custom block %q op[%d]: %w", spec.Name, i, err)
 			}
+		}
+		if isPolarOp(op.Op) {
+			if shapes == nil || len(op.Inputs) != 2 {
+				return wi, fmt.Errorf("polar sampling is supported only in validated grid graphs")
+			}
+			var dr float32
+			intParams, dr, err = polarParameters(op, [][]int{shapes[op.Inputs[0]], shapes[op.Inputs[1]]})
+			if err != nil {
+				return wi, err
+			}
+			floatParams = []float32{dr}
 		}
 		if code == OpConv2D {
 			params, err := convolutionParameters(op)

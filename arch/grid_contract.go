@@ -53,7 +53,15 @@ func attachGridContract(p *Program, cfg *ArchConfig, metas []WeightMeta, shapes 
 				names[j] = original[a]
 			}
 		}
-		if op.Op == "conv2d" || op.Op == "conv_transpose2d" || op.Op == "max_pool2d" {
+		polarAxes := len(names) == 4 && names[1] == "angle" && names[2] == "radius"
+		switch op.Op {
+		case "conv2d", "conv_transpose2d", "max_pool2d":
+			if !polarAxes {
+				names = []string{"batch", "height", "width", "channel"}
+			}
+		case "cartesian_to_polar":
+			names = []string{"batch", "angle", "radius", "channel"}
+		case "polar_to_cartesian":
 			names = []string{"batch", "height", "width", "channel"}
 		}
 		if op.Op == "reshape" {
@@ -77,11 +85,21 @@ func attachGridContract(p *Program, cfg *ArchConfig, metas []WeightMeta, shapes 
 			}
 			pc.DetachedEdges = append(pc.DetachedEdges, ContractEdge{in, out})
 		}
+		if isPolarOp(op.Op) {
+			pc.DetachedEdges = append(pc.DetachedEdges, ContractEdge{"grid_vectors", out})
+			if op.Op == "cartesian_to_polar" {
+				in := prefix + op.Inputs[0]
+				if op.Inputs[0] == "x" {
+					in = "grid"
+				}
+				pc.DetachedEdges = append(pc.DetachedEdges, ContractEdge{in, out})
+			}
+		}
 	}
 	// Record the exact detached operations and output selection so validation
 	// catches changes to gradient boundaries and provenance, not just shapes.
 	for _, op := range p.Ops {
-		if op.Code == OpStopGradient || (len(op.Outputs) == 1 && op.Outputs[0] == "predictions") {
+		if op.Code == OpStopGradient || op.Code == OpCartesianToPolar || op.Code == OpPolarToCartesian || (len(op.Outputs) == 1 && op.Outputs[0] == "predictions") {
 			pc.Ops = append(pc.Ops, contractOpBinding(op))
 		}
 	}

@@ -1186,6 +1186,8 @@ These symbols are accepted in custom weight shapes and in `params.shape`:
 | `conv_transpose2d` | 2 or 3 | 1 | `kernel`, `stride`, `padding`, `output_padding:0` | NHWC spatial transposed convolution, optional bias. |
 | `max_pool2d` | 1 | 1 | `kernel`, `stride`, `padding:0` | NHWC pooling; kernel=stride; first-max tie gradient. |
 | `pad` | 1 | 1 | `axis1`, `axis2`, `mode` (all required) | Rank-4 NHWC spatial padding. Nonnegative `[before,after]` per axis; mode `zero`, `edge` or `circular`. Each circular amount is bounded by the original axis length. |
+| `cartesian_to_polar` | 2 | 1 | `n_rays`, `n_r`, `dr`, `tx` | Grid-only map + direct `v`; bilinear border-clamped sampling to `[B,K,J,C]`. Rejects differentiable weight ancestors; use explicit `stop_gradient` to detach. |
+| `polar_to_cartesian` | 2 | 1 | `n_rays`, `dr`, `height`, `width`, `tx` | Grid-only inverse sampling with angular wrap, full map resolution, and gradient into polar features only. Requires `J >= ceil(hypot(H-1,W-1)/dr)+2`. |
 | `group_norm` | 3 | 1 | required `groups`, optional `eps` (default `1e-5`) | NHWC input, scale `[C]`, bias `[C]`. Positive groups must divide C; positive finite epsilon. Normalizes H/W and channels within each group per sample, with biased variance. Declare scale/bias weights with `one`/`zero` initialization. See [grid contracts](dense-grid.md). |
 
 Grid custom graphs support the narrower, shape-checked operation subset listed

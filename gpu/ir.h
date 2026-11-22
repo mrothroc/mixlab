@@ -118,6 +118,8 @@ enum OpType {
   OP_MAX_POOL2D = 111,
   OP_GROUP_NORM = 112,
   OP_SPATIAL_PAD = 113,
+  OP_CARTESIAN_TO_POLAR = 114,
+  OP_POLAR_TO_CARTESIAN = 115,
 };
 
 struct IRop {
@@ -150,7 +152,7 @@ struct TensorDesc {
 using TensorMap = std::unordered_map<std::string, TensorDesc>;
 using ArrayMap = std::unordered_map<std::string, mlx::core::array>;
 
-ArrayMap tensor_map_to_arrays(const TensorMap& inputs);
+ArrayMap tensor_map_to_arrays(const TensorMap& inputs, const IRProgram* program = nullptr);
 
 mlx::core::array ir_interpret(
     const IRProgram& program,

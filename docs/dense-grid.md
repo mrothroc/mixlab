@@ -116,6 +116,61 @@ edge height padding, on two-channel 8x8 inputs.
 same prepare/train workflow below. It is a runnable operator example, not a
 benchmark reproduction.
 
+### Polar branches
+
+[`grid_polar_tiny.json`](../examples/grid_polar_tiny.json) resamples fixed inputs,
+applies radial and circular-angular convolutions, maps features back to the full
+Cartesian resolution, and fuses them with the original map. Declare
+`input_adapter.vector_dim` and supply vectors in every dataset split.
+
+| Op | Inputs | Required parameters | Output |
+|---|---|---|---|
+| `cartesian_to_polar` | map, `v` | `n_rays`, `n_r`, `dr`, `tx:[row_column,col_column]` | `[B,K,J,C]` |
+| `polar_to_cartesian` | polar features, `v` | `n_rays`, `dr`, `height`, `width`, `tx` | `[B,H,W,C]` |
+
+`tx` identifies two distinct columns in the unnormalized per-record vector.
+Coordinates must be finite, in-map, and are measured at integer pixel centres.
+Native train/validation/prediction errors name the record; raw GPU calls name the
+batch row. Geometry vectors must be direct external inputs, not learned values.
+Dihedral augmentation is rejected for polar graphs.
+
+Ray zero points along positive column; angles increase toward positive row.
+Ray `k` has angle `2*pi*k/K`; sample `j` has radius `j*dr`. Cartesian sampling
+is bilinear with border clamping. Back-mapping is inverse bilinear sampling,
+with angular wraparound and `atan2(0,0)=0`, not splatting. `height`/`width` must
+equal the full configured map size; downsample after back-mapping if needed.
+The inverse requires `J >= ceil(hypot(H-1,W-1)/dr)+2`, including for fractional
+transmitters. `dr` must remain finite/positive when represented as float32.
+
+Cartesian-to-polar is not differentiable. Every declared weight in its map
+ancestry is treated as potentially trainable, including frozen weights and
+weights reached through another branch. Such graphs are rejected unless that
+dependency is explicitly cut with `stop_gradient`. Input-only transforms are
+allowed. An explicit stop intentionally prevents learning through that path;
+it is not a way to train a Cartesian encoder through the sampler.
+Polar-to-Cartesian differentiates into its polar input; neither op differentiates
+into `v`. Neither op adds weights or changes checkpoint naming.
+
+The implementation computes coordinates on-device for each batch and uses MLX
+gathers/autodiff; there is no per-record coordinate cache. FLOPs include seven
+interpolation operations per output value, not coordinate trig/index/scatter
+costs. Large polar grids may consume much more memory than the Cartesian input;
+the tiny example is not a full-resolution throughput or capacity claim.
+
+PyTorch export remains weights plus a caller-supplied model. `export.json`
+includes `polar_geometry` validation metadata; `infer.py --vectors ...` validates
+coordinates before invoking the model. The reference test twin uses
+`grid_sample(align_corners=True)` with border clamping, and a duplicated first
+angular row for inverse wraparound. The forward ops and their parameters remain
+in `config.json`; no Python model is generated.
+
+Run `go test -tags mlx ./gpu ./train -run GridPolar -count=1` with NumPy, PyTorch
+and safetensors available for train/resume/predict/export checks. Run
+`bash scripts/test_grid_polar_native.sh` for the full independent double-precision
+coordinate/forward/shared-plan adjoint matrix on the active GPU. The latter
+separates coordinate error from adjoint accumulation error and reports, rather
+than gates on, end-to-end white-noise error.
+
 ### GroupNorm
 
 [`grid_group_norm_tiny.json`](../examples/grid_group_norm_tiny.json) uses

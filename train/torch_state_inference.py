@@ -80,6 +80,12 @@ def run(args):
                     v = np.array(vectors[start:start+len(batch)], copy=True)
                     if not np.isfinite(v).all():
                         raise ValueError(f"non-finite vectors in rows {start}:{start+len(batch)}")
+                    for geometry in manifest.get("polar_geometry", []):
+                        row, col = v[:, geometry["row_column"]], v[:, geometry["col_column"]]
+                        invalid = (row < 0) | (row > geometry["height"] - 1) | (col < 0) | (col > geometry["width"] - 1)
+                        if invalid.any():
+                            index = start + int(np.flatnonzero(invalid)[0])
+                            raise ValueError(f"invalid polar transmitter at input row {index}")
                     y = model(torch.from_numpy(batch), torch.from_numpy(v))
                 if isinstance(y, (tuple, list)):
                     if args.output_index is None or not 0 <= args.output_index < len(y):

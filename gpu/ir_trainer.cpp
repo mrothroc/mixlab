@@ -2238,7 +2238,7 @@ void IRTrainer::submit_step(const TensorMap& inputs) {
   const auto& input_names = cached_named_step_input_names;
   const auto& signature = cached_named_step_signature;
 
-  auto input_arrays_by_name = tensor_map_to_arrays(inputs);
+  auto input_arrays_by_name = tensor_map_to_arrays(inputs, &program);
   if (cached_named_step_argument_layout_signature != signature) {
     cached_named_step_ordered_inputs.clear();
     cached_named_step_args.clear();
@@ -3412,7 +3412,7 @@ float IRTrainer::evaluate_named_with_outputs(
   }
 
   const auto input_names = sorted_input_names(inputs);
-  auto input_arrays_by_name = tensor_map_to_arrays(inputs);
+  auto input_arrays_by_name = tensor_map_to_arrays(inputs, &program);
   std::vector<mx::array> args;
   args.reserve(weights.size() + input_names.size());
   args.insert(args.end(), weights.begin(), weights.end());
@@ -3576,7 +3576,7 @@ std::vector<int32_t> IRTrainer::sample_categorical_output(
   }
 
   const auto input_names = sorted_input_names(inputs);
-  auto input_arrays_by_name = tensor_map_to_arrays(inputs);
+  auto input_arrays_by_name = tensor_map_to_arrays(inputs, &program);
   std::vector<mx::array> ordered_input_arrays;
   ordered_input_arrays.reserve(input_names.size());
   for (const auto& name : input_names) {

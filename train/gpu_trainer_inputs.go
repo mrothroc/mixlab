@@ -73,7 +73,7 @@ func (t *mlxGPUTrainer) makeRTDGeneratorInputs(batch objectiveBatch) ([]gpu.Tens
 
 func (t *mlxGPUTrainer) makeObjectiveInputs(batch objectiveBatch, batchSize, seqLen int) ([]gpu.TensorInput, error) {
 	if len(t.gridInputs) > 0 {
-		return makeGridInputs(t.gridInputs, batch.grid)
+		return makeGridInputs(t.gridInputs, batch.grid, t.gridPolarChecks...)
 	}
 	need := batchSize * seqLen
 	if t.batchNorm {

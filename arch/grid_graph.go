@@ -125,6 +125,11 @@ func buildGridGraph(cfg *ArchConfig, supervised bool) (*Program, []WeightMeta, e
 		}
 	}
 	fanIn := map[string]int{}
+	// Track all declared weights, irrespective of reachability or freeze schedules.
+	dependent := map[string]bool{}
+	for _, w := range spec.Weights {
+		dependent[w.Name] = true
+	}
 	for n, op := range spec.Ops {
 		if op.Output == "" || len(op.Outputs) > 0 || shapes[op.Output] != nil {
 			return nil, nil, fmt.Errorf("grid op %d requires a unique output name", n)
@@ -137,6 +142,25 @@ func buildGridGraph(cfg *ArchConfig, supervised bool) (*Program, []WeightMeta, e
 			return nil, nil, err
 		}
 		shapes[op.Output] = s
+		if isPolarOp(op.Op) {
+			if op.Inputs[1] != "v" || i.VectorDim == 0 {
+				return nil, nil, fmt.Errorf("polar ops require the declared per-record vector v")
+			}
+			if a := cfg.Training.GridAugmentation; a != nil && a.Dihedral {
+				return nil, nil, fmt.Errorf("polar graphs do not support dihedral augmentation")
+			}
+			if op.Op == "polar_to_cartesian" && (s[1] != i.Height || s[2] != i.Width) {
+				return nil, nil, fmt.Errorf("polar_to_cartesian must output the full input map resolution")
+			}
+			if op.Op == "cartesian_to_polar" && dependent[op.Inputs[0]] {
+				return nil, nil, fmt.Errorf("cartesian_to_polar map input %q has a trainable ancestor; use explicit stop_gradient", op.Inputs[0])
+			}
+		}
+		if op.Op != "stop_gradient" && op.Op != "cartesian_to_polar" {
+			for _, in := range op.Inputs {
+				dependent[op.Output] = dependent[op.Output] || dependent[in]
+			}
+		}
 	}
 	if err := resolveGridKernelMetadata(cfg, metas); err != nil {
 		return nil, nil, err
@@ -171,7 +195,7 @@ func buildGridGraph(cfg *ArchConfig, supervised bool) (*Program, []WeightMeta, e
 	if i.VectorDim > 0 {
 		p.DeclareInput("grid_vectors", TensorFloat32, shapes["v"])
 	}
-	if _, err := emitCustomBlockIRWithBindings(p, resolved, "grid", 0, 1, 1, cfg.Training.BatchSize, 1, 0, bindings); err != nil {
+	if _, err := emitCustomBlockIRWithBindings(p, resolved, "grid", 0, 1, 1, cfg.Training.BatchSize, 1, 0, bindings, shapes); err != nil {
 		return nil, nil, err
 	}
 	prefix := tmpName("grid_custom_"+strings.ToLower(strings.TrimSpace(spec.Name)), 0) + "_"
@@ -285,6 +309,8 @@ func gridOpShape(op OpSpec, shapes map[string][]int, fanIn map[string]int) ([]in
 	}
 	s := append([]int(nil), inputs[0]...)
 	switch op.Op {
+	case "cartesian_to_polar", "polar_to_cartesian":
+		return polarShape(op, inputs)
 	case "pad":
 		return spatialPadShape(op, inputs)
 	case "reshape":
