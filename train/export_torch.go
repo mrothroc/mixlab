@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/mrothroc/mixlab/arch"
 )
 
 //go:embed torch_state_inference.py
@@ -75,6 +77,13 @@ func RunExportTorchState(opts ExportTorchStateOptions) error {
 		manifest["vector_dim"] = cfg.InputAdapter.VectorDim
 		manifest["vector_dtype"] = "float32"
 		manifest["vector_layout"] = "NS"
+	}
+	program, err := arch.BuildGridIRProgram(cfg, false)
+	if err != nil {
+		return err
+	}
+	if checks := arch.GridPolarInputChecks(program); len(checks) > 0 {
+		manifest["polar_geometry"] = checks
 	}
 	// One-time warm-start paths are not part of an inference package.
 	cfg.Training.InitFrom, cfg.Training.InitAllowMissing = "", nil

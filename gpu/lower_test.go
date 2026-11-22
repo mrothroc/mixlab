@@ -111,6 +111,8 @@ func TestIRToGPUOpCodeAlignment(t *testing.T) {
 		{"MaxPool2D", ir.OpMaxPool2D, OpMaxPool2D},
 		{"GroupNorm", ir.OpGroupNorm, OpGroupNorm},
 		{"SpatialPad", ir.OpSpatialPad, OpSpatialPad},
+		{"CartesianToPolar", ir.OpCartesianToPolar, OpCartesianToPolar},
+		{"PolarToCartesian", ir.OpPolarToCartesian, OpPolarToCartesian},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

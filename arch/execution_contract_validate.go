@@ -241,6 +241,12 @@ func ValidateProgramContract(p *Program, c *ProgramContract) error {
 	for _, edge := range c.DetachedEdges {
 		found := false
 		for _, op := range p.Ops {
+			if len(op.Outputs) == 1 && op.Outputs[0] == edge.Output && len(op.Inputs) == 2 &&
+				((op.Code == OpCartesianToPolar && (op.Inputs[0] == edge.Input || op.Inputs[1] == edge.Input)) ||
+					(op.Code == OpPolarToCartesian && op.Inputs[1] == edge.Input)) {
+				found = true
+				break
+			}
 			if op.Code == OpStopGradient && reflect.DeepEqual(op.Inputs, []string{edge.Input}) && reflect.DeepEqual(op.Outputs, []string{edge.Output}) {
 				found = true
 				break

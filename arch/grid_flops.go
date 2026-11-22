@@ -49,6 +49,10 @@ func estimateGridFLOPs(cfg *ArchConfig) FLOPsEstimate {
 			n *= int64(d)
 		}
 		switch op.Op {
+		case "cartesian_to_polar", "polar_to_cartesian":
+			// Four weighted samples and three additions per output value.
+			// Coordinate trig/index generation and scatter costs are not modeled.
+			est.ForwardFLOPs += 7 * n
 		case "group_norm":
 			// Mean, centering, square/variance, normalization and affine;
 			// epsilon and reciprocal-square-root once per sample/group.

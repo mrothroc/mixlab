@@ -902,7 +902,7 @@ int mlx_ir_eval_program_output_size_named_for_output(
       weights.push_back(*w);
     }
 
-    auto tensor_map = mlx_ir::tensor_map_to_arrays(to_tensor_map(inputs, n_inputs));
+    auto tensor_map = mlx_ir::tensor_map_to_arrays(to_tensor_map(inputs, n_inputs), prog.get());
     mx::array out = (output_name && output_name[0] != '\0')
                         ? mlx_ir::ir_interpret(*prog, weights, tensor_map, std::string(output_name))
                         : mlx_ir::ir_interpret(*prog, weights, tensor_map);
@@ -1104,7 +1104,7 @@ int mlx_ir_eval_program_handle_outputs(
       weights.push_back(*weight);
     }
 
-    auto tensor_map = mlx_ir::tensor_map_to_arrays(to_tensor_map(inputs, n_inputs));
+    auto tensor_map = mlx_ir::tensor_map_to_arrays(to_tensor_map(inputs, n_inputs), prog.get());
     std::vector<std::string> input_names;
     input_names.reserve(static_cast<size_t>(n_inputs + n_handle_inputs));
     std::vector<mx::array> args;
@@ -1242,7 +1242,7 @@ int mlx_ir_eval_program_grads_named_for_output(
     }
 
     auto tensor_map = to_tensor_map(inputs, n_inputs);
-    auto input_arrays_by_name = mlx_ir::tensor_map_to_arrays(tensor_map);
+    auto input_arrays_by_name = mlx_ir::tensor_map_to_arrays(tensor_map, prog.get());
     std::vector<std::string> input_names;
     input_names.reserve(static_cast<size_t>(n_inputs));
     std::vector<mx::array> input_arrays;

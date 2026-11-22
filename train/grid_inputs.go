@@ -8,7 +8,7 @@ import (
 	"github.com/mrothroc/mixlab/gpu"
 )
 
-func makeGridInputs(decls []arch.TensorDecl, b *data.GridBatch) ([]gpu.TensorInput, error) {
+func makeGridInputs(decls []arch.TensorDecl, b *data.GridBatch, checks ...arch.PolarInputCheck) ([]gpu.TensorInput, error) {
 	if b == nil {
 		return nil, fmt.Errorf("grid program requires a grid batch")
 	}
@@ -20,6 +20,15 @@ func makeGridInputs(decls []arch.TensorDecl, b *data.GridBatch) ([]gpu.TensorInp
 			return nil, fmt.Errorf("grid input %q: got %d values, expected shape %v", d.Name, len(v), d.Shape)
 		}
 		inputs = append(inputs, gpu.TensorInput{Name: d.Name, DType: gpu.TensorFloat32, Shape: d.Shape, Data: v})
+	}
+	for _, check := range checks {
+		for _, d := range decls {
+			if d.Name == check.Input && len(d.Shape) == 2 {
+				if err := check.Validate(values[d.Name], d.Shape[1], b.IDs); err != nil {
+					return nil, err
+				}
+			}
+		}
 	}
 	return inputs, nil
 }

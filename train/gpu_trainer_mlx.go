@@ -14,6 +14,7 @@ import (
 type mlxGPUTrainer struct {
 	localAccumulation          int
 	gridInputs                 []ir.TensorDecl
+	gridPolarChecks            []ir.PolarInputCheck
 	handle                     gpu.TrainerHandle
 	prog                       *gpu.Program
 	activeIRProg               *ir.Program
@@ -553,6 +554,7 @@ func initMLXGPUTrainerWithDistributedContext(
 		shapes:                      shapes,
 		optimizerSpec:               optimizerSpec,
 		gridInputs:                  gridInputDeclarations(irProg),
+		gridPolarChecks:             ir.GridPolarInputChecks(irProg),
 		baseLR:                      optimizerSpec.DefaultBaseLR,
 		evalLossOutputName:          preferredEvalLossOutputName(irProg),
 		componentLossOutputs:        componentLossOutputs,

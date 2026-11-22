@@ -18,6 +18,10 @@ GroupNorm between convolutions and trains with batch size one.
 convolution kernels with Muon while keeping named input/output kernels on AdamW.
 [`grid_aspp_tiny.json`](grid_aspp_tiny.json) uses four parallel dilated
 convolutions (1/6/12/18), concatenation and a 1x1 projection on a 32x32 grid.
+[`grid_polar_tiny.json`](grid_polar_tiny.json) combines fixed-input polar sampling,
+radial/angular convolutions, inverse sampling and full-resolution Cartesian fusion.
+It requires two per-record coordinate values; see [polar branches](../docs/dense-grid.md#polar-branches).
+
 [`grid_rectangular_tiny.json`](grid_rectangular_tiny.json) uses 1x9 and 9x1
 convolutions with explicit circular/edge padding on a two-channel 8x8 grid.
 [`grid_two_stage_1.json`](grid_two_stage_1.json) and

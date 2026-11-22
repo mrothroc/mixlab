@@ -22,6 +22,8 @@ type gridReferenceCase struct {
 	Groups                  int
 	Eps                     float32
 	Params                  []int
+	Dr                      float32
+	Vectors                 gridReferenceTensor
 	Weights, Grads          []gridReferenceTensor
 	Output, Cotangent       gridReferenceTensor
 }
@@ -74,7 +76,10 @@ func runGridReferenceCases(t *testing.T, cases []gridReferenceCase) {
 					code = ir.OpConvTranspose2D
 				}
 			}
-			if f.Op == "pad" {
+			if f.Op == "polar_to_cartesian" {
+				p.DeclareInput("v", ir.TensorFloat32, f.Vectors.Shape)
+				p.AddOp(ir.OpPolarToCartesian, []string{"w0", "v"}, []string{"output"}, []float32{f.Dr}, f.Params)
+			} else if f.Op == "pad" {
 				p.AddOp(ir.OpSpatialPad, names, []string{"output"}, nil, f.Params)
 			} else if f.Op == "group_norm" {
 				p.AddOp(ir.OpGroupNorm, names, []string{"output"}, []float32{f.Eps}, []int{f.Groups})
@@ -112,6 +117,9 @@ func runGridReferenceCases(t *testing.T, cases []gridReferenceCase) {
 				}
 			}
 			inputs := []TensorInput{{Name: "cotangent", DType: TensorFloat32, Shape: f.Cotangent.Shape, Data: f.Cotangent.Data}}
+			if f.Op == "polar_to_cartesian" {
+				inputs = append(inputs, TensorInput{Name: "v", DType: TensorFloat32, Shape: f.Vectors.Shape, Data: f.Vectors.Data})
+			}
 			got, err := EvalProgramOutput(gp, handles, inputs, "output")
 			if err != nil {
 				t.Fatal(err)

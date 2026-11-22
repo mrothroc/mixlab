@@ -63,6 +63,7 @@ func visitGridPredictions(cfg *ArchConfig, checkpoint string, ds *data.GridDatas
 	}
 	defer program.Destroy()
 	bs := cfg.Training.BatchSize
+	polarChecks := arch.GridPolarInputChecks(p)
 	reader, err := data.NewGridBatchReader(ds, cfg.Training.GridLoader.EffectiveReadWorkers(bs))
 	if err != nil {
 		return err
@@ -81,7 +82,7 @@ func visitGridPredictions(cfg *ArchConfig, checkpoint string, ds *data.GridDatas
 		if err = reader.ReadInto(ids[:n], &b); err != nil {
 			return err
 		}
-		inputs, err := makeGridInputs(p.Inputs, &b)
+		inputs, err := makeGridInputs(p.Inputs, &b, polarChecks...)
 		if err != nil {
 			return err
 		}
