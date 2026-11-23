@@ -2,6 +2,7 @@ package gpu
 
 import (
 	"os"
+	"runtime"
 	"strconv"
 
 	ir "github.com/mrothroc/mixlab/arch"
@@ -27,6 +28,12 @@ const (
 	maxTTTMLPScanOpsPerBuffer = 128
 	maxTTTMLPScanMBPerBuffer  = 128
 	tttMLPCUDAGraphCacheSize  = 512
+
+	// Polar graphs retain large feature maps alongside convolution adjoints.
+	// Pair these bounds with the CUDA image's tiled convolution weight VJP.
+	maxPolarOpsPerBuffer = 20
+	maxPolarMBPerBuffer  = 100
+	polarGraphCacheSize  = 64
 )
 
 type CUDAGraphLimits struct {
@@ -38,37 +45,42 @@ type CUDAGraphLimits struct {
 // TuneCUDAGraphLimits derives MLX CUDA graph batching limits from backend IR.
 // It is pure policy: no GPU, no CGO, and no process environment mutation.
 func TuneCUDAGraphLimits(prog *ir.Program) CUDAGraphLimits {
+	return tuneCUDAGraphLimitsForOS(prog, runtime.GOOS)
+}
+
+func tuneCUDAGraphLimitsForOS(prog *ir.Program, goos string) CUDAGraphLimits {
 	if prog == nil {
 		return CUDAGraphLimits{}
 	}
 
 	maxOps := len(prog.Ops) * 3 // forward + backward + optimizer margin
-	if programHasOp(prog, ir.OpMamba3SelectiveScan) || programHasOp(prog, ir.OpMamba3CanonicalBlock) {
-		if maxOps > maxMamba3SelectiveScanOpsPerBuffer {
-			maxOps = maxMamba3SelectiveScanOpsPerBuffer
-		}
-		return CUDAGraphLimits{
-			MaxOpsPerBuffer: maxOps,
-			MaxMBPerBuffer:  maxMamba3SelectiveScanMBPerBuffer,
-			GraphCacheSize:  mamba3CUDAGraphCacheSize,
-		}
-	}
-	if programHasOp(prog, ir.OpTTTMLPScan) || programHasOp(prog, ir.OpTTTMLPStatefulScan) {
-		if maxOps > maxTTTMLPScanOpsPerBuffer {
-			maxOps = maxTTTMLPScanOpsPerBuffer
-		}
-		return CUDAGraphLimits{
-			MaxOpsPerBuffer: maxOps,
-			MaxMBPerBuffer:  maxTTTMLPScanMBPerBuffer,
-			GraphCacheSize:  tttMLPCUDAGraphCacheSize,
-		}
-	}
-	if programHasOp(prog, ir.OpGatedDeltaScan) && maxOps < minGatedDeltaNetMaxOpsPerBuffer {
-		// GatedDeltaScan is a compact IR op that expands into a much larger MLX
-		// graph on Metal/CUDA, so raw IR op count can under-size MLX buffers.
+	hasMamba := programHasOp(prog, ir.OpMamba3SelectiveScan) || programHasOp(prog, ir.OpMamba3CanonicalBlock)
+	hasTTT := programHasOp(prog, ir.OpTTTMLPScan) || programHasOp(prog, ir.OpTTTMLPStatefulScan)
+	if !hasMamba && !hasTTT && programHasOp(prog, ir.OpGatedDeltaScan) && maxOps < minGatedDeltaNetMaxOpsPerBuffer {
 		maxOps = minGatedDeltaNetMaxOpsPerBuffer
 	}
-	return CUDAGraphLimits{MaxOpsPerBuffer: maxOps}
+	limits := CUDAGraphLimits{MaxOpsPerBuffer: maxOps}
+	capLimit := func(current *int, cap int) {
+		if *current == 0 || *current > cap {
+			*current = cap
+		}
+	}
+	capAll := func(ops, mb, cache int) {
+		capLimit(&limits.MaxOpsPerBuffer, ops)
+		capLimit(&limits.MaxMBPerBuffer, mb)
+		capLimit(&limits.GraphCacheSize, cache)
+	}
+	if hasMamba {
+		capAll(maxMamba3SelectiveScanOpsPerBuffer, maxMamba3SelectiveScanMBPerBuffer, mamba3CUDAGraphCacheSize)
+	} else if hasTTT {
+		capAll(maxTTTMLPScanOpsPerBuffer, maxTTTMLPScanMBPerBuffer, tttMLPCUDAGraphCacheSize)
+	}
+	// MLX's unprefixed buffer env vars also affect Metal. This new memory
+	// policy is CUDA-only; preserve the established Metal graph batching.
+	if goos == "linux" && (programHasOp(prog, ir.OpCartesianToPolar) || programHasOp(prog, ir.OpPolarToCartesian)) {
+		capAll(maxPolarOpsPerBuffer, maxPolarMBPerBuffer, polarGraphCacheSize)
+	}
+	return limits
 }
 
 // ApplyCUDAGraphLimits applies missing MLX CUDA graph env vars only. Explicit
