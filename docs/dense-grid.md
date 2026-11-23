@@ -171,6 +171,49 @@ coordinate/forward/shared-plan adjoint matrix on the active GPU. The latter
 separates coordinate error from adjoint accumulation error and reports, rather
 than gates on, end-to-end white-noise error.
 
+#### Measuring capacity and throughput
+
+Run each configuration in a separate process so allocator peaks are not carried
+over from a previous model. The opt-in synthetic training benchmark runs five
+warmup and twenty measured updates with AdamW, masked MSE and explicit strict
+FP32. It does not reduce the configured batch size to fit memory:
+
+```bash
+MIXLAB_GRID_BENCH_CONFIG=/path/to/config.json \
+  go test -tags mlx ./train -run '^TestGridTrainingBenchmark$' -count=1 -v
+```
+
+Set `MIXLAB_GRID_BENCH_BASELINE=/path/to/baseline.json` to match all equal-name,
+equal-shape initial tensors across architecture arms, including biases. A widened
+kernel retains its own fan-in-correct initialization. Synthetic inputs, targets and masks are
+deterministic; coordinates vary each step and have no record-plan cache.
+Each measured interval includes batch submission, forward, backward, optimizer
+update and synchronized loss collection. It excludes host fixture construction.
+The `GRID_BENCHMARK` JSON line reports samples, median, config hashes and MLX
+memory. Peak memory includes initialization and warmup but excludes host buffers.
+An allocation failure is a capacity failure, not a throughput result.
+Record the measured peak separately from the configured allocator limit: on
+Metal, that setting guides reclamation and scheduling rather than imposing a
+hard process-memory cap, so the peak can exceed it.
+MLX counters also need not include allocations owned by CUDA graphs or backend
+libraries; they are not a measurement of total device-process memory.
+
+For isolated native back-map measurements:
+
+```bash
+bash scripts/test_grid_polar_native.sh --benchmark 512
+bash scripts/test_grid_polar_native.sh --benchmark 1024
+```
+
+These use B=16, H=W=256, C=32, J=363 and an 8 GiB MLX limit with a 256 MiB
+allocator cache. Each forward or gradient-only VJP includes fresh coordinate
+construction and synchronization. The VJP is measured directly, not estimated
+by subtracting forward time; it is not the full model's backward time. Peaks are
+reset for each phase and include its warmups and live inputs. Use
+`--benchmark --smoke` for a small harness check, not a capacity claim. Record
+device, runtime revision, precision and memory limits alongside results before
+comparing machines. The CNN-only baseline has no back-map measurement.
+
 ### GroupNorm
 
 [`grid_group_norm_tiny.json`](../examples/grid_group_norm_tiny.json) uses
