@@ -3,6 +3,7 @@ package train
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/mrothroc/mixlab/gpu"
@@ -22,6 +23,42 @@ func TestMergeCUDAGraphLimits_PrioritizesSmallGraphCap(t *testing.T) {
 	}
 	if got.GraphCacheSize != 1024 {
 		t.Fatalf("graph cache size=%d, want 1024", got.GraphCacheSize)
+	}
+}
+
+func TestPolarCUDAGraphPreflight(t *testing.T) {
+	path := filepath.Join("..", "examples", "grid_polar_tiny.json")
+	want := gpu.CUDAGraphLimits{MaxOpsPerBuffer: 20, MaxMBPerBuffer: 100, GraphCacheSize: 64}
+	if runtime.GOOS != "linux" {
+		cfg, err := LoadArchConfigQuiet(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := BuildIRProgramFromConfig(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cudaGraphLimitsForConfigPath(path); got != (gpu.CUDAGraphLimits{MaxOpsPerBuffer: len(p.Ops) * 3}) {
+			t.Fatalf("non-CUDA preflight changed: %+v", got)
+		}
+		return
+	}
+	if got := cudaGraphLimitsForConfigPath(path); got != want {
+		t.Fatalf("grid preflight=%+v want=%+v", got, want)
+	}
+	for _, key := range []string{gpu.MLXMaxOpsPerBufferEnv, gpu.MLXMaxMBPerBufferEnv, gpu.MLXCUDAGraphCacheEnv} {
+		unsetEnvForTest(t, key)
+	}
+	// No MLX initialization: production preflight resolves policy from config.
+	ConfigureCUDAGraphLimits(path, "")
+	for key, value := range map[string]string{gpu.MLXMaxOpsPerBufferEnv: "20", gpu.MLXMaxMBPerBufferEnv: "100", gpu.MLXCUDAGraphCacheEnv: "64"} {
+		if got := os.Getenv(key); got != value {
+			t.Fatalf("%s=%q want %q", key, got, value)
+		}
+	}
+	other := gpu.CUDAGraphLimits{MaxOpsPerBuffer: 64, MaxMBPerBuffer: 128, GraphCacheSize: 1024}
+	if mergeCUDAGraphLimits(want, other) != want || mergeCUDAGraphLimits(other, want) != want {
+		t.Fatal("config-directory merge must keep the tighter bounds in either order")
 	}
 }
 

@@ -173,6 +173,16 @@ than gates on, end-to-end white-noise error.
 
 #### Measuring capacity and throughput
 
+CUDA images tile FP32 convolution weight-gradient patch matrices larger than
+2 GiB along the batch axis, targeting 256 MiB per tile (at least one record). This is an internal
+operator reduction: the training batch, optimizer update and model stay unchanged.
+Polar programs also default to CUDA graph limits of 20 ops, 100 MiB and 64 cached
+graphs. Explicit `MLX_MAX_OPS_PER_BUFFER`, `MLX_MAX_MB_PER_BUFFER` and
+`MLX_CUDA_GRAPH_CACHE_SIZE` overrides still win, but can increase memory pressure.
+These are not hard VRAM caps. The dependency patch requires rebuilding the CUDA
+base and downstream images; see [image rebuilds](../docker/README.md#why-three-layers).
+Metal keeps its existing runtime. Neither backend caches record-dependent geometry.
+
 Run each configuration in a separate process so allocator peaks are not carried
 over from a previous model. The opt-in synthetic training benchmark runs five
 warmup and twenty measured updates with AdamW, masked MSE and explicit strict
