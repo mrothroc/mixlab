@@ -23,6 +23,10 @@ func TestGridTrainingBenchmark(t *testing.T) {
 	if path == "" {
 		t.Skip("explicit synthetic grid benchmark; set MIXLAB_GRID_BENCH_CONFIG")
 	}
+	steps, err := gridBenchmarkSteps(os.Getenv("MIXLAB_GRID_BENCH_STEPS"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	raw, err := os.ReadFile(path)
@@ -49,7 +53,7 @@ func TestGridTrainingBenchmark(t *testing.T) {
 	}
 	hash := sha256.Sum256(raw)
 	report := map[string]any{"format": "mixlab.grid_benchmark.v1", "config_sha256": hex.EncodeToString(hash[:]),
-		"name": cfg.Name, "status": "error", "warmup": 5, "measured_steps": 20, "seed": cfg.Training.Seed,
+		"name": cfg.Name, "status": "error", "warmup": 5, "measured_steps": steps - 5, "seed": cfg.Training.Seed,
 		"synthetic_seed": 412, "batch": cfg.Training.BatchSize, "height": cfg.InputAdapter.Height, "width": cfg.InputAdapter.Width,
 		"channels": cfg.InputAdapter.Channels, "device": gpu.DeviceName(), "backend": gpu.PrecisionBackend(),
 		"memory_scope": "MLX process lifetime including initialization and warmup; excludes host batch buffers", "coordinate_cache": false}
@@ -77,6 +81,29 @@ func TestGridTrainingBenchmark(t *testing.T) {
 	}
 	report["memory_limits"] = limits
 	report["device"] = limits.DeviceName
+	report["graph_policy_env"] = map[string]string{
+		gpu.MLXMaxOpsPerBufferEnv: os.Getenv(gpu.MLXMaxOpsPerBufferEnv),
+		gpu.MLXMaxMBPerBufferEnv:  os.Getenv(gpu.MLXMaxMBPerBufferEnv),
+		gpu.MLXCUDAGraphCacheEnv:  os.Getenv(gpu.MLXCUDAGraphCacheEnv),
+		"MLX_USE_CUDA_GRAPHS":     os.Getenv("MLX_USE_CUDA_GRAPHS"),
+	}
+	// Snapshot outside timed updates. CUDA reservations include allocations not
+	// represented by MLX live-array counters; neither is total process memory.
+	trace := func(phase string, step int) {
+		entry := map[string]any{"phase": phase, "step": step, "mlx": gpu.MemoryStatsSnapshot()}
+		if memory, ok := gpu.CUDAMemorySnapshot(); ok {
+			entry["cuda"] = memory
+		}
+		if memory, ok := gpu.DeviceMemoryInfo(); ok {
+			entry["device"] = memory
+		}
+		encoded, e := json.Marshal(entry)
+		if e != nil {
+			t.Fatal(e)
+		}
+		fmt.Printf("GRID_MEMORY %s\n", encoded)
+	}
+	trace("initialized", -1)
 	var baseline *ArchConfig
 	if base := os.Getenv("MIXLAB_GRID_BENCH_BASELINE"); base != "" {
 		baseline, err = LoadArchConfig(base)
@@ -103,9 +130,10 @@ func TestGridTrainingBenchmark(t *testing.T) {
 		tr.CloseTrainer()
 	}()
 	b := gridBenchmarkBatch(cfg)
+	trace("trainer_ready", -1)
 	checks := arch.GridPolarInputChecks(p)
 	var samples []float64
-	for step := 0; step < 25; step++ {
+	for step := 0; step < steps; step++ {
 		// Vary geometry outside the timed section, defeating record-plan reuse.
 		for n := 0; n < b.BatchSize; n++ {
 			for _, c := range checks {
@@ -131,6 +159,7 @@ func TestGridTrainingBenchmark(t *testing.T) {
 		report["completed_steps"] = step + 1
 		report["last_loss"] = loss
 		t.Logf("step=%d seconds=%.6f loss=%g", step, seconds, loss)
+		trace("step_complete", step)
 	}
 	report["samples_seconds"], report["median_seconds"], report["status"] = samples, gridBenchmarkMedian(samples), "pass"
 	report["compile_stats"] = formatCompileStats(tr)

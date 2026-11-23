@@ -1,13 +1,40 @@
 package train
 
 import (
+	"fmt"
 	"math"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/mrothroc/mixlab/data"
 )
+
+func gridBenchmarkSteps(value string) (int, error) {
+	if value == "" {
+		return 25, nil
+	}
+	steps, err := strconv.Atoi(value)
+	if err != nil || steps < 6 || steps > 1000 {
+		return 0, fmt.Errorf("MIXLAB_GRID_BENCH_STEPS must be in [6,1000]")
+	}
+	return steps, nil
+}
+
+func TestGridBenchmarkSteps(t *testing.T) {
+	for value, want := range map[string]int{"": 25, "6": 6, "100": 100, "1000": 1000} {
+		got, err := gridBenchmarkSteps(value)
+		if err != nil || got != want {
+			t.Fatalf("%q: %d, %v; want %d", value, got, err, want)
+		}
+	}
+	for _, value := range []string{"0", "5", "-1", "1001", "1.5", "invalid", "9999999999999999999999999"} {
+		if _, err := gridBenchmarkSteps(value); err == nil {
+			t.Fatalf("accepted %q", value)
+		}
+	}
+}
 
 func gridBenchmarkMedian(values []float64) float64 {
 	x := slices.Clone(values)
