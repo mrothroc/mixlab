@@ -27,6 +27,7 @@ RUN set -x \
     && test "${MIXLAB_MLX_BUILD_VERSION}" = "${MLX_VERSION}" \
     && test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1" \
     && test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1" \
+    && test "${MIXLAB_MLX_CONV_WEIGHT_TILES}" = "1" \
     && test "${MIXLAB_MLX_CUDA_ALLOCATOR_FIX}" = "2" \
     && test "${MIXLAB_MLX_CUDA_CONV_PLAN_FIX}" = "1" \
     && test "${MIXLAB_MLX_CUDA_JIT_CCCL_FIX}" = "1" \

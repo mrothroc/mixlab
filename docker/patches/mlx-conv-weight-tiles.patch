@@ -1,0 +1,57 @@
+--- a/mlx/primitives.cpp
++++ b/mlx/primitives.cpp
+@@ -1270,6 +1270,27 @@
+   return allow_col_major_ == c_other.allow_col_major_;
+ }
+ 
++int conv_weight_patch_batch(const array& in, const array& wt, const array& cotan) {
++  // Divide the budget instead of multiplying dimensions, which can overflow.
++  // One record is the minimum tile even when it exceeds the target budget.
++  const int batch = in.shape(0);
++  if (in.dtype() != float32 || batch <= 1) return batch;
++  size_t records = (256ULL << 20) / sizeof(float);
++  size_t untiled_records = (2ULL << 30) / sizeof(float);
++  for (int axis = 1; axis < cotan.ndim() - 1; ++axis) {
++    if (cotan.shape(axis) <= 0) return batch;
++    records /= size_t(cotan.shape(axis));
++    untiled_records /= size_t(cotan.shape(axis));
++  }
++  for (int axis = 1; axis < wt.ndim(); ++axis) {
++    if (wt.shape(axis) <= 0) return batch;
++    records /= size_t(wt.shape(axis));
++    untiled_records /= size_t(wt.shape(axis));
++  }
++  if (size_t(batch) <= untiled_records) return batch;
++  return int(std::max<size_t>(1, std::min<size_t>(records, batch)));
++}
++
+ array conv_weight_backward_patches(
+     const array& in,
+     const array& wt,
+@@ -1278,6 +1299,26 @@
+     const std::vector<int>& padding_lo,
+     const std::vector<int>& padding_hi,
+     StreamOrDevice s) {
++  // Bound the im2col materialization for FP32 weight gradients. This is an
++  // internal reduction over one convolution's batch, not optimizer microsteps.
++  const int chunk = conv_weight_patch_batch(in, wt, cotan);
++  if (chunk > 0 && in.shape(0) > chunk) {
++    auto result = zeros(wt.shape(), float32, s);
++    for (int begin = 0; begin < in.shape(0);) {
++      const int end = begin + std::min(chunk, in.shape(0) - begin);
++      auto starts = Shape(in.ndim(), 0);
++      auto in_ends = in.shape();
++      auto cotan_ends = cotan.shape();
++      starts[0] = begin;
++      in_ends[0] = cotan_ends[0] = end;
++      result = add(result, conv_weight_backward_patches(
++          slice(in, starts, in_ends, s), wt,
++          slice(cotan, starts, cotan_ends, s), kernel_strides,
++          padding_lo, padding_hi, s), s);
++      begin = end;
++    }
++    return result;
++  }
+   // Resolve Padded input shapes and strides
+   Shape padding_starts(in.ndim(), 0);
+   auto padding_ends = in.shape();

@@ -23,6 +23,8 @@ RUN test "${MIXLAB_MLX_CUDA_WORKER_FIX}" = "1" \
     || { echo "Rebuild the MLX CUDA base and architecture tiers with the worker fix" >&2; exit 1; }
 RUN test "${MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX}" = "1" \
     || { echo "Rebuild the MLX CUDA base and architecture tiers with the convolution gradient fix" >&2; exit 1; }
+RUN test "${MIXLAB_MLX_CONV_WEIGHT_TILES}" = "1" \
+    || { echo "Rebuild the MLX CUDA base and architecture tiers with convolution weight tiling" >&2; exit 1; }
 RUN test "${MIXLAB_MLX_CUDA_ALLOCATOR_FIX}" = "2" \
     || { echo "Rebuild the MLX CUDA base and architecture tiers with the allocator reclaim fix" >&2; exit 1; }
 RUN test "${MIXLAB_MLX_CUDA_CONV_PLAN_FIX}" = "1" \

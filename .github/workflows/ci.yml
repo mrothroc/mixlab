@@ -74,6 +74,20 @@ jobs:
             -o "$SOURCE"
           python3 docker/test_mlx_worker.py --source "$SOURCE"
 
+      - name: Test MLX convolution weight tiles
+        run: |
+          ROOT="$RUNNER_TEMP/mlx-conv-tiles"
+          SOURCE="$ROOT/mlx/primitives.cpp"
+          mkdir -p "$(dirname "$SOURCE")"
+          curl --fail --location --max-time 30 \
+            https://raw.githubusercontent.com/ml-explore/mlx/36969c094354086e15d2a327a9c50feb20b9cf11/mlx/primitives.cpp \
+            -o "$SOURCE"
+          git -C "$ROOT" apply "$GITHUB_WORKSPACE/docker/patches/mlx-conv-transpose-weight-grad.patch"
+          python3 docker/test_mlx_conv_weight_tiles.py --source "$SOURCE" --expect-broken
+          git -C "$ROOT" apply --check "$GITHUB_WORKSPACE/docker/patches/mlx-conv-weight-tiles.patch"
+          git -C "$ROOT" apply "$GITHUB_WORKSPACE/docker/patches/mlx-conv-weight-tiles.patch"
+          python3 docker/test_mlx_conv_weight_tiles.py --source "$SOURCE"
+
       - name: Test MLX CUDA allocator patch
         run: |
           ROOT="$RUNNER_TEMP/mlx-allocator"
