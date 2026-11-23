@@ -134,6 +134,22 @@ func TestCUDAAllocatorPatchIsCoveredInCI(t *testing.T) {
 	}
 }
 
+func TestConvolutionWeightTilesBuildContract(t *testing.T) {
+	for _, path := range []string{"../docker/app.Dockerfile", "../docker/addarch.Dockerfile"} {
+		if !strings.Contains(readRepositoryFile(t, path), `test "${MIXLAB_MLX_CONV_WEIGHT_TILES}" = "1"`) {
+			t.Errorf("%s must reject an untiled CUDA base", path)
+		}
+	}
+	for _, path := range []string{"../docker/base.Dockerfile", "../.github/workflows/ci.yml"} {
+		body := readRepositoryFile(t, path)
+		for _, required := range []string{"mlx-conv-weight-tiles.patch", "test_mlx_conv_weight_tiles.py", "--expect-broken"} {
+			if !strings.Contains(body, required) {
+				t.Errorf("%s missing %s", path, required)
+			}
+		}
+	}
+}
+
 func TestCUDAConvolutionFallbackPatchIsCoveredInCI(t *testing.T) {
 	ci := readRepositoryFile(t, "../.github/workflows/ci.yml")
 	for _, required := range []string{"mlx-cuda-conv-plan-fallback.patch", "test_mlx_conv_fallback.py", pinnedMLXCommit + "/mlx/backend/cuda/conv.cpp"} {

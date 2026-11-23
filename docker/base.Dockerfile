@@ -61,6 +61,15 @@ RUN git -C /opt/mlx apply --check /tmp/mlx-conv-transpose-weight-grad.patch \
     && git -C /opt/mlx apply /tmp/mlx-conv-transpose-weight-grad.patch
 ENV MIXLAB_MLX_CONV_TRANSPOSE_GRAD_FIX=1
 
+# Bound large FP32 im2col weight-gradient temporaries, including decoder VJPs.
+COPY docker/patches/mlx-conv-weight-tiles.patch /tmp/mlx-conv-weight-tiles.patch
+COPY docker/test_mlx_allocator.py docker/test_mlx_conv_weight_tiles.py /tmp/
+RUN python3 /tmp/test_mlx_conv_weight_tiles.py --source /opt/mlx/mlx/primitives.cpp --expect-broken \
+    && git -C /opt/mlx apply --check /tmp/mlx-conv-weight-tiles.patch \
+    && git -C /opt/mlx apply /tmp/mlx-conv-weight-tiles.patch \
+    && python3 /tmp/test_mlx_conv_weight_tiles.py --source /opt/mlx/mlx/primitives.cpp
+ENV MIXLAB_MLX_CONV_WEIGHT_TILES=1
+
 # Missing strict cuDNN plans must reach MLX's existing FP32 GEMM fallback.
 COPY docker/patches/mlx-cuda-conv-plan-fallback.patch /tmp/mlx-cuda-conv-plan-fallback.patch
 COPY docker/test_mlx_conv_fallback.py /tmp/test_mlx_conv_fallback.py

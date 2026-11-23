@@ -260,6 +260,22 @@ methods before and after patching. On an otherwise idle CUDA host, run
 See [dense grid memory checks](../docs/performance.md#dense-grid-memory-checks)
 for the GPU acceptance command and memory attribution.
 
+`MIXLAB_MLX_CONV_WEIGHT_TILES=1` marks the bounded FP32 convolution weight VJP.
+It reuses the ordinary/transpose patch helper, reducing batch-axis tiles into
+one weight gradient without changing the training batch or optimizer update.
+Only patch matrices larger than 2 GiB are tiled, targeting 256 MiB per tile
+with a one-record minimum; it is not a hard memory limit. Non-FP32 and smaller
+convolutions keep the old path. Polar programs
+also use conservative graph batches to avoid retaining too many tile temporaries.
+The base and CI check the actual size policy before/after patching; run
+`bash docker/test_mlx_conv_weight_tiles.sh` on CUDA for the independent forward
+and both-adjoint oracle, including a ragged final tile and live-policy assertion.
+Downstream image builds reject bases without this provenance marker. Do not set
+the marker manually: rebuild the base, architecture tiers, app and RunPod image.
+When locally replacing static `libmlx.a`, force the final Go link (for example,
+a fresh `-ldflags=-buildid=<unique-id>`); rebuilding a cached test executable alone
+can silently reuse code linked against the previous archive.
+
 `MIXLAB_MLX_CUDA_JIT_CCCL_FIX=1` marks a base whose MLX runtime-compiled
 kernels always find MLX's own CCCL headers. `libmlx` is a static archive, so
 MLX looks for them relative to the executable; a binary outside `/usr/local`
