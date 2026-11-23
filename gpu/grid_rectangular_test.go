@@ -12,6 +12,9 @@ import (
 )
 
 func TestGridRectangularPadPyTorchForwardBackward(t *testing.T) {
+	if !runInStrictFP32Process(t) {
+		return
+	}
 	lockMLXThread(t)
 	if !Available() {
 		t.Skip("MLX unavailable")
