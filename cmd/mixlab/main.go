@@ -19,7 +19,7 @@ func main() {
 	configPath := flag.String("config", "", "path to architecture JSON config")
 	contractProfile := flag.String("contract-profile", "native-full", "inspection profile: native-full or native-ttt-stateful (batch one, token one, offset zero)")
 	contractRequire := flag.String("contract-require", "", "optional contract requirement: complete, streaming, refinement, save-restore, or clone")
-	gridIn := flag.String("grid-in", "", "grid dataset manifest for predict-grid")
+	gridIn := flag.String("grid-in", "", "grid dataset manifest for predict-grid (include per-record vectors when vector_dim > 0)")
 	gridOut := flag.String("grid-out", "", "new prediction output directory for predict-grid")
 	gridSplit := flag.String("grid-split", "predict", "manifest split for predict-grid")
 	exportMap := flag.String("export-map", "", "declarative logical-weight map for export-torch-state")
