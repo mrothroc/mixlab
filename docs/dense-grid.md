@@ -202,6 +202,13 @@ update and synchronized loss collection. It excludes host fixture construction.
 The `GRID_BENCHMARK` JSON line reports samples, median, config hashes and MLX
 memory. Peak memory includes initialization and warmup but excludes host buffers.
 An allocation failure is a capacity failure, not a throughput result.
+Set `MIXLAB_GRID_BENCH_STEPS=100` for a sustained-capacity check (total updates,
+including the five warmups; accepted range 6-1000). `GRID_MEMORY` JSON lines
+record initialization, trainer setup and each completed update, outside the
+timed interval. They include MLX counters and, when available, CUDA pool/graph
+reservations and device free memory. The final report records the effective
+graph-policy environment. For total process GPU memory, sample the benchmark
+PID separately with `nvidia-smi`; device free memory also reflects other users.
 Record the measured peak separately from the configured allocator limit: on
 Metal, that setting guides reclamation and scheduling rather than imposing a
 hard process-memory cap, so the peak can exceed it.
