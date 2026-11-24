@@ -35,7 +35,10 @@ func TestGPUPrecisionSubprocess(t *testing.T) {
 		}
 		for _, conv := range []bool{false, true} {
 			for _, depth := range []int{1, 4} {
-				t.Run(fmt.Sprintf("conv=%v/depth=%d", conv, depth), func(t *testing.T) { precisionNumericalProbe(t, conv, depth, allow) })
+				t.Run(fmt.Sprintf("conv=%v/depth=%d", conv, depth), func(t *testing.T) {
+					lockMLXThread(t)
+					precisionNumericalProbe(t, conv, depth, allow)
+				})
 			}
 		}
 		precisionSpatialProbes(t, allow)

@@ -32,6 +32,7 @@ func TestSegmentAttentionMaskMatchesOracle(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			lockMLXThread(t)
 			prog := ir.NewProgram(1)
 			prog.DeclareInput("scores", ir.TensorFloat32, []int{B, H, T, T})
 			prog.DeclareInput("segment_ids", ir.TensorInt32, []int{B, T})

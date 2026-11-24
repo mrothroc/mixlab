@@ -35,6 +35,7 @@ func TestGridPolarNativeForwardBackward(t *testing.T) {
 	}
 	for _, inverse := range []bool{false, true} {
 		t.Run(map[bool]string{false: "cartesian", true: "polar"}[inverse], func(t *testing.T) {
+			lockMLXThread(t)
 			b, h, w, k, j, c := 2, 4, 5, 8, 7, 2
 			ih, iw, oh, ow, code := h, w, k, j, ir.OpCartesianToPolar
 			if inverse {

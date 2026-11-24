@@ -108,6 +108,7 @@ func TestOptimizerStepGuardRollsBackNonFiniteGradientAndBiasStep(t *testing.T) {
 		{name: "sgd", group: OptimizerGroup{Kind: OptimizerSGD, LR: 0.01, Beta1: 0.9}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			lockMLXThread(t)
 			trainer := optimizerGuardTrainer(t, prog, 0, tc.group, false)
 			loss, err := TrainerStep(trainer, optimizerGuardInput(0))
 			if err != nil {

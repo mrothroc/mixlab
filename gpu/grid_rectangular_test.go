@@ -52,6 +52,7 @@ func TestGridRectangularPadInvalidIR(t *testing.T) {
 		{"pad_overflow", ir.OpSpatialPad, []int{math.MaxInt32, 0, 0, 0, 0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			lockMLXThread(t)
 			p := ir.NewProgram(2)
 			names := []string{"w0", "w1"}
 			if tc.code == ir.OpSpatialPad {

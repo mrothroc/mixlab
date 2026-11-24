@@ -25,6 +25,7 @@ func TestGridDilationInvalidRuntimeParams(t *testing.T) {
 		{"transpose", ir.OpConvTranspose2D, []int{3, 1, 1, 2}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			lockMLXThread(t)
 			p := ir.NewProgram(2)
 			p.AddOp(tc.op, []string{"w0", "w1"}, []string{"y"}, nil, tc.params)
 			p.DeclareOutput("y", ir.TensorFloat32, []int{1, 3, 3, 1})

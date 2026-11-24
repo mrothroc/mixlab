@@ -74,6 +74,7 @@ func TestTrainerStateSnapshotRestoreMatchesUninterruptedOptimizerStep(t *testing
 		{name: "sgd_zero_momentum", group: OptimizerGroup{Kind: OptimizerSGD, LR: 1e-2}, stateCount: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			lockMLXThread(t)
 			uninterrupted := resumeStateTrainer(t, prog, initial, tc.group)
 			for step := 0; step < 2; step++ {
 				if _, err := TrainerStep(uninterrupted, inputs); err != nil {

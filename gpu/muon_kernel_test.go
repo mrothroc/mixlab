@@ -65,6 +65,7 @@ func TestMuonKernelMatrixParityAndResume(t *testing.T) {
 		for _, normalization := range []MuonNormalization{MuonNormalizationNone, MuonNormalizationRowL2, MuonNormalizationNorMuon} {
 			for _, variant := range []NewtonSchulzVariant{NewtonSchulzFixed, NewtonSchulzPolarExpress} {
 				t.Run(fmt.Sprintf("view%d_norm%d_ns%d", view, normalization, variant), func(t *testing.T) {
+					lockMLXThread(t)
 					shape := []int{3, 2, 2, 2}
 					if view == MuonMatrixIHWO {
 						shape = []int{2, 2, 2, 3}
