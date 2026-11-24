@@ -189,6 +189,7 @@ func TestGatedDeltaScanChunkedMatchesNaiveForwardAndGrad(t *testing.T) {
 		{name: "recurrent_large_chunk", dk: 16, dv: 32, chunkSize: 128},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			lockMLXThread(t)
 			runGatedDeltaScanChunkedParity(t, tc.dk, tc.dv, tc.chunkSize)
 		})
 	}

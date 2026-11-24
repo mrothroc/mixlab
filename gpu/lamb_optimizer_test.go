@@ -67,6 +67,7 @@ func TestLAMBOptimizerMatchesCPUOracle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			lockMLXThread(t)
 			trainer, handles := newLAMBOracleTrainer(t, tt.w0, tt.w1, tt.decay0, tt.decay1, float32(tt.weightDecay), tt.maxGradNorm, tt.trustCap)
 			defer TrainerDestroy(trainer)
 			for _, h := range handles {

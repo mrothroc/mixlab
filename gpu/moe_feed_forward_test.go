@@ -18,6 +18,7 @@ func TestMoEFeedForwardMatchesCPUOracle(t *testing.T) {
 	}
 	for _, topK := range []int{1, 2} {
 		t.Run("topk", func(t *testing.T) {
+			lockMLXThread(t)
 			const (
 				B   = 1
 				T   = 4

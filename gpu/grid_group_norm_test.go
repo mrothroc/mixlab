@@ -47,6 +47,7 @@ func TestGridGroupNormInvalidRuntime(t *testing.T) {
 		{"scale_rank", 2, 1e-5, []int{2, 2}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			lockMLXThread(t)
 			p := ir.NewProgram(3)
 			p.AddOp(ir.OpGroupNorm, []string{"w0", "w1", "w2"}, []string{"y"}, []float32{tc.eps}, []int{tc.groups})
 			p.DeclareOutput("y", ir.TensorFloat32, []int{1, 2, 3, 4})

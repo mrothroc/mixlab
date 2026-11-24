@@ -25,6 +25,7 @@ func TestEnergyPairwiseLossMatchesCPUOracle(t *testing.T) {
 		{"hinge", ir.EnergyPairLossHinge},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			lockMLXThread(t)
 			prog := ir.NewProgram(1)
 			prog.DeclareInput("logits", ir.TensorFloat32, []int{rows, 1})
 			prog.DeclareInput("mask", ir.TensorFloat32, []int{rows})
