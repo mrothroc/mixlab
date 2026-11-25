@@ -3,17 +3,29 @@
 package train
 
 import (
+	"encoding/json"
 	"math"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/mrothroc/mixlab/arch"
 	"github.com/mrothroc/mixlab/data"
+	"github.com/mrothroc/mixlab/internal/gridpoints"
 )
 
 func TestGridPolarTrainingResumePredictionExport(t *testing.T) {
+	testGridPolarTrainingResumePredictionExport(t, false)
+}
+
+func TestGridPointsPolarTrainingResumePredictionExport(t *testing.T) {
+	testGridPolarTrainingResumePredictionExport(t, true)
+}
+
+func testGridPolarTrainingResumePredictionExport(t *testing.T, points bool) {
 	if !runInStrictFP32Process(t) {
 		return
 	}
@@ -26,6 +38,10 @@ func TestGridPolarTrainingResumePredictionExport(t *testing.T) {
 	cfg, err := LoadArchConfig("../examples/grid_polar_tiny.json")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if points {
+		cfg.InputAdapter.VectorPoints = gridpoints.Columns{{0, 1}}
+		cfg.Training.GridAugmentation = &arch.GridAugmentationSpec{Dihedral: true}
 	}
 	cfg.Training.Steps = 30
 	cfg.Training.WarmupSteps = 0
@@ -117,6 +133,10 @@ func TestGridPolarTrainingResumePredictionExport(t *testing.T) {
 	}
 	resumedPath := filepath.Join(dir, "resumed.st")
 	resumeDir := filepath.Join(dir, "resume")
+	if points {
+		zero := 0
+		cfg.Training.GridLoader = &arch.GridLoaderSpec{PrefetchBatches: &zero, ReadWorkers: 1}
+	}
 	_, err = runGridTrain(cfg, manifest, TrainOptions{Resume: filepath.Join(fullDir, resumeManifestFilename(7)), CheckpointDir: resumeDir, CheckpointEvery: 7, ValEvery: 7, SafetensorsPath: resumedPath})
 	if err != nil {
 		t.Fatal(err)
@@ -193,6 +213,27 @@ func TestGridPolarTrainingResumePredictionExport(t *testing.T) {
 		pkg := filepath.Join(dir, "export")
 		if err := RunExportTorchState(ExportTorchStateOptions{ConfigPath: config, SafetensorsLoad: checkpoint, MapPath: mapPath, OutputDir: pkg}); err != nil {
 			t.Fatal(err)
+		}
+		if points {
+			for _, name := range []string{"config.json", "export.json"} {
+				raw, err := os.ReadFile(filepath.Join(pkg, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var m map[string]json.RawMessage
+				if err = json.Unmarshal(raw, &m); err != nil {
+					t.Fatal(err)
+				}
+				if name == "config.json" {
+					if err = json.Unmarshal(m["input_adapter"], &m); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var declared gridpoints.Columns
+				if err = json.Unmarshal(m["vector_points"], &declared); err != nil || !reflect.DeepEqual(declared, cfg.InputAdapter.VectorPoints) {
+					t.Fatal(name, declared, err)
+				}
+			}
 		}
 		ref := filepath.Join(dir, "native.json")
 		if err := atomicWriteJSON(ref, map[string]any{"inputs": nhwc, "vectors": vectors, "predictions": native}); err != nil {

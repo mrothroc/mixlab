@@ -78,6 +78,9 @@ func RunExportTorchState(opts ExportTorchStateOptions) error {
 		manifest["vector_dtype"] = "float32"
 		manifest["vector_layout"] = "NS"
 	}
+	if len(cfg.InputAdapter.VectorPoints) > 0 {
+		manifest["vector_points"] = cfg.InputAdapter.VectorPoints
+	}
 	program, err := arch.BuildGridIRProgram(cfg, false)
 	if err != nil {
 		return err

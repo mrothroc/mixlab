@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/mrothroc/mixlab/gpu"
+	"github.com/mrothroc/mixlab/internal/gridpoints"
 )
 
 func trainingPrecision(cfg *ArchConfig) (gpu.PrecisionPolicy, error) {
@@ -20,21 +21,29 @@ func startTrainingPrecision(cfg *ArchConfig, opts TrainOptions) error {
 	// Do not overwrite an existing run's provenance before accepting its resume.
 	if opts.Resume != "" {
 		var saved *gpu.PrecisionPolicy
+		var configHash string
 		if cfg.Training.Distributed != nil {
 			m, err := resolveDistributedResumeManifest(opts.Resume)
 			if err != nil {
 				return err
 			}
 			saved = m.Precision
+			configHash = m.ConfigHash
 		} else {
 			m, err := resolveResumeManifest(opts.Resume)
 			if err != nil {
 				return err
 			}
 			saved = m.Precision
+			configHash = m.ConfigHash
 		}
 		if err := checkResumePrecision(saved, p); err != nil {
 			return err
+		}
+		if cfg.GridEnabled() {
+			if err := checkResumeConfigHash(cfg, configHash); err != nil {
+				return err
+			}
 		}
 	}
 	fmt.Printf("  [%s] %s\n", cfg.Name, p)
@@ -52,11 +61,16 @@ func startTrainingPrecision(cfg *ArchConfig, opts TrainOptions) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
+	var points gridpoints.Columns
+	if cfg.GridEnabled() {
+		points = cfg.InputAdapter.VectorPoints
+	}
 	return atomicWriteJSON(path, struct {
-		Format    string              `json:"format"`
-		Name      string              `json:"name"`
-		Precision gpu.PrecisionPolicy `json:"precision"`
-	}{"mixlab_run_v1", cfg.Name, p})
+		Format       string              `json:"format"`
+		Name         string              `json:"name"`
+		Precision    gpu.PrecisionPolicy `json:"precision"`
+		VectorPoints gridpoints.Columns  `json:"vector_points,omitempty"`
+	}{"mixlab_run_v1", cfg.Name, p, points})
 }
 
 func checkResumePrecision(saved *gpu.PrecisionPolicy, current gpu.PrecisionPolicy) error {

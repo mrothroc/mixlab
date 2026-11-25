@@ -93,6 +93,9 @@ func buildGridGraph(cfg *ArchConfig, supervised bool) (*Program, []WeightMeta, e
 	}
 	spec := cfg.Blocks[0]
 	i := cfg.InputAdapter
+	if err := i.VectorPoints.Validate(i.VectorDim); err != nil {
+		return nil, nil, err
+	}
 	inputShape := []int{cfg.Training.BatchSize, i.Height, i.Width, i.Channels}
 	if _, err := gridSize(inputShape); err != nil {
 		return nil, nil, err
@@ -147,7 +150,13 @@ func buildGridGraph(cfg *ArchConfig, supervised bool) (*Program, []WeightMeta, e
 				return nil, nil, fmt.Errorf("polar ops require the declared per-record vector v")
 			}
 			if a := cfg.Training.GridAugmentation; a != nil && a.Dihedral {
-				return nil, nil, fmt.Errorf("polar graphs do not support dihedral augmentation")
+				params, _, err := polarParameters(op, [][]int{shapes[op.Inputs[0]], shapes[op.Inputs[1]]})
+				if err != nil {
+					return nil, nil, err
+				}
+				if !i.VectorPoints.Contains(params[4], params[5]) {
+					return nil, nil, fmt.Errorf("grid op %d (%s, %s) tx=[%d,%d] requires a matching ordered input_adapter.vector_points pair for dihedral augmentation", n, op.Output, op.Op, params[4], params[5])
+				}
 			}
 			if op.Op == "polar_to_cartesian" && (s[1] != i.Height || s[2] != i.Width) {
 				return nil, nil, fmt.Errorf("polar_to_cartesian must output the full input map resolution")

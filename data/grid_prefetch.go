@@ -3,13 +3,17 @@ package data
 import (
 	"fmt"
 	"io"
+	"slices"
 	"sync"
+
+	"github.com/mrothroc/mixlab/internal/gridpoints"
 )
 
 type GridPrefetchOptions struct {
 	BatchSize, Depth, Workers, Steps int
 	Seed                             int64
 	Dihedral                         bool
+	VectorPoints                     gridpoints.Columns
 }
 
 type gridPreparedBatch struct {
@@ -35,15 +39,20 @@ type GridPrefetch struct {
 }
 
 func NewGridPrefetch(d *GridDataset, sampler *GridSampler, opts GridPrefetchOptions) (*GridPrefetch, error) {
-	if sampler == nil || opts.Depth < 0 || opts.Depth > 64 || opts.Steps < 0 {
+	if d == nil || sampler == nil || opts.Depth < 0 || opts.Depth > 64 || opts.Steps < 0 {
 		return nil, fmt.Errorf("invalid grid prefetch options")
 	}
+	if err := opts.VectorPoints.Validate(d.Geometry.VectorDim); err != nil {
+		return nil, err
+	}
+	opts.VectorPoints = slices.Clone(opts.VectorPoints)
 	r, err := NewGridBatchReader(d, opts.Workers)
 	if err != nil {
 		return nil, err
 	}
 	p := &GridPrefetch{opts: opts, reader: r, sampler: sampler, remaining: opts.Steps,
-		free: make(chan *GridBatch, opts.Depth+1), ready: make(chan gridPreparedBatch, opts.Depth),
+		augmenter: GridAugmenter{Points: opts.VectorPoints},
+		free:      make(chan *GridBatch, opts.Depth+1), ready: make(chan gridPreparedBatch, opts.Depth),
 		stop: make(chan struct{}), done: make(chan struct{})}
 	for i := 0; i <= opts.Depth; i++ {
 		b, err := NewGridBatch(d.Geometry, opts.BatchSize)
