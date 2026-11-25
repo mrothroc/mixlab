@@ -241,3 +241,34 @@ func TestDiLoCoTerminalReleaseRetryAndRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestDiLoCoTerminalFailureEventBypassesRateLimit(t *testing.T) {
+	s, f := committedRetryService(t)
+	ctx := context.Background()
+	repo := &recoveryTestRepository{state: f.state}
+	models := &DiLoCoModels{Repository: repo}
+	s.RunTerminal = models.Terminal
+	calls := 0
+	s.Run = func(context.Context, admission.Submission, admission.Snapshot) error {
+		calls++
+		switch calls {
+		case 1:
+			return syscall.EHOSTUNREACH
+		case 2:
+			// The tick that makes the run terminal carries its only specific cause.
+			repo.state.Phase, repo.state.Failure = coordinator.Failed, "learner same-allocation recovery permanently rejected"
+			return errors.New("recovery cannot extend original workload deadline")
+		}
+		return nil
+	}
+	var events []string
+	s.Event = func(_ string, err error) { events = append(events, err.Error()) }
+	start := f.now.Load()
+	for second := int64(0); second < 30; second++ {
+		f.now.Store(start + second)
+		check(t, s.step(ctx, f.q.Launch.Run))
+	}
+	if len(events) != 2 || !strings.Contains(events[1], "recovery cannot extend original workload deadline") {
+		t.Fatalf("terminal failure cause was rate-limited away: calls=%d events=%q", calls, events)
+	}
+}

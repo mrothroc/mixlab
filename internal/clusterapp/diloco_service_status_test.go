@@ -69,7 +69,7 @@ func TestDiLoCoStatusSanitizesLegacyAndUnknownObservation(t *testing.T) {
 func TestDiLoCoJoinedFailuresKeepNodeAndClassTogether(t *testing.T) {
 	first, second := strings.Repeat("a", 32), strings.Repeat("b", 32)
 	effect := errors.Join(&nodeFailure{node: first, err: managedtls.ErrPeerRejected}, &nodeFailure{node: second, err: syscall.EHOSTUNREACH})
-	o, _ := serviceObservation("run", 100, admission.Observation{}, admission.Snapshot{}, admission.Snapshot{}, true, effect)
+	o, _ := serviceObservation("run", 100, admission.Observation{}, admission.Snapshot{}, admission.Snapshot{}, true, false, effect)
 	if o.FailureNode != first || o.FailureClass != "tls_rejected" {
 		t.Fatalf("class came from a different node: %+v", o)
 	}
