@@ -44,7 +44,7 @@ func (c Columns) Validate(vectorDim int) error {
 	if len(c) == 0 || vectorDim <= 0 {
 		return fmt.Errorf("vector_points requires a nonempty declaration and positive vector_dim")
 	}
-	seen := make(map[int]bool, len(c)*2)
+	seen := map[int]bool{}
 	for i, pair := range c {
 		for _, column := range pair {
 			if column < 0 || column >= vectorDim {
