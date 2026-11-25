@@ -219,7 +219,10 @@ coordinator restart; completed admission effects, explicit cancellation and
 admission deadline transitions are not held behind an obsolete retry delay.
 Service failure events are rate-limited to one per run per minute, including
 changing error text. This bounds repetitive error logging, not all operational
-logs. Live committed runs keep their normal service tick cadence, including
+logs. The one exception is the error from the step that ends a run: it is
+always emitted, because durable run state records only a generic failure reason
+and this event is the only place the specific cause appears. A run ends once,
+so the exception cannot flood the log. Live committed runs keep their normal service tick cadence, including
 lease maintenance, learner recovery, round advancement and evaluation deadline
 checks, even when errors persist. Backoff for committed runs requires durable
 `COMPLETE` or `FAILED` coordinator state; live errors never delay the next tick.

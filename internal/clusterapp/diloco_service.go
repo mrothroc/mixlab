@@ -71,6 +71,7 @@ func (s DiLoCoService) step(ctx context.Context, id string) error {
 			retryAllowed = false
 		}
 	}
+	wasTerminal := v.Committed && v.Done && retryAllowed
 	now := s.Clock().Unix()
 	// An explicit cancellation or expired admission bypasses forward retry wait.
 	deadlineCrossed := !v.Aborting && !v.Committed && previous.At < v.Deadline && now >= v.Deadline
@@ -108,6 +109,13 @@ func (s DiLoCoService) step(ctx context.Context, id string) error {
 	} else {
 		effect = s.Run(work, q, v)
 	}
+	// The effect that ends a run is its only specific failure cause: durable run
+	// state keeps a generic reason. Emit it even inside the rate-limit window.
+	// A run ends once, so this cannot flood the log.
+	endedRun := false
+	if effect != nil && v.Committed && v.Done && !wasTerminal && terminalErr == nil && s.RunTerminal != nil {
+		endedRun, _ = s.RunTerminal(work, id)
+	}
 	effect = errors.Join(diLoCoStageError("read run retry scope", terminalErr), effect)
 	cancel()
 	if ctx.Err() != nil {
@@ -117,7 +125,7 @@ func (s DiLoCoService) step(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	observation, emit := serviceObservation(id, s.Clock().Unix(), previous, before, after, retryAllowed, effect)
+	observation, emit := serviceObservation(id, s.Clock().Unix(), previous, before, after, retryAllowed, endedRun, effect)
 	// Observation is replaceable operational evidence, not the local event log.
 	// A failed observation write must not hide the original effect diagnostic.
 	if emit && s.Event != nil {

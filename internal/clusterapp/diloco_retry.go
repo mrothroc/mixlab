@@ -32,7 +32,7 @@ func admissionRetryDelay(id string, failures uint32, at int64) int64 {
 	return base + int64(binary.LittleEndian.Uint64(h[:8])%uint64(base/4+1))
 }
 
-func serviceObservation(id string, at int64, previous admission.Observation, before, after admission.Snapshot, retryAllowed bool, effect error) (admission.Observation, bool) {
+func serviceObservation(id string, at int64, previous admission.Observation, before, after admission.Snapshot, retryAllowed, endedRun bool, effect error) (admission.Observation, bool) {
 	v := admission.Observation{At: at, EventAt: previous.EventAt}
 	if effect == nil {
 		return v, false
@@ -64,7 +64,7 @@ func serviceObservation(id string, at int64, previous admission.Observation, bef
 		v.RetryAt = at + admissionRetryDelay(id, v.RetryFailures, at)
 		v.RetryPhase = admissionRetryPhase(after)
 	}
-	emit := previous.EventAt == 0 || at < previous.EventAt || at-previous.EventAt >= 60
+	emit := endedRun || previous.EventAt == 0 || at < previous.EventAt || at-previous.EventAt >= 60
 	if emit {
 		v.EventAt = at
 	}

@@ -111,7 +111,7 @@ func TestDiLoCoRetryJitterAndChangingErrorsStayBounded(t *testing.T) {
 	previous := admission.Observation{}
 	events := 0
 	for second := int64(1000); second < 4600; second++ {
-		next, emit := serviceObservation("run", second, previous, admission.Snapshot{}, admission.Snapshot{}, true, fmt.Errorf("changing failure %d", second))
+		next, emit := serviceObservation("run", second, previous, admission.Snapshot{}, admission.Snapshot{}, true, false, fmt.Errorf("changing failure %d", second))
 		if emit {
 			events++
 		}
