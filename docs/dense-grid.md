@@ -29,9 +29,11 @@ configured width must still match the dataset. Counting and weight export need
 no dataset. No weights are added just by declaring a vector input.
 
 Vectors are caller-defined features, not tokens or image channels. Mixlab does
-not normalize or augment them. Generic non-geometric vectors may accompany D4
-map augmentation, but do not enable map augmentation when vectors encode spatial
-coordinates unless the graph explicitly supports the corresponding transform.
+not normalize them; undeclared columns are never augmented. For spatial points,
+declare `input_adapter.vector_points: [[row_column,col_column], ...]` so D4 moves
+them with the map (see [augmentation](#augmentation-and-staged-training)). Generic
+non-geometric vectors may accompany D4 without such a declaration. Directions
+and displacement vectors are not supported by this point-coordinate contract.
 [`grid_vectors_tiny.json`](../examples/grid_vectors_tiny.json) demonstrates a
 one-pixel map plus a per-record scalar, using reshape, addition and convolution.
 
@@ -132,7 +134,11 @@ Cartesian resolution, and fuses them with the original map. Declare
 Coordinates must be finite, in-map, and are measured at integer pixel centres.
 Native train/validation/prediction errors name the record; raw GPU calls name the
 batch row. Geometry vectors must be direct external inputs, not learned values.
-Dihedral augmentation is rejected for polar graphs.
+Dihedral augmentation is allowed only when every polar op's ordered `tx` pair
+is declared in `input_adapter.vector_points`. Otherwise graph validation names
+the offending op and pair. This applies to both sampling and back-mapping.
+Mixlab does not require `n_rays` to be divisible by four: augmentation is valid
+independently of whether the chosen ray set is D4-equivariant.
 
 Ray zero points along positive column; angles increase toward positive row.
 Ray `k` has angle `2*pi*k/K`; sample `j` has radius `j*dr`. Cartesian sampling
@@ -518,6 +524,25 @@ first, then rotate. Selection is keyed by seed, epoch, occurrence, and record ID
 independent of shuffle RNG or worker timing. Omission or `dihedral:false` leaves
 batches unchanged. Validation and prediction never augment. Scratch memory is
 one record's largest NHWC tensor, reused between records.
+
+For per-record pixel coordinates, declare ordered column pairs on the grid
+adapter, for example `"vector_dim":5, "vector_points":[[2,0],[4,1]]`.
+These pairs identify row/column point coordinates, not directions or displacement
+vectors. Each column may appear only once; indices must be integers within the
+vector width. Explicit empty/null declarations and malformed pairs are errors.
+Omission keeps vectors unchanged, including the existing rejection of polar
+graphs with D4 enabled and no point declaration.
+
+Real rows' declared points receive exactly their map's transform in float32:
+mirror `col = float32(n-1)-col` first for indices 4..7, then apply
+`(row,col) = (float32(n-1)-col,row)` per quarter turn. Undeclared columns are
+unchanged. Padded rows are never transformed; their vectors remain copies of
+the original, unaugmented first row, with zero maps/targets/masks. Selection and
+alignment are identical with or without prefetch and across exact resume.
+
+The run manifest and exported config/manifest record `vector_points`; changing
+the declaration rejects exact resume. It adds no weights or inference transform.
+Validation, prediction and exported `infer.py --vectors` still use raw points.
 
 Use `training.init_from` or `-safetensors-load` for weights-only warm starts,
 never both. Config-relative paths resolve beside the config file; CLI-relative

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/mrothroc/mixlab/internal/gridpoints"
 )
 
 const (
@@ -24,22 +26,23 @@ const (
 // InputAdapterSpec selects how model inputs become [B,T,model_dim] hidden
 // states. Omission preserves the historical token embedding path.
 type InputAdapterSpec struct {
-	VectorDim         int               `json:"vector_dim,omitempty"`
-	Channels          int               `json:"channels,omitempty"`
-	Height            int               `json:"height,omitempty"`
-	Width             int               `json:"width,omitempty"`
-	Kind              string            `json:"kind,omitempty"`
-	FeatureDim        int               `json:"feature_dim,omitempty"`
-	Bias              *bool             `json:"bias,omitempty"`
-	Norm              string            `json:"norm,omitempty"`
-	NumCodebooks      int               `json:"num_codebooks,omitempty"`
-	CodebookVocabSize int               `json:"codebook_vocab_size,omitempty"`
-	Fusion            string            `json:"fusion,omitempty"`
-	FusionHiddenDim   int               `json:"fusion_hidden_dim,omitempty"`
-	Image             *PatchImageSpec   `json:"image,omitempty"`
-	Patch             int               `json:"patch,omitempty"`
-	Coords            string            `json:"coords,omitempty"`
-	Augment           *PatchAugmentSpec `json:"augment,omitempty"`
+	VectorPoints      gridpoints.Columns `json:"vector_points,omitempty"`
+	VectorDim         int                `json:"vector_dim,omitempty"`
+	Channels          int                `json:"channels,omitempty"`
+	Height            int                `json:"height,omitempty"`
+	Width             int                `json:"width,omitempty"`
+	Kind              string             `json:"kind,omitempty"`
+	FeatureDim        int                `json:"feature_dim,omitempty"`
+	Bias              *bool              `json:"bias,omitempty"`
+	Norm              string             `json:"norm,omitempty"`
+	NumCodebooks      int                `json:"num_codebooks,omitempty"`
+	CodebookVocabSize int                `json:"codebook_vocab_size,omitempty"`
+	Fusion            string             `json:"fusion,omitempty"`
+	FusionHiddenDim   int                `json:"fusion_hidden_dim,omitempty"`
+	Image             *PatchImageSpec    `json:"image,omitempty"`
+	Patch             int                `json:"patch,omitempty"`
+	Coords            string             `json:"coords,omitempty"`
+	Augment           *PatchAugmentSpec  `json:"augment,omitempty"`
 }
 
 func normalizeInputAdapterKind(value string) string {
@@ -226,6 +229,9 @@ func validateInputAdapter(cfg *ArchConfig, source string) error {
 		return fmt.Errorf("config %q is nil", source)
 	}
 	kind := cfg.EffectiveInputAdapterKind()
+	if cfg.InputAdapter != nil && cfg.InputAdapter.VectorPoints != nil && kind != InputAdapterGrid {
+		return fmt.Errorf("config %q input_adapter.vector_points is valid only with kind=grid", source)
+	}
 	if cfg.InputAdapter != nil && cfg.InputAdapter.VectorDim != 0 && kind != InputAdapterGrid {
 		return fmt.Errorf("input_adapter.vector_dim requires kind=grid")
 	}

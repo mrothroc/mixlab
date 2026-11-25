@@ -33,12 +33,8 @@ func prepareResumeRun(cfg *ArchConfig, trainPattern, resumePath string, earlySto
 	if err := checkResumePrecision(manifest.Precision, precision); err != nil {
 		return resumeRunSetup{}, err
 	}
-	currentConfigHash, err := resumeConfigHash(cfg)
-	if err != nil {
-		return resumeRunSetup{}, fmt.Errorf("hash current config: %w", err)
-	}
-	if currentConfigHash != manifest.ConfigHash {
-		return resumeRunSetup{}, fmt.Errorf("training config does not match resumable checkpoint (checkpoint=%s current=%s)", manifest.ConfigHash, currentConfigHash)
+	if err := checkResumeConfigHash(cfg, manifest.ConfigHash); err != nil {
+		return resumeRunSetup{}, err
 	}
 	currentDatasetHash, err := resumeTrainingDatasetHash(cfg, trainPattern)
 	if err != nil {
@@ -69,6 +65,17 @@ func prepareResumeRun(cfg *ArchConfig, trainPattern, resumePath string, earlySto
 	setup.StartStep = manifest.GlobalStep
 	setup.Loaded = &loaded
 	return setup, nil
+}
+
+func checkResumeConfigHash(cfg *ArchConfig, saved string) error {
+	current, err := resumeConfigHash(cfg)
+	if err != nil {
+		return fmt.Errorf("hash current config: %w", err)
+	}
+	if current != saved {
+		return fmt.Errorf("training config does not match resumable checkpoint (checkpoint=%s current=%s)", saved, current)
+	}
+	return nil
 }
 
 func validateResumeStep(cfg *ArchConfig, manifest resumeManifest, steps int) error {

@@ -19,7 +19,8 @@ func newTrainingGridPrefetch(cfg *ArchConfig, ds *data.GridDataset, consumed *da
 	}
 	s := cfg.Training.GridLoader
 	opts := data.GridPrefetchOptions{BatchSize: cfg.Training.BatchSize, Depth: s.EffectivePrefetchBatches(),
-		Workers: s.EffectiveReadWorkers(cfg.Training.BatchSize), Steps: max(0, steps-startStep), Seed: cfg.Training.Seed,
+		VectorPoints: cfg.InputAdapter.VectorPoints,
+		Workers:      s.EffectiveReadWorkers(cfg.Training.BatchSize), Steps: max(0, steps-startStep), Seed: cfg.Training.Seed,
 		Dihedral: cfg.Training.GridAugmentation != nil && cfg.Training.GridAugmentation.Dihedral}
 	p, err := data.NewGridPrefetch(ds, producer, opts)
 	if err != nil {

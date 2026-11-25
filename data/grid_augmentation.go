@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+
+	"github.com/mrothroc/mixlab/internal/gridpoints"
 )
 
 // GridDihedralIndex has no mutable RNG state, including across prefetch workers.
@@ -20,11 +22,20 @@ func GridDihedralIndex(seed int64, epoch, occurrence int, id string) int {
 }
 
 // GridAugmenter owns scratch storage; use one per batch-preparation worker.
-type GridAugmenter struct{ scratch []float32 }
+type GridAugmenter struct {
+	Points  gridpoints.Columns
+	scratch []float32
+}
 
 func (a *GridAugmenter) Apply(b GridBatch, seed int64, epoch, occurrence int) error {
 	if b.Geometry.Height != b.Geometry.Width || b.Geometry.Height <= 0 || b.Count < 0 || b.Count > b.BatchSize || len(b.IDs) < b.Count {
 		return fmt.Errorf("D4 augmentation requires square, valid grid batches")
+	}
+	if err := a.Points.Validate(b.Geometry.VectorDim); err != nil {
+		return err
+	}
+	if len(a.Points) > 0 && len(b.Vectors) != b.BatchSize*b.Geometry.VectorDim {
+		return fmt.Errorf("invalid D4 batch vector buffer length")
 	}
 	n := b.Geometry.Height
 	for row := 0; row < b.Count; row++ {
@@ -41,6 +52,18 @@ func (a *GridAugmenter) Apply(b GridBatch, seed int64, epoch, occurrence int) er
 			if err := a.Transform(values[row*size:(row+1)*size], n, channels, transform); err != nil {
 				return err
 			}
+		}
+		for _, pair := range a.Points {
+			offset := row * b.Geometry.VectorDim
+			y, x := b.Vectors[offset+pair[0]], b.Vectors[offset+pair[1]]
+			last := float32(n - 1)
+			if transform >= 4 {
+				x = last - x
+			}
+			for r := 0; r < transform%4; r++ {
+				y, x = last-x, y
+			}
+			b.Vectors[offset+pair[0]], b.Vectors[offset+pair[1]] = y, x
 		}
 	}
 	return nil
